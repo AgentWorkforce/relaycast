@@ -8,9 +8,15 @@
  * is empty; a package changelog with nothing pending is left untouched, so the
  * release simply gets no heading there.
  *
+ * `--package <name>` cuts only `packages/<name>/CHANGELOG.md`, for a package on
+ * its own version line (the Rust SDK, tagged `<name>-vX.Y.Z`).
+ *
  * Usage:
  *   node scripts/cut-changelog.mjs --version 6.3.0
  *                                 [--date 2026-07-25] [--from-tag v6.2.0]
+ *                                 [--dry-run]
+ *   node scripts/cut-changelog.mjs --package sdk-rust --version 11.0.0
+ *                                 [--date 2026-10-28] [--from-tag sdk-rust-v10.0.0]
  *                                 [--dry-run]
  */
 
@@ -28,9 +34,9 @@ function flag(name) {
 }
 
 const version = flag("version");
-if (!version || !/^\d+\.\d+\.\d+(?:-[\w.]+)?$/.test(version)) {
+if (!version || !/^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/.test(version)) {
   console.error(
-    "usage: cut-changelog.mjs --version <x.y.z> [--date <yyyy-mm-dd>] [--from-tag <tag>] [--dry-run]",
+    "usage: cut-changelog.mjs [--package <name>] --version <x.y.z> [--date <yyyy-mm-dd>] [--from-tag <tag>] [--dry-run]",
   );
   process.exit(1);
 }
@@ -53,6 +59,16 @@ if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) {
 // versioned in lockstep with the npm packages (the Swift SDK ships off the
 // repo's release tag), including ones added later.
 const EXCLUDED_PACKAGES = new Set(["sdk-rust"]);
+
+const ownLinePackage = flag("package");
+if (ownLinePackage !== undefined && !EXCLUDED_PACKAGES.has(ownLinePackage)) {
+  console.error(
+    `--package must name a package on its own version line (${[...EXCLUDED_PACKAGES].join(", ")}), got ${ownLinePackage}`,
+  );
+  process.exit(1);
+}
+const tagPrefix = ownLinePackage ? `${ownLinePackage}-v` : "v";
+const stableTag = new RegExp(`^${tagPrefix}\\d+\\.\\d+\\.\\d+$`);
 
 const UNRELEASED =
   /^## \[Unreleased(?: - (?:Patch|Minor|Major))?\][ \t]*\n([\s\S]*?)(?=^## \[|(?![\s\S]))/m;
@@ -94,12 +110,12 @@ function git(command) {
 function lastStableTag() {
   const explicit = flag("from-tag");
   if (explicit) {
-    if (!/^v\d+\.\d+\.\d+$/.test(explicit)) {
+    if (!stableTag.test(explicit)) {
       throw new Error(
-        `--from-tag must be a stable vX.Y.Z tag, got ${explicit}`,
+        `--from-tag must be a stable ${tagPrefix}X.Y.Z tag, got ${explicit}`,
       );
     }
-    if (explicit === `v${version}`) {
+    if (explicit === `${tagPrefix}${version}`) {
       throw new Error("--from-tag must precede the release being cut");
     }
     return explicit;
@@ -107,7 +123,7 @@ function lastStableTag() {
   const tags = git("git tag -l --merged HEAD --sort=-v:refname")
     .split("\n")
     .map((tag) => tag.trim())
-    .filter((tag) => /^v\d+\.\d+\.\d+$/.test(tag) && tag !== `v${version}`);
+    .filter((tag) => stableTag.test(tag) && tag !== `${tagPrefix}${version}`);
   return tags[0];
 }
 
@@ -206,15 +222,20 @@ if (!fromTag)
   warn("no previous stable tag found; commit-subject fallback disabled");
 else console.log(`cutting v${version} (${date}), pending since ${fromTag}`);
 
-const packageChangelogs = readdirSync("packages", { withFileTypes: true })
-  .filter((entry) => entry.isDirectory() && !EXCLUDED_PACKAGES.has(entry.name))
-  .map((entry) => path.join("packages", entry.name, "CHANGELOG.md"))
-  .filter(existsSync)
-  .sort();
+const changelogs = ownLinePackage
+  ? [path.join("packages", ownLinePackage, "CHANGELOG.md")]
+  : [
+      "CHANGELOG.md",
+      ...readdirSync("packages", { withFileTypes: true })
+        .filter((entry) => entry.isDirectory() && !EXCLUDED_PACKAGES.has(entry.name))
+        .map((entry) => path.join("packages", entry.name, "CHANGELOG.md"))
+        .filter(existsSync)
+        .sort(),
+    ];
 
 const levels = [];
 let rootWasCut = false;
-for (const file of ["CHANGELOG.md", ...packageChangelogs]) {
+for (const file of changelogs) {
   const result = cut(file, {
     fallback: file === "CHANGELOG.md" ? fallbackBody(fromTag) : "",
   });
@@ -233,10 +254,10 @@ if (fromTag && rootWasCut) {
 }
 
 // The pending heading records the SemVer impact of what is being released; a
-// release smaller than that impact is a mis-bump worth surfacing (after the
-// fact — this runs post-publish, so it never fails the release).
+// release smaller than that impact is a mis-bump worth surfacing; it is a
+// warning, so it never fails the release.
 if (fromTag) {
-  const actual = levelOf(fromTag.replace(/^v/, ""), version);
+  const actual = levelOf(fromTag.slice(tagPrefix.length), version);
   const rank = { Patch: 0, Minor: 1, Major: 2 };
   for (const { file, level } of levels) {
     if (rank[level] > rank[actual]) {

@@ -696,6 +696,118 @@ describe('AgentClient WebSocket integration', () => {
     expect(handler).not.toHaveBeenCalled();
   });
 
+  it.each([
+    { v: 2 }, { ok: false }, { type: 'pong' },
+    { data: { agent_presence: false, agent_id: 'agent_1' } },
+    { data: { agent_id: 'agent_1' } },
+  ])('does not suppress fallback for invalid confirmation %j', async (invalid) => {
+    vi.spyOn(Math, 'random').mockReturnValue(0);
+    const agent = createAgent();
+    agent.connect();
+    const socket = await nextSocket();
+    socket.simulateOpen();
+    await vi.advanceTimersByTimeAsync(27_000);
+    const frame = JSON.parse(socket.send.mock.calls.at(-1)![0]);
+    socket.simulateMessage({ v: 1, type: 'reply', id: frame.id, ok: true,
+      data: { agent_presence: true, agent_id: 'agent_1' }, ...invalid });
+    await vi.advanceTimersByTimeAsync(3_000);
+    expect(mockFetch.mock.calls.filter(([url]) => String(url).endsWith('/agents/heartbeat'))).toHaveLength(2);
+    await agent.disconnect();
+    vi.mocked(Math.random).mockRestore();
+  });
+
+  it('uses send time for lease expiry even when a reply arrives late', async () => {
+    vi.spyOn(Math, 'random').mockReturnValue(0);
+    const agent = createAgent();
+    agent.connect();
+    const socket = await nextSocket();
+    socket.simulateOpen();
+    await vi.advanceTimersByTimeAsync(27_000);
+    const frame = JSON.parse(socket.send.mock.calls.at(-1)![0]);
+    vi.setSystemTime(Date.now() + 30_000);
+    socket.simulateMessage({ v: 1, type: 'reply', id: frame.id, ok: true,
+      data: { agent_presence: true, agent_id: 'agent_1' } });
+    await vi.advanceTimersByTimeAsync(3_000);
+    expect(mockFetch.mock.calls.filter(([url]) => String(url).endsWith('/agents/heartbeat'))).toHaveLength(2);
+    await agent.disconnect();
+    vi.mocked(Math.random).mockRestore();
+  });
+
+  it.each([0, 0.999999])('bounds each jittered heartbeat before the existing 30s deadline (%s)', async (random) => {
+    vi.spyOn(Math, 'random').mockReturnValue(random);
+    const agent = createAgent({ autoHeartbeatMs: false });
+    agent.connect();
+    const socket = await nextSocket();
+    socket.simulateOpen();
+    const frames = () => socket.send.mock.calls.map(([raw]) => JSON.parse(raw)).filter(f => f.type === 'node.heartbeat');
+    await vi.advanceTimersByTimeAsync(26_999);
+    expect(frames()).toHaveLength(0);
+    await vi.advanceTimersByTimeAsync(3_001);
+    expect(frames()).toHaveLength(1);
+    await vi.advanceTimersByTimeAsync(30_000);
+    expect(frames()).toHaveLength(2);
+    await agent.disconnect();
+    vi.mocked(Math.random).mockRestore();
+  });
+
+  it('requires fresh correlated presence and falls back while the socket remains open', async () => {
+    vi.spyOn(Math, 'random').mockReturnValue(0);
+    const agent = createAgent();
+    agent.connect();
+    const ws = await nextSocket();
+    ws.simulateOpen();
+    await vi.advanceTimersByTimeAsync(27_000);
+    const heartbeat = () => ws.send.mock.calls.map(([raw]) => JSON.parse(raw)).filter(f => f.type === 'node.heartbeat').at(-1)!;
+    const reply = (id: string, agentId = 'agent_1') => ws.simulateMessage({
+      v: 1, type: 'reply', id, ok: true, data: { agent_presence: true, agent_id: agentId },
+    });
+    const beats = () => mockFetch.mock.calls.filter(([url]) => String(url).endsWith('/agents/heartbeat')).length;
+    expect(beats()).toBe(1);
+    reply(heartbeat().id);
+    await vi.advanceTimersByTimeAsync(3_000);
+    expect(beats()).toBe(1);
+    await agent.heartbeat();
+    expect(beats()).toBe(2);
+    await vi.advanceTimersByTimeAsync(24_000);
+    const latest = heartbeat().id;
+    reply(latest, 'wrong-agent');
+    reply(latest);
+    await vi.advanceTimersByTimeAsync(6_000);
+    expect(beats()).toBe(3);
+    await agent.disconnect();
+    vi.mocked(Math.random).mockRestore();
+  });
+
+  it('rejects unrelated and superseded replies and forgets leases across reconnects', async () => {
+    vi.spyOn(Math, 'random').mockReturnValue(0);
+    const agent = createAgent();
+    agent.connect();
+    const ws = await nextSocket();
+    ws.simulateOpen();
+    await vi.advanceTimersByTimeAsync(27_000);
+    const frame = JSON.parse(ws.send.mock.calls.at(-1)![0]);
+    const reply = (id: string) => ({ v: 1, type: 'reply', id, ok: true, data: { agent_presence: true, agent_id: 'agent_1' } });
+    ws.simulateMessage(reply('unrelated'));
+    await vi.advanceTimersByTimeAsync(3_000);
+    const beats = () => mockFetch.mock.calls.filter(([url]) => String(url).endsWith('/agents/heartbeat')).length;
+    expect(beats()).toBe(2);
+    await vi.advanceTimersByTimeAsync(30_000);
+    ws.simulateMessage(reply(frame.id));
+    expect(beats()).toBe(3);
+    const current = JSON.parse(ws.send.mock.calls.at(-1)![0]);
+    ws.simulateMessage(reply(current.id));
+    ws.simulateClose();
+    await vi.advanceTimersByTimeAsync(1_000);
+    const next = await nextSocket(1);
+    next.simulateOpen();
+    await vi.advanceTimersByTimeAsync(0);
+    next.simulateMessage(reply(frame.id));
+    await vi.advanceTimersByTimeAsync(30_000);
+    expect(beats()).toBe(5);
+    await agent.disconnect();
+    vi.mocked(Math.random).mockRestore();
+  });
+
   it('starts auto-heartbeat on open and continues on interval', async () => {
     const agent = createAgent({ autoHeartbeatMs: 30_000 });
     agent.connect();

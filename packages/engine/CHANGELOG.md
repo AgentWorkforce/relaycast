@@ -11,9 +11,20 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Added
 
-- `/internal` admin API, enabled by `EngineConfig.internalSecret` (`RELAYCAST_INTERNAL_SECRET` / `_FILE` in `relaycast-engine`): `GET /internal/capabilities`, `POST /internal/workspaces`, and generation-fenced `POST /internal/workspaces/:id/api-key` (push or server-minted rotation, with an optional grace window). Unset, every `/internal` route is `404`.
+- `/internal` admin API, enabled by `EngineConfig.internalSecret` (`RELAYCAST_INTERNAL_SECRET` / `_FILE` in `relaycast-engine`): `GET /internal/capabilities`, `POST` and idempotent `DELETE /internal/workspaces/:id`, and generation-fenced `POST /internal/workspaces/:id/api-key` (push or server-minted rotation, with an optional grace window). Unset, every `/internal` route is `404`.
 - `EngineConfig.publicWorkspaceCreate: false` (`RELAYCAST_PUBLIC_WORKSPACE_CREATE=false`) answers the public `POST /v1/workspaces` with the generic `404`.
 - `internalSecret` must be at least 32 characters (`createEngine` throws otherwise); `/internal` pushes require `api_key` to match `^rk_live_[A-Za-z0-9_-]{32,256}$` and a safe-integer `key_generation`; request logs no longer fingerprint the bearer on `/internal` paths. `relaycast-engine` reads `RELAYCAST_WORKSPACE_BOOTSTRAP_SECRET_FILE` (one trailing newline stripped; a directly set bootstrap secret is used byte-for-byte so existing keyed-create retries keep deriving the same keys), lets a direct variable win over `_FILE`, and exits `64` on an unreadable `_FILE`. `startServer` refuses a short `internalSecret` before opening SQLite. `/internal` key pushes refuse (`409 api_key_conflict`) a key that is another workspace's current key or its previous key inside the grace window.
+
+### Fixed
+
+- A DM participant's inbox unread count drops after they mark a message read or acknowledge its delivery. Migration `0078_dm_participant_read_cursor.sql` seeds each cursor from existing read receipts.
+- Channel unread counts in the inbox no longer drop newer messages whose ids have more digits than the read cursor.
+
+## [12.2.0] - 2026-10-29
+
+### Added
+
+- Optional `EngineDeps.nodeLiveness` and `configureNodeLiveness(db, authority)` let hosts supply current node/provider receipt leases. Hosts must bound authority calls, preserve connection generations across reconstruction, recheck the lease at final send, and own offline transitions. Unconfigured self-hosted engines retain database-based liveness.
 
 ## [12.1.0] - 2026-10-28
 

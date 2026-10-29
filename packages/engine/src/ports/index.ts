@@ -1,3 +1,5 @@
+export type { NodeLivenessAuthority, NodeLivenessSnapshot } from './nodeLiveness.js';
+import type { NodeLivenessAuthority } from './nodeLiveness.js';
 /**
  * The complete dependency contract for the Relaycast engine.
  *
@@ -88,6 +90,8 @@ export interface EnginePorts {
 
 /** The open-core hosting seam — each has an OSS default in `../auth`, etc. */
 export interface EngineProviders {
+  /** Optional host-owned receipt lease; omitted preserves D1 TTL behavior. */
+  nodeLiveness?: NodeLivenessAuthority;
   auth: AuthProvider;
   /** Host admission and metering hooks. Omitted: every request is admitted. */
   admission?: AdmissionHooks;

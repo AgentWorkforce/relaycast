@@ -59,6 +59,7 @@ const NON_SDK_OPENAPI_PATHS = new Set([
   // bearer), called by a control plane, never by the agent SDKs.
   '/v1/internal/capabilities',
   '/v1/internal/workspaces',
+  '/v1/internal/workspaces/{param}',
   '/v1/internal/workspaces/{param}/api-key',
 ]);
 

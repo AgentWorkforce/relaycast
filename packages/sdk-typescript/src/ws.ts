@@ -115,7 +115,16 @@ export class WsClient {
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
   private connectTimer: ReturnType<typeof setTimeout> | null = null;
   private connectTimeoutMs = 10_000;
-  private pingTimer: ReturnType<typeof setInterval> | null = null;
+  private pingTimer: ReturnType<typeof setTimeout> | null = null;
+  private heartbeatSequence = 0;
+  private pendingPresence: { id: string; sentAt: number; agentId: string } | null = null;
+  private confirmedPresenceAt: number | null = null;
+
+  /** A server-confirmed direct-agent lease; socket openness alone grants nothing. */
+  confirmedPresenceRemainingMs(): number {
+    const age = this.confirmedPresenceAt === null ? Infinity : Date.now() - this.confirmedPresenceAt;
+    return this.isOpen && age >= 0 && age < 30_000 ? 30_000 - age : 0;
+  }
   private closed = false;
   private debug: boolean;
   private originClient: string;
@@ -465,6 +474,17 @@ export class WsClient {
       return true;
     }
 
+    const pending = this.pendingPresence;
+    if (pending && parsed.id === pending.id) {
+      this.pendingPresence = null;
+      const age = Date.now() - pending.sentAt;
+      if (parsed.v === 1 && parsed.type === 'reply' && parsed.ok === true
+        && isRecord(parsed.data) && parsed.data.agent_presence === true
+        && parsed.data.agent_id === pending.agentId && age >= 0 && age < 30_000) {
+        this.confirmedPresenceAt = pending.sentAt;
+      }
+    }
+
     // Node control replies/errors are transport-level acknowledgements for the
     // direct node client. They are intentionally not surfaced as app events.
     return parsed.type === 'reply' || parsed.type === 'error' || parsed.type === 'pong' || parsed.type === 'resync_ack';
@@ -606,30 +626,37 @@ export class WsClient {
 
   private startPing(): void {
     this.stopPing();
-    this.pingTimer = setInterval(() => {
-      if (this.nodeMode) {
-        const nodeId = typeof this.lastNodeRegistration?.node_id === 'string'
-          ? this.lastNodeRegistration.node_id
-          : undefined;
-        this.sendJson({
-          v: 1,
-          type: 'node.heartbeat',
-          ...(nodeId ? { node_id: nodeId } : {}),
-          load: null,
-          active_agents: 1,
-          handlers_live: false,
-        });
-        return;
-      }
-      this.sendJson({ type: 'ping' });
-    }, 30_000);
+    const schedule = (): void => {
+      // Spread receipts without extending the established 30s maximum cadence.
+      this.pingTimer = setTimeout(() => {
+        if (!this.isOpen) return;
+        if (this.nodeMode) {
+          const nodeId = this.lastNodeRegistration?.node_id;
+          const id = `sdk-presence-${++this.heartbeatSequence}`;
+          this.pendingPresence = typeof nodeId === 'string' && nodeId.startsWith('node_direct_')
+            ? { id, sentAt: Date.now(), agentId: nodeId.slice('node_direct_'.length) }
+            : null;
+          this.sendJson({
+            v: 1, id, type: 'node.heartbeat',
+            ...(typeof nodeId === 'string' ? { node_id: nodeId } : {}),
+            load: null, active_agents: 1, handlers_live: false,
+          });
+        } else {
+          this.sendJson({ type: 'ping' });
+        }
+        schedule();
+      }, 27_000 + Math.floor(Math.random() * 3_000));
+    };
+    schedule();
   }
 
   private stopPing(): void {
     if (this.pingTimer) {
-      clearInterval(this.pingTimer);
+      clearTimeout(this.pingTimer);
       this.pingTimer = null;
     }
+    this.pendingPresence = null;
+    this.confirmedPresenceAt = null;
   }
 
   private clearConnectTimer(): void {

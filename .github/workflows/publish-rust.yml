@@ -48,6 +48,11 @@ jobs:
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
 
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22.22.3"
+
       - name: Determine and set version
         id: bump
         shell: bash
@@ -165,6 +170,9 @@ jobs:
           echo "new_version=$NEW_VERSION" >> "$GITHUB_OUTPUT"
           echo "New version: $NEW_VERSION"
 
+      - name: Cut changelog
+        run: node scripts/cut-changelog.mjs --package sdk-rust --version "${{ steps.bump.outputs.new_version }}"
+
       - name: Run tests
         run: cargo test --manifest-path packages/sdk-rust/Cargo.toml
 
@@ -190,17 +198,39 @@ jobs:
           git config user.name "GitHub Actions"
           git config user.email "actions@github.com"
 
-          git add packages/sdk-rust/Cargo.toml
+          git add packages/sdk-rust/Cargo.toml packages/sdk-rust/CHANGELOG.md
           if ! git diff --staged --quiet; then
             git commit -m "chore(sdk-rust): v${NEW_VERSION}"
             # main can advance during the (multi-minute) build — e.g. a
             # concurrent npm publish — so rebase onto the latest main and retry
             # to avoid non-fast-forward rejections. The release commit only
-            # touches version metadata, so it rebases cleanly onto another
-            # release's commit.
+            # touches the crate's version and changelog, which no other
+            # release writes, so it rebases cleanly onto another release's
+            # commit. A Rust changelog edit merged during the build would be
+            # folded into the cut release (or conflict with it) although the
+            # published crate does not contain it. The crate is already
+            # published, so the commit then carries the version alone and the
+            # cut is reported for a manual follow-up instead.
+            CHANGELOG="packages/sdk-rust/CHANGELOG.md"
             pushed=false
             for attempt in 1 2 3 4 5; do
               git fetch origin main
+              if ! git diff --quiet HEAD~1 HEAD -- "$CHANGELOG" &&
+                ! git diff --quiet HEAD~1 origin/main -- "$CHANGELOG"; then
+                {
+                  echo "## Changelog not cut"
+                  echo ""
+                  echo "\`$CHANGELOG\` changed on main during the release. Move the entries this release shipped under \`[${NEW_VERSION}]\` by hand:"
+                  echo ""
+                  echo '```diff'
+                  git diff HEAD~1 HEAD -- "$CHANGELOG"
+                  echo '```'
+                } >> "$GITHUB_STEP_SUMMARY"
+                echo "::warning::$CHANGELOG changed on main during the release; committed the version only. Cut [${NEW_VERSION}] by hand (diff in the job summary)."
+                git reset --soft HEAD~1
+                git restore --staged --worktree "$CHANGELOG"
+                git commit -m "chore(sdk-rust): v${NEW_VERSION}"
+              fi
               if ! git rebase origin/main; then
                 git rebase --abort
                 echo "::error::rebase onto origin/main failed (unexpected conflict)"

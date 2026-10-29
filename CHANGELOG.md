@@ -20,13 +20,23 @@ Packages without a separate changelog are covered by the cross-package notes bel
 
 ### Added
 
-- Engine: an opt-in internal admin API (`RELAYCAST_INTERNAL_SECRET`) lets a trusted control plane create workspaces and register or rotate their keys, with the hosted gateway's request and response shapes.
+- Engine: an opt-in internal admin API (`RELAYCAST_INTERNAL_SECRET`) lets a trusted control plane create or idempotently delete workspaces and register or rotate their keys, with the hosted gateway's request and response shapes.
 - Container image: `RELAYCAST_ALLOW_INSECURE_BASE_URL=true` accepts `http://` base URLs on loopback and private hosts, and `RELAYCAST_INTERNAL_SECRET(_FILE)` is passed through.
 - A Helm chart (`charts/relaycast`) runs the single-process engine with a persistent volume.
 - `RELAYCAST_PUBLIC_WORKSPACE_CREATE=false` turns the anonymous `POST /v1/workspaces` into a `404` for control-plane-managed deployments; the chart sets it when the internal secret is configured (now opt-in).
 - Container image: `*.svc` / `*.svc.cluster.local` count as private hosts, and `RELAYCAST_PRIVATE_DNS_SUFFIXES` / `RELAYCAST_INSECURE_BASE_URL_HOSTS` extend that for custom cluster domains and `<svc>.<ns>` names (entries must sit under a private zone, be a `.svc.<domain>` zone, or be a two-label `<svc>.<ns>` name; public names are refused).
 - Container image: `RELAYCAST_WORKSPACE_BOOTSTRAP_SECRET_FILE` is supported (one trailing newline is stripped; a directly set bootstrap secret is still used byte-for-byte); a directly set variable wins over its `_FILE`, and an unreadable `_FILE` exits `64`.
 - Helm chart: the data PVC carries `helm.sh/resource-policy: keep` by default (`persistence.retainOnUninstall`), so `helm uninstall` no longer deletes the database.
+
+### Fixed
+
+- A DM participant's inbox unread count drops after they mark a message read, and stays dropped across later inbox reads.
+- Inbox channel unread counts stay correct when message ids gain a digit.
+
+## [12.2.0] - 2026-10-29
+
+- Hosts can use connection-owned presence leases instead of database heartbeat timestamps for live routing and presence decisions.
+- The TypeScript SDK avoids duplicate automatic HTTP heartbeats while recent WebSocket acknowledgements confirm agent presence, with fallback for older servers and lost acknowledgements.
 
 ## [12.1.0] - 2026-10-28
 
@@ -935,7 +945,8 @@ Packages without a separate changelog are covered by the cross-package notes bel
 
 Earlier releases are available on the [GitHub releases page](https://github.com/AgentWorkforce/relaycast/releases).
 
-[Unreleased]: https://github.com/AgentWorkforce/relaycast/compare/v12.1.0...HEAD
+[Unreleased]: https://github.com/AgentWorkforce/relaycast/compare/v12.2.0...HEAD
+[12.2.0]: https://github.com/AgentWorkforce/relaycast/compare/v12.1.0...v12.2.0
 [12.1.0]: https://github.com/AgentWorkforce/relaycast/compare/v12.0.0...v12.1.0
 [12.0.0]: https://github.com/AgentWorkforce/relaycast/compare/v11.1.1...v12.0.0
 [11.1.1]: https://github.com/AgentWorkforce/relaycast/compare/v11.1.0...v11.1.1

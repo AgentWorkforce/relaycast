@@ -36,9 +36,38 @@ export const INTERNAL_CAPABILITIES = {
   },
   workspace_admin: {
     create: true,
+    delete: true,
     server_minted_key: true,
   },
 } as const;
+
+// The self-host engine is a single process. Keep a per-database deletion
+// fence so a key push already in flight cannot recreate a workspace after an
+// internal-admin delete has claimed it. The trusted control plane also fences
+// its own app row before calling this endpoint; this closes the engine-local
+// request race.
+const internalDeletionFences = new WeakMap<object, Set<string>>();
+
+function deletionFences(db: Db): Set<string> {
+  const key = db as object;
+  const existing = internalDeletionFences.get(key);
+  if (existing) return existing;
+  const created = new Set<string>();
+  internalDeletionFences.set(key, created);
+  return created;
+}
+
+export function beginInternalWorkspaceDeletion(db: Db, workspaceId: string): () => void {
+  const fences = deletionFences(db);
+  fences.add(workspaceId);
+  return () => fences.delete(workspaceId);
+}
+
+function assertInternalWorkspaceWritable(db: Db, workspaceId: string): void {
+  if (deletionFences(db).has(workspaceId)) {
+    throw codedError('Workspace is being deleted', 'workspace_deleted', 410);
+  }
+}
 
 /** Minimum length of `config.internalSecret` (e.g. `openssl rand -hex 32` is 64). */
 export const MIN_INTERNAL_SECRET_LENGTH = 32;
@@ -171,6 +200,7 @@ export async function pushWorkspaceKey(
   workspaceId: string,
   input: PushWorkspaceKeyInput,
 ): Promise<PushWorkspaceKeyResult> {
+  assertInternalWorkspaceWritable(db, workspaceId);
   const minted = input.apiKey === undefined;
   const apiKey = input.apiKey ?? `rk_live_${randomHex(16)}`;
   const apiKeyHash = await sha256Hex(apiKey);
@@ -183,6 +213,7 @@ export async function pushWorkspaceKey(
 
   let row = await readKeyRow(db, workspaceId);
   for (let attempt = 0; attempt < 2; attempt += 1) {
+    assertInternalWorkspaceWritable(db, workspaceId);
     if (!row) {
       if (minted) throw codedError('Workspace not found', 'workspace_not_found', 404);
       if (await keyOwnedElsewhere(db, apiKeyHash, workspaceId)) throw keyConflict();

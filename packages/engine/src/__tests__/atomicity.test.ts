@@ -17,10 +17,12 @@ import {
   channelMembers,
   channels,
   deliveries,
+  dmParticipants,
   files,
   messageAttachments,
   messageLogs,
   messages,
+  nodes,
   readReceipts,
   pendingEvents,
   sessionEvents,
@@ -31,6 +33,7 @@ import { sendDm } from '../engine/dm.js';
 import { createGroupDm, postGroupMessage } from '../engine/groupDm.js';
 import { postReply } from '../engine/thread.js';
 import { markRead } from '../engine/receipt.js';
+import { ackDelivery, ackDeliveriesUpToSeq, DELIVERY_EXPIRY_BATCH_SIZE } from '../engine/delivery.js';
 import { rotateAgentIdentity } from '../engine/agentIdentity.js';
 import {
   applyStatusEventEffect,
@@ -194,6 +197,135 @@ describe('atomic write paths', () => {
       const receipt = await markRead(db, ws.workspaceId, sent.id, bob.agentId);
       expect(receipt?.message_id).toBe(sent.id);
       expect(await db.select().from(readReceipts)).toHaveLength(1);
+    });
+
+    it('does not advance the DM cursor when the delivery is already dead-lettered', async () => {
+      const { ws, alice, bob, db } = await seed();
+      const sent = await sendDm(db, ws.workspaceId, alice.agentId, { to: 'bob', text: 'psst' });
+      const [delivery] = await db.select().from(deliveries).where(eq(deliveries.messageId, sent.id));
+      await db.update(deliveries).set({ status: 'dead_lettered' }).where(eq(deliveries.id, delivery.id));
+
+      const acked = await ackDelivery(db, ws.workspaceId, bob.agentId, delivery.id);
+
+      expect(acked?.changed).toBe(false);
+      expect(acked?.delivery.status).toBe('dead_lettered');
+      const [cursor] = await db.select().from(dmParticipants).where(eq(dmParticipants.agentId, bob.agentId));
+      expect(cursor.lastReadId).toBeNull();
+      expect(await db.select().from(readReceipts)).toHaveLength(0);
+    });
+
+    it('acks a cumulative backlog in chunks and moves the cursor only on the last one', async () => {
+      const { ws, alice, bob, channelId, db } = await seed();
+      await db.insert(nodes).values({
+        id: 'node_ack_chunk',
+        workspaceId: ws.workspaceId,
+        name: 'ack-chunk',
+        tokenHash: 'ack-chunk-token',
+      });
+      await db.update(agents).set({
+        locationType: 'via_node',
+        locationNodeId: 'node_ack_chunk',
+        providerName: 'default',
+      }).where(eq(agents.id, bob.agentId));
+
+      const count = DELIVERY_EXPIRY_BATCH_SIZE + 1;
+      for (let i = 0; i < count; i++) {
+        await postMessage(db, ws.workspaceId, channelId, alice.agentId, { text: `n${i}` });
+      }
+      const bobRows = await db.select().from(deliveries).where(eq(deliveries.agentId, bob.agentId));
+      expect(bobRows).toHaveLength(count);
+      const upToSeq = Math.max(...bobRows.map((row) => row.seq));
+
+      const restore = injectUpdateFailure(db, dmParticipants, 'injected chunk cursor failure', {
+        skip: DELIVERY_EXPIRY_BATCH_SIZE,
+        times: 1,
+      });
+      await expect(ackDeliveriesUpToSeq(
+        db, ws.workspaceId, 'node_ack_chunk', 'default', 'bob', upToSeq,
+      )).rejects.toThrow('injected chunk cursor failure');
+      restore();
+
+      const mid = await db.select().from(deliveries).where(eq(deliveries.agentId, bob.agentId));
+      expect(mid.filter((row) => row.status === 'acked')).toHaveLength(DELIVERY_EXPIRY_BATCH_SIZE);
+      expect(mid.filter((row) => row.status === 'queued')).toHaveLength(1);
+      const [paused] = await db.select({ seq: agents.deliveryAckSeq }).from(agents).where(eq(agents.id, bob.agentId));
+      expect(paused.seq).toBe(0);
+
+      const done = await ackDeliveriesUpToSeq(
+        db, ws.workspaceId, 'node_ack_chunk', 'default', 'bob', upToSeq,
+      );
+      expect(done?.acked).toBe(1);
+      const after = await db.select().from(deliveries).where(eq(deliveries.agentId, bob.agentId));
+      expect(after.every((row) => row.status === 'acked')).toBe(true);
+      const [finished] = await db.select({ seq: agents.deliveryAckSeq }).from(agents).where(eq(agents.id, bob.agentId));
+      expect(finished.seq).toBe(upToSeq);
+    });
+
+    it('keeps the DM read cursor at the last acked message when a later chunk fails', async () => {
+      const { ws, alice, bob, db } = await seed();
+      await db.insert(nodes).values({
+        id: 'node_ack_dm_chunk',
+        workspaceId: ws.workspaceId,
+        name: 'ack-dm-chunk',
+        tokenHash: 'ack-dm-chunk-token',
+      });
+      await db.update(agents).set({
+        locationType: 'via_node',
+        locationNodeId: 'node_ack_dm_chunk',
+        providerName: 'default',
+      }).where(eq(agents.id, bob.agentId));
+
+      const count = DELIVERY_EXPIRY_BATCH_SIZE + 1;
+      for (let i = 0; i < count; i++) {
+        await sendDm(db, ws.workspaceId, alice.agentId, { to: 'bob', text: `dm${i}` });
+      }
+      const bobRows = (await db.select().from(deliveries).where(eq(deliveries.agentId, bob.agentId)))
+        .sort((a, b) => a.seq - b.seq);
+      expect(bobRows).toHaveLength(count);
+      const upToSeq = bobRows[count - 1].seq;
+      const endOfChunkOne = bobRows[DELIVERY_EXPIRY_BATCH_SIZE - 1].messageId;
+      const endOfBacklog = bobRows[count - 1].messageId;
+
+      const restore = injectUpdateFailure(db, dmParticipants, 'injected dm chunk cursor failure', {
+        skip: DELIVERY_EXPIRY_BATCH_SIZE,
+        times: 1,
+      });
+      await expect(ackDeliveriesUpToSeq(
+        db, ws.workspaceId, 'node_ack_dm_chunk', 'default', 'bob', upToSeq,
+      )).rejects.toThrow('injected dm chunk cursor failure');
+      restore();
+
+      const [paused] = await db.select().from(dmParticipants).where(eq(dmParticipants.agentId, bob.agentId));
+      expect(paused.lastReadId).toBe(endOfChunkOne);
+
+      const done = await ackDeliveriesUpToSeq(
+        db, ws.workspaceId, 'node_ack_dm_chunk', 'default', 'bob', upToSeq,
+      );
+      expect(done?.acked).toBe(1);
+      const [finished] = await db.select().from(dmParticipants).where(eq(dmParticipants.agentId, bob.agentId));
+      expect(finished.lastReadId).toBe(endOfBacklog);
+    });
+
+    it('rolls back a delivery ack when the DM read cursor update fails', async () => {
+      const { ws, alice, bob, db } = await seed();
+      const sent = await sendDm(db, ws.workspaceId, alice.agentId, { to: 'bob', text: 'psst' });
+      const [delivery] = await db.select().from(deliveries).where(eq(deliveries.messageId, sent.id));
+
+      const restore = injectUpdateFailure(db, dmParticipants, 'injected dm cursor failure');
+      await expect(ackDelivery(db, ws.workspaceId, bob.agentId, delivery.id)).rejects.toThrow(
+        'injected dm cursor failure',
+      );
+      restore();
+
+      const [after] = await db.select().from(deliveries).where(eq(deliveries.id, delivery.id));
+      expect(after.status).toBe('queued');
+      const [participant] = await db.select().from(dmParticipants).where(eq(dmParticipants.agentId, bob.agentId));
+      expect(participant.lastReadId).toBeNull();
+
+      const acked = await ackDelivery(db, ws.workspaceId, bob.agentId, delivery.id);
+      expect(acked?.changed).toBe(true);
+      const [cursor] = await db.select().from(dmParticipants).where(eq(dmParticipants.agentId, bob.agentId));
+      expect(cursor.lastReadId).toBe(sent.id);
     });
 
     it('commits concurrent transactional sends without interleaving', async () => {
@@ -378,7 +510,7 @@ describe('atomic write paths', () => {
       expect(delivery.agentId).toBe(alice.agentId);
     });
 
-    it('markRead issues exactly one batch: receipt + delivery transition + lastReadId', async () => {
+    it('markRead issues exactly one batch: receipt + delivery transition + read cursors', async () => {
       const { ws, alice, bob, channelId, db } = await seed();
       const sent = await postMessage(db, ws.workspaceId, channelId, alice.agentId, { text: 'hello' });
       const batches = attachFakeBatch(db);
@@ -386,14 +518,31 @@ describe('atomic write paths', () => {
       const receipt = await markRead(db, ws.workspaceId, sent.id, bob.agentId);
 
       expect(batches).toHaveLength(1);
-      expect(batches[0]).toHaveLength(3);
+      expect(batches[0]).toHaveLength(4);
       expectStatementOn(batches[0], 'insert', 'read_receipts');
       expectStatementOn(batches[0], 'update', 'deliveries');
       expectStatementOn(batches[0], 'update', 'channel_members');
+      expectStatementOn(batches[0], 'update', 'dm_participants');
 
       expect(receipt?.message_id).toBe(sent.id);
       const [delivery] = await db.select().from(deliveries);
       expect(delivery.status).toBe('acked');
+    });
+
+    it('acks a DM delivery and its read cursor in one batch', async () => {
+      const { ws, alice, bob, db } = await seed();
+      const sent = await sendDm(db, ws.workspaceId, alice.agentId, { to: 'bob', text: 'psst' });
+      const [delivery] = await db.select().from(deliveries).where(eq(deliveries.messageId, sent.id));
+      const batches = attachFakeBatch(db);
+
+      const acked = await ackDelivery(db, ws.workspaceId, bob.agentId, delivery.id);
+
+      expect(acked?.changed).toBe(true);
+      expect(batches).toHaveLength(1);
+      expectStatementOn(batches[0], 'update', 'deliveries');
+      expectStatementOn(batches[0], 'update', 'dm_participants');
+      const [cursor] = await db.select().from(dmParticipants).where(eq(dmParticipants.agentId, bob.agentId));
+      expect(cursor.lastReadId).toBe(sent.id);
     });
 
     it('a failed batch applies nothing — no orphan message rows', async () => {

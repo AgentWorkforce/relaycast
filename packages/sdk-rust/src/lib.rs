@@ -124,6 +124,7 @@ pub mod registration;
 pub mod relay;
 pub mod types;
 pub mod ws;
+mod ws_tls;
 
 // Re-export main types
 pub use agent::{AgentClient, DmOptions, EnsureChannelOutcome};

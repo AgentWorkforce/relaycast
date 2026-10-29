@@ -50,6 +50,7 @@ describe('internal admin API', () => {
       for (const [path, method] of [
         ['/capabilities', 'GET'],
         ['/workspaces', 'POST'],
+        ['/workspaces/ws1', 'DELETE'],
         ['/workspaces/ws1/api-key', 'POST'],
       ] as const) {
         const res = await internal(path, { method, body: method === 'POST' ? {} : undefined });
@@ -83,7 +84,7 @@ describe('internal admin API', () => {
           revocation_markers: true,
           previous_key_slot: true,
         },
-        workspace_admin: { create: true, server_minted_key: true },
+        workspace_admin: { create: true, delete: true, server_minted_key: true },
       });
     });
 
@@ -112,6 +113,38 @@ describe('internal admin API', () => {
       stack = makeNodeStack({ internalSecret: SECRET });
       const res = await internal('/workspaces', { method: 'POST', body: { name: '' } });
       expect(res.status).toBe(400);
+    });
+
+    it('deletes by id idempotently and revokes workspace and agent credentials', async () => {
+      stack = makeNodeStack({ internalSecret: SECRET });
+      const ws = await createViaAdmin('delete-me');
+      const alice = await registerAgent(stack.app, ws.api_key, 'alice');
+
+      expect((await internal(`/workspaces/${ws.workspace_id}`, { method: 'DELETE' })).status).toBe(204);
+      expect((await internal(`/workspaces/${ws.workspace_id}`, { method: 'DELETE' })).status).toBe(204);
+      expect((await readWorkspace(ws.api_key)).status).toBe(401);
+      expect((await stack.app.request('/v1/inbox', {
+        headers: { authorization: `Bearer ${alice.token}` },
+      })).status).toBe(401);
+    });
+
+    it('validates delete ids and fences a concurrent key push', async () => {
+      stack = makeNodeStack({ internalSecret: SECRET });
+      expect((await internal('/workspaces/bad%20id', { method: 'DELETE' })).status).toBe(400);
+      const ws = await createViaAdmin('delete-race');
+      const nextKey = `rk_${'live'}_delete_race_000000000000000000000`;
+      const deletion = internal(`/workspaces/${ws.workspace_id}`, { method: 'DELETE' });
+      const push = internal(`/workspaces/${ws.workspace_id}/api-key`, {
+        method: 'POST',
+        body: { api_key: nextKey, key_generation: 1 },
+      });
+      const [deleted, pushed] = await Promise.all([deletion, push]);
+      expect(deleted.status).toBe(204);
+      expect([200, 410]).toContain(pushed.status);
+      // If the push won the write race, deletion followed it and removed the
+      // workspace. If deletion claimed first, the push was fenced with 410.
+      expect((await readWorkspace(nextKey)).status).toBe(401);
+      expect((await internal(`/workspaces/${ws.workspace_id}`, { method: 'DELETE' })).status).toBe(204);
     });
 
     it('server-minted rotation kills the old key and fences the workspace', async () => {

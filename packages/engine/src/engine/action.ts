@@ -1,3 +1,4 @@
+import { nodeLive, nodeReady, providerLive } from './nodeLiveness.js';
 import { and, asc, eq, inArray, isNotNull, isNull, like, lt, lte, or, sql } from 'drizzle-orm';
 import type { getDb } from '../db/index.js';
 import { actions, actionInvocations, agents, agentNodeBindings, channelMembers, dmParticipants, nodes } from '../db/schema.js';
@@ -22,8 +23,8 @@ import {
 import type { NodeConnectionRegistry, NodeDrainOptions } from '../ports/realtime.js';
 import { runAtomic, runAtomicWrites, type AtomicWrite } from '../ports/database.js';
 import { exclusiveClaimWrite, retryAfterAtMatches, type InvocationClaimStatus } from './invocationClaim.js';
-import { claimSpawnNode, chooseNodeForAction, isNodeLive, releaseNodeCapacity, reserveNodeCapacity } from './placement.js';
-import { DEFAULT_PROVIDER_NAME, capacityProviderName, getProvider, isProviderLive } from './nodeProvider.js';
+import { claimSpawnNode, chooseNodeForAction, releaseNodeCapacity, reserveNodeCapacity } from './placement.js';
+import { DEFAULT_PROVIDER_NAME, capacityProviderName, getProvider } from './nodeProvider.js';
 import { AGENT_TOKEN_HASH_PATTERN } from '@relaycast/types';
 import { createTaskState, expireTaskInvocation, expireTaskInvocations, taskExecution } from './taskInvocation.js';
 import { withEngineOperation } from '../lib/engineDiagnostics.js';
@@ -845,7 +846,7 @@ async function isHandlerConnectionLive(
   const provider = await getProvider(db, workspaceId, nodeId, providerName);
   if (!provider) return true;
   const explicitlyAttached = registry.isProviderAttached?.(workspaceId, nodeId, providerName) ?? true;
-  return !explicitlyAttached || isProviderLive(provider);
+  return !explicitlyAttached || await providerLive(db, workspaceId, nodeId, provider);
 }
 
 /** Is a node provider currently invokable — connection up AND heartbeat handlers_live. */
@@ -858,7 +859,7 @@ async function isNodeProviderLive(
 ): Promise<boolean> {
   if (!registry.isProviderConnected(workspaceId, nodeId, providerName)) return false;
   const provider = await getProvider(db, workspaceId, nodeId, providerName);
-  return !!provider && isProviderLive(provider);
+  return !!provider && await providerLive(db, workspaceId, nodeId, provider);
 }
 
 async function failInvocationForUnavailableProvider(
@@ -1581,7 +1582,7 @@ async function dispatchRelease(args: {
       .select({ status: nodes.status, lastHeartbeatAt: nodes.lastHeartbeatAt })
       .from(nodes)
       .where(and(eq(nodes.workspaceId, args.workspaceId), eq(nodes.id, nodeId)));
-    if (!directNode || !isNodeLive(directNode)) hostLive = false;
+    if (!directNode || !(await nodeLive(args.db, { ...directNode, workspaceId: args.workspaceId, id: nodeId! }))) hostLive = false;
   }
 
   if (!hostLive || !registry) {
@@ -3708,7 +3709,7 @@ export async function drainNodeInvocations(
             })
             .from(nodes)
             .where(and(eq(nodes.workspaceId, workspaceId), eq(nodes.id, nodeId)));
-          if (node && isNodeLive(node) && node.handlersLive) {
+          if (node && await nodeReady(db, { ...node, workspaceId, id: nodeId })) {
             await db
               .update(actionInvocations)
               .set({ retryAfterAt: new Date(Date.now() + NODE_DRAIN_REQUEUE_RETRY_MS) })

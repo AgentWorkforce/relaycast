@@ -15,7 +15,11 @@ import {
 } from '../lib/httpResponse.js';
 import { emitServerEvent } from '../lib/serverTelemetry.js';
 import * as workspaceEngine from '../engine/workspace.js';
-import { INTERNAL_CAPABILITIES, pushWorkspaceKey } from '../engine/internalAdmin.js';
+import {
+  beginInternalWorkspaceDeletion,
+  INTERNAL_CAPABILITIES,
+  pushWorkspaceKey,
+} from '../engine/internalAdmin.js';
 import { WORKSPACE_KEY_MAX_GRACE_MS } from '../engine/tokenRotate.js';
 
 /**
@@ -73,6 +77,25 @@ internalRoutes.post('/workspaces', async (c) => {
       api_key_generation: 0,
     });
   } catch (err: unknown) {
+    return errorResponse(c, err);
+  }
+});
+
+// DELETE /internal/workspaces/:id — authoritative, idempotent deletion for a
+// trusted control plane. Unlike the public route this authenticates with the
+// internal secret, so a retry remains distinguishable from a wrong workspace
+// key after the workspace row (and its key hash) is already gone.
+internalRoutes.delete('/workspaces/:id', async (c) => {
+  const workspaceId = c.req.param('id');
+  if (!WORKSPACE_ID_PATTERN.test(workspaceId)) {
+    return jsonError(c, 'invalid_request', 'Invalid workspace id', 400);
+  }
+  const releaseFence = beginInternalWorkspaceDeletion(c.get('db'), workspaceId);
+  try {
+    await workspaceEngine.deleteWorkspace(c.get('db'), c.get('engine').files, workspaceId);
+    return c.body(null, 204);
+  } catch (err: unknown) {
+    releaseFence();
     return errorResponse(c, err);
   }
 });

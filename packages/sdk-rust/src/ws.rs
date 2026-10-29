@@ -5,7 +5,7 @@ use std::collections::HashSet;
 use std::sync::Arc;
 use tokio::sync::{broadcast, mpsc, Mutex};
 use tokio::time::{Duration, MissedTickBehavior};
-use tokio_tungstenite::{connect_async, tungstenite::Message};
+use tokio_tungstenite::tungstenite::Message;
 use tracing::{debug, warn};
 use url::Url;
 
@@ -14,6 +14,7 @@ use crate::origin_actor::{
     sanitize_agent_relay_distinct_id, sanitize_origin_actor, AGENT_RELAY_DISTINCT_ID_QUERY,
 };
 use crate::types::WsEvent;
+use crate::ws_tls;
 use crate::{ws_base_from_http, DEFAULT_BASE_URL};
 
 const SDK_VERSION: &str = env!("CARGO_PKG_VERSION");
@@ -261,7 +262,7 @@ impl WsClient {
             }
         }
 
-        let (ws_stream, _) = connect_async(url.as_str()).await?;
+        let (ws_stream, _) = ws_tls::connect(&url).await.map_err(RelayError::WebSocket)?;
 
         let (command_tx, mut command_rx) = mpsc::channel::<WsCommand>(32);
         self.command_tx = Some(command_tx);
@@ -317,7 +318,7 @@ impl WsClient {
                         }
                     }
 
-                    match connect_async(reconnect_url.as_str()).await {
+                    match ws_tls::connect(&reconnect_url).await {
                         Ok((stream, _)) => stream,
                         Err(err) => {
                             let _ = lifecycle_tx.send(WsLifecycleEvent::Error(err.to_string()));

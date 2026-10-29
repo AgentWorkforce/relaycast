@@ -1327,6 +1327,10 @@ components:
         status:
           type: string
           enum: [online, offline]
+        liveness_status:
+          type: string
+          enum: [online, offline, unknown]
+          description: Optional connection-authority result. Unknown means the owner could not be reached; status remains offline and live is false for availability compatibility. Database heartbeat timestamps may be sparse checkpoints when this field is present.
         live:
           type: boolean
         handlers_live:
@@ -4330,11 +4334,14 @@ paths:
       summary: Get inbox
       description: >-
         Get the authenticated agent's unified inbox (unread counts, mentions, DMs,
-        recent reactions). Unread counts exclude archived channels. Mentions are
-        matched with the exact `@handle` token contract used for delivery: escaped
-        (`\@x`), email-address (`user@x`), prefix, and superstring text are not
-        mentions, and only messages in live channels the agent has joined or DMs
-        the agent participates in are returned.
+        recent reactions). Unread counts exclude archived channels. A DM unread
+        count includes messages from other participants after that participant's
+        read cursor. Marking a message read, or acknowledging its delivery, moves
+        the cursor forward and the count drops. Mentions are matched with the
+        exact `@handle` token contract used for delivery: escaped (`\@x`),
+        email-address (`user@x`), prefix, and superstring text are not mentions,
+        and only messages in live channels the agent has joined or DMs the agent
+        participates in are returned.
       tags:
         - Inbox
       security:
@@ -6793,6 +6800,8 @@ paths:
                         properties:
                           create:
                             type: boolean
+                          delete:
+                            type: boolean
                           server_minted_key:
                             type: boolean
         '401':
@@ -6863,6 +6872,53 @@ paths:
                             enum: [0]
         '400':
           description: Invalid body
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '401':
+          description: Missing or wrong internal secret (`unauthorized`)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: >-
+            `not_found` — the admin API is disabled (no internal secret
+            configured). Indistinguishable from an absent route.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /internal/workspaces/{id}:
+    servers:
+      - url: http://localhost:8787
+        description: Self-hosted engine (root, no /v1 prefix)
+    delete:
+      summary: Delete workspace (control plane)
+      description: >-
+        Idempotently delete a workspace by id using the internal secret.
+        Returns 204 both when deletion commits and when the workspace is
+        already gone, so a control plane can safely retry after losing a
+        response. Current and previous workspace keys and agent tokens stop
+        authenticating. A concurrent internal key push is fenced.
+      tags:
+        - Internal Admin
+      security:
+        - internalSecret: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            pattern: '^[A-Za-z0-9_-]{1,128}$'
+      responses:
+        '204':
+          description: Workspace deleted or already absent
+        '400':
+          description: Invalid workspace id
           content:
             application/json:
               schema:

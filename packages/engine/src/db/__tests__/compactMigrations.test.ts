@@ -176,6 +176,10 @@ function expectConstraintsPreserved(before: ReturnType<typeof constraints>, afte
       // 0063 appends four nullable recovery fields. Remove only their exact
       // additive DDL so changes to every pre-existing node constraint remain
       // visible to this preservation assertion.
+      // 0078 appends the DM unread cursor. Remove only that additive column.
+      if (table.name === 'dm_participants') {
+        table = { ...table, sql: table.sql.replace(', last_read_id TEXT', '') };
+      }
       if (table.name === 'nodes') {
         table = {
           ...table,

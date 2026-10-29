@@ -1,3 +1,4 @@
+import { nodeReady, filterAsync, nodeLivenessAuthority } from './nodeLiveness.js';
 import { and, eq, sql } from 'drizzle-orm';
 import type { FleetCapability } from '@relaycast/types';
 import type { getDb } from '../db/index.js';
@@ -183,8 +184,8 @@ export async function reserveNodeCapacity(
     .where(and(
       eq(nodes.workspaceId, workspaceId),
       eq(nodes.id, nodeId),
-      eq(nodes.status, 'online'),
-      eq(nodes.handlersLive, true),
+      nodeLivenessAuthority(db) ? undefined : eq(nodes.status, 'online'),
+      nodeLivenessAuthority(db) ? undefined : eq(nodes.handlersLive, true),
       sql`(${nodes.maxAgents} = 0 OR (${nodes.activeAgents} + coalesce(${nodes.reservedAgents}, 0)) < ${nodes.maxAgents})`,
     ))
     .returning();
@@ -220,7 +221,7 @@ export async function claimSpawnNode(
     const chooseLiveCandidate = async (node: NodeRow | undefined): Promise<PlacementResult | null> => {
       if (!node) return null;
       if (!nodeHasCapability(node, capability) || excluded.has(node.id)) return null;
-      if (!isNodeLive(node) || !node.handlersLive) return { node, capability, queued: true };
+      if (!(await nodeReady(db, node))) return { node, capability, queued: true };
       const reserved = await reserveNodeCapacity(tx, workspaceId, node.id);
       if (!reserved) {
         throw codedError(`Node "${node.name}" is at capacity`, 'handler_unavailable', 503);
@@ -239,7 +240,7 @@ export async function claimSpawnNode(
         throw codedError(`Node "${node.name}" is unavailable for retry`, 'handler_unavailable', 503);
       }
       if (node && nodeHasCapability(node, capability)) {
-        return { node, capability, queued: !isNodeLive(node) || !node.handlersLive };
+        return { node, capability, queued: !(await nodeReady(db, node)) };
       }
     }
 
@@ -272,7 +273,7 @@ export async function claimSpawnNode(
       if (!nodeHasCapability(node, capability)) {
         throw codedError(`Node "${node.name}" does not provide ${capability}`, 'capability_mismatch', 409);
       }
-      return { node, capability, queued: !isNodeLive(node) || !node.handlersLive };
+      return { node, capability, queued: !(await nodeReady(db, node)) };
     }
 
     if (target) {
@@ -291,18 +292,16 @@ export async function claimSpawnNode(
       if (!nodeHasCapability(node, capability)) {
         throw codedError(`Node "${target}" does not provide ${capability}`, 'capability_mismatch', 409);
       }
-      return { node, capability, queued: !isNodeLive(node) || !node.handlersLive };
+      return { node, capability, queued: !(await nodeReady(db, node)) };
     }
 
     const rows = await tx.select().from(nodes).where(eq(nodes.workspaceId, workspaceId));
-    const eligible = rows
-      .filter((node) =>
+    const eligible = (await filterAsync(rows, async (node) =>
         !excluded.has(node.id) &&
         nodeHasCapability(node, capability) &&
-        isNodeLive(node) &&
-        node.handlersLive &&
+        (await nodeReady(db, node)) &&
         nodeHasCapacity(node),
-      )
+      ))
       .sort(compareNodeCapacityLoad);
 
     for (const node of eligible) {
@@ -333,7 +332,7 @@ export async function chooseNodeForAction(
       return {
         node,
         capability,
-        queued: !isNodeLive(node) || !node.handlersLive,
+        queued: !(await nodeReady(db, node)),
       };
     }
     if (node && excluded.has(node.id)) {
@@ -371,7 +370,7 @@ export async function chooseNodeForAction(
     return {
       node,
       capability,
-      queued: !isNodeLive(node) || !node.handlersLive,
+      queued: !(await nodeReady(db, node)),
     };
   }
 
@@ -392,19 +391,17 @@ export async function chooseNodeForAction(
     return {
       node,
       capability,
-      queued: !isNodeLive(node) || !node.handlersLive,
+      queued: !(await nodeReady(db, node)),
     };
   }
 
   const rows = await db.select().from(nodes).where(eq(nodes.workspaceId, workspaceId));
-  const eligible = rows
-    .filter((node) =>
+  const eligible = (await filterAsync(rows, async (node) =>
       !excluded.has(node.id) &&
       nodeHasCapability(node, capability) &&
-      isNodeLive(node) &&
-      node.handlersLive &&
+      (await nodeReady(db, node)) &&
       nodeHasCapacity(node),
-    )
+    ))
     .sort(compareNodeCapacityLoad);
 
   const node = eligible[0];
