@@ -188,6 +188,20 @@ describe('observer tokens', () => {
       expect(Date.parse((created.body.data as { expires_at: string }).expires_at)).toBe(future);
     }
 
+    const patchTarget = await createObserverToken(stack, ws.workspaceKey, {
+      name: 'patch-target',
+      scopes: ['messages:read'],
+    });
+    const patched = await stack.app.request(`/v1/observer-tokens/${patchTarget.data.id}`, {
+      method: 'PATCH',
+      headers: { 'content-type': 'application/json', authorization: `Bearer ${ws.workspaceKey}` },
+      body: JSON.stringify({ expires_at: negative, filters: { created_after: positive } }),
+    });
+    const patchedBody = await patched.json() as { data: { expires_at: string; filters: { created_after: string } } };
+    expect(patched.status).toBe(200);
+    expect(Date.parse(patchedBody.data.expires_at)).toBe(future);
+    expect(Date.parse(patchedBody.data.filters.created_after)).toBe(future);
+
     const pastOffset = new Date(Date.now() - 60_000).toISOString().replace(/Z$/, '+05:30');
     const expired = await createObserverToken(stack, ws.workspaceKey, {
       name: 'expired-offset',

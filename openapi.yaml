@@ -2204,6 +2204,7 @@ paths:
                   type: string
                   format: date-time
                   nullable: true
+                  description: RFC 3339 timestamp; numeric offsets are accepted and the expiry is stored as the equivalent UTC instant. The same applies to `filters.created_after`.
       responses:
         '201':
           description: Observer token created
@@ -2310,6 +2311,7 @@ paths:
                   type: string
                   format: date-time
                   nullable: true
+                  description: RFC 3339 timestamp; numeric offsets are accepted and the expiry is stored as the equivalent UTC instant. The same applies to `filters.created_after`.
       responses:
         '200':
           description: Observer token updated
