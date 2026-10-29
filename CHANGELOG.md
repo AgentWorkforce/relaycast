@@ -16,7 +16,9 @@ This project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 Packages without a separate changelog are covered by the cross-package notes below.
 
-## [Unreleased - Patch]
+## [Unreleased]
+
+## [12.2.1] - 2026-10-29
 
 - A DM participant's inbox unread count drops after they mark a message read, and stays dropped across later inbox reads.
 - Inbox channel unread counts stay correct when message ids gain a digit.
@@ -933,7 +935,8 @@ Packages without a separate changelog are covered by the cross-package notes bel
 
 Earlier releases are available on the [GitHub releases page](https://github.com/AgentWorkforce/relaycast/releases).
 
-[Unreleased]: https://github.com/AgentWorkforce/relaycast/compare/v12.2.0...HEAD
+[Unreleased]: https://github.com/AgentWorkforce/relaycast/compare/v12.2.1...HEAD
+[12.2.1]: https://github.com/AgentWorkforce/relaycast/compare/v12.2.0...v12.2.1
 [12.2.0]: https://github.com/AgentWorkforce/relaycast/compare/v12.1.0...v12.2.0
 [12.1.0]: https://github.com/AgentWorkforce/relaycast/compare/v12.0.0...v12.1.0
 [12.0.0]: https://github.com/AgentWorkforce/relaycast/compare/v11.1.1...v12.0.0
