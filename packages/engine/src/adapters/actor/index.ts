@@ -283,8 +283,8 @@ export function createActorRuntime(options: ActorRuntimeOptions): ActorRuntime {
       maintaining = true;
       blobDeadline = Date.now() + blobDeleteBudgetMs;
       try {
-        kv.prune();
         const steps: [string, () => Promise<unknown>][] = [
+          ['kv_expiry', async () => kv.prune()],
           ['presence', () => presence.sweep()],
           ['stale_agents', () => sweepStaleAgents(db)],
           ['offline_nodes', () => sweepOfflineNodes(db, realtime, deps)],

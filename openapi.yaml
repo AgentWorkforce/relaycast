@@ -5050,7 +5050,7 @@ paths:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
         '409':
-          description: The file bytes were never PUT to the upload URL, or are empty (`upload_incomplete`); upload them and retry. The stored bytes differ from the declared `size_bytes` (`upload_size_mismatch`).
+          description: The file bytes were never PUT to the upload URL, or are empty (`upload_incomplete`); upload them and retry. The stored bytes differ from the declared `size_bytes` (`upload_size_mismatch`). Both checks run when the deployment's file storage reports stored sizes (`FileStorage.statObject`), as the Node and actor adapters do; without it completion is accepted as declared.
           content:
             application/json:
               schema:
