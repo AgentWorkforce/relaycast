@@ -268,7 +268,7 @@ pub async fn bootstrap_session(
     let (api_key, workspace_id) = if let Some(ref key) = config.api_key {
         (key.clone(), cached.as_ref().map(|c| c.workspace_id.clone()))
     } else if let Some(ref creds) = cached {
-        if creds.api_key.starts_with("rk_") {
+        if is_workspace_key(&creds.api_key) {
             (creds.api_key.clone(), Some(creds.workspace_id.clone()))
         } else {
             create_fresh_workspace(base_url).await?
@@ -415,6 +415,12 @@ pub async fn bootstrap_session(
     }
 }
 
+/// Whether a cached key is a workspace key: `rk_...` or a self-routing
+/// `relaycast_ws_<workspace_id>_<secret>`. Every deployment accepts both.
+fn is_workspace_key(key: &str) -> bool {
+    key.starts_with("rk_") || key.starts_with("relaycast_ws_")
+}
+
 async fn create_fresh_workspace(base_url: Option<&str>) -> Result<(String, Option<String>)> {
     let ws_name = format!("relay-{}", uuid_v4_short());
     let result = RelayCast::create_workspace(
@@ -477,6 +483,20 @@ fn uuid_v4_short() -> String {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn workspace_keys_of_both_families_are_reused() {
+        assert!(is_workspace_key("rk_live_abc"));
+        assert!(is_workspace_key(&format!(
+            "relaycast_ws_241764880589606912_{}",
+            "a".repeat(64)
+        )));
+        assert!(!is_workspace_key(&format!(
+            "relaycast_ag_241764880589606912_{}",
+            "a".repeat(64)
+        )));
+        assert!(!is_workspace_key("at_live_abc"));
+    }
+
     use super::*;
     use serde_json::json;
     use wiremock::matchers::{body_string_contains, method, path};

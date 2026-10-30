@@ -31,6 +31,12 @@ describe('Relay Connect observer presentation', () => {
     );
   });
 
+  it('redacts self-routing credentials too', () => {
+    expect(sanitizeConnectObserverText('Use relaycast_ob_241764880589606912_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa now.')).toBe(
+      'Use [credential redacted] now.',
+    );
+  });
+
   it('removes query and fragment capabilities without removing the room binding', () => {
     expect(
       connectObserverUrlWithoutCapability(

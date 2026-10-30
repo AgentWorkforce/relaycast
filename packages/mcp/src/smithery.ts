@@ -13,7 +13,7 @@ export const configSchema = z.object({
     .string()
     .optional()
     .describe(
-      'Workspace API key (rk_live_...) used to pre-authenticate the MCP session.',
+      'Workspace API key (rk_live_... or relaycast_ws_...) used to pre-authenticate the MCP session.',
     ),
   relayBaseUrl: z
     .string()

@@ -66,6 +66,15 @@ describe('mintObserverStreamToken', () => {
     expect(nameA).not.toBe(nameB);
   });
 
+  it('accepts a self-routing observer token from a deployment that mints them', async () => {
+    mockFetch(
+      jsonResponse({ ok: true, data: { id: 'ot_1', token: 'relaycast_ob_241764880589606912_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa' } }, 201)
+    );
+    await expect(
+      mintObserverStreamToken('http://relay.test', 'relaycast_ws_241764880589606912_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa')
+    ).resolves.toEqual({ token: 'relaycast_ob_241764880589606912_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa', id: 'ot_1' });
+  });
+
   it('returns null when creation fails', async () => {
     mockFetch(jsonResponse({ ok: false }, 401));
 

@@ -134,6 +134,20 @@ describe('registration tools', () => {
     expect(saved!.agentName).toBe('old-agent');
   });
 
+  it('set_workspace_key accepts a relaycast_ws_ key and rejects other credentials', async () => {
+    const routed = 'relaycast_ws_241764880589606912_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa';
+    const ok = await client.callTool({ name: 'workspace.set_key', arguments: { api_key: routed } });
+    expect(ok.isError).toBeFalsy();
+    expect(session.workspaceKey).toBe(routed);
+
+    const agentToken = await client.callTool({
+      name: 'workspace.set_key',
+      arguments: { api_key: 'relaycast_ag_241764880589606912_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa' },
+    });
+    expect(agentToken.isError).toBe(true);
+    expect(session.workspaceKey).toBe(routed);
+  });
+
   it('set_workspace_key restores saved context when switching back', async () => {
     // Simulate a previously joined workspace.
     session.workspaceKey = 'rk_live_ws1';

@@ -8,6 +8,10 @@ The format is based on Keep a Changelog, and this project follows Semantic Versi
 
 ## [Unreleased - Major]
 
+### Changed
+
+- A cached `relaycast_ws_…` workspace key is reused like an `rk_…` key instead of triggering a new workspace.
+
 ### Removed
 
 - `Workspace::plan`; servers no longer return it.

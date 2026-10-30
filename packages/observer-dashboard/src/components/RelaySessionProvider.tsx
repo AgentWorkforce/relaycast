@@ -15,6 +15,7 @@ import {
   shouldInitializeConnectObserver,
 } from '../lib/connect-observer';
 import { ConnectObserverTemporaryState } from './ConnectObserverTemporaryState';
+import { isObserverToken, isWorkspaceKey } from '@relaycast/types';
 
 interface Session {
   apiKey: string;
@@ -140,12 +141,12 @@ export function RelaySessionProvider({
           mode === 'connect' &&
           (!observerIdParam ||
             !/^ot_(?!live_)[A-Za-z0-9_-]+$/.test(observerIdParam) ||
-            (keyParam !== null && !keyParam.startsWith('ot_live_')))
+            (keyParam !== null && !isObserverToken(keyParam)))
         ) {
           setAccessFailure('unavailable');
           return;
         }
-        if (keyParam?.startsWith('rk_live_') || keyParam?.startsWith('ot_live_')) {
+        if (keyParam !== null && (isWorkspaceKey(keyParam) || isObserverToken(keyParam))) {
           const result = await login(
             keyParam,
             mode === 'connect' ? { connectObserverId: observerIdParam!, signal: controller.signal } : undefined,
@@ -181,7 +182,7 @@ export function RelaySessionProvider({
 
         if (
           data?.authenticated &&
-          (mode !== 'connect' || (data.apiKey?.startsWith('ot_live_') && data.connectObserverId === observerIdParam))
+          (mode !== 'connect' || (typeof data.apiKey === 'string' && isObserverToken(data.apiKey) && data.connectObserverId === observerIdParam))
         ) {
           // Drop another workspace's cached activity before this dashboard
           // mounts, so switching keys never hydrates stale cross-workspace events.

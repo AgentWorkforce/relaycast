@@ -16,8 +16,9 @@ This project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 Packages without a separate changelog are covered by the cross-package notes below.
 
-## [Unreleased - Patch]
+## [Unreleased - Minor]
 
+- The MCP server, the observer dashboard and the Rust SDK accept self-routing credentials (`relaycast_ws_…`, `relaycast_ob_…`) wherever they accepted `rk_live_` / `ot_live_`.
 - Observer token `expires_at` and `filters.created_after` accept RFC 3339 numeric-offset timestamps (for example `+05:30`); the stored expiry is the same instant as the equivalent UTC timestamp.
 
 ## [12.2.1] - 2026-10-29

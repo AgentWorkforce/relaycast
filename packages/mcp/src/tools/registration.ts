@@ -3,6 +3,7 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
 import { RelayCast } from '@relaycast/sdk';
 import type { RegisteredAgent, SessionState, WorkspaceContext } from '../types.js';
+import { isWorkspaceKey } from '@relaycast/types';
 
 type ApiOk<T> = { ok: true; data: T };
 type ApiErr = { ok: false; error?: { message?: string } };
@@ -223,9 +224,9 @@ export function registerRegistrationTools(
     {
       title: 'Set Workspace Key',
       description:
-        'Authenticate this MCP session by providing an existing workspace API key (rk_live_...). This enables all workspace-level tools including agent registration, channel management, and messaging. If the key belongs to a different workspace than the current session, the previous agent identity is cleared and you must re-register.',
+        'Authenticate this MCP session by providing an existing workspace API key (rk_live_... or relaycast_ws_...). This enables all workspace-level tools including agent registration, channel management, and messaging. If the key belongs to a different workspace than the current session, the previous agent identity is cleared and you must re-register.',
       inputSchema: {
-        api_key: z.string().describe('Workspace API key starting with "rk_live_", obtained from workspace creation or the Relaycast dashboard'),
+        api_key: z.string().describe('Workspace API key ("rk_live_..." or "relaycast_ws_..."), obtained from workspace creation or the Relaycast dashboard'),
       },
       outputSchema: {
         message: z.string().describe('Confirmation message indicating whether the workspace key was set successfully'),
@@ -233,8 +234,8 @@ export function registerRegistrationTools(
       annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
     },
     async ({ api_key }) => {
-      if (!api_key.startsWith('rk_live_')) {
-        throw new Error('Workspace key must start with "rk_live_"');
+      if (!isWorkspaceKey(api_key)) {
+        throw new Error('Workspace key must be an "rk_live_..." or "relaycast_ws_..." key');
       }
 
       const session = getSession();
@@ -569,7 +570,7 @@ export function registerRegistrationTools(
       description:
         'Join an additional workspace by providing its API key and registering an agent identity. The agent will be registered in the target workspace and the session context will be saved, allowing you to switch between workspaces without re-registering. After joining, the new workspace becomes the active workspace.',
       inputSchema: {
-        api_key: z.string().describe('Workspace API key starting with "rk_live_"'),
+        api_key: z.string().describe('Workspace API key ("rk_live_..." or "relaycast_ws_...")'),
         name: z.string().describe('Agent name to register in the target workspace'),
         workspace_name: z.string().optional().describe('Optional custom label to save for easier switching. The canonical workspace name is fetched automatically from the API.'),
         type: z.enum(['agent', 'human']).optional().describe('Whether this identity represents an AI agent or a human user'),
@@ -579,8 +580,8 @@ export function registerRegistrationTools(
       annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: true },
     },
     async ({ api_key, name, workspace_name, type, persona }) => {
-      if (!api_key.startsWith('rk_live_')) {
-        throw new Error('Workspace key must start with "rk_live_"');
+      if (!isWorkspaceKey(api_key)) {
+        throw new Error('Workspace key must be an "rk_live_..." or "relaycast_ws_..." key');
       }
 
       const session = getSession();
@@ -673,8 +674,8 @@ export function registerRegistrationTools(
       if (!api_key && !workspace_ref && !workspace_name) {
         throw new Error('Provide "api_key", "workspace_ref", or "workspace_name".');
       }
-      if (api_key && !api_key.startsWith('rk_live_')) {
-        throw new Error('Workspace key must start with "rk_live_"');
+      if (api_key && !isWorkspaceKey(api_key)) {
+        throw new Error('Workspace key must be an "rk_live_..." or "relaycast_ws_..." key');
       }
 
       const session = getSession();

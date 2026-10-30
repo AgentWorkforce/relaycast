@@ -1,3 +1,5 @@
+import { isObserverToken } from '@relaycast/types';
+
 /**
  * Observer-token minting for workspace-key logins.
  *
@@ -100,7 +102,7 @@ export async function mintObserverStreamToken(
     const id = body?.data?.id;
     if (
       typeof token === 'string' &&
-      token.startsWith('ot_live_') &&
+      isObserverToken(token) &&
       typeof id === 'string' &&
       id.length > 0
     ) {
