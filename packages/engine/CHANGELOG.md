@@ -7,7 +7,14 @@ See the [root changelog](../../CHANGELOG.md) for cross-package release highlight
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased - Patch]
+## [Unreleased - Minor]
+
+### Added
+
+- `EngineConfig.credentialFormat`: `'live'` (default) issues and accepts `rk_live_` / `at_live_` / `nt_live_` / `ot_live_` / `wh_live_`; `'self_routing'` issues and accepts `relaycast_<ws|ag|nd|ob|wh>_<workspace_id>_<64 hex>`. Deterministic workspace keys (idempotent and bootstrap creates) follow the format; self-routing derivation binds the workspace id.
+- `EngineConfig.workspaceId`: the id `POST /v1/workspaces` assigns, for single-workspace hosts. A second create returns `409 workspace_exists`.
+- `@relaycast/engine/adapters/actor`: `createActorRuntime` runs the engine on a durable actor's SQLite (`exec` one statement at a time, no transaction statements). Reads recover positional rows from name-keyed results; each actor call is one transaction, and a write group that fails after writing rolls the call back and replays it with that group failing up front. Migrations ship bundled; KV lives in the actor database; webhooks, http_push and other outbound HTTP run from the actor alarm; file URLs are signed for a gateway that holds the blobs.
+- `@relaycast/engine/gateway`: `parseSelfRoutingCredential`, `generateWorkspaceId`, `verifyFileToken` and `callWorkspaceActor` (the call/replay loop) without the engine.
 
 ### Fixed
 

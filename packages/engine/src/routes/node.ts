@@ -33,6 +33,7 @@ import {
   normalizeObserverFilters,
   observerAllowsAgent,
 } from '../engine/observerToken.js';
+import { credentialFormat, credentialFromHex } from '../auth/credentials.js';
 
 export const nodeRoutes = new Hono<AppEnv>();
 
@@ -226,7 +227,12 @@ async function enrollNode(c: Context<AppEnv>, data: z.infer<typeof createNodeSch
             requestDigest,
           ]));
           return {
-            replacementToken: `nt_live_${replacementDigest.slice(0, 48)}`,
+            replacementToken: credentialFromHex(
+              credentialFormat(c.get('db')),
+              'node',
+              c.get('workspace').id,
+              replacementDigest,
+            ),
             idempotencyKeyHash: await sha256Hex(idempotencyKey),
             requestDigest,
           };

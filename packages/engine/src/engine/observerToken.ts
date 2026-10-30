@@ -4,9 +4,10 @@ import type { ObserverScope as SharedObserverScope } from '@relaycast/types';
 import type { getDb } from '../db/index.js';
 import { channels, dmConversations, files as fileRows, messageAttachments, messages, observerTokens } from '../db/schema.js';
 import type { ObserverTokenFilters } from '../db/schema.js';
-import { randomHex, sha256Hex } from '../lib/crypto.js';
+import { sha256Hex } from '../lib/crypto.js';
 import { codedError } from '../lib/httpError.js';
 import { generateId } from './snowflake.js';
+import { issueCredential } from '../auth/credentials.js';
 
 type Db = ReturnType<typeof getDb>;
 export type ObserverToken = typeof observerTokens.$inferSelect;
@@ -185,7 +186,7 @@ export async function createObserverToken(
   workspaceId: string,
   input: CreateObserverTokenInput,
 ): Promise<PublicObserverToken> {
-  const token = `ot_live_${randomHex(24)}`;
+  const token = issueCredential(db, 'observer', workspaceId);
   const tokenHash = await sha256Hex(token);
   const expiresAt = parseExpiresAt(input.expires_at);
   const scopes = normalizeScopes(input.scopes);
@@ -278,7 +279,7 @@ export async function rotateObserverToken(
   workspaceId: string,
   id: string,
 ): Promise<PublicObserverToken | null> {
-  const token = `ot_live_${randomHex(24)}`;
+  const token = issueCredential(db, 'observer', workspaceId);
   const tokenHash = await sha256Hex(token);
   const [row] = await db
     .update(observerTokens)

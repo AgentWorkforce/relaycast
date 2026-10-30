@@ -471,6 +471,11 @@ hosted usage view, backfill boundary, and cost model.
 - Node token (`nt_live_*`): realtime transport token for direct or broker nodes on `/v1/node/ws`
   (`GET /v1/node/me` returns the node it belongs to; agent detail's `origin_node_id` names the node that registered an agent and cannot be patched, unlike `metadata.fleet`)
 - Observer token (`ot_live_*`): scoped read-only token for workspace realtime and read-only REST
+- Credential families: a deployment issues either the `*_live_*` family above (the default) or
+  self-routing credentials, `relaycast_<kind>_<workspace_id>_<secret>` with kind
+  `ws` | `ag` | `nd` | `ob` | `wh` and a 64-hex secret (engine `credentialFormat: 'self_routing'`).
+  A self-routing credential names its workspace, so a stateless gateway routes it without a lookup;
+  the engine still authenticates the whole credential against its own tables.
 - Identity types: `agent` (AI worker), `human` (person), `system` (automation/service actor)
 - Message payloads and realtime message events include optional `agent_type` so clients can distinguish agent, human, and system senders without extra identity lookups.
 - Channel: shared room for team/agent communication

@@ -2,8 +2,9 @@ import { WorkspaceMetadataSchema } from '@relaycast/types';
 import { and, asc, eq, gt, inArray, isNull, like, lte, or, sql } from 'drizzle-orm';
 import type { getDb } from '../db/index.js';
 import { workspaces, channels, fileCleanupQueue, workspaceEvents, workspaceCreateIdempotency } from '../db/schema.js';
-import { constantTimeEqual, hmacSha256Hex, randomHex, sha256Hex } from '../lib/crypto.js';
+import { constantTimeEqual, hmacSha256Hex, sha256Hex } from '../lib/crypto.js';
 import { generateId } from './snowflake.js';
+import { credentialFormat, credentialFromHex, issueCredential, type CredentialFormat } from '../auth/credentials.js';
 import { codedError } from '../lib/httpError.js';
 import { D1WriteRetryExhaustedError, retryD1Write } from '../lib/d1Retry.js';
 import { runAtomicWrites } from '../ports/database.js';
@@ -35,6 +36,11 @@ type CreateWorkspaceOptions =
   | {
       ownerApiKey?: string;
       ownerApiKeyHash?: string;
+      /**
+       * The id the new workspace takes. Single-workspace hosts (one workspace
+       * per actor) assign it; otherwise a fresh snowflake id is generated.
+       */
+      workspaceId?: string;
       /** Deployment-configured secret used to derive the anonymous bootstrap child key. */
       bootstrapSecret?: string;
       /**
@@ -133,22 +139,41 @@ export function workspaceCreateRequestDigest(input: {
   }));
 }
 
+/**
+ * HMAC material for a deterministic workspace key. A self-routing key names
+ * its workspace, so its material binds the workspace id too.
+ */
+function workspaceKeyMaterial(
+  format: CredentialFormat,
+  workspaceId: string,
+  idempotencyKey: string,
+  requestDigest: string,
+): string {
+  return format === 'self_routing'
+    ? `relaycast:workspace-create:v2:${workspaceId}:${idempotencyKey}:${requestDigest}`
+    : `relaycast:workspace-create:v1:${idempotencyKey}:${requestDigest}`;
+}
+
 export async function deriveIdempotentWorkspaceApiKey(
+  format: CredentialFormat,
+  workspaceId: string,
   ownerApiKey: string,
   idempotencyKey: string,
   requestDigest: string,
 ): Promise<string> {
-  const material = `relaycast:workspace-create:v1:${idempotencyKey}:${requestDigest}`;
-  return `rk_live_${(await hmacSha256Hex(material, ownerApiKey)).slice(0, 32)}`;
+  const material = workspaceKeyMaterial(format, workspaceId, idempotencyKey, requestDigest);
+  return credentialFromHex(format, 'workspace', workspaceId, await hmacSha256Hex(material, ownerApiKey));
 }
 
 export async function deriveBootstrapWorkspaceApiKey(
+  format: CredentialFormat,
+  workspaceId: string,
   bootstrapSecret: string,
   idempotencyKey: string,
   requestDigest: string,
 ): Promise<string> {
-  const material = `relaycast:workspace-create:v1:${idempotencyKey}:${requestDigest}`;
-  return `rk_live_${(await hmacSha256Hex(material, bootstrapSecret)).slice(0, 32)}`;
+  const material = workspaceKeyMaterial(format, workspaceId, idempotencyKey, requestDigest);
+  return credentialFromHex(format, 'workspace', workspaceId, await hmacSha256Hex(material, bootstrapSecret));
 }
 
 function idempotencyConflict(message: string, code = 'workspace_create_idempotency_conflict') {
@@ -333,11 +358,13 @@ export async function createWorkspace(
   const ownerScopeHash = bootstrapIdempotency && idempotencyKey
     ? await hashApiKey(`bootstrap:${idempotencyKey}`)
     : ownerApiKeyHash;
-  const deterministicApiKey = idempotencyKey && requestDigest
-    ? (providedOwnerApiKey
-      ? await deriveIdempotentWorkspaceApiKey(providedOwnerApiKey, idempotencyKey, requestDigest)
-      : await deriveBootstrapWorkspaceApiKey(bootstrapSecret!, idempotencyKey, requestDigest))
-    : undefined;
+  const format = credentialFormat(db);
+  const deriveDeterministicApiKey = async (forWorkspaceId: string): Promise<string | undefined> => {
+    if (!idempotencyKey || !requestDigest) return undefined;
+    return providedOwnerApiKey
+      ? deriveIdempotentWorkspaceApiKey(format, forWorkspaceId, providedOwnerApiKey, idempotencyKey, requestDigest)
+      : deriveBootstrapWorkspaceApiKey(format, forWorkspaceId, bootstrapSecret!, idempotencyKey, requestDigest);
+  };
 
   if (ownerScopeHash && idempotencyKeyHash && requestDigest) {
     const [binding] = await db
@@ -358,13 +385,14 @@ export async function createWorkspace(
         );
       }
       const [existing] = await db.select().from(workspaces).where(eq(workspaces.id, binding.workspaceId));
-      if (!existing || existing.apiKeyHash !== await hashApiKey(deterministicApiKey!)) {
+      const replayApiKey = await deriveDeterministicApiKey(binding.workspaceId);
+      if (!existing || existing.apiKeyHash !== await hashApiKey(replayApiKey!)) {
         throw idempotencyConflict(
           'The workspace create idempotency binding cannot recover its child workspace',
           'workspace_create_idempotency_unusable',
         );
       }
-      const workspace = buildWorkspaceResponse(existing, deterministicApiKey);
+      const workspace = buildWorkspaceResponse(existing, replayApiKey);
       return { workspace, created: false, ...workspace };
     }
   }
@@ -389,13 +417,19 @@ export async function createWorkspace(
     }
   }
 
-  const workspaceId = generateId();
-  const apiKey = deterministicApiKey ?? `rk_live_${randomHex(16)}`;
+  const assignedWorkspaceId = createOptions?.workspaceId;
+  if (assignedWorkspaceId) {
+    const [taken] = await db.select({ id: workspaces.id }).from(workspaces).where(eq(workspaces.id, assignedWorkspaceId));
+    if (taken) throw codedError('Workspace already exists', 'workspace_exists', 409);
+  }
+  const workspaceId = assignedWorkspaceId ?? generateId();
+  const apiKey = await deriveDeterministicApiKey(workspaceId) ?? issueCredential(db, 'workspace', workspaceId);
   const apiKeyHash = await hashApiKey(apiKey);
 
   const channelId = generateId();
   const expected = { workspaceId, name, apiKeyHash, channelId };
   let replayedWorkspace: typeof workspaces.$inferSelect | undefined;
+  let replayedApiKey: string | undefined;
   let recoveredOwnWorkspace = false;
   let writeResult: WorkspaceWriteResult;
   try {
@@ -456,7 +490,8 @@ export async function createWorkspace(
               );
             }
             const [existing] = await db.select().from(workspaces).where(eq(workspaces.id, binding.workspaceId));
-            if (!existing || existing.apiKeyHash !== apiKeyHash) {
+            replayedApiKey = await deriveDeterministicApiKey(binding.workspaceId);
+            if (!existing || existing.apiKeyHash !== await hashApiKey(replayedApiKey!)) {
               throw idempotencyConflict(
                 'The workspace create idempotency binding cannot recover its child workspace',
                 'workspace_create_idempotency_unusable',
@@ -530,7 +565,7 @@ export async function createWorkspace(
   const createdWorkspace = workspaceRows[0];
 
   if (replayedWorkspace) {
-    const workspace = buildWorkspaceResponse(replayedWorkspace, apiKey);
+    const workspace = buildWorkspaceResponse(replayedWorkspace, replayedApiKey);
     return { workspace, created: recoveredOwnWorkspace, ...workspace };
   }
 

@@ -53,6 +53,7 @@ import {
 } from '../lib/httpResponse.js';
 import { parsePaginationQuery, positiveIntQueryParam } from '../lib/httpQuery.js';
 import { runInBackground } from './background.js';
+import { credentialFormat, parseCredential, type CredentialFormat } from '../auth/credentials.js';
 
 export const workspaceRoutes = new Hono<AppEnv>();
 
@@ -171,11 +172,14 @@ type OwnerAuthorization =
   | { kind: 'invalid' }
   | { kind: 'workspace'; token: string };
 
-function parseOwnerAuthorization(authHeader: string | undefined): OwnerAuthorization {
+function parseOwnerAuthorization(authHeader: string | undefined, format: CredentialFormat): OwnerAuthorization {
   if (authHeader === undefined) return { kind: 'absent' };
   if (!authHeader.startsWith('Bearer ')) return { kind: 'invalid' };
   const token = authHeader.slice(7);
-  return token.startsWith('rk_')
+  const isWorkspaceKey = format === 'self_routing'
+    ? parseCredential(token, format)?.kind === 'workspace'
+    : token.startsWith('rk_');
+  return isWorkspaceKey
     ? { kind: 'workspace', token }
     : { kind: 'invalid' };
 }
@@ -233,7 +237,7 @@ workspaceRoutes.post('/workspaces', async (c) => {
       return jsonError(c, 'invalid_idempotency_key', idempotencyError, 400);
     }
     const db = c.get('db');
-    const ownerAuthorization = parseOwnerAuthorization(c.req.header('Authorization'));
+    const ownerAuthorization = parseOwnerAuthorization(c.req.header('Authorization'), credentialFormat(db));
     if (idempotencyKey && ownerAuthorization.kind === 'invalid') {
       return jsonError(c, 'unauthorized', 'Missing or invalid Authorization header', 401);
     }
@@ -260,6 +264,7 @@ workspaceRoutes.post('/workspaces', async (c) => {
       name,
       {
         ...(ownerApiKey ? { ownerApiKey } : {}),
+        ...(c.get('engine').config.workspaceId ? { workspaceId: c.get('engine').config.workspaceId } : {}),
         ...(idempotencyKey && !ownerApiKey
           ? {
             bootstrapSecret: c.get('engine').config.workspaceBootstrapSecret,

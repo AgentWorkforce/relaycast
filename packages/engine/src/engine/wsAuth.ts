@@ -1,6 +1,7 @@
 import type { AuthProvider, Workspace, ObserverToken } from '../ports/auth.js';
 import type { EngineDb } from '../ports/database.js';
 import { getAuthTokenKind } from '../auth/tokenKind.js';
+import { credentialFormat } from '../auth/credentials.js';
 import { getNodeByTokenHash } from './node.js';
 import { hasObserverScope } from './observerToken.js';
 import { getWorkspaceExpiry } from './workspace.js';
@@ -79,7 +80,7 @@ function expiredWorkspaceWs(): WsAuthError {
 }
 
 export async function authenticateRealtimeWs(deps: WsAuthDeps, token: string): Promise<RealtimeWsAuthResult> {
-  const tokenKind = getAuthTokenKind(token);
+  const tokenKind = getAuthTokenKind(token, credentialFormat(deps.db));
 
   if (tokenKind === 'agent') {
     return invalidWsToken('Agent realtime WebSockets have moved to node transport');
@@ -113,7 +114,7 @@ export async function authenticateRealtimeWs(deps: WsAuthDeps, token: string): P
 }
 
 export async function authenticateNodeWs(deps: WsAuthDeps, token: string): Promise<NodeWsAuthResult> {
-  if (getAuthTokenKind(token) !== 'node') {
+  if (getAuthTokenKind(token, credentialFormat(deps.db)) !== 'node') {
     return invalidWsToken('Invalid node token format');
   }
 

@@ -5,6 +5,7 @@ import { getActiveObserverTokenByHash } from '../engine/observerToken.js';
 import type { AuthProvider, AuthResult, AuthRequire } from '../ports/auth.js';
 import type { EngineDb } from '../ports/database.js';
 import { parseAuthToken, validateTokenRequirement } from './tokenKind.js';
+import { credentialFormat } from './credentials.js';
 import { isWorkspaceExpired, workspaceExpiredAuthResult } from './workspaceExpiry.js';
 
 export {
@@ -41,7 +42,8 @@ function resolved(
  * The built-in, self-host authentication provider.
  *
  * Reproduces the original `middleware/auth.ts` behavior: bearer tokens prefixed
- * `rk_live_` (workspace) or `at_live_` (agent) are SHA-256 hashed and looked up
+ * workspace, agent, node or observer credentials in the deployment's
+ * credential family (`auth/credentials.ts`) are SHA-256 hashed and looked up
  * in the `workspaces` / `agents` tables. The cloud product replaces this with a
  * provider backed by its own accounts/billing system.
  */
@@ -52,12 +54,13 @@ export class SqliteApiKeyAuthProvider implements AuthProvider {
 
   async authenticate(args: { token: string; require: AuthRequire; db: EngineDb }): Promise<AuthResult> {
     const { token, require, db } = args;
-    const parsedToken = parseAuthToken(token);
+    const format = credentialFormat(db);
+    const parsedToken = parseAuthToken(token, format);
     if (!parsedToken) {
       return unauthorized('Invalid token format');
     }
 
-    const requirement = validateTokenRequirement(parsedToken.kind, require);
+    const requirement = validateTokenRequirement(parsedToken.kind, require, format);
     if (!requirement.ok) {
       return unauthorized(requirement.message, requirement.code);
     }

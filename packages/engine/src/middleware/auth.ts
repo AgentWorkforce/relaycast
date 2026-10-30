@@ -4,6 +4,7 @@ import { touchLastSeen } from '../engine/agent.js';
 import type { AppEnv } from '../env.js';
 import type { AuthRequire } from '../ports/auth.js';
 import { getAuthTokenKind, requiredTokenMessage } from '../auth/tokenKind.js';
+import { credentialFormat } from '../auth/credentials.js';
 import { authenticateUnexpired } from '../auth/workspaceExpiry.js';
 import { jsonError } from '../lib/httpResponse.js';
 import { sha256Hex } from '../lib/crypto.js';
@@ -59,7 +60,7 @@ function makeAuthMiddleware(require: AuthRequire) {
     }
     const missing = missingPrincipal(require, result);
     if (missing) {
-      return jsonError(c, 'unauthorized', requiredTokenMessage(missing), 401);
+      return jsonError(c, 'unauthorized', requiredTokenMessage(missing, credentialFormat(db)), 401);
     }
 
     c.set('workspace', result.workspace);
@@ -106,7 +107,7 @@ export function requireWorkspaceRead(
     }
 
     const db = c.get('db');
-    const require: AuthRequire = getAuthTokenKind(token) === 'observer'
+    const require: AuthRequire = getAuthTokenKind(token, credentialFormat(db)) === 'observer'
       ? 'observer'
       : allowAgent || allowNode
         ? 'any'
@@ -119,7 +120,7 @@ export function requireWorkspaceRead(
     // fall through below and read with the workspace's full access, unscoped.
     const missing = missingPrincipal(require, result);
     if (missing) {
-      return jsonError(c, 'unauthorized', requiredTokenMessage(missing), 401);
+      return jsonError(c, 'unauthorized', requiredTokenMessage(missing, credentialFormat(db)), 401);
     }
 
     if (result.observerToken) {

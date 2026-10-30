@@ -252,7 +252,7 @@ describe('workspace write durability', () => {
 
     expect(batchCalls()).toBe(2);
     expect(created.created).toBe(true);
-    expect(created.api_key).toBe(await deriveBootstrapWorkspaceApiKey(bootstrapSecret, idempotencyKey, requestDigest));
+    expect(created.api_key).toBe(await deriveBootstrapWorkspaceApiKey('live', created.workspace_id, bootstrapSecret, idempotencyKey, requestDigest));
     expect(await db.select().from(workspaces)).toHaveLength(1);
     expect(await db.select().from(workspaceCreateIdempotency)).toHaveLength(1);
 
@@ -381,7 +381,7 @@ describe('workspace write durability', () => {
     const ownerApiKey = 'rk_live_collision_owner';
     const idempotencyKey = 'collision-job';
     const requestDigest = await workspaceCreateRequestDigest({ name: 'collision-child' });
-    const deterministicApiKey = await deriveIdempotentWorkspaceApiKey(ownerApiKey, idempotencyKey, requestDigest);
+    const deterministicApiKey = await deriveIdempotentWorkspaceApiKey('live', 'unused', ownerApiKey, idempotencyKey, requestDigest);
     const pair = useGeneratedPair();
 
     attachD1Batch({

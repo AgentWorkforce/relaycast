@@ -1,72 +1,36 @@
-import { z } from 'zod';
 import type { AuthRequire } from '../ports/auth.js';
+import { credentialShape, parseCredential, type CredentialFormat } from './credentials.js';
 
-const tokenKindConfig = {
-  workspace: {
-    prefix: 'rk_live_',
-    requiredMessage: 'Workspace key required (rk_live_...)',
-  },
-  agent: {
-    prefix: 'at_live_',
-    requiredMessage: 'Agent token required (at_live_...)',
-  },
-  node: {
-    prefix: 'nt_live_',
-    requiredMessage: 'Node token required (nt_live_...)',
-  },
-  observer: {
-    prefix: 'ot_live_',
-    requiredMessage: 'Observer token required (ot_live_...)',
-  },
+const tokenKindLabel = {
+  workspace: 'Workspace key',
+  agent: 'Agent token',
+  node: 'Node token',
+  observer: 'Observer token',
 } as const;
 
-export type AuthTokenKind = keyof typeof tokenKindConfig;
+export type AuthTokenKind = keyof typeof tokenKindLabel;
 
-type ParsedTokenFor<Kind extends AuthTokenKind> = {
-  kind: Kind;
+export interface ParsedAuthToken {
+  kind: AuthTokenKind;
   token: string;
-};
-
-const workspaceTokenSchema = z
-  .string()
-  .startsWith(tokenKindConfig.workspace.prefix)
-  .transform((token): ParsedTokenFor<'workspace'> => ({ kind: 'workspace', token }));
-
-const agentTokenSchema = z
-  .string()
-  .startsWith(tokenKindConfig.agent.prefix)
-  .transform((token): ParsedTokenFor<'agent'> => ({ kind: 'agent', token }));
-
-const nodeTokenSchema = z
-  .string()
-  .startsWith(tokenKindConfig.node.prefix)
-  .transform((token): ParsedTokenFor<'node'> => ({ kind: 'node', token }));
-
-const observerTokenSchema = z
-  .string()
-  .startsWith(tokenKindConfig.observer.prefix)
-  .transform((token): ParsedTokenFor<'observer'> => ({ kind: 'observer', token }));
-
-export const authTokenSchema = z.union([
-  workspaceTokenSchema,
-  agentTokenSchema,
-  nodeTokenSchema,
-  observerTokenSchema,
-]);
-
-export type ParsedAuthToken = z.infer<typeof authTokenSchema>;
-
-export function parseAuthToken(token: string): ParsedAuthToken | undefined {
-  const parsed = authTokenSchema.safeParse(token);
-  return parsed.success ? parsed.data : undefined;
 }
 
-export function getAuthTokenKind(token: string): AuthTokenKind | undefined {
-  return parseAuthToken(token)?.kind;
+/** Classify an API credential under the deployment's credential family. */
+export function parseAuthToken(token: string, format: CredentialFormat): ParsedAuthToken | undefined {
+  const parsed = parseCredential(token, format);
+  if (!parsed || parsed.kind === 'webhook') return undefined;
+  return { kind: parsed.kind, token };
 }
 
-export function requiredTokenMessage(kind: Exclude<AuthRequire, 'any' | 'sender'>): string {
-  return tokenKindConfig[kind].requiredMessage;
+export function getAuthTokenKind(token: string, format: CredentialFormat): AuthTokenKind | undefined {
+  return parseAuthToken(token, format)?.kind;
+}
+
+export function requiredTokenMessage(
+  kind: Exclude<AuthRequire, 'any' | 'sender'>,
+  format: CredentialFormat,
+): string {
+  return `${tokenKindLabel[kind]} required (${credentialShape(kind, format)})`;
 }
 
 const allowedKindsByRequire = {
@@ -89,6 +53,7 @@ export type AuthRequirementValidation =
 export function validateTokenRequirement(
   tokenKind: AuthTokenKind,
   require: AuthRequire,
+  format: CredentialFormat,
 ): AuthRequirementValidation {
   const allowedKinds: readonly AuthTokenKind[] = allowedKindsByRequire[require];
   if (allowedKinds.includes(tokenKind)) {
@@ -118,6 +83,6 @@ export function validateTokenRequirement(
   return {
     ok: false,
     code: 'unauthorized',
-    message: requiredTokenMessage(require),
+    message: requiredTokenMessage(require, format),
   };
 }

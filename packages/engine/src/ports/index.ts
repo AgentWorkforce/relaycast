@@ -74,6 +74,7 @@ import type { AdmissionHooks } from './admission.js';
 import type { TelemetrySink } from './telemetry.js';
 import type { EngineDiagnostics } from './diagnostics.js';
 import type { EngineLogExport } from './logging.js';
+import type { CredentialFormat } from '../auth/credentials.js';
 
 /** Infrastructure ports the engine reads off the request context. */
 export interface EnginePorts {
@@ -116,6 +117,18 @@ export interface EngineDeps extends EnginePorts, EngineProviders {
 
 export interface EngineConfig {
   environment?: string;
+  /**
+   * The credential family this deployment issues and accepts. `live` (the
+   * default) issues `rk_live_` / `at_live_` / `nt_live_` / `ot_live_` /
+   * `wh_live_`; `self_routing` issues `relaycast_<kind>_<workspace_id>_<secret>`
+   * so a stateless gateway can route by credential. See `auth/credentials.ts`.
+   */
+  credentialFormat?: CredentialFormat;
+  /**
+   * Single-workspace hosts (one workspace per durable actor): the id that
+   * `POST /v1/workspaces` gives the workspace it creates.
+   */
+  workspaceId?: string;
   appVersion?: string;
   appSemver?: string;
   sdkSemver?: string;
