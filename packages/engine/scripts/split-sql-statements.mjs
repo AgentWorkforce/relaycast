@@ -2,7 +2,7 @@
  * Split a SQLite migration script into single statements.
  *
  * Handles `-- line` and `/* block *\/` comments (dropped), quoted strings and
- * identifiers, drizzle-kit `--> statement-breakpoint` markers (a comment), and
+ * identifiers (including `[bracketed]`), drizzle-kit `--> statement-breakpoint` markers (a comment), and
  * `CREATE TRIGGER ... BEGIN ... END` bodies, whose inner `;` and `CASE ... END`
  * do not end the statement.
  *
@@ -35,10 +35,11 @@ export function splitSqlStatements(sql) {
       current += ' ';
       continue;
     }
-    if (ch === "'" || ch === '"' || ch === '`') {
+    if (ch === "'" || ch === '"' || ch === '`' || ch === '[') {
       // A doubled quote inside a literal is an escaped quote, so scanning to the
-      // next quote and continuing re-enters the same literal.
-      const end = sql.indexOf(ch, i + 1);
+      // next quote and continuing re-enters the same literal. `[name]` is an
+      // identifier quoted with brackets.
+      const end = sql.indexOf(ch === '[' ? ']' : ch, i + 1);
       if (end === -1) throw new Error(`Unterminated ${ch} literal`);
       current += sql.slice(i, end + 1);
       i = end + 1;

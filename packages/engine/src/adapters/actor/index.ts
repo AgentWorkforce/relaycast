@@ -108,6 +108,10 @@ class ExternalIoOutsideMaintenance extends Error {
 
 export function createActorRuntime(options: ActorRuntimeOptions): ActorRuntime {
   const { sql } = options;
+  // Self-routing credentials embed the workspace id between `_` separators.
+  if (!/^[A-Za-z0-9]+$/.test(options.workspaceId)) {
+    throw new Error(`Workspace actor id ${JSON.stringify(options.workspaceId)} must be alphanumeric`);
+  }
   let scope: ActorCallScope | undefined;
   let maintaining = false;
 

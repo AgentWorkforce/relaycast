@@ -418,10 +418,6 @@ export async function createWorkspace(
   }
 
   const assignedWorkspaceId = createOptions?.workspaceId;
-  if (assignedWorkspaceId) {
-    const [taken] = await db.select({ id: workspaces.id }).from(workspaces).where(eq(workspaces.id, assignedWorkspaceId));
-    if (taken) throw codedError('Workspace already exists', 'workspace_exists', 409);
-  }
   const workspaceId = assignedWorkspaceId ?? generateId();
   const apiKey = await deriveDeterministicApiKey(workspaceId) ?? issueCredential(db, 'workspace', workspaceId);
   const apiKeyHash = await hashApiKey(apiKey);
@@ -538,6 +534,9 @@ export async function createWorkspace(
           };
           throw error;
         }
+        // An assigned id belongs to one workspace: the insert lost to the one
+        // already holding it.
+        if (assignedWorkspaceId) throw codedError('Workspace already exists', 'workspace_exists', 409);
         throw codedError('Generated workspace identifier collision', 'workspace_id_collision', 500);
       }
     });

@@ -638,3 +638,19 @@ describe('workspace write durability', () => {
     expect(await db.select().from(workspaces)).toHaveLength(1);
   });
 });
+
+describe('self-routing workspace key derivation', () => {
+  it('names and binds the workspace id', async () => {
+    const digest = await workspaceCreateRequestDigest({ name: 'routed' });
+    const first = await deriveIdempotentWorkspaceApiKey('self_routing', '111', 'relaycast_ws_owner', 'job-1', digest);
+    const again = await deriveIdempotentWorkspaceApiKey('self_routing', '111', 'relaycast_ws_owner', 'job-1', digest);
+    const other = await deriveIdempotentWorkspaceApiKey('self_routing', '222', 'relaycast_ws_owner', 'job-1', digest);
+    const bootstrap = await deriveBootstrapWorkspaceApiKey('self_routing', '111', 'bootstrap-secret', 'job-1', digest);
+    expect(first).toMatch(/^relaycast_ws_111_[0-9a-f]{64}$/);
+    expect(again).toBe(first);
+    expect(other).toMatch(/^relaycast_ws_222_[0-9a-f]{64}$/);
+    expect(other.slice(-64)).not.toBe(first.slice(-64));
+    expect(bootstrap).toMatch(/^relaycast_ws_111_[0-9a-f]{64}$/);
+    expect(bootstrap).not.toBe(first);
+  });
+});
