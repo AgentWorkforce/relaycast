@@ -53,7 +53,8 @@ RELAYCAST_PUBLIC_URL=http://127.0.0.1:8787 RELAYCAST_FILE_SIGNING_SECRET=dev-sec
 
 # Gateway, in a second terminal
 cd gateway && bun install
-RELAYCAST_FILE_SIGNING_SECRET=dev-secret RELAYCAST_WORKSPACE_ID_KEY=a:dev-workspace-id-secret bun run start
+RELAYCAST_FILE_SIGNING_SECRET=dev-secret \
+  RELAYCAST_WORKSPACE_ID_KEYRING='{"current":"a","keys":{"a":"dev-workspace-id-secret"}}' bun run start
 
 # Drive it
 bun gateway/drive.ts
@@ -82,7 +83,8 @@ terse deploy                         # prints TERSE_ACTOR_URL
 ```
 
 Run the gateway anywhere with `TERSE_ACTOR_URL`, `TERSE_API_KEY`, the same
-`RELAYCAST_FILE_SIGNING_SECRET`, and `RELAYCAST_WORKSPACE_ID_KEY`
-(`<version a-z>:<secret>`). To rotate the workspace id key, set the new key
-with the next version letter and move the old one to
-`RELAYCAST_WORKSPACE_ID_PREVIOUS_KEY`; ids minted with either still verify.
+`RELAYCAST_FILE_SIGNING_SECRET`, and `RELAYCAST_WORKSPACE_ID_KEYRING`
+(`{"current":"a","keys":{"a":"<secret>"}}`). Workspace ids are permanent, so
+rotation adds a key version and makes it current, and never drops one: an id
+verifies with the version it names. Removing a version locks out every
+workspace minted under it.

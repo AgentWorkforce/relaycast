@@ -2,7 +2,7 @@ import { afterAll, beforeAll, describe, expect, it } from "bun:test"
 import { mkdtemp, rm } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
-import { createWorkspaceIdSigner, parseWorkspaceIdKey, signFileToken } from "@relaycast/engine/gateway"
+import { createWorkspaceIdSigner, signFileToken } from "@relaycast/engine/gateway"
 
 const SECRET = "test-secret"
 let dir: string
@@ -13,7 +13,7 @@ beforeAll(async () => {
     dir = await mkdtemp(join(tmpdir(), "relaycast-gateway-"))
     process.env.RELAYCAST_FILE_SIGNING_SECRET = SECRET
     process.env.RELAYCAST_FILE_DIR = dir
-    process.env.RELAYCAST_WORKSPACE_ID_KEY = "a:test-workspace-id-secret"
+    process.env.RELAYCAST_WORKSPACE_ID_KEYRING = JSON.stringify({ current: "a", keys: { a: "test-workspace-id-secret" } })
     ;({ serveFile, handleRequest } = await import("./server.js"))
 })
 afterAll(() => rm(dir, { recursive: true, force: true }))
@@ -67,7 +67,7 @@ describe("workspace routing", () => {
         }) as typeof fetch
         try {
             const forged = `relaycast_ag_241764880589606912_${"c".repeat(64)}`
-            const otherKey = await createWorkspaceIdSigner(parseWorkspaceIdKey("a:some-other-secret-value")).mint()
+            const otherKey = await createWorkspaceIdSigner({ current: "a", keys: { a: "some-other-secret-value" } }).mint()
             for (const token of [forged, `relaycast_ag_${otherKey}_${"c".repeat(64)}`]) {
                 const response = await handleRequest(new Request("http://gateway/v1/inbox", { headers: { authorization: `Bearer ${token}` } }))
                 expect(response.status).toBe(401)

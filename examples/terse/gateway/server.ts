@@ -5,8 +5,9 @@
 //   TERSE_ACTOR_URL   actors endpoint (default: local `terse actor dev`)
 //   TERSE_API_KEY     required for a hosted Terse project
 //   RELAYCAST_FILE_SIGNING_SECRET   shared with the actors
-//   RELAYCAST_WORKSPACE_ID_KEY      "<version a-z>:<secret>" signing workspace ids
-//   RELAYCAST_WORKSPACE_ID_PREVIOUS_KEY  the key being rotated out, if any
+//   RELAYCAST_WORKSPACE_ID_KEYRING  {"current":"a","keys":{"a":"<secret>"}}: signs
+//                        workspace ids. Rotate by adding a version and making it
+//                        current; removing a version locks out its workspaces.
 //   RELAYCAST_FILE_DIR   where file bytes live (default ./files). Run one
 //                        gateway instance on persistent storage, or replace
 //                        serveFile with a shared object store.
@@ -18,7 +19,7 @@ import {
     callWorkspaceActor,
     createWorkspaceIdSigner,
     parseSelfRoutingCredential,
-    parseWorkspaceIdKey,
+    parseWorkspaceIdKeyring,
     verifyFileToken,
     type ActorHttpCall,
     type ActorHttpRequest,
@@ -39,15 +40,11 @@ const workspace = (id: string) => createActorStub<WorkspaceStub>("Workspace", id
 
 const fileSecret = process.env.RELAYCAST_FILE_SIGNING_SECRET
 if (!fileSecret) throw new Error("RELAYCAST_FILE_SIGNING_SECRET is not set")
-const workspaceIdKey = process.env.RELAYCAST_WORKSPACE_ID_KEY
-if (!workspaceIdKey) throw new Error("RELAYCAST_WORKSPACE_ID_KEY is not set")
-const previousWorkspaceIdKey = process.env.RELAYCAST_WORKSPACE_ID_PREVIOUS_KEY
+const workspaceIdKeyring = process.env.RELAYCAST_WORKSPACE_ID_KEYRING
+if (!workspaceIdKeyring) throw new Error("RELAYCAST_WORKSPACE_ID_KEYRING is not set")
 // Workspace ids carry a tag only this gateway can mint, so a credential naming
 // a made-up workspace is refused here and never creates an actor.
-const workspaceIds = createWorkspaceIdSigner(
-    parseWorkspaceIdKey(workspaceIdKey),
-    previousWorkspaceIdKey ? parseWorkspaceIdKey(previousWorkspaceIdKey) : undefined,
-)
+const workspaceIds = createWorkspaceIdSigner(parseWorkspaceIdKeyring(workspaceIdKeyring))
 const fileRoot = resolve(process.env.RELAYCAST_FILE_DIR ?? resolve(import.meta.dir, "files"))
 /** Largest body the gateway reads; an upload token binds the exact size anyway. */
 const MAX_BODY_BYTES = 64 * 1024 * 1024
