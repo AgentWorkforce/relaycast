@@ -13,7 +13,7 @@
   },
   "dependencies": {
     "@relaycast/engine": "link:../../../packages/engine",
-    "terse-sdk": "0.14.7"
+    "terse-sdk": "0.14.8"
   },
   "devDependencies": {
     "@types/bun": "^1.4.4",

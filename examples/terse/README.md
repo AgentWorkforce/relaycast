@@ -28,7 +28,7 @@ How it behaves:
   (`relaycast_ws_…`, `relaycast_ag_…`), so the gateway finds the workspace
   without a lookup. The actor still verifies every credential against its own
   tables.
-- The actor runs on durable-actors >= 0.14.5. Each actor call is one SQLite
+- The actor runs on durable-actors 0.14.5. Each actor call is one SQLite
   transaction, and each engine write group nests inside it
   (`db.transaction`), so a failed group rolls back alone and the request goes
   on, as on the Node adapter.
@@ -74,12 +74,11 @@ store.
 
 ## Deploy to Terse
 
-The actor imports `durable-actors` (>= 0.14.5). `terse deploy` uploads the
-`actor/` source and discovers its actors through the project's `terse-sdk`,
-so `terse-cli` and `terse-sdk` stay dev dependencies. Deploying requires
-terse-sdk and terse-cli 0.14.8; the pins move from 0.14.7 once 0.14.8 is on
-npm. On an older hosted
-runtime, `createActorRuntime` throws `the relaycast actor adapter requires
+The actor depends on `durable-actors` 0.14.5 and on `terse-cli` / `terse-sdk`
+0.14.8 (dev dependencies), which pin the same durable-actors, so the project
+holds one copy. `terse deploy` uploads the `actor/` source and discovers its
+actors through the project's `terse-sdk`. On an older hosted runtime,
+`createActorRuntime` throws `the relaycast actor adapter requires
 durable-actors >= 0.14.5`.
 
 ```sh
