@@ -32,6 +32,8 @@ export class Workspace extends Actor {
             fileSigningSecret: requiredEnv("RELAYCAST_FILE_SIGNING_SECRET"),
             outboundFetch: (input, init) => globalThis.fetch(input, init),
             alarm: this.alarm,
+            // The gateway reads request bodies up to this size (MAX_BODY_BYTES in gateway/server.ts).
+            config: { maxUploadBytes: 64 * 1024 * 1024 },
             // Engine errors and alerts (e.g. alert: "maintenance_rolled_back") go to the actor's log.
             telemetry: {
                 capture() {},

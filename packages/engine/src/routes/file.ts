@@ -31,25 +31,27 @@ export const fileRoutes = new Hono<AppEnv>();
 const fileUploadSchema = z.object({
   filename: z.string().min(1),
   content_type: z.string().min(1),
-  size_bytes: z.number().finite().refine((value) => value > 0),
+  size_bytes: z.number().int().positive().max(Number.MAX_SAFE_INTEGER),
 });
 
 const listFilesQuerySchema = LimitQuerySchema.extend({
   uploaded_by: z.string().optional(),
 });
 
-type ValidationFailure = { error: { issues: Array<{ path: PropertyKey[] }> } };
+type ValidationFailure = { error: { issues: Array<{ path: PropertyKey[]; code?: string; expected?: unknown }> } };
 
 function uploadInvalidMessage(failure: ValidationFailure) {
   const hasFilenameIssue = failure.error.issues.some((issue) => issue.path[0] === 'filename');
   const hasContentTypeIssue = failure.error.issues.some((issue) => issue.path[0] === 'content_type');
-  const hasSizeBytesIssue = failure.error.issues.some((issue) => issue.path[0] === 'size_bytes');
+  const sizeBytesIssue = failure.error.issues.find((issue) => issue.path[0] === 'size_bytes');
   return hasFilenameIssue
     ? 'filename is required'
     : hasContentTypeIssue
       ? 'content_type is required'
-      : hasSizeBytesIssue
-        ? 'size_bytes is required'
+      : sizeBytesIssue
+        ? (sizeBytesIssue.code === 'invalid_type' && sizeBytesIssue.expected !== 'int'
+          ? 'size_bytes is required'
+          : 'size_bytes must be a positive integer')
         : 'invalid upload body';
 }
 
@@ -65,6 +67,10 @@ fileRoutes.post('/files/upload', requireAgentToken, rateLimit, async (c) => {
       return parsed.response;
     }
     const { filename, content_type, size_bytes } = parsed.data;
+    const maxUploadBytes = c.get('engine').config.maxUploadBytes;
+    if (maxUploadBytes !== undefined && size_bytes > maxUploadBytes) {
+      return jsonError(c, 'file_too_large', `size_bytes exceeds the ${maxUploadBytes}-byte upload limit`, 413);
+    }
 
     const result = await fileEngine.createUpload(
       db,

@@ -89,5 +89,5 @@ export function maskCredential(token: string): string {
 const CREDENTIAL_IN_TEXT = /relaycast_(?:ws|ag|nd|ob|wh)_[A-Za-z0-9]+_[0-9a-f]{64}|(?:rk|at|nt|ot|wh)_live_[A-Za-z0-9_-]+/g;
 
 export function redactCredentials(text: string, replacement: string): string {
-  return text.replace(CREDENTIAL_IN_TEXT, replacement);
+  return text.replace(CREDENTIAL_IN_TEXT, () => replacement);
 }

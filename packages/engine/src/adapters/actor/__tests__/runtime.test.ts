@@ -245,6 +245,31 @@ describe('workspace actor runtime', () => {
     expect(actor.alarm.at === null || actor.alarm.at % 1000 === 0).toBe(true);
   });
 
+  it('keeps a pending backoff alarm and its failure count when requests arrive', async () => {
+    const actor = new FakeWorkspaceActor(WORKSPACE_ID);
+    await workspaceWithAgents(actor);
+    const backoff = (Math.floor(Date.now() / 1000) + 600) * 1000 + 3;
+    actor.alarm.at = backoff;
+    await call(actor, 'GET', '/v1/agents', undefined, (await call<{ api_key: string }>(actor, 'GET', '/v1/workspace')).json?.data?.api_key);
+    expect(actor.alarm.at).toBe(backoff);
+  });
+
+  it('bounds the time a maintenance pass spends on blob deletes when the gateway hangs', async () => {
+    const hang: typeof fetch = (_input, init) => new Promise((_resolve, reject) => {
+      init?.signal?.addEventListener('abort', () => reject(init.signal!.reason));
+    });
+    const actor = new FakeWorkspaceActor(WORKSPACE_ID, { outboundFetch: hang, blobDeleteBudgetMs: 200 });
+    await call(actor, 'POST', '/v1/workspaces', { name: 'hung-gateway' });
+    for (let i = 0; i < 30; i += 1) {
+      actor.sql.exec('INSERT INTO file_cleanup_queue (storage_key, delete_after, process_after) VALUES (?, 0, 0)', `${WORKSPACE_ID}/f${i}/f${i}`);
+    }
+    const started = Date.now();
+    await actor.maintain();
+    expect(Date.now() - started).toBeLessThan(2_000);
+    // Nothing was lost: the queue keeps every row for the next pass.
+    expect(rows(actor, 'SELECT COUNT(*) AS n FROM file_cleanup_queue')).toEqual([{ n: 30 }]);
+  });
+
   it('arms the alarm when an idempotency record expires', async () => {
     const actor = new FakeWorkspaceActor(WORKSPACE_ID);
     await call(actor, 'POST', '/v1/workspaces', { name: 'kv-expiry' });

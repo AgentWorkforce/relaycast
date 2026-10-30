@@ -20,7 +20,7 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 ### Changed
 
 - File storage keys are `<workspace_id>/<file_id>/<file_id>[.<ext>]`; the client filename stays in file metadata only. Existing files keep their stored keys.
-- `POST /v1/files/upload` requires `size_bytes` > 0.
+- `POST /v1/files/upload` requires `size_bytes` to be a positive safe integer (`400 size_bytes must be a positive integer`), and `EngineConfig.maxUploadBytes` caps it (`413 file_too_large`).
 - Binding a second credential format to a database handle that already mints another one throws.
 
 ### Fixed

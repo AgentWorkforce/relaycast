@@ -46,6 +46,11 @@ How it behaves:
 
 Requires [Bun](https://bun.sh) 1.4.2+.
 
+In this repository both packages link the engine from `packages/engine`;
+build it first (`npm ci && npx turbo build --filter=@relaycast/engine` at the
+repository root). Outside it, and for `terse deploy` (which uploads only
+`actor/`), depend on the published `@relaycast/engine` instead.
+
 ```sh
 # Actors: state persists in actor/.durable-actors/
 cd actor && bun install
@@ -62,11 +67,6 @@ bun gateway/drive.ts
 
 Point any relaycast client at `http://127.0.0.1:8787` with the `relaycast_ws_…`
 key the drive script prints.
-
-In this repository both packages link the engine from `packages/engine`;
-build it first (`npm ci && npx turbo build --filter=@relaycast/engine` at the
-repository root). Outside it, and for `terse deploy` (which uploads only
-`actor/`), depend on the published `@relaycast/engine` instead.
 
 The gateway keeps file bytes on its own disk (`RELAYCAST_FILE_DIR`), so run a
 single instance on persistent storage, or point `serveFile` at a shared object

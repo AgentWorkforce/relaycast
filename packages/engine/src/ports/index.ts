@@ -130,6 +130,12 @@ export interface EngineConfig {
    * `POST /v1/workspaces` gives the workspace it creates.
    */
   workspaceId?: string;
+  /**
+   * Largest `size_bytes` `POST /v1/files/upload` signs a URL for; larger
+   * uploads answer `413 file_too_large`. Set it to what the blob store's
+   * front end accepts in one request body. Unset: no engine limit.
+   */
+  maxUploadBytes?: number;
   appVersion?: string;
   appSemver?: string;
   sdkSemver?: string;
