@@ -37,8 +37,8 @@ import type { ActorHttpRequest, ActorHttpResponse } from './http.js';
 /** Liveness sweeps for connected nodes run on the self-host sweep cadence. */
 const MAINTENANCE_INTERVAL_MS = 15_000;
 const DEFAULT_BLOB_DELETE_BUDGET_MS = 15_000;
-/** Longest wait between retries of a maintenance pass that keeps rolling back. */
-const MAX_MAINTENANCE_BACKOFF_MS = 60 * 60_000;
+/** Wait before the next maintenance pass after one that rolled back. */
+const DEFAULT_MAINTENANCE_RETRY_MS = 5 * 60_000;
 /** Work already due is retried no sooner than this, so a stuck row cannot spin the alarm. */
 const MIN_RETRY_MS = 5_000;
 
@@ -64,6 +64,11 @@ export interface ActorRuntimeOptions {
    * when outbound work is queued, never pushing an earlier pending alarm back.
    */
   alarm: { get(): number | null; set(timestampMs: number): void };
+  /**
+   * When a maintenance pass rolls back, the next one runs this long after it.
+   * Default 5 minutes.
+   */
+  maintenanceRetryMs?: number;
   /**
    * Total time one maintenance pass may spend deleting blobs through the
    * gateway; the rest wait for the next pass. Default 15s.
@@ -129,17 +134,11 @@ export function createActorRuntime(options: ActorRuntimeOptions): ActorRuntime {
     },
   });
 
-  // Scheduled maintenance lands on whole seconds; the millisecond part of an
-  // alarm counts consecutive failed maintenance passes (see maintain()).
   const requestMaintenance = (atMs: number = Date.now()): void => {
-    const at = Math.ceil(atMs / 1000) * 1000;
     const current = options.alarm.get();
     // A past timestamp is an alarm that already fired (or is firing now).
-    const pending = current !== null && current > Date.now();
-    // A pending retry after a rolled-back pass (non-zero milliseconds) keeps its
-    // backoff and failure count; requests don't pull it earlier.
-    if (pending && (current <= at || current % 1000 !== 0)) return;
-    options.alarm.set(at);
+    if (current !== null && current > Date.now() && current <= atMs) return;
+    options.alarm.set(atMs);
   };
 
   // Outbound HTTP holds the actor's mailbox for its whole duration, so it runs
@@ -269,11 +268,6 @@ export function createActorRuntime(options: ActorRuntimeOptions): ActorRuntime {
     },
 
     async maintain() {
-      // The firing alarm's millisecond part is the number of passes in a row
-      // that rolled back; it is set outside the transaction, so it survives the
-      // rollback that discards everything else this pass wrote.
-      const firing = options.alarm.get();
-      const previousFailures = firing === null ? 0 : firing % 1000;
       let failedStep: string | undefined;
       let pass: ActorCallScope | undefined;
       try {
@@ -306,9 +300,9 @@ export function createActorRuntime(options: ActorRuntimeOptions): ActorRuntime {
         });
       } catch (error) {
         // A rolled-back pass has no caller to replay it (an alarm has no
-        // outside caller), so it alerts and retries with backoff. A runtime
-        // savepoint (TerseAI/durable-actors#370) removes this case.
-        const consecutiveFailures = Math.min(previousFailures + 1, 999);
+        // outside caller), so it alerts and runs again after a fixed interval.
+        // The alarm is the one thing the rollback keeps. A runtime savepoint
+        // (TerseAI/durable-actors#370) removes this case.
         const failure = error instanceof ActorReplayRequired ? error.failures.at(-1) : undefined;
         telemetry.captureException(error, {
           source: 'actor.maintenance',
@@ -317,10 +311,8 @@ export function createActorRuntime(options: ActorRuntimeOptions): ActorRuntime {
           step: failedStep ?? null,
           write_group: failure?.index ?? null,
           error_code: maintenanceErrorCode(failure, error),
-          consecutive_failures: consecutiveFailures,
         });
-        const backoffMs = Math.min(MAINTENANCE_INTERVAL_MS * 2 ** (consecutiveFailures - 1), MAX_MAINTENANCE_BACKOFF_MS);
-        options.alarm.set(Math.ceil((Date.now() + backoffMs) / 1000) * 1000 + consecutiveFailures);
+        options.alarm.set(Date.now() + (options.maintenanceRetryMs ?? DEFAULT_MAINTENANCE_RETRY_MS));
         throw error;
       }
     },
