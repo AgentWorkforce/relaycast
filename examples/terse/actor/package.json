@@ -12,12 +12,12 @@
   },
   "dependencies": {
     "@relaycast/engine": "link:../../../packages/engine",
-    "durable-actors": "^0.14.5"
+    "durable-actors": "0.14.5"
   },
   "devDependencies": {
     "@types/node": "^22.0.0",
-    "terse-cli": "0.14.7",
-    "terse-sdk": "0.14.7",
+    "terse-cli": "0.14.8",
+    "terse-sdk": "0.14.8",
     "typescript": "~5.9.3"
   }
 }
