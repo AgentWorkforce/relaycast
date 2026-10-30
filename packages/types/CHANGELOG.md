@@ -11,7 +11,7 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Added
 
-- `parseCredential`, `credentialKind`, `credentialWorkspaceId`, `isWorkspaceKey`, `isObserverToken`, `maskCredential` and `redactCredentials`: the one classifier of credential shape for both families (`*_live_*` and `relaycast_<kind>_<workspace_id>_<secret>`), used by the engine and clients.
+- `parseCredential`, `credentialKind`, `credentialWorkspaceId`, `isWorkspaceKey`, `isObserverToken`, `maskCredential` and `redactCredentials` (literal replacement text; finds credentials glued to surrounding text): the one classifier of credential shape for both families (`*_live_*` and `relaycast_<kind>_<workspace_id>_<secret>`), used by the engine and clients.
 
 ## [12.0.0] - 2026-10-27
 

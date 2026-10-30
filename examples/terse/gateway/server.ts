@@ -46,13 +46,18 @@ if (!workspaceIdKeyring) throw new Error("RELAYCAST_WORKSPACE_ID_KEYRING is not 
 // a made-up workspace is refused here and never creates an actor.
 const workspaceIds = createWorkspaceIdSigner(parseWorkspaceIdKeyring(workspaceIdKeyring))
 const fileRoot = resolve(process.env.RELAYCAST_FILE_DIR ?? resolve(import.meta.dir, "files"))
-/** Largest body the gateway reads; an upload token binds the exact size anyway. */
+/**
+ * Largest request body the gateway reads. Uploads are the largest bodies, and
+ * the actors refuse to sign anything bigger (`maxUploadBytes` in
+ * actor/src/workspace.ts), so keep the two equal.
+ */
 const MAX_BODY_BYTES = 64 * 1024 * 1024
 
 /** The file for a storage key, or null if the key would resolve outside `fileRoot`. */
 function filePath(key: string): string | null {
     const path = resolve(fileRoot, ...key.split("/"))
-    return path.startsWith(fileRoot + sep) ? path : null
+    const prefix = fileRoot.endsWith(sep) ? fileRoot : fileRoot + sep
+    return path.startsWith(prefix) ? path : null
 }
 
 function error(status: number, code: string, message: string): Response {

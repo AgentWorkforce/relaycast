@@ -53,5 +53,7 @@ describe('credential families', () => {
     expect(redactCredentials(`key:${routed}xyz and ${routed}.`, '[x]')).toBe('key:[x]xyz and [x].');
     expect(redactCredentials(`(rk_live_abc)and prefixot_live_def`, '[x]')).toBe('([x])and prefix[x]');
     expect(redactCredentials(`x${routed}0`, '[x]')).toBe('x[x]0');
+    // The replacement is literal: `$&` must not re-insert the credential.
+    expect(redactCredentials(`a rk_live_abc b`, '$&')).toBe('a $& b');
   });
 });

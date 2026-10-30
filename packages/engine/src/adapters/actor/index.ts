@@ -36,6 +36,7 @@ import type { ActorHttpRequest, ActorHttpResponse } from './http.js';
 
 /** Liveness sweeps for connected nodes run on the self-host sweep cadence. */
 const MAINTENANCE_INTERVAL_MS = 15_000;
+const DEFAULT_BLOB_DELETE_BUDGET_MS = 15_000;
 /** Longest wait between retries of a maintenance pass that keeps rolling back. */
 const MAX_MAINTENANCE_BACKOFF_MS = 60 * 60_000;
 /** Work already due is retried no sooner than this, so a stuck row cannot spin the alarm. */
@@ -63,6 +64,11 @@ export interface ActorRuntimeOptions {
    * when outbound work is queued, never pushing an earlier pending alarm back.
    */
   alarm: { get(): number | null; set(timestampMs: number): void };
+  /**
+   * Total time one maintenance pass may spend deleting blobs through the
+   * gateway; the rest wait for the next pass. Default 15s.
+   */
+  blobDeleteBudgetMs?: number;
   /**
    * Engine config. The runtime sets `workspaceId` (the actor id),
    * `credentialFormat: 'self_routing'` (a gateway routes by credential) and
@@ -129,7 +135,10 @@ export function createActorRuntime(options: ActorRuntimeOptions): ActorRuntime {
     const at = Math.ceil(atMs / 1000) * 1000;
     const current = options.alarm.get();
     // A past timestamp is an alarm that already fired (or is firing now).
-    if (current !== null && current > Date.now() && current <= at) return;
+    const pending = current !== null && current > Date.now();
+    // A pending retry after a rolled-back pass (non-zero milliseconds) keeps its
+    // backoff and failure count; requests don't pull it earlier.
+    if (pending && (current <= at || current % 1000 !== 0)) return;
     options.alarm.set(at);
   };
 
@@ -168,7 +177,16 @@ export function createActorRuntime(options: ActorRuntimeOptions): ActorRuntime {
   const presence = new InProcessPresence(realtime, { db, sweepIntervalMs: 0 });
   realtime.setPresenceTracker(presence);
   const kv = new ActorKeyValueStore(sql);
-  const files = new SignedUrlFileStorage(options.baseUrl, options.fileSigningSecret, maintenanceOnly(options.outboundFetch));
+  // Blob deletes share one time budget per maintenance pass, so a gateway that
+  // hangs can hold the mailbox for at most that long.
+  let blobDeadline = 0;
+  const blobDeleteFetch: typeof globalThis.fetch = (input, init) => {
+    const remaining = blobDeadline - Date.now();
+    if (remaining <= 0) return Promise.reject(new Error('Blob delete budget for this maintenance pass is spent'));
+    const budget = AbortSignal.timeout(remaining);
+    return options.outboundFetch(input, { ...init, signal: init?.signal ? AbortSignal.any([init.signal, budget]) : budget });
+  };
+  const files = new SignedUrlFileStorage(options.baseUrl, options.fileSigningSecret, maintenanceOnly(blobDeleteFetch));
   const messageTtlDays = options.config?.retention?.messageTtlDays ?? null;
   const webhookQueue = new ActorEventQueue(
     db,
@@ -262,6 +280,7 @@ export function createActorRuntime(options: ActorRuntimeOptions): ActorRuntime {
         await inScope([], async () => {
           pass = scope;
           maintaining = true;
+          blobDeadline = Date.now() + (options.blobDeleteBudgetMs ?? DEFAULT_BLOB_DELETE_BUDGET_MS);
           try {
             kv.prune();
             await presence.sweep().catch((err) => telemetry.captureException(err, { source: 'actor.maintenance', op: 'presence' }));

@@ -65,3 +65,29 @@ describe('file storage keys', () => {
       .toMatchObject({ key: 'w/f/a.txt' });
   });
 });
+
+describe('file upload sizes', () => {
+  it('must be positive safe integers within the deployment limit', async () => {
+    const stack = makeNodeStack({ maxUploadBytes: 1024 });
+    const workspace = await createWorkspace(stack.app, 'upload-sizes');
+    const agent = await registerAgent(stack.app, workspace.workspaceKey, 'uploader');
+    const upload = async (size: unknown) => {
+      const res = await stack.app.request('/v1/files/upload', {
+        method: 'POST',
+        headers: { authorization: `Bearer ${agent.token}`, 'content-type': 'application/json' },
+        body: JSON.stringify({ filename: 'a.txt', content_type: 'text/plain', ...(size === undefined ? {} : { size_bytes: size }) }),
+      });
+      return { status: res.status, body: await res.json() as { error?: { code: string; message: string } } };
+    };
+    expect((await upload(undefined)).body.error?.message).toBe('size_bytes is required');
+    for (const size of [-1, 0, 1.5, 2 ** 60]) {
+      const result = await upload(size);
+      expect(result.status).toBe(400);
+      expect(result.body.error?.message).toBe('size_bytes must be a positive integer');
+    }
+    const tooLarge = await upload(1025);
+    expect(tooLarge.status).toBe(413);
+    expect(tooLarge.body.error?.code).toBe('file_too_large');
+    expect((await upload(1024)).status).toBe(201);
+  });
+});
