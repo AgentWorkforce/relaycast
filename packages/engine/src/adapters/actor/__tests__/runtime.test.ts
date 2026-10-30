@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { callWorkspaceActor } from '../../../gateway.js';
 import { verifyFileToken } from '../../../lib/fileTokens.js';
 import { sha256Hex } from '../../../lib/crypto.js';
-import { nextMaintenanceAt } from '../index.js';
+import { ActorReplayRequired, nextMaintenanceAt } from '../index.js';
 import { SignedUrlFileStorage } from '../files.js';
 import { FakeWorkspaceActor, jsonRequest } from './fakeActor.js';
 
@@ -205,6 +205,44 @@ describe('workspace actor runtime', () => {
     });
     const storage = new SignedUrlFileStorage('https://armadillo.test', 'file-secret', never, 50);
     await expect(storage.deleteObjects({ storageKeys: ['w/f/a.txt'] })).rejects.toThrow();
+  });
+
+  it('alerts on a maintenance pass that rolls back and counts consecutive failures across the rollback', async () => {
+    const alerts: Record<string, unknown>[] = [];
+    const actor = new FakeWorkspaceActor(WORKSPACE_ID, {
+      telemetry: { capture() {}, captureException: (_error, context) => { if (context?.alert) alerts.push(context); } },
+    });
+    await call(actor, 'POST', '/v1/workspaces', { name: 'doomed-maintenance' });
+    // The expiry reaper's write group deletes the workspace's events, then its
+    // workspace delete aborts: a group that fails after writing.
+    actor.sql.raw.exec(`
+      UPDATE workspaces SET expires_at = unixepoch() - 60;
+      INSERT INTO workspace_events (workspace_id, seq, type, payload) VALUES ('${WORKSPACE_ID}', 999, 'probe', '{}');
+      CREATE TRIGGER refuse_workspace_delete BEFORE DELETE ON workspaces BEGIN SELECT RAISE(ABORT, 'refused'); END;
+    `);
+
+    actor.alarm.at = Math.floor(Date.now() / 1000) * 1000;
+    await expect(actor.maintain()).rejects.toBeInstanceOf(ActorReplayRequired);
+    expect(alerts).toEqual([expect.objectContaining({
+      alert: 'maintenance_rolled_back',
+      workspace_id: WORKSPACE_ID,
+      step: 'workspace_expiry',
+      write_group: expect.any(Number),
+      error_code: 'SQLITE_CONSTRAINT_TRIGGER',
+      consecutive_failures: 1,
+    })]);
+    // The retry alarm carries the count and survives the rollback.
+    expect(actor.alarm.at! % 1000).toBe(1);
+    expect(rows(actor, "SELECT COUNT(*) AS n FROM workspace_events WHERE seq = 999")).toEqual([{ n: 1 }]);
+
+    await expect(actor.maintain()).rejects.toBeInstanceOf(ActorReplayRequired);
+    expect(alerts.at(-1)).toMatchObject({ consecutive_failures: 2 });
+    expect(actor.alarm.at! % 1000).toBe(2);
+
+    // Once the pass commits, scheduled alarms are whole seconds again.
+    actor.sql.raw.exec('DROP TRIGGER refuse_workspace_delete');
+    await actor.maintain();
+    expect(actor.alarm.at === null || actor.alarm.at % 1000 === 0).toBe(true);
   });
 
   it('arms the alarm when an idempotency record expires', async () => {

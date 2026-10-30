@@ -20,6 +20,10 @@ client ──HTTP──▶ gateway (gateway/server.ts)
 
 How it behaves:
 
+- The gateway mints workspace ids with an HMAC tag
+  (`<snowflake><key version><tag>`) and verifies it before calling an actor, so
+  a credential naming a workspace it never minted is refused without creating
+  an actor.
 - Workspaces created here issue self-routing credentials
   (`relaycast_ws_…`, `relaycast_ag_…`), so the gateway finds the workspace
   without a lookup. The actor still verifies every credential against its own
@@ -28,8 +32,14 @@ How it behaves:
   after writing, the call rolls back and `callWorkspaceActor` calls again with
   that group failing up front; the client gets the response of the pass that
   commits.
-- Outbound HTTP (webhooks, http_push nodes, A2A) runs from the actor alarm,
-  never while a request holds the actor.
+- Outbound HTTP (webhooks, http_push nodes, A2A egress retries) runs from the
+  actor alarm, never while a request holds the actor. A DM to an external A2A
+  agent is still sent inline, bounded by its 15s timeout.
+- A maintenance pass whose write group fails after writing rolls back with no
+  caller to replay it. The runtime reports it to telemetry
+  (`alert: 'maintenance_rolled_back'`, with step, write group, error code and
+  the count of consecutive failures) and retries with backoff. A runtime
+  savepoint (TerseAI/durable-actors#370) removes this case.
 - WebSocket endpoints (`/v1/ws`, `/v1/node/ws`) are not served by this example.
 
 ## Run locally
@@ -43,7 +53,7 @@ RELAYCAST_PUBLIC_URL=http://127.0.0.1:8787 RELAYCAST_FILE_SIGNING_SECRET=dev-sec
 
 # Gateway, in a second terminal
 cd gateway && bun install
-RELAYCAST_FILE_SIGNING_SECRET=dev-secret bun run start
+RELAYCAST_FILE_SIGNING_SECRET=dev-secret RELAYCAST_WORKSPACE_ID_KEY=a:dev-workspace-id-secret bun run start
 
 # Drive it
 bun gateway/drive.ts
@@ -71,5 +81,8 @@ terse secrets add RELAYCAST_PUBLIC_URL   # your gateway's public origin
 terse deploy                         # prints TERSE_ACTOR_URL
 ```
 
-Run the gateway anywhere with `TERSE_ACTOR_URL`, `TERSE_API_KEY` and the same
-`RELAYCAST_FILE_SIGNING_SECRET`.
+Run the gateway anywhere with `TERSE_ACTOR_URL`, `TERSE_API_KEY`, the same
+`RELAYCAST_FILE_SIGNING_SECRET`, and `RELAYCAST_WORKSPACE_ID_KEY`
+(`<version a-z>:<secret>`). To rotate the workspace id key, set the new key
+with the next version letter and move the old one to
+`RELAYCAST_WORKSPACE_ID_PREVIOUS_KEY`; ids minted with either still verify.

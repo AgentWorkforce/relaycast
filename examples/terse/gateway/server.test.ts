@@ -2,17 +2,19 @@ import { afterAll, beforeAll, describe, expect, it } from "bun:test"
 import { mkdtemp, rm } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
-import { signFileToken } from "@relaycast/engine/gateway"
+import { createWorkspaceIdSigner, parseWorkspaceIdKey, signFileToken } from "@relaycast/engine/gateway"
 
 const SECRET = "test-secret"
 let dir: string
 let serveFile: (request: Request) => Promise<Response>
+let handleRequest: (request: Request) => Promise<Response>
 
 beforeAll(async () => {
     dir = await mkdtemp(join(tmpdir(), "relaycast-gateway-"))
     process.env.RELAYCAST_FILE_SIGNING_SECRET = SECRET
     process.env.RELAYCAST_FILE_DIR = dir
-    ;({ serveFile } = await import("./server.js"))
+    process.env.RELAYCAST_WORKSPACE_ID_KEY = "a:test-workspace-id-secret"
+    ;({ serveFile, handleRequest } = await import("./server.js"))
 })
 afterAll(() => rm(dir, { recursive: true, force: true }))
 
@@ -52,5 +54,27 @@ describe("/_relayfiles uploads", () => {
     it("refuse a declared Content-Length that differs from the signed size", async () => {
         const response = await put("w/f3/f3.txt", 5, "hello!", { "content-length": "6" })
         expect(response.status).toBe(400)
+    })
+})
+
+describe("workspace routing", () => {
+    it("refuses a credential naming a workspace this gateway never minted, without calling an actor", async () => {
+        const realFetch = globalThis.fetch
+        let invokes = 0
+        globalThis.fetch = (async (...args: Parameters<typeof fetch>) => {
+            invokes += 1
+            return realFetch(...args)
+        }) as typeof fetch
+        try {
+            const forged = `relaycast_ag_241764880589606912_${"c".repeat(64)}`
+            const otherKey = await createWorkspaceIdSigner(parseWorkspaceIdKey("a:some-other-secret-value")).mint()
+            for (const token of [forged, `relaycast_ag_${otherKey}_${"c".repeat(64)}`]) {
+                const response = await handleRequest(new Request("http://gateway/v1/inbox", { headers: { authorization: `Bearer ${token}` } }))
+                expect(response.status).toBe(401)
+            }
+            expect(invokes).toBe(0)
+        } finally {
+            globalThis.fetch = realFetch
+        }
     })
 })

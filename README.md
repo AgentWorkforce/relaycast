@@ -1358,7 +1358,7 @@ stateless gateway that routes by the workspace id inside each
 - `@relaycast/engine/adapters/actor`: `createActorRuntime` runs the engine on an
   actor's database and alarm. It is written against a minimal database/alarm
   interface; the engine does not depend on Terse.
-- `@relaycast/engine/gateway`: credential parsing, workspace ids, signed file
+- `@relaycast/engine/gateway`: credential parsing, signed workspace ids, signed file
   URLs, and `callWorkspaceActor` (repeats a call whose failed write group rolled
   it back).
 

@@ -91,8 +91,14 @@ export class FakeWorkspaceActor {
     return this.sql.atomic(() => this.runtime.handle(request, replay));
   }
 
-  maintain(): Promise<void> {
-    return this.sql.atomic(() => this.runtime.maintain());
+  /** `onAlarm`: the firing alarm reads as set during the call and is consumed after it unless re-armed. */
+  async maintain(): Promise<void> {
+    const firing = this.alarm.at;
+    try {
+      await this.sql.atomic(() => this.runtime.maintain());
+    } finally {
+      if (this.alarm.at === firing) this.alarm.at = null;
+    }
   }
 }
 

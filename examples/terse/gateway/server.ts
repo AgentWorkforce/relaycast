@@ -5,6 +5,8 @@
 //   TERSE_ACTOR_URL   actors endpoint (default: local `terse actor dev`)
 //   TERSE_API_KEY     required for a hosted Terse project
 //   RELAYCAST_FILE_SIGNING_SECRET   shared with the actors
+//   RELAYCAST_WORKSPACE_ID_KEY      "<version a-z>:<secret>" signing workspace ids
+//   RELAYCAST_WORKSPACE_ID_PREVIOUS_KEY  the key being rotated out, if any
 //   RELAYCAST_FILE_DIR   where file bytes live (default ./files). Run one
 //                        gateway instance on persistent storage, or replace
 //                        serveFile with a shared object store.
@@ -14,8 +16,9 @@ import { dirname, resolve, sep } from "node:path"
 import {
     ACTOR_FILE_ROUTE,
     callWorkspaceActor,
-    generateWorkspaceId,
+    createWorkspaceIdSigner,
     parseSelfRoutingCredential,
+    parseWorkspaceIdKey,
     verifyFileToken,
     type ActorHttpCall,
     type ActorHttpRequest,
@@ -36,6 +39,15 @@ const workspace = (id: string) => createActorStub<WorkspaceStub>("Workspace", id
 
 const fileSecret = process.env.RELAYCAST_FILE_SIGNING_SECRET
 if (!fileSecret) throw new Error("RELAYCAST_FILE_SIGNING_SECRET is not set")
+const workspaceIdKey = process.env.RELAYCAST_WORKSPACE_ID_KEY
+if (!workspaceIdKey) throw new Error("RELAYCAST_WORKSPACE_ID_KEY is not set")
+const previousWorkspaceIdKey = process.env.RELAYCAST_WORKSPACE_ID_PREVIOUS_KEY
+// Workspace ids carry a tag only this gateway can mint, so a credential naming
+// a made-up workspace is refused here and never creates an actor.
+const workspaceIds = createWorkspaceIdSigner(
+    parseWorkspaceIdKey(workspaceIdKey),
+    previousWorkspaceIdKey ? parseWorkspaceIdKey(previousWorkspaceIdKey) : undefined,
+)
 const fileRoot = resolve(process.env.RELAYCAST_FILE_DIR ?? resolve(import.meta.dir, "files"))
 /** Largest body the gateway reads; an upload token binds the exact size anyway. */
 const MAX_BODY_BYTES = 64 * 1024 * 1024
@@ -118,12 +130,14 @@ export async function handleRequest(request: Request): Promise<Response> {
     const url = new URL(request.url)
     if (url.pathname === ACTOR_FILE_ROUTE) return serveFile(request)
     if (request.method === "POST" && url.pathname === "/v1/workspaces") {
-        const id = generateWorkspaceId()
+        const id = await workspaceIds.mint()
         return forward((req, replay) => workspace(id).create(req, replay), request)
     }
     const header = request.headers.get("authorization")
     const credential = header?.startsWith("Bearer ") ? parseSelfRoutingCredential(header.slice(7)) : undefined
-    if (!credential) return error(401, "unauthorized", "A relaycast_ credential is required")
+    if (!credential || !(await workspaceIds.verify(credential.workspaceId))) {
+        return error(401, "unauthorized", "A relaycast_ credential minted by this deployment is required")
+    }
     return forward((req, replay) => workspace(credential.workspaceId).handle(req, replay), request)
 }
 
