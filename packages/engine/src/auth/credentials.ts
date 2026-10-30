@@ -1,3 +1,11 @@
+import {
+  LIVE_CREDENTIAL_PREFIXES,
+  SELF_ROUTING_KIND_CODES,
+  parseCredential,
+  type CredentialFamily,
+  type CredentialKind,
+  type ParsedCredential,
+} from '@relaycast/types';
 import { randomHex } from '../lib/crypto.js';
 
 /**
@@ -15,72 +23,38 @@ import { randomHex } from '../lib/crypto.js';
  * Every deployment accepts both families. Which one it mints is per deployment
  * (`EngineConfig.credentialFormat`, default `live`).
  */
-export type CredentialFormat = 'live' | 'self_routing';
+export type CredentialFormat = CredentialFamily;
+export type { CredentialKind, ParsedCredential };
+export { parseCredential };
 
-export type CredentialKind = 'workspace' | 'agent' | 'node' | 'observer' | 'webhook';
-
-interface LiveFamily {
-  prefix: string;
-  secretBytes: number;
-}
-
-const LIVE: Record<CredentialKind, LiveFamily> = {
-  workspace: { prefix: 'rk_live_', secretBytes: 16 },
-  agent: { prefix: 'at_live_', secretBytes: 16 },
-  node: { prefix: 'nt_live_', secretBytes: 24 },
-  observer: { prefix: 'ot_live_', secretBytes: 24 },
-  webhook: { prefix: 'wh_live_', secretBytes: 24 },
+/** Random secret bytes per `live` kind (the established lengths). */
+const LIVE_SECRET_BYTES: Record<CredentialKind, number> = {
+  workspace: 16,
+  agent: 16,
+  node: 24,
+  observer: 24,
+  webhook: 24,
 };
-
-const SELF_ROUTING_CODES = {
-  workspace: 'ws',
-  agent: 'ag',
-  node: 'nd',
-  observer: 'ob',
-  webhook: 'wh',
-} as const satisfies Record<CredentialKind, string>;
-
-export type SelfRoutingKindCode = (typeof SELF_ROUTING_CODES)[CredentialKind];
-
-const KIND_BY_CODE = Object.fromEntries(
-  Object.entries(SELF_ROUTING_CODES).map(([kind, code]) => [code, kind]),
-) as Record<SelfRoutingKindCode, CredentialKind>;
 
 const SELF_ROUTING_SECRET_HEX = 64;
 const WORKSPACE_ID_PATTERN = /^[A-Za-z0-9]+$/;
-const SELF_ROUTING_PATTERN = /^relaycast_(ws|ag|nd|ob|wh)_([A-Za-z0-9]+)_([0-9a-f]{64})$/;
-
-export type ParsedCredential =
-  | { family: 'live'; kind: CredentialKind }
-  | { family: 'self_routing'; kind: CredentialKind; workspaceId: string };
 
 /**
- * Parse a self-routing credential without consulting any deployment state.
- * Gateways use this to route; it proves nothing about validity.
+ * Parse a self-routing credential, for gateways that route by it. Proves
+ * nothing about validity.
  */
 export function parseSelfRoutingCredential(
   token: string,
 ): { kind: CredentialKind; workspaceId: string } | undefined {
-  const match = SELF_ROUTING_PATTERN.exec(token);
-  if (!match) return undefined;
-  return { kind: KIND_BY_CODE[match[1] as SelfRoutingKindCode], workspaceId: match[2] };
-}
-
-/** Classify a presented credential of either family. */
-export function parseCredential(token: string): ParsedCredential | undefined {
-  const routed = parseSelfRoutingCredential(token);
-  if (routed) return { family: 'self_routing', ...routed };
-  for (const [kind, family] of Object.entries(LIVE) as [CredentialKind, LiveFamily][]) {
-    if (token.startsWith(family.prefix)) return { family: 'live', kind };
-  }
-  return undefined;
+  const parsed = parseCredential(token);
+  return parsed?.family === 'self_routing' ? { kind: parsed.kind, workspaceId: parsed.workspaceId } : undefined;
 }
 
 /** Human-readable shape of a credential kind in the family a deployment mints, for error messages. */
 export function credentialShape(kind: CredentialKind, format: CredentialFormat): string {
   return format === 'self_routing'
-    ? `relaycast_${SELF_ROUTING_CODES[kind]}_...`
-    : `${LIVE[kind].prefix}...`;
+    ? `relaycast_${SELF_ROUTING_KIND_CODES[kind]}_...`
+    : `${LIVE_CREDENTIAL_PREFIXES[kind]}...`;
 }
 
 function assertWorkspaceId(workspaceId: string): void {
@@ -104,16 +78,16 @@ export function credentialFromHex(
   if (format === 'self_routing') {
     assertWorkspaceId(workspaceId);
     if (hex.length < SELF_ROUTING_SECRET_HEX) throw new Error('Credential secret material is too short');
-    return `relaycast_${SELF_ROUTING_CODES[kind]}_${workspaceId}_${hex.slice(0, SELF_ROUTING_SECRET_HEX)}`;
+    return `relaycast_${SELF_ROUTING_KIND_CODES[kind]}_${workspaceId}_${hex.slice(0, SELF_ROUTING_SECRET_HEX)}`;
   }
-  const family = LIVE[kind];
-  if (hex.length < family.secretBytes * 2) throw new Error('Credential secret material is too short');
-  return `${family.prefix}${hex.slice(0, family.secretBytes * 2)}`;
+  const length = LIVE_SECRET_BYTES[kind] * 2;
+  if (hex.length < length) throw new Error('Credential secret material is too short');
+  return `${LIVE_CREDENTIAL_PREFIXES[kind]}${hex.slice(0, length)}`;
 }
 
 /** Mint a fresh random credential of `kind` for `workspaceId`. */
 export function mintCredential(format: CredentialFormat, kind: CredentialKind, workspaceId: string): string {
-  const bytes = format === 'self_routing' ? SELF_ROUTING_SECRET_HEX / 2 : LIVE[kind].secretBytes;
+  const bytes = format === 'self_routing' ? SELF_ROUTING_SECRET_HEX / 2 : LIVE_SECRET_BYTES[kind];
   return credentialFromHex(format, kind, workspaceId, randomHex(bytes));
 }
 

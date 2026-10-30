@@ -87,3 +87,24 @@ describe('credential families', () => {
     expect(prepare).toHaveBeenCalledTimes(1);
   });
 });
+
+describe('self-routing observer tokens', () => {
+  it('authenticate as observers and keep their scopes', async () => {
+    const stack = makeNodeStack({ credentialFormat: 'self_routing' });
+    const workspace = await createWorkspace(stack.app, 'observer-scope');
+    const created = await stack.app.request('/v1/observer-tokens', {
+      method: 'POST',
+      headers: { authorization: `Bearer ${workspace.workspaceKey}`, 'content-type': 'application/json' },
+      body: JSON.stringify({ name: 'stream-only', scopes: ['stream:read'] }),
+    });
+    expect(created.status).toBe(201);
+    const { data } = await created.json() as { data: { token: string } };
+    expect(data.token).toMatch(new RegExp(`^relaycast_ob_${workspace.workspaceId}_[0-9a-f]{64}$`));
+
+    // A read route requiring files:read refuses the stream-only token instead of
+    // treating it as a general workspace credential.
+    const files = await stack.app.request('/v1/files', { headers: { authorization: `Bearer ${data.token}` } });
+    expect(files.status).toBe(403);
+    expect(((await files.json()) as { error: { code: string } }).error.code).toBe('insufficient_scope');
+  });
+});
