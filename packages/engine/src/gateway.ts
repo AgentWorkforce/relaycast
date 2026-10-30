@@ -8,7 +8,7 @@ import type { ActorHttpRequest, ActorHttpResponse } from './adapters/actor/http.
 
 export { parseSelfRoutingCredential } from './auth/credentials.js';
 export type { CredentialKind } from './auth/credentials.js';
-export { verifyFileToken } from './lib/fileTokens.js';
+export { signFileToken, verifyFileToken } from './lib/fileTokens.js';
 export type { FileTokenPayload } from './lib/fileTokens.js';
 export { generateId as generateWorkspaceId } from './engine/snowflake.js';
 export { parseActorReplay } from './adapters/actor/call-scope.js';
