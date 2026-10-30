@@ -2,7 +2,7 @@
 // state: a `relaycast_<kind>_<workspace_id>_<secret>` credential names its
 // workspace, and that workspace's actor authenticates it.
 //
-//   TERSE_ACTOR_URL   actors endpoint (default: local `terse actor dev`)
+//   TERSE_ACTOR_URL   actors endpoint (default: local `durable-actors dev`)
 //   TERSE_API_KEY     required for a hosted Terse project
 //   RELAYCAST_FILE_SIGNING_SECRET   shared with the actors
 //   RELAYCAST_WORKSPACE_ID_KEYRING  {"current":"a","keys":{"a":"<secret>"}}: signs
@@ -17,16 +17,17 @@ import { dirname, resolve, sep } from "node:path"
 import {
     ACTOR_FILE_ROUTE,
     OBJECT_SIZE_HEADER,
-    callWorkspaceActor,
     createWorkspaceIdSigner,
     parseSelfRoutingCredential,
     parseWorkspaceIdKeyring,
     verifyFileToken,
-    type ActorHttpCall,
     type ActorHttpRequest,
     type ActorHttpResponse,
 } from "@relaycast/engine/gateway"
 import { createActorStub } from "terse-sdk/actors"
+
+/** One actor call: `create` or `handle` on the workspace actor. */
+type ActorHttpCall = (request: ActorHttpRequest) => Promise<ActorHttpResponse>
 
 interface WorkspaceStub {
     create: ActorHttpCall
@@ -72,8 +73,7 @@ async function forward(call: ActorHttpCall, request: Request): Promise<Response>
         headers: [...request.headers],
         body: request.method === "GET" || request.method === "HEAD" ? null : await request.text(),
     }
-    // Repeats a call that rolled back a failed write group (see the adapter's call-scope.ts).
-    const response: ActorHttpResponse = await callWorkspaceActor(call, actorRequest)
+    const response = await call(actorRequest)
     const empty = response.status === 204 || response.status === 304
     return new Response(empty ? null : response.body, { status: response.status, headers: response.headers })
 }
@@ -149,14 +149,14 @@ export async function handleRequest(request: Request): Promise<Response> {
     if (url.pathname === ACTOR_FILE_ROUTE) return serveFile(request)
     if (request.method === "POST" && url.pathname === "/v1/workspaces") {
         const id = await workspaceIds.mint()
-        return forward((req, replay) => workspace(id).create(req, replay), request)
+        return forward((req) => workspace(id).create(req), request)
     }
     const header = request.headers.get("authorization")
     const credential = header?.startsWith("Bearer ") ? parseSelfRoutingCredential(header.slice(7)) : undefined
     if (!credential || !(await workspaceIds.verify(credential.workspaceId))) {
         return error(401, "unauthorized", "A relaycast_ credential minted by this deployment is required")
     }
-    return forward((req, replay) => workspace(credential.workspaceId).handle(req, replay), request)
+    return forward((req) => workspace(credential.workspaceId).handle(req), request)
 }
 
 if (import.meta.main) {

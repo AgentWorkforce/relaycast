@@ -2,7 +2,7 @@ import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import { sql } from 'drizzle-orm';
-import { createActorEngineDb, execPositional, isReadStatement } from '../database.js';
+import { createActorEngineDb } from '../database.js';
 import { applyActorMigrations } from '../migrations.js';
 import { FakeActorDatabase } from './fakeActor.js';
 import { channels, messages, workspaces } from '../../../db/schema.js';
@@ -10,52 +10,50 @@ import { desc, eq } from 'drizzle-orm';
 import { appendWorkspaceEventBatch } from '../../../engine/workspaceEvents.js';
 
 function engineDb(fake: FakeActorDatabase) {
-  return createActorEngineDb(fake, { runGroup: (body) => body() });
+  return createActorEngineDb(fake);
 }
 
-describe('actor SQL shim', () => {
-  it('keeps both values of a repeated result column', () => {
+describe('actor engine database', () => {
+  it('maps rows positionally and by name, keeping the first of a repeated name', async () => {
     const fake = new FakeActorDatabase();
-    // The runtime contract the shim exists for: exec alone collapses the pair.
+    // exec alone collapses a repeated column name; query keeps both values.
     expect(fake.exec('SELECT 1 AS id, 2 AS id')).toEqual([{ id: 2 }]);
-    const [row] = execPositional(fake, 'SELECT 1 AS id, 2 AS id', []);
-    expect([...row]).toEqual([1, 2]);
-    expect((row as unknown as { id: number }).id).toBe(1);
+    const db = engineDb(fake);
+    const [row] = await db.all<unknown[] & { id: number }>(sql`SELECT 1 AS id, 2 AS id, 3 AS "0", 4 AS length`);
+    expect([...row]).toEqual([1, 2, 3, 4]);
+    expect(row.id).toBe(1);
+    // Integer-like names and `length` stay positional only.
+    expect(row[0]).toBe(1);
+    expect(row.length).toBe(4);
   });
 
-  it('recovers column order around integer-named columns', () => {
-    const fake = new FakeActorDatabase();
-    // A V8 row object enumerates the "0" key first; the result order is id, name, 0.
-    fake.exec('CREATE TABLE t (id TEXT, name TEXT)');
-    fake.exec("INSERT INTO t VALUES ('a', 'alice'), ('b', 'bob')");
-    const statement = 'select "id", "name", 0 from "t" order by "id" desc';
-    expect(execPositional(fake, statement, []).map((row) => [...row])).toEqual([['b', 'bob', 0], ['a', 'alice', 0]]);
-    // Once seen, the statement runs positionally from the start.
-    const before = fake.statements;
-    expect(execPositional(fake, statement, []).map((row) => [...row])).toEqual([['b', 'bob', 0], ['a', 'alice', 0]]);
-    expect(fake.statements - before).toBe(1);
-    // A CTE read with integer-named columns nests inside the positional wrapper.
-    expect([...execPositional(fake, 'WITH x AS (SELECT 5 AS v) SELECT v, 7 FROM x', [])[0]]).toEqual([5, 7]);
-    expect([...execPositional(fake, 'SELECT 1', [])[0]]).toEqual([1]);
-  });
-
-  it('runs writes and RETURNING unwrapped', () => {
+  it('runs writes, RETURNING and CTE writes as they are', async () => {
     const fake = new FakeActorDatabase();
     fake.exec('CREATE TABLE t (id INTEGER PRIMARY KEY, name TEXT)');
-    expect(isReadStatement('INSERT INTO t (name) VALUES (?) RETURNING id, name')).toBe(false);
-    const rows = execPositional(fake, 'INSERT INTO t (name) VALUES (?) RETURNING id, name', ['a']);
-    expect(rows.map((row) => [...row])).toEqual([[1, 'a']]);
+    const db = engineDb(fake);
+    const inserted = await db.all<{ id: number; name: string }>(sql`INSERT INTO t (name) VALUES ('a') RETURNING id, name`);
+    expect(inserted.map((row) => [row.id, row.name])).toEqual([[1, 'a']]);
+    await db.run(sql`WITH RECURSIVE n(x) AS (SELECT 1 UNION ALL SELECT x + 1 FROM n WHERE x < 3) DELETE FROM t WHERE id IN n`);
+    expect(fake.exec('SELECT COUNT(*) AS n FROM t')).toEqual([{ n: 0 }]);
   });
 
-  it('classifies statements by what they run, behind comments and CTEs', () => {
-    expect(isReadStatement('  -- note\n/* x */ with page AS (SELECT 1) SELECT * FROM page')).toBe(true);
-    expect(isReadStatement('select 1')).toBe(true);
-    expect(isReadStatement('UPDATE t SET a = 1')).toBe(false);
-    expect(isReadStatement(`WITH
-      input_events(ord, v) AS (VALUES (0, 'a')),
-      bases AS MATERIALIZED (SELECT 'insert' AS "select" FROM input_events)
-      INSERT INTO t (name) SELECT v FROM input_events RETURNING id`)).toBe(false);
-    expect(isReadStatement('WITH RECURSIVE n(x) AS (SELECT 1 UNION ALL SELECT x + 1 FROM n WHERE x < 3) DELETE FROM t WHERE id IN n')).toBe(false);
+  it('rolls back a failed write group alone and goes on', async () => {
+    const fake = new FakeActorDatabase();
+    fake.exec('CREATE TABLE t (id INTEGER PRIMARY KEY, name TEXT UNIQUE)');
+    const failures: unknown[] = [];
+    let groups = 0;
+    const db = createActorEngineDb(fake, { onGroupStart: () => { groups += 1; }, onGroupFailure: (error) => failures.push(error) });
+    await fake.atomic(async () => {
+      await db.run(sql`INSERT INTO t (name) VALUES ('kept')`);
+      await expect(db.withTransaction(async (tx) => {
+        await tx.run(sql`INSERT INTO t (name) VALUES ('rolled back')`);
+        await tx.run(sql`INSERT INTO t (name) VALUES ('kept')`);
+      })).rejects.toMatchObject({ cause: { code: 'SQLITE_CONSTRAINT_UNIQUE' } });
+      await db.withTransaction((tx) => tx.run(sql`INSERT INTO t (name) VALUES ('after')`));
+    });
+    expect(fake.exec('SELECT name FROM t ORDER BY id')).toEqual([{ name: 'kept' }, { name: 'after' }]);
+    expect(groups).toBe(2);
+    expect(failures).toHaveLength(1);
   });
 
   it('appends a workspace event batch (a CTE INSERT ... RETURNING) through the actor database', async () => {
@@ -125,15 +123,15 @@ describe('bundled actor migrations', () => {
 });
 
 describe('actor constraint errors', () => {
-  it('carry the code engine classifiers read', () => {
+  it('carry the code engine classifiers read', async () => {
     const fake = new FakeActorDatabase();
     fake.exec('CREATE TABLE u (id TEXT PRIMARY KEY, name TEXT UNIQUE)');
     fake.exec("INSERT INTO u VALUES ('1', 'a')");
     let raw: unknown;
     try { fake.exec("INSERT INTO u VALUES ('2', 'a')"); } catch (error) { raw = error; }
     expect((raw as { code?: string }).code).toBeUndefined();
-    expect(() => execPositional(fake, "INSERT INTO u VALUES ('2', 'a')", [])).toThrow(
-      expect.objectContaining({ code: 'SQLITE_CONSTRAINT_UNIQUE', message: expect.stringContaining('UNIQUE constraint failed: u.name') }),
-    );
+    await expect(engineDb(fake).run(sql`INSERT INTO u VALUES ('2', 'a')`)).rejects.toMatchObject({
+      cause: { code: 'SQLITE_CONSTRAINT_UNIQUE', message: expect.stringContaining('UNIQUE constraint failed: u.name') },
+    });
   });
 });

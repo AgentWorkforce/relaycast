@@ -19,8 +19,7 @@ import {
 } from '../../engine/action.js';
 import { A2A_EGRESS_RETRY_WINDOW_MS, sweepPendingA2aEgress } from '../../engine/a2aEgress.js';
 import { reapExpiredWorkspaces } from '../../engine/workspace.js';
-import { createActorEngineDb, type ActorSql } from './database.js';
-import { ActorCallScope, ActorReplayRequired, type ActorWriteGroupFailure } from './call-scope.js';
+import { createActorEngineDb, type ActorDatabase, type ActorSql } from './database.js';
 import { applyActorMigrations } from './migrations.js';
 import { ActorKeyValueStore, ensureActorKvTable } from './kv.js';
 import { ActorEventQueue } from './event-queue.js';
@@ -28,23 +27,19 @@ import { SignedUrlFileStorage } from './files.js';
 import { ActorEphemeralOutbox, ensureActorOutboundTable } from './ephemeral-outbox.js';
 import { isSafeExternalUrl } from '../../lib/ssrf.js';
 
-export type { ActorSql, SqliteValue } from './database.js';
-export { ActorReplayRequired } from './call-scope.js';
-export type { ActorWriteGroupFailure, ActorSerializedError } from './call-scope.js';
+export type { ActorDatabase, ActorSql, SqliteValue } from './database.js';
 export type { ActorHttpRequest, ActorHttpResponse } from './http.js';
 import type { ActorHttpRequest, ActorHttpResponse } from './http.js';
 
 /** Liveness sweeps for connected nodes run on the self-host sweep cadence. */
 const MAINTENANCE_INTERVAL_MS = 15_000;
 const DEFAULT_BLOB_DELETE_BUDGET_MS = 15_000;
-/** Wait before the next maintenance pass after one that rolled back. */
-const DEFAULT_MAINTENANCE_RETRY_MS = 5 * 60_000;
 /** Work already due is retried no sooner than this, so a stuck row cannot spin the alarm. */
 const MIN_RETRY_MS = 5_000;
 
 export interface ActorRuntimeOptions {
-  /** The actor's database (`this.db`). */
-  sql: ActorSql;
+  /** The actor's database (`this.db`, durable-actors >= 0.14.5). */
+  sql: ActorDatabase;
   /** The actor id, which is the workspace id. */
   workspaceId: string;
   /** Public origin clients reach this deployment on; file URLs point at its `/_relayfiles`. */
@@ -65,12 +60,6 @@ export interface ActorRuntimeOptions {
    */
   alarm: { get(): number | null; set(timestampMs: number): void };
   /**
-   * When a maintenance pass rolls back, the next one runs this long after it
-   * (a request can pull it earlier, to its own maintenance deadline). At
-   * least 5 seconds; default 5 minutes.
-   */
-  maintenanceRetryMs?: number;
-  /**
    * Total time one maintenance pass may spend deleting blobs through the
    * gateway; the rest wait for the next pass. Positive; default 15s.
    */
@@ -89,20 +78,20 @@ export interface ActorRuntimeOptions {
 export interface ActorRuntime {
   readonly deps: EngineDeps;
   /**
-   * Serve one HTTP request inside an `@Atomic` actor call. Engine background
-   * work is awaited, so it commits with the call. Throws
-   * {@link ActorReplayRequired} when the call must roll back and run again
-   * with the given failures (see `call-scope.ts`); the actor method must let
-   * it propagate.
+   * Serve one HTTP request inside an actor call. Engine background
+   * work is awaited, so it commits with the call. Each engine write group is
+   * a nested actor transaction: a failed group rolls back alone and the
+   * request goes on, as on the Node adapter.
    */
-  handle(request: ActorHttpRequest, replay: readonly ActorWriteGroupFailure[]): Promise<ActorHttpResponse>;
+  handle(request: ActorHttpRequest): Promise<ActorHttpResponse>;
   /**
    * Run maintenance from the actor alarm: deliver the webhook outbox and
    * queued ephemeral events, redrive node deliveries and A2A egress, delete
    * blobs, run liveness and presence sweeps, expiry and retention. Re-arms the
    * alarm for the nearest outstanding deadline (see {@link nextMaintenanceAt}).
-   * Throws {@link ActorReplayRequired} when a maintenance write group failed
-   * after writing, so the alarm call rolls back.
+   * Each step runs in its own nested transaction: a step or write group that
+   * fails rolls back alone, raises a `maintenance_rolled_back` alert, and the
+   * rest of the pass commits.
    */
   maintain(): Promise<void>;
 }
@@ -115,26 +104,25 @@ class ExternalIoOutsideMaintenance extends Error {
 }
 
 export function createActorRuntime(options: ActorRuntimeOptions): ActorRuntime {
-  const { sql } = options;
+  if (!isActorSql(options.sql)) throw new Error('the relaycast actor adapter requires durable-actors >= 0.14.5');
+  const sql = options.sql;
   const blobDeleteBudgetMs = positiveDuration('blobDeleteBudgetMs', options.blobDeleteBudgetMs, DEFAULT_BLOB_DELETE_BUDGET_MS, 1);
-  const maintenanceRetryMs = positiveDuration('maintenanceRetryMs', options.maintenanceRetryMs, DEFAULT_MAINTENANCE_RETRY_MS, MIN_RETRY_MS);
   // Self-routing credentials embed the workspace id between `_` separators.
   if (!/^[A-Za-z0-9]+$/.test(options.workspaceId)) {
     throw new Error(`Workspace actor id ${JSON.stringify(options.workspaceId)} must be alphanumeric`);
   }
-  let scope: ActorCallScope | undefined;
   let maintaining = false;
+  // Write groups of the running maintenance step: how many opened, and the failures.
+  let stepGroups = 0;
+  let stepFailures: { index: number; error: unknown }[] = [];
 
   applyActorMigrations(sql);
   ensureActorKvTable(sql);
   ensureActorOutboundTable(sql);
 
   const db = createActorEngineDb(sql, {
-    observer: { onWrite: () => scope?.onWrite() },
-    runGroup: (body) => {
-      if (!scope) throw new Error('Engine write group outside an actor call');
-      return scope.runGroup(body);
-    },
+    onGroupStart: () => { stepGroups += 1; },
+    onGroupFailure: (error) => { if (maintaining) stepFailures.push({ index: stepGroups - 1, error }); },
   });
 
   const requestMaintenance = (atMs: number = Date.now()): void => {
@@ -191,7 +179,12 @@ export function createActorRuntime(options: ActorRuntimeOptions): ActorRuntime {
   // Completion's size check runs in the request: a short, bounded call to our
   // own gateway (not an outside destination).
   const statFetch: typeof globalThis.fetch = (input, init) => options.outboundFetch(input, init);
-  const files = new SignedUrlFileStorage(options.baseUrl, options.fileSigningSecret, maintenanceOnly(blobDeleteFetch), statFetch);
+  const files = new SignedUrlFileStorage({
+    baseUrl: options.baseUrl,
+    secret: options.fileSigningSecret,
+    fetch: maintenanceOnly(blobDeleteFetch),
+    statFetch,
+  });
   const messageTtlDays = options.config?.retention?.messageTtlDays ?? null;
   const webhookQueue = new ActorEventQueue(
     db,
@@ -227,100 +220,87 @@ export function createActorRuntime(options: ActorRuntimeOptions): ActorRuntime {
   const app = createEngine(deps);
   const runDeliveryMaintenance = createDeliveryMaintenanceRunner(deps);
 
-  async function inScope<T>(replay: readonly ActorWriteGroupFailure[], work: () => Promise<T>): Promise<T> {
-    if (scope) throw new Error('Actor calls do not overlap; a call is already running');
-    applyActorMigrations(sql);
-    const current = new ActorCallScope(replay);
-    scope = current;
+  const alert = (step: string, writeGroup: number | null, error: unknown): void => {
+    telemetry.captureException(error, {
+      source: 'actor.maintenance',
+      alert: 'maintenance_rolled_back',
+      workspace_id: options.workspaceId,
+      step,
+      write_group: writeGroup,
+      error_code: errorCode(error),
+    });
+  };
+
+  /** Run one maintenance step in its own transaction; a failure rolls back that step (or group) alone. */
+  const runStep = async (step: string, work: () => Promise<unknown>): Promise<void> => {
+    stepGroups = 0;
+    stepFailures = [];
     try {
-      const result = await work();
-      if (current.mustRollBack) throw new ActorReplayRequired([...replay, ...current.failures]);
-      return result;
-    } finally {
-      scope = undefined;
+      await sql.transaction(work);
+    } catch (error) {
+      // A group whose error the step rethrew is the step's failure, reported once.
+      const failed = stepFailures.find((failure) => failure.error === error);
+      stepFailures = stepFailures.filter((failure) => failure !== failed);
+      alert(step, failed?.index ?? null, error);
     }
-  }
+    // Groups that rolled back while the step went on.
+    for (const failure of stepFailures) alert(step, failure.index, failure.error);
+  };
 
   return {
     deps,
 
-    handle(request, replay) {
-      return inScope(replay, async () => {
-        const background: Promise<unknown>[] = [];
-        const executionCtx = {
-          waitUntil: (promise: Promise<unknown>) => { background.push(promise); },
-          passThroughOnException() {},
-          props: {},
-        };
-        const response = await app.fetch(
-          new Request(request.url, {
-            method: request.method,
-            headers: request.headers,
-            body: request.body,
-          }),
-          {},
-          executionCtx,
-        );
-        const body = await response.text();
-        // Background work can schedule more background work; settle all of it
-        // so it commits (or rolls back) with this call.
-        for (let settled = 0; settled < background.length; settled = background.length) {
-          await Promise.allSettled(background.slice(settled));
-        }
-        const next = nextMaintenanceAt(sql);
-        if (next !== null) requestMaintenance(next);
-        return { status: response.status, headers: [...response.headers], body };
-      });
+    async handle(request) {
+      applyActorMigrations(sql);
+      const background: Promise<unknown>[] = [];
+      const executionCtx = {
+        waitUntil: (promise: Promise<unknown>) => { background.push(promise); },
+        passThroughOnException() {},
+        props: {},
+      };
+      const response = await app.fetch(
+        new Request(request.url, {
+          method: request.method,
+          headers: request.headers,
+          body: request.body,
+        }),
+        {},
+        executionCtx,
+      );
+      const body = await response.text();
+      // Background work can schedule more background work; settle all of it
+      // so it commits (or rolls back) with this call.
+      for (let settled = 0; settled < background.length; settled = background.length) {
+        await Promise.allSettled(background.slice(settled));
+      }
+      const next = nextMaintenanceAt(sql);
+      if (next !== null) requestMaintenance(next);
+      return { status: response.status, headers: [...response.headers], body };
     },
 
     async maintain() {
-      let failedStep: string | undefined;
-      let pass: ActorCallScope | undefined;
+      applyActorMigrations(sql);
+      maintaining = true;
+      blobDeadline = Date.now() + blobDeleteBudgetMs;
       try {
-        await inScope([], async () => {
-          pass = scope;
-          maintaining = true;
-          blobDeadline = Date.now() + blobDeleteBudgetMs;
-          try {
-            kv.prune();
-            await presence.sweep().catch((err) => telemetry.captureException(err, { source: 'actor.maintenance', op: 'presence' }));
-            const steps: [string, () => Promise<unknown>][] = [
-              ['stale_agents', () => sweepStaleAgents(db)],
-              ['offline_nodes', () => sweepOfflineNodes(db, realtime, deps)],
-              ['invocations', () => sweepTimedOutInvocations(db, realtime, { completionDeps: deps })],
-              ['workspace_expiry', () => reapExpiredWorkspaces(db, files)],
-              ['deliveries', () => runDeliveryMaintenance()],
-              ['a2a_egress', () => sweepPendingA2aEgress(db, undefined, outboundFetch)],
-              ['webhooks', () => webhookQueue.drain()],
-              ['ephemeral_events', () => ephemeralOutbox.drain()],
-            ];
-            for (const [op, step] of steps) {
-              await step().catch((err) => telemetry.captureException(err, { source: 'actor.maintenance', op }));
-              if (!failedStep && pass?.mustRollBack) failedStep = op;
-            }
-          } finally {
-            maintaining = false;
-          }
-          const next = nextMaintenanceAt(sql);
-          if (next !== null) requestMaintenance(next);
-        });
-      } catch (error) {
-        // A rolled-back pass has no caller to replay it (an alarm has no
-        // outside caller), so it alerts and runs again after a fixed interval.
-        // The alarm is the one thing the rollback keeps. A runtime savepoint
-        // (TerseAI/durable-actors#370) removes this case.
-        const failure = error instanceof ActorReplayRequired ? error.failures.at(-1) : undefined;
-        telemetry.captureException(error, {
-          source: 'actor.maintenance',
-          alert: 'maintenance_rolled_back',
-          workspace_id: options.workspaceId,
-          step: failedStep ?? null,
-          write_group: failure?.index ?? null,
-          error_code: maintenanceErrorCode(failure, error),
-        });
-        options.alarm.set(Date.now() + maintenanceRetryMs);
-        throw error;
+        kv.prune();
+        const steps: [string, () => Promise<unknown>][] = [
+          ['presence', () => presence.sweep()],
+          ['stale_agents', () => sweepStaleAgents(db)],
+          ['offline_nodes', () => sweepOfflineNodes(db, realtime, deps)],
+          ['invocations', () => sweepTimedOutInvocations(db, realtime, { completionDeps: deps })],
+          ['workspace_expiry', () => reapExpiredWorkspaces(db, files)],
+          ['deliveries', () => runDeliveryMaintenance()],
+          ['a2a_egress', () => sweepPendingA2aEgress(db, undefined, outboundFetch)],
+          ['webhooks', () => webhookQueue.drain()],
+          ['ephemeral_events', () => ephemeralOutbox.drain()],
+        ];
+        for (const [step, work] of steps) await runStep(step, work);
+      } finally {
+        maintaining = false;
       }
+      const next = nextMaintenanceAt(sql);
+      if (next !== null) requestMaintenance(next);
     },
   };
 }
@@ -373,14 +353,19 @@ export function nextMaintenanceAt(sql: ActorSql): number | null {
   return Math.max(Number(row.due) * 1000, Date.now() + MIN_RETRY_MS);
 }
 
-/** The most specific code of a maintenance failure: the failing group's error chain, else the thrown error. */
-function maintenanceErrorCode(failure: ActorWriteGroupFailure | undefined, error: unknown): string | null {
-  for (const link of failure?.error ?? []) {
-    const code = (JSON.parse(link.fields) as { code?: unknown }).code;
+function isActorSql(db: ActorDatabase): db is ActorSql {
+  return typeof (db as Partial<ActorSql> | undefined)?.query === 'function' && typeof db.transaction === 'function';
+}
+
+/** The first string `code` along an error's cause chain (drizzle wraps driver errors). */
+function errorCode(error: unknown): string | null {
+  const seen = new Set<unknown>();
+  for (let link = error; link !== null && typeof link === 'object' && !seen.has(link); link = (link as { cause?: unknown }).cause) {
+    seen.add(link);
+    const code = (link as { code?: unknown }).code;
     if (typeof code === 'string') return code;
   }
-  const code = (error as { code?: unknown } | null)?.code;
-  return typeof code === 'string' ? code : null;
+  return null;
 }
 
 function positiveDuration(name: string, value: number | undefined, fallback: number, minimum: number): number {

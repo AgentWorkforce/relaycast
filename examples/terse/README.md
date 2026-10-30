@@ -14,9 +14,9 @@ client ──HTTP──▶ gateway (gateway/server.ts)
 | Path | What it is |
 |---|---|
 | `actor/src/workspace.ts` | The `Workspace` actor: `createActorRuntime` from `@relaycast/engine/adapters/actor` on the actor's database and alarm |
-| `gateway/server.ts` | Bun server: routes by the workspace id in each credential, calls actors with `terse-sdk`, serves signed file URLs from its disk |
+| `gateway/server.ts` | Bun server: routes by the workspace id in each credential, calls actors with `terse-sdk`, serves signed file URLs (PUT, GET, HEAD stat, DELETE) from its disk |
 | `gateway/server.test.ts` | `bun test`: signed uploads, chunked or not, are held to the signed size |
-| `gateway/drive.ts` | End-to-end check: workspace, agents, channel post and read, DM, inbox, search, a rolled-back write group, file upload/download |
+| `gateway/drive.ts` | End-to-end check: workspace, agents, channel post and read, DM, inbox, search, a rolled-back write group, file upload, completion and download |
 
 How it behaves:
 
@@ -28,20 +28,18 @@ How it behaves:
   (`relaycast_ws_…`, `relaycast_ag_…`), so the gateway finds the workspace
   without a lookup. The actor still verifies every credential against its own
   tables.
-- Each actor call is one SQLite transaction. If an engine write group fails
-  after writing, the call rolls back and `callWorkspaceActor` calls again with
-  that group failing up front; the client gets the response of the pass that
-  commits.
+- The actor runs on durable-actors >= 0.14.5. Each actor call is one SQLite
+  transaction, and each engine write group nests inside it
+  (`db.transaction`), so a failed group rolls back alone and the request goes
+  on, as on the Node adapter.
 - Outbound HTTP (webhooks, http_push nodes, A2A egress retries) runs from the
   actor alarm, never while a request holds the actor. A DM to an external A2A
   agent is still sent inline, bounded by its 15s timeout.
-- A maintenance pass whose write group fails after writing rolls back with no
-  caller to replay it. The runtime reports it to telemetry
+- Each maintenance step runs in its own nested transaction. A step or write
+  group that fails rolls back alone and is reported to telemetry
   (`alert: 'maintenance_rolled_back'`, with workspace, step, write group and
-  error code) and runs maintenance again after `maintenanceRetryMs` (default 5
-  minutes). A request can pull that retry earlier, to the request's own
-  maintenance deadline (at least 5 seconds out). A runtime savepoint
-  (TerseAI/durable-actors#370) removes this case.
+  error code); the rest of the pass commits, and the alarm re-arms for the
+  next outstanding deadline.
 - WebSocket endpoints (`/v1/ws`, `/v1/node/ws`) are not served by this example.
 
 ## Run locally
@@ -54,7 +52,7 @@ repository root). Outside it, and for `terse deploy` (which uploads only
 `actor/`), depend on the published `@relaycast/engine` instead.
 
 ```sh
-# Actors: state persists in actor/.durable-actors/
+# Actors (`durable-actors dev` on 127.0.0.1:7100): state persists in actor/.durable-actors/
 cd actor && bun install
 RELAYCAST_PUBLIC_URL=http://127.0.0.1:8787 RELAYCAST_FILE_SIGNING_SECRET=dev-secret bun run dev
 
@@ -75,6 +73,14 @@ single instance on persistent storage, or point `serveFile` at a shared object
 store.
 
 ## Deploy to Terse
+
+The actor imports `durable-actors` (>= 0.14.5). `terse deploy` uploads the
+`actor/` source and discovers its actors through the project's `terse-sdk`,
+so `terse-cli` and `terse-sdk` stay dev dependencies. Deploying requires
+terse-sdk and terse-cli 0.14.8; the pins move from 0.14.7 once 0.14.8 is on
+npm. On an older hosted
+runtime, `createActorRuntime` throws `the relaycast actor adapter requires
+durable-actors >= 0.14.5`.
 
 ```sh
 cd actor

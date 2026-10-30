@@ -1364,11 +1364,13 @@ stateless gateway that routes by the workspace id inside each
 `relaycast_<kind>_<workspace_id>_<secret>` credential.
 
 - `@relaycast/engine/adapters/actor`: `createActorRuntime` runs the engine on an
-  actor's database and alarm. It is written against a minimal database/alarm
-  interface; the engine does not depend on Terse.
-- `@relaycast/engine/gateway`: credential parsing, signed workspace ids, signed file
-  URLs, and `callWorkspaceActor` (repeats a call whose failed write group rolled
-  it back).
+  actor's database and alarm. It requires durable-actors >= 0.14.5 (`db.query`
+  and nested `db.transaction`) and throws on an older runtime. Each engine
+  write group is a nested transaction, so a failed group rolls back alone and
+  the request goes on, as on the Node adapter. It is written against a minimal
+  database/alarm interface; the engine does not depend on Terse.
+- `@relaycast/engine/gateway`: credential parsing, signed workspace ids, and
+  signed file URLs.
 
 [`examples/terse`](examples/terse) is a complete deployment: the `Workspace`
 actor, a small Bun gateway, local and hosted steps, and an end-to-end check.

@@ -30,14 +30,33 @@ export const OBJECT_SIZE_HEADER = 'x-relaycast-object-size';
  * actor runtime allows only during maintenance; inside a request it fails, and
  * the engine's durable cleanup queue retries the deletion from maintenance.
  */
+export interface SignedUrlFileStorageOptions {
+  /** Public origin of the gateway that serves {@link ACTOR_FILE_ROUTE}. */
+  baseUrl: string;
+  /** HMAC secret shared with that gateway. */
+  secret: string;
+  /** Transport for blob deletes. */
+  fetch: typeof globalThis.fetch;
+  /** Transport for upload completion's size check. */
+  statFetch: typeof globalThis.fetch;
+  /** Per-delete timeout. Default 10s. */
+  deleteTimeoutMs?: number;
+}
+
 export class SignedUrlFileStorage implements FileStorage {
-  constructor(
-    private readonly baseUrl: string,
-    private readonly secret: string,
-    private readonly fetch: typeof globalThis.fetch,
-    private readonly statFetch: typeof globalThis.fetch,
-    private readonly deleteTimeoutMs: number = DELETE_TIMEOUT_MS,
-  ) {}
+  private readonly baseUrl: string;
+  private readonly secret: string;
+  private readonly fetch: typeof globalThis.fetch;
+  private readonly statFetch: typeof globalThis.fetch;
+  private readonly deleteTimeoutMs: number;
+
+  constructor(options: SignedUrlFileStorageOptions) {
+    this.baseUrl = options.baseUrl;
+    this.secret = options.secret;
+    this.fetch = options.fetch;
+    this.statFetch = options.statFetch;
+    this.deleteTimeoutMs = options.deleteTimeoutMs ?? DELETE_TIMEOUT_MS;
+  }
 
   /** The stored size, from the gateway; `null` when nothing is stored under `storageKey`. */
   async statObject(args: { storageKey: string }): Promise<{ sizeBytes: number } | null> {

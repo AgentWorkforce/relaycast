@@ -65,7 +65,7 @@ expect((search.json?.data ?? []).some((hit: { text: string }) => hit.text === "h
 
 // A write group that fails after writing: the registration inserts its direct
 // node and agent, then the recovery verifier's unique index rejects the
-// credential. The call rolls back and replays; the client gets the engine's 409.
+// credential. That group rolls back alone; the client gets the engine's 409.
 const verifier = "a".repeat(64)
 expect((await call("POST", "/v1/agents", { name: "owner", recovery_proof_hash: verifier }, key)).status === 201, "owner enrolls a recovery verifier")
 const thief = await call("POST", "/v1/agents", { name: "thief", recovery_proof_hash: verifier }, key)
@@ -85,10 +85,14 @@ expect(again.status === 201, "recycled registers again after the engine reclaims
 const upload = await call("POST", "/v1/files/upload", { filename: "hello.txt", content_type: "text/plain", size_bytes: 11 }, aliceToken)
 const uploadUrl: string = upload.json?.data?.upload_url
 expect(upload.status === 201 && uploadUrl?.startsWith(`${BASE}/_relayfiles?token=`), "upload URL is a signed gateway URL")
+const fileId: string = upload.json?.data?.id
+// Completion asks the gateway for the stored size (a signed HEAD): before the PUT there is nothing stored.
+const early = await call("POST", `/v1/files/${fileId}/complete`, {}, aliceToken)
+expect(early.status === 409 && early.json?.error?.code === "upload_incomplete", "completing before the PUT answers 409 upload_incomplete (gateway stat)")
 const put = await fetch(uploadUrl, { method: "PUT", headers: { "content-type": "text/plain" }, body: "hello bytes" })
 expect(put.status === 200, "PUT stores the bytes at the gateway")
-const fileId: string = upload.json?.data?.id
-expect((await call("POST", `/v1/files/${fileId}/complete`, {}, aliceToken)).status === 200, "upload completes")
+const completed = await call("POST", `/v1/files/${fileId}/complete`, {}, aliceToken)
+expect(completed.status === 200 && completed.json?.data?.size_bytes === 11, "upload completes once the gateway reports the declared size")
 const file = await call("GET", `/v1/files/${fileId}`, undefined, bobToken)
 const downloaded = await fetch(file.json?.data?.download_url)
 expect((await downloaded.text()) === "hello bytes", "download URL serves the bytes back")
