@@ -76,9 +76,9 @@ export async function completeUpload(
     return null;
   }
 
-  // A completed file is attachable, so its bytes must actually be stored.
-  // Recipients see the stored size, whatever the upload request declared.
-  let sizeBytes = file.sizeBytes;
+  // A completed file is attachable, so its bytes must actually be stored, and
+  // exactly as many as the upload declared.
+  const sizeBytes = file.sizeBytes;
   if (storage.statObject) {
     const stored = await storage.statObject({ storageKey: file.storageKey });
     if (!stored || stored.sizeBytes === 0) {
@@ -88,7 +88,13 @@ export async function completeUpload(
         409,
       );
     }
-    sizeBytes = stored.sizeBytes;
+    if (stored.sizeBytes !== sizeBytes) {
+      throw codedError(
+        `Stored ${stored.sizeBytes} bytes, but the upload declared ${sizeBytes}`,
+        'upload_size_mismatch',
+        409,
+      );
+    }
   }
 
   // Generate the URL before flipping status, so a transient storage error keeps
