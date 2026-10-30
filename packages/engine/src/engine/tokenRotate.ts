@@ -1,8 +1,9 @@
 import { eq, and, sql } from 'drizzle-orm';
 import type { getDb } from '../db/index.js';
 import { agents, workspaces } from '../db/schema.js';
-import { randomHex, sha256Hex } from '../lib/crypto.js';
+import { sha256Hex } from '../lib/crypto.js';
 import { codedError } from '../lib/httpError.js';
+import { issueCredential } from '../auth/credentials.js';
 
 type Db = ReturnType<typeof getDb>;
 
@@ -27,7 +28,7 @@ export async function rotateAgentToken(db: Db, workspaceId: string, agentName: s
     throw codedError(`Agent "${agentName}" not found`, 'agent_not_found', 404);
   }
 
-  const newToken = `at_live_${randomHex(16)}`;
+  const newToken = issueCredential(db, 'agent', workspaceId);
   const newTokenHash = await sha256Hex(newToken);
   const graceExpiresAtSeconds = Math.floor((Date.now() + AGENT_TOKEN_GRACE_MS) / 1000);
 
@@ -101,7 +102,7 @@ export async function rotateWorkspaceKey(
     throw codedError('Workspace not found', 'workspace_not_found', 404);
   }
 
-  const newApiKey = `rk_live_${randomHex(16)}`;
+  const newApiKey = issueCredential(db, 'workspace', workspaceId);
   const newApiKeyHash = await sha256Hex(newApiKey);
   const graceExpiresAt = graceMs === 0 ? null : new Date(Date.now() + graceMs);
 

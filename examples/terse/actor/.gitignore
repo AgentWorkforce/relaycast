@@ -1,0 +1,4 @@
+node_modules/
+.durable-actors/
+terse.config.json
+.env

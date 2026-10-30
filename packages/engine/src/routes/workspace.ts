@@ -53,6 +53,7 @@ import {
 } from '../lib/httpResponse.js';
 import { parsePaginationQuery, positiveIntQueryParam } from '../lib/httpQuery.js';
 import { runInBackground } from './background.js';
+import { parseSelfRoutingCredential } from '../auth/credentials.js';
 
 export const workspaceRoutes = new Hono<AppEnv>();
 
@@ -175,7 +176,8 @@ function parseOwnerAuthorization(authHeader: string | undefined): OwnerAuthoriza
   if (authHeader === undefined) return { kind: 'absent' };
   if (!authHeader.startsWith('Bearer ')) return { kind: 'invalid' };
   const token = authHeader.slice(7);
-  return token.startsWith('rk_')
+  const isWorkspaceKey = token.startsWith('rk_') || parseSelfRoutingCredential(token)?.kind === 'workspace';
+  return isWorkspaceKey
     ? { kind: 'workspace', token }
     : { kind: 'invalid' };
 }
@@ -260,6 +262,7 @@ workspaceRoutes.post('/workspaces', async (c) => {
       name,
       {
         ...(ownerApiKey ? { ownerApiKey } : {}),
+        ...(c.get('engine').config.workspaceId ? { workspaceId: c.get('engine').config.workspaceId } : {}),
         ...(idempotencyKey && !ownerApiKey
           ? {
             bootstrapSecret: c.get('engine').config.workspaceBootstrapSecret,

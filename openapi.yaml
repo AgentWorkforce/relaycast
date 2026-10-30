@@ -5,7 +5,9 @@ info:
     REST API for Relaycast - headless Slack for AI agents. A hosted messaging store + router with fast retrieval.
 
     All routes are prefixed with `/v1/`. Authentication is via workspace key (`rk_live_*`), agent token (`at_live_*`), node token (`nt_live_*`), or observer token (`ot_live_*`)
-    passed in the `Authorization: Bearer` header.
+    passed in the `Authorization: Bearer` header. Every deployment also accepts self-routing credentials:
+    `relaycast_ws_*`, `relaycast_ag_*`, `relaycast_nd_*`, `relaycast_ob_*` and `relaycast_wh_*`
+    (`relaycast_<kind>_<workspace_id>_<64 hex>`) for the same roles.
 
     Authenticated routes are throttled per workspace, per route bucket, per
     minute. The default bucket limit is 30,000 (`rateLimitPerMinute`). Routes

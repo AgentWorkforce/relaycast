@@ -19,6 +19,14 @@
       "types": "./dist/adapters/node/index.d.ts",
       "import": "./dist/adapters/node/index.js"
     },
+    "./adapters/actor": {
+      "types": "./dist/adapters/actor/index.d.ts",
+      "import": "./dist/adapters/actor/index.js"
+    },
+    "./gateway": {
+      "types": "./dist/gateway.d.ts",
+      "import": "./dist/gateway.js"
+    },
     "./auth": {
       "types": "./dist/auth/index.d.ts",
       "import": "./dist/auth/index.js"
@@ -53,6 +61,7 @@
   ],
   "scripts": {
     "build": "tsc && node -e \"require('fs').cpSync('src/db/migrations','dist/db/migrations',{recursive:true})\"",
+    "generate:actor-migrations": "node scripts/generate-actor-migrations.mjs",
     "build:standalone": "bun standalone/build.ts",
     "test": "vitest run",
     "test:bun": "bun --bun x vitest run",

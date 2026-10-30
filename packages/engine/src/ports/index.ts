@@ -74,6 +74,7 @@ import type { AdmissionHooks } from './admission.js';
 import type { TelemetrySink } from './telemetry.js';
 import type { EngineDiagnostics } from './diagnostics.js';
 import type { EngineLogExport } from './logging.js';
+import type { CredentialFormat } from '../auth/credentials.js';
 
 /** Infrastructure ports the engine reads off the request context. */
 export interface EnginePorts {
@@ -116,6 +117,19 @@ export interface EngineDeps extends EnginePorts, EngineProviders {
 
 export interface EngineConfig {
   environment?: string;
+  /**
+   * The credential family this deployment mints. `live` (the default) mints
+   * `rk_live_` / `at_live_` / `nt_live_` / `ot_live_` / `wh_live_`;
+   * `self_routing` mints `relaycast_<kind>_<workspace_id>_<secret>` so a
+   * stateless gateway can route by credential. Every deployment accepts both
+   * families. See `auth/credentials.ts`.
+   */
+  credentialFormat?: CredentialFormat;
+  /**
+   * Single-workspace hosts (one workspace per durable actor): the id that
+   * `POST /v1/workspaces` gives the workspace it creates.
+   */
+  workspaceId?: string;
   appVersion?: string;
   appSemver?: string;
   sdkSemver?: string;
@@ -125,6 +139,13 @@ export interface EngineConfig {
    * pinning at socket-connect time to prevent DNS rebinding.
    */
   outboundWebhookFetch?: typeof globalThis.fetch;
+  /**
+   * Transport for best-effort ephemeral http_push events (context updates,
+   * reactions, receipts), which have no delivery row to retry from. Defaults
+   * to `outboundWebhookFetch`. A host that cannot do outbound HTTP while it
+   * serves a request queues them here instead.
+   */
+  ephemeralEventFetch?: typeof globalThis.fetch;
   /**
    * Effective deployment-wide retention fallback. Adapters must provide an
    * explicit value (`null` means never prune); omission is reported as unknown
@@ -216,3 +237,8 @@ export interface EngineConfig {
 }
 
 export type { WorkspaceDeliveryPolicy, WorkspaceDeliveryPolicyConfig } from './workspaceDelivery.js';
+
+/** The transport for ephemeral http_push events under `config`. */
+export function ephemeralEventFetch(config: EngineConfig | undefined): typeof globalThis.fetch | undefined {
+  return config?.ephemeralEventFetch ?? config?.outboundWebhookFetch;
+}

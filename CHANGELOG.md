@@ -18,6 +18,9 @@ Packages without a separate changelog are covered by the cross-package notes bel
 
 ## [Unreleased - Minor]
 
+- Every deployment accepts self-routing credentials, `relaycast_<kind>_<workspace_id>_<secret>`, alongside `rk_live_` / `at_live_` / `nt_live_` / `ot_live_` / `wh_live_`. Which family a deployment mints is per deployment (`credentialFormat`, default `live`), so existing deployments keep minting `*_live_*`.
+- [`examples/terse`](examples/terse) runs relaycast on Terse durable actors.
+- `@relaycast/engine/adapters/actor` runs the engine inside a durable actor that holds one workspace on its own SQLite, and `@relaycast/engine/gateway` has what a stateless gateway in front of those actors needs.
 - The MCP server, the observer dashboard and the Rust SDK accept self-routing credentials (`relaycast_ws_…`, `relaycast_ob_…`) wherever they accepted `rk_live_` / `ot_live_`.
 - Observer token `expires_at` and `filters.created_after` accept RFC 3339 numeric-offset timestamps (for example `+05:30`); the stored expiry is the same instant as the equivalent UTC timestamp.
 

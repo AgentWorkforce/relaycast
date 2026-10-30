@@ -11,6 +11,7 @@ import {
   sendNodeContextToAgents,
   sendNodePresenceContext,
 } from './nodeContext.js';
+import { ephemeralEventFetch } from '../ports/index.js';
 
 /**
  * The single place that decides which sinks a workspace event reaches.
@@ -211,7 +212,7 @@ export async function publishEventsToAgents(
           realtime: deps.engine.realtime,
           environment: deps.engine.config?.environment,
           httpPushProxy: deps.engine.config?.httpPushProxy,
-          outboundWebhookFetch: deps.engine.config?.outboundWebhookFetch,
+          ephemeralEventFetch: ephemeralEventFetch(deps.engine.config),
         },
         contextEvents,
       ).catch((err) => onSinkError?.('node_context', err)),

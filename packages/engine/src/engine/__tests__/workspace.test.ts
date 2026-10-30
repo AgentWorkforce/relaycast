@@ -127,6 +127,20 @@ describe('workspace write durability', () => {
     });
   }
 
+  it('answers workspace_exists only when the assigned id is taken', async () => {
+    attachD1Batch({});
+    await seedDeletionWorkspace('assigned-taken');
+    await expect(createWorkspace(db, 'again', { workspaceId: 'assigned-taken' }))
+      .rejects.toMatchObject({ code: 'workspace_exists', status: 409 });
+
+    // A collision on anything else keeps its own error.
+    await seedDeletionWorkspace('other');
+    await db.insert(channels).values({ id: 'colliding-channel', workspaceId: 'other', name: 'general' });
+    vi.spyOn(snowflake, 'generateId').mockReturnValueOnce('colliding-channel');
+    await expect(createWorkspace(db, 'fresh', { workspaceId: 'assigned-free' }))
+      .rejects.toMatchObject({ code: 'workspace_id_collision', status: 500 });
+  });
+
   it('retries a transient D1 failure and commits workspace plus channel atomically', async () => {
     const batchCalls = attachD1Batch({ failBeforeFirst: true });
 
@@ -252,7 +266,7 @@ describe('workspace write durability', () => {
 
     expect(batchCalls()).toBe(2);
     expect(created.created).toBe(true);
-    expect(created.api_key).toBe(await deriveBootstrapWorkspaceApiKey(bootstrapSecret, idempotencyKey, requestDigest));
+    expect(created.api_key).toBe(await deriveBootstrapWorkspaceApiKey('live', created.workspace_id, bootstrapSecret, idempotencyKey, requestDigest));
     expect(await db.select().from(workspaces)).toHaveLength(1);
     expect(await db.select().from(workspaceCreateIdempotency)).toHaveLength(1);
 
@@ -381,7 +395,7 @@ describe('workspace write durability', () => {
     const ownerApiKey = 'rk_live_collision_owner';
     const idempotencyKey = 'collision-job';
     const requestDigest = await workspaceCreateRequestDigest({ name: 'collision-child' });
-    const deterministicApiKey = await deriveIdempotentWorkspaceApiKey(ownerApiKey, idempotencyKey, requestDigest);
+    const deterministicApiKey = await deriveIdempotentWorkspaceApiKey('live', 'unused', ownerApiKey, idempotencyKey, requestDigest);
     const pair = useGeneratedPair();
 
     attachD1Batch({
@@ -636,5 +650,21 @@ describe('workspace write durability', () => {
     )).rejects.toThrow('D1_TYPE_ERROR');
     expect(calls).toBe(1);
     expect(await db.select().from(workspaces)).toHaveLength(1);
+  });
+});
+
+describe('self-routing workspace key derivation', () => {
+  it('names and binds the workspace id', async () => {
+    const digest = await workspaceCreateRequestDigest({ name: 'routed' });
+    const first = await deriveIdempotentWorkspaceApiKey('self_routing', '111', 'relaycast_ws_owner', 'job-1', digest);
+    const again = await deriveIdempotentWorkspaceApiKey('self_routing', '111', 'relaycast_ws_owner', 'job-1', digest);
+    const other = await deriveIdempotentWorkspaceApiKey('self_routing', '222', 'relaycast_ws_owner', 'job-1', digest);
+    const bootstrap = await deriveBootstrapWorkspaceApiKey('self_routing', '111', 'bootstrap-secret', 'job-1', digest);
+    expect(first).toMatch(/^relaycast_ws_111_[0-9a-f]{64}$/);
+    expect(again).toBe(first);
+    expect(other).toMatch(/^relaycast_ws_222_[0-9a-f]{64}$/);
+    expect(other.slice(-64)).not.toBe(first.slice(-64));
+    expect(bootstrap).toMatch(/^relaycast_ws_111_[0-9a-f]{64}$/);
+    expect(bootstrap).not.toBe(first);
   });
 });

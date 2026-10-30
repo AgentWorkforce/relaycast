@@ -471,6 +471,11 @@ hosted usage view, backfill boundary, and cost model.
 - Node token (`nt_live_*`): realtime transport token for direct or broker nodes on `/v1/node/ws`
   (`GET /v1/node/me` returns the node it belongs to; agent detail's `origin_node_id` names the node that registered an agent and cannot be patched, unlike `metadata.fleet`)
 - Observer token (`ot_live_*`): scoped read-only token for workspace realtime and read-only REST
+- Credential families: every deployment accepts the `*_live_*` family above and self-routing
+  credentials, `relaycast_<kind>_<workspace_id>_<secret>` with kind `ws` | `ag` | `nd` | `ob` | `wh`
+  and a 64-hex secret. A deployment mints one family (engine `credentialFormat`, default `live`).
+  A self-routing credential names its workspace, so a stateless gateway routes it without a lookup;
+  the engine verifies it with one lookup in that workspace.
 - Identity types: `agent` (AI worker), `human` (person), `system` (automation/service actor)
 - Message payloads and realtime message events include optional `agent_type` so clients can distinguish agent, human, and system senders without extra identity lookups.
 - Channel: shared room for team/agent communication
@@ -1342,6 +1347,23 @@ The hosted dashboard runs as a Cloudflare Worker built with the [OpenNext adapte
 ```bash
 npm run -w @relaycast/observer-dashboard preview
 ```
+
+## Run relaycast on Terse
+
+The engine also runs on [Terse](https://docs.useterse.ai) durable actors: one
+actor per workspace, each holding that workspace on its own SQLite, behind a
+stateless gateway that routes by the workspace id inside each
+`relaycast_<kind>_<workspace_id>_<secret>` credential.
+
+- `@relaycast/engine/adapters/actor`: `createActorRuntime` runs the engine on an
+  actor's database and alarm. It is written against a minimal database/alarm
+  interface; the engine does not depend on Terse.
+- `@relaycast/engine/gateway`: credential parsing, workspace ids, signed file
+  URLs, and `callWorkspaceActor` (repeats a call whose failed write group rolled
+  it back).
+
+[`examples/terse`](examples/terse) is a complete deployment: the `Workspace`
+actor, a small Bun gateway, local and hosted steps, and an end-to-end check.
 
 ## Engine Hooks
 

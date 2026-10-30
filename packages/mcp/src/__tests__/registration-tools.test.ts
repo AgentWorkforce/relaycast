@@ -148,6 +148,32 @@ describe('registration tools', () => {
     expect(session.workspaceKey).toBe(routed);
   });
 
+  it('switches to a self-routing workspace by the masked key workspace.list shows', async () => {
+    const routed = 'relaycast_ws_241764880589606912_0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef';
+    session.workspaceKey = 'rk_live_current';
+    session.agentToken = 'at_live_current';
+    session.agentName = 'bot-current';
+    session.workspaces.set(routed, {
+      workspaceKey: routed,
+      agentToken: 'relaycast_ag_241764880589606912_0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef',
+      agentName: 'bot-routed',
+      agents: new Map([['bot-routed', { agentName: 'bot-routed', agentToken: 'relaycast_ag_241764880589606912_0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef' }]]),
+      wsBridge: null,
+      subscriptions: null,
+      wsInitAttempted: false,
+    });
+
+    const listed = await client.callTool({ name: 'workspace.list', arguments: {} });
+    const workspaces = (listed.structuredContent as { workspaces: { workspace_key: string }[] }).workspaces;
+    const masked = workspaces.map((w) => w.workspace_key).find((key) => key.startsWith('relaycast_ws_'))!;
+    expect(masked).toBe('relaycast_ws_241764880589606912_0123...cdef');
+
+    const switched = await client.callTool({ name: 'workspace.switch', arguments: { api_key: masked } });
+    expect(switched.isError).toBeFalsy();
+    expect(session.workspaceKey).toBe(routed);
+    expect(session.agentName).toBe('bot-routed');
+  });
+
   it('set_workspace_key restores saved context when switching back', async () => {
     // Simulate a previously joined workspace.
     session.workspaceKey = 'rk_live_ws1';

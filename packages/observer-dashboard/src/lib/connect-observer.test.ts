@@ -32,9 +32,10 @@ describe('Relay Connect observer presentation', () => {
   });
 
   it('redacts self-routing credentials too', () => {
-    expect(sanitizeConnectObserverText('Use relaycast_ob_241764880589606912_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa now.')).toBe(
-      'Use [credential redacted] now.',
+    expect(sanitizeConnectObserverText('Use relaycast_ob_241764880589606912_0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdefnow.')).toBe(
+      'Use [credential redacted]now.',
     );
+    expect(sanitizeConnectObserverText('token=ot_live_secret,next')).toBe('token=[credential redacted],next');
   });
 
   it('removes query and fragment capabilities without removing the room binding', () => {

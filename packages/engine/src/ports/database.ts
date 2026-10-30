@@ -1,4 +1,5 @@
 import { configureNodeLiveness, nodeLivenessAuthority } from './nodeLiveness.js';
+import { configureCredentialFormat, credentialFormat } from '../auth/credentials.js';
 import { WorkspaceDeliveryCapacityError } from '../engine/workspaceDeliveryPolicy.js';
 import type { BatchItem } from 'drizzle-orm/batch';
 import type { BaseSQLiteDatabase } from 'drizzle-orm/sqlite-core';
@@ -100,6 +101,12 @@ export interface BatchCapability {
   batch(statements: readonly [AtomicWrite, ...AtomicWrite[]]): Promise<unknown[]>;
 }
 
+/** A transaction handle carries the bindings of the handle it was opened from. */
+function inheritHandleBindings(tx: EngineDb, db: EngineDb): void {
+  configureNodeLiveness(tx, nodeLivenessAuthority(db));
+  configureCredentialFormat(tx, credentialFormat(db));
+}
+
 function buildStatements(input: AtomicWriteInput, db: EngineDb): readonly AtomicWrite[] {
   return typeof input === 'function' ? input(db) : input;
 }
@@ -120,7 +127,7 @@ async function runSequentially(statements: readonly AtomicWrite[]): Promise<unkn
 export function runAtomic<T>(db: EngineDb, fn: (tx: EngineDb) => Promise<T>): Promise<T> {
   const { withTransaction } = db as EngineDb & Partial<TransactionCapability>;
   return withTransaction ? withTransaction(tx => {
-    configureNodeLiveness(tx, nodeLivenessAuthority(db));
+    inheritHandleBindings(tx, db);
     return fn(tx);
   }) : fn(db);
 }
@@ -161,7 +168,7 @@ async function executeAtomicWrites(
 
   if (handle.withTransaction) {
     return handle.withTransaction(async (tx) => {
-      configureNodeLiveness(tx, nodeLivenessAuthority(db));
+      inheritHandleBindings(tx, db);
       const statements = buildStatements(input, tx);
       return statements.length === 0 ? [] : runSequentially(statements);
     });
