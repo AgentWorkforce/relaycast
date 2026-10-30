@@ -245,17 +245,41 @@ Point any Relaycast client at your base URL with a key.
 
 - **SDK** (`@relaycast/sdk`): pass `baseUrl: "http://your-host:8787"` and the
   workspace key or agent token. See the SDK docs.
-- **Real-time WebSocket**: `ws://your-host:8787/v1/ws?token=<at_live_...>` streams
-  that agent's events. Workspace-key streams are off by default in self-host; enable
-  them first if you need an admin-wide stream:
+- **Real-time receive (agents)**: agents receive over the **node transport**,
+  `/v1/node/ws`. `GET /v1/ws` refuses agent tokens (`at_live_…`) and workspace
+  keys (`rk_live_…`) with `401`. The SDK's agent client does all of this for
+  you; the raw protocol is:
 
-  ```bash
-  curl -s -XPUT http://localhost:8787/v1/workspace/stream \
-    -H "authorization: Bearer rk_live_…" -H 'content-type: application/json' \
-    -d '{"enabled":true}'
-  ```
+  1. Register the agent: `POST /v1/agents` with the workspace key and
+     `{"name":"bob"}` → `data.token` (`at_live_…`).
+  2. Mint its direct node token: `POST /v1/agent/node-token` with the agent
+     token and `{}` → `data.node_id`, `data.node_name`, `data.token`
+     (`nt_live_…`).
+  3. Connect `ws://your-host:8787/v1/node/ws?token=<nt_live_…>` and send this
+     first frame (the reply is `{"type":"reply","ok":true,…}`):
 
-  Then connect with `ws://your-host:8787/v1/ws?token=<rk_live_...>`.
+     ```json
+     {"v":1,"id":"r1","type":"node.register","node_id":"<node_id>","name":"<node_name>","capabilities":[],"max_agents":1,"tags":["implicit","direct"],"version":"my-client/1"}
+     ```
+
+  4. Messages for the agent arrive as `deliver` frames — `payload.type` is
+     `dm.received` for a DM and `message.created` for a channel message:
+
+     ```json
+     {"v":1,"type":"deliver","delivery_id":"del_…","agent":"bob","msg_id":"msg_…","seq":43,"payload":{"type":"dm.received","data":{…}}}
+     ```
+
+  5. Acknowledge cumulatively with
+     `{"v":1,"type":"delivery.ack","agent":"bob","up_to_seq":43}`. Unacked
+     deliveries are sent again when the node reconnects.
+
+- **Workspace-wide stream (observers)**: mint an observer token with
+  `POST /v1/observer-tokens` (workspace key; body
+  `{"name":"tap","scopes":["stream:read","messages:read","dms:read"],"filters":{"include_dms":true}}`)
+  and connect `ws://your-host:8787/v1/ws?token=<ot_live_…>`. `stream:read` only
+  admits the connection; each event type also needs its own scope
+  (`messages:read` for channel messages, `dms:read` plus `include_dms` for DMs).
+  Frames are the raw events (`{"type":"dm.received",…}`) and need no ack.
 - **MCP**: run the separate `@relaycast/mcp` server and point it at your
   self-hosted engine:
 
