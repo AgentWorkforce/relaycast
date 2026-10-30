@@ -378,38 +378,15 @@ labs and in-cluster control planes; never for a public origin. See
 [`RUNBOOK.md`](../RUNBOOK.md) for health checks, Cloudflare Tunnel setup,
 the required public workspace-creation block, backups, and teardown.
 
-**Kubernetes (Helm)**: `charts/relaycast` runs the repository image.
-**It is single-process only** — the Deployment is pinned to `replicas: 1` with
-a `Recreate` rollout and a `ReadWriteOnce` PVC on `/data`; do not scale it
-(see [Limitations](#8-limitations)). Put secrets in your own Secret and point
-`existingSecret` at it:
-
-```bash
-kubectl create secret generic relaycast-secrets \
-  --from-literal=workspace-bootstrap-secret="$(openssl rand -hex 32)" \
-  --from-literal=internal-secret="$(openssl rand -hex 32)"
-helm install relaycast charts/relaycast \
-  --set baseUrl=https://relay.example.com \
-  --set existingSecret=relaycast-secrets \
-  --set secretKeys.internalSecret=internal-secret
-```
-
-The admin API is opt-in: set `secretKeys.internalSecret=internal-secret` (the
-key name in your Secret) to mount it as `RELAYCAST_INTERNAL_SECRET_FILE`. When
-it is set the chart also disables the public `POST /v1/workspaces`
-(`publicWorkspaceCreate`, default automatic). For an in-cluster-only origin
-such as `http://relaycast.relay.svc:8787` (the URL printed in the install
-notes), also set `allowInsecureBaseUrl=true`; for a custom `clusterDomain` add
-`privateDnsSuffixes`, or allowlist a `<svc>.<ns>` short name with
-`insecureBaseUrlHosts`. Probes use `GET /health`.
-
-The chart-created PVC is annotated `helm.sh/resource-policy: keep`
-(`persistence.retainOnUninstall`, default `true`), so `helm uninstall` leaves
-the database behind; reinstalling under the same release name reuses it, and
-you delete it with `kubectl delete pvc` (the install notes print the claim name) only when you
-mean to. With `retainOnUninstall=false`, uninstall deletes the claim and a
-`Delete` reclaim policy destroys the data. `persistence.existingClaim` is never
-touched by the chart.
+**Kubernetes (Helm)**: the chart lives in
+[AgentWorkforce/helm-charts](https://github.com/AgentWorkforce/helm-charts/tree/main/charts/relaycast)
+(`helm repo add agentworkforce https://agentworkforce.github.io/helm-charts`);
+this repository no longer ships a chart. It runs the published image pinned by
+digest, **single-process only** (`replicas: 1`, `Recreate`, a `ReadWriteOnce`
+PVC on `/data`), with secrets mounted from your own Secret as `*_FILE` paths,
+public workspace creation off by default, and an optional backup CronJob. See
+that chart's README for the quickstart, the first-workspace bootstrap, ingress
+and backup/restore.
 
 ---
 

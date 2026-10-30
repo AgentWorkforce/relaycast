@@ -22,11 +22,9 @@ Packages without a separate changelog are covered by the cross-package notes bel
 
 - Engine: an opt-in internal admin API (`RELAYCAST_INTERNAL_SECRET`) lets a trusted control plane create or idempotently delete workspaces and register or rotate their keys, with the hosted gateway's request and response shapes.
 - Container image: `RELAYCAST_ALLOW_INSECURE_BASE_URL=true` accepts `http://` base URLs on loopback and private hosts, and `RELAYCAST_INTERNAL_SECRET(_FILE)` is passed through.
-- A Helm chart (`charts/relaycast`) runs the single-process engine with a persistent volume.
-- `RELAYCAST_PUBLIC_WORKSPACE_CREATE=false` turns the anonymous `POST /v1/workspaces` into a `404` for control-plane-managed deployments; the chart sets it when the internal secret is configured (now opt-in).
+- `RELAYCAST_PUBLIC_WORKSPACE_CREATE=false` turns the anonymous `POST /v1/workspaces` into a `404` for control-plane-managed deployments.
 - Container image: `*.svc` / `*.svc.cluster.local` count as private hosts, and `RELAYCAST_PRIVATE_DNS_SUFFIXES` / `RELAYCAST_INSECURE_BASE_URL_HOSTS` extend that for custom cluster domains and `<svc>.<ns>` names (entries must sit under a private zone, be a `.svc.<domain>` zone, or be a two-label `<svc>.<ns>` name; public names are refused).
 - Container image: `RELAYCAST_WORKSPACE_BOOTSTRAP_SECRET_FILE` is supported (one trailing newline is stripped; a directly set bootstrap secret is still used byte-for-byte); a directly set variable wins over its `_FILE`, and an unreadable `_FILE` exits `64`.
-- Helm chart: the data PVC carries `helm.sh/resource-policy: keep` by default (`persistence.retainOnUninstall`), so `helm uninstall` no longer deletes the database.
 
 ### Fixed
 
