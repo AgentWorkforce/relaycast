@@ -207,6 +207,16 @@ describe('workspace actor runtime', () => {
     await expect(storage.deleteObjects({ storageKeys: ['w/f/a.txt'] })).rejects.toThrow();
   });
 
+  it('arms the alarm when an idempotency record expires', async () => {
+    const actor = new FakeWorkspaceActor(WORKSPACE_ID);
+    await call(actor, 'POST', '/v1/workspaces', { name: 'kv-expiry' });
+    actor.sql.exec('DELETE FROM _actor_kv');
+    expect(nextMaintenanceAt(actor.sql)).toBeNull();
+    const expiresAt = Date.now() + 3_600_000;
+    actor.sql.exec("INSERT INTO _actor_kv (key, value, expires_at) VALUES ('idem', 'v', ?)", expiresAt);
+    expect(nextMaintenanceAt(actor.sql)).toBe(Math.floor(expiresAt / 1000) * 1000);
+  });
+
   it('queues ephemeral events during a request and sends them from maintenance', async () => {
     const sent: string[] = [];
     const actor = new FakeWorkspaceActor(WORKSPACE_ID, {

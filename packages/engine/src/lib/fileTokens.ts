@@ -81,7 +81,7 @@ export async function verifyFileToken(
     ) {
       return null;
     }
-    if (payload.op === 'put' && (!Number.isSafeInteger(payload.size) || typeof payload.type !== 'string')) return null;
+    if (payload.op === 'put' && (!Number.isSafeInteger(payload.size) || payload.size! < 1 || typeof payload.type !== 'string')) return null;
     if (!isContainedStorageKey(payload.key)) return null;
     if (payload.exp * 1000 < nowMs) return null;
     return payload.op === 'put'

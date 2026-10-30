@@ -99,8 +99,11 @@ const formats = new WeakMap<object, CredentialFormat>();
  * same binding pattern as node liveness).
  */
 export function configureCredentialFormat(db: object, format: CredentialFormat): void {
-  if (format === 'live') formats.delete(db);
-  else formats.set(db, format);
+  const bound = formats.get(db);
+  if (bound !== undefined && bound !== format) {
+    throw new Error(`This database handle already mints ${bound} credentials; one handle serves one credential format`);
+  }
+  formats.set(db, format);
 }
 
 /** The credential family `db`'s deployment mints; `live` unless configured otherwise. */

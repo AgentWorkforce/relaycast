@@ -31,7 +31,7 @@ export const fileRoutes = new Hono<AppEnv>();
 const fileUploadSchema = z.object({
   filename: z.string().min(1),
   content_type: z.string().min(1),
-  size_bytes: z.number().finite().refine((value) => value !== 0),
+  size_bytes: z.number().finite().refine((value) => value > 0),
 });
 
 const listFilesQuerySchema = LimitQuerySchema.extend({

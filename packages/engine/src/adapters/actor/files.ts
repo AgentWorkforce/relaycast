@@ -48,8 +48,9 @@ export class SignedUrlFileStorage implements FileStorage {
   }
 
   async deleteObjects(args: { storageKeys: string[] }): Promise<void> {
-    const exp = Math.floor(Date.now() / 1000) + DELETE_TTL_SECONDS;
     for (const key of args.storageKeys) {
+      // A fresh token per key: a long batch must not outlive one shared expiry.
+      const exp = Math.floor(Date.now() / 1000) + DELETE_TTL_SECONDS;
       const response = await this.fetch(await this.url({ key, op: 'delete', exp }), {
         method: 'DELETE',
         signal: AbortSignal.timeout(this.deleteTimeoutMs),

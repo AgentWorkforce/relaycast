@@ -96,7 +96,7 @@ function nodeContextDeps(deps: EventDispatchDeps, workspaceId: string) {
     workspaceId,
     environment: deps.engine.config?.environment,
     httpPushProxy: deps.engine.config?.httpPushProxy,
-    outboundWebhookFetch: deps.engine.config?.outboundWebhookFetch,
+    ephemeralEventFetch: ephemeralEventFetch(deps.engine.config),
   };
 }
 

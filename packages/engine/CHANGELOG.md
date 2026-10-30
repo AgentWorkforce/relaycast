@@ -15,7 +15,13 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 - `EngineConfig.workspaceId`: the id `POST /v1/workspaces` assigns, for single-workspace hosts. A second create returns `409 workspace_exists`.
 - `@relaycast/engine/adapters/actor`: `createActorRuntime` runs the engine on a durable actor's SQLite (`exec` one statement at a time, no transaction statements). Reads recover positional rows from name-keyed results; each actor call is one transaction, and a write group that fails after writing rolls the call back and replays it with that group failing up front. Migrations ship bundled; KV lives in the actor database; webhooks, http_push, ephemeral events, A2A egress and blob deletes run from the actor alarm, which stays armed for the nearest outstanding deadline; file URLs (upload URLs bind size and content type) are signed for a gateway that holds the blobs. The actor runtime always issues self-routing credentials.
 - `EngineConfig.ephemeralEventFetch`: transport for best-effort ephemeral http_push events (defaults to `outboundWebhookFetch`). `sweepPendingA2aEgress` and `dispatchA2aEgress` take an optional fetch for A2A egress.
-- `@relaycast/engine/gateway`: `parseSelfRoutingCredential`, `generateWorkspaceId`, `verifyFileToken` and `callWorkspaceActor` (the call/replay loop) without the engine.
+- `@relaycast/engine/gateway`: `parseSelfRoutingCredential`, `generateWorkspaceId`, `signFileToken`, `verifyFileToken`, `ACTOR_FILE_ROUTE` and `callWorkspaceActor` (the call/replay loop) without the engine.
+
+### Changed
+
+- File storage keys are `<workspace_id>/<file_id>/<file_id>[.<ext>]`; the client filename stays in file metadata only. Existing files keep their stored keys.
+- `POST /v1/files/upload` requires `size_bytes` > 0.
+- Binding a second credential format to a database handle that already mints another one throws.
 
 ### Fixed
 

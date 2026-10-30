@@ -5,7 +5,7 @@ import { isContainedStorageKey, signFileToken, verifyFileToken } from '../../lib
 import { createWorkspace, makeNodeStack, registerAgent } from './harness.js';
 
 describe('file storage keys', () => {
-  it('keep a traversal filename inside the uploader workspace and file', async () => {
+  it('never contain the client filename', async () => {
     const stack = makeNodeStack();
     const workspace = await createWorkspace(stack.app, 'key-containment');
     const agent = await registerAgent(stack.app, workspace.workspaceKey, 'uploader');
@@ -19,22 +19,34 @@ describe('file storage keys', () => {
 
     const [row] = await stack.runtime.deps.db.select().from(files).where(eq(files.id, data.id));
     expect(row.filename).toBe('../../victim/123/evil.txt');
-    expect(row.storageKey).toBe(`${workspace.workspaceId}/${data.id}/..%2F..%2Fvictim%2F123%2Fevil.txt`);
+    expect(row.storageKey).toBe(`${workspace.workspaceId}/${data.id}/${data.id}.txt`);
     expect(isContainedStorageKey(row.storageKey)).toBe(true);
   });
 
-  it('encode a bare dot-segment filename', async () => {
+  it('store a long non-ASCII filename on local disk under a bounded name', async () => {
     const stack = makeNodeStack();
-    const workspace = await createWorkspace(stack.app, 'dot-segment');
+    const workspace = await createWorkspace(stack.app, 'long-name');
     const agent = await registerAgent(stack.app, workspace.workspaceKey, 'uploader');
+    const filename = `${'漢字'.repeat(60)}.txt`;
+    const headers = { authorization: `Bearer ${agent.token}`, 'content-type': 'application/json' };
     const res = await stack.app.request('/v1/files/upload', {
       method: 'POST',
-      headers: { authorization: `Bearer ${agent.token}`, 'content-type': 'application/json' },
-      body: JSON.stringify({ filename: '..', content_type: 'text/plain', size_bytes: 1 }),
+      headers,
+      body: JSON.stringify({ filename, content_type: 'text/plain', size_bytes: 5 }),
     });
-    const { data } = await res.json() as { data: { id: string } };
+    expect(res.status).toBe(201);
+    const { data } = await res.json() as { data: { id: string; upload_url: string } };
+    const put = await stack.runtime.fileHandler(new Request(data.upload_url, {
+      method: 'PUT',
+      headers: { 'content-type': 'text/plain' },
+      body: 'hello',
+    }));
+    expect(put.status).toBe(200);
+    const complete = await stack.app.request(`/v1/files/${data.id}/complete`, { method: 'POST', headers, body: '{}' });
+    expect(complete.status).toBe(200);
     const [row] = await stack.runtime.deps.db.select().from(files).where(eq(files.id, data.id));
-    expect(row.storageKey.endsWith('/%2E%2E')).toBe(true);
+    expect(row.filename).toBe(filename);
+    expect(row.storageKey).toBe(`${workspace.workspaceId}/${data.id}/${data.id}.txt`);
   });
 
   it('are refused by file tokens when they would leave their prefix', async () => {

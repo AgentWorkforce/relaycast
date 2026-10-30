@@ -17,7 +17,7 @@ import {
   PENDING_INVOCATION_MAX_AGE_MS,
   sweepTimedOutInvocations,
 } from '../../engine/action.js';
-import { sweepPendingA2aEgress } from '../../engine/a2aEgress.js';
+import { A2A_EGRESS_RETRY_WINDOW_MS, sweepPendingA2aEgress } from '../../engine/a2aEgress.js';
 import { reapExpiredWorkspaces } from '../../engine/workspace.js';
 import { createActorEngineDb, type ActorSql } from './database.js';
 import { ActorCallScope, ActorReplayRequired, type ActorWriteGroupFailure } from './call-scope.js';
@@ -281,7 +281,8 @@ export function createActorRuntime(options: ActorRuntimeOptions): ActorRuntime {
  * invocation sweep acts on, including task deadlines (a plain queue waiting
  * for its node to reconnect has none: the reconnect is a request, which
  * re-arms), agent
- * liveness, blob cleanup, workspace expiry and queued ephemeral events, and
+ * liveness, blob cleanup, workspace expiry, idempotency-record expiry, A2A
+ * retention, and queued ephemeral events, and
  * the sweep cadence while nodes are connected. `null` when nothing is
  * outstanding, so an idle workspace's actor goes dormant.
  */
@@ -302,6 +303,10 @@ export function nextMaintenanceAt(sql: ActorSql): number | null {
       UNION ALL SELECT MIN(unixepoch() + ?) FROM nodes WHERE status != 'offline'
       UNION ALL SELECT MIN(process_after) FROM file_cleanup_queue
       UNION ALL SELECT MIN(expires_at) FROM workspaces
+      UNION ALL SELECT MIN(expires_at) / 1000 FROM _actor_kv
+      UNION ALL SELECT MIN(created_at + ?) FROM a2a_egress WHERE status NOT IN ('pending', 'sending')
+      UNION ALL SELECT MIN(created_at + ?) FROM a2a_inbound
+      UNION ALL SELECT MIN(created_at + ?) FROM direct_dm_idempotency
       UNION ALL SELECT MIN(0) FROM _actor_outbound
     )`,
     Math.ceil(ACTION_DISPATCH_TIMEOUT_MS / 1000),
@@ -309,6 +314,9 @@ export function nextMaintenanceAt(sql: ActorSql): number | null {
     Math.ceil(ACTION_HANDLER_UNREACHABLE_TTL_MS / 1000),
     Math.ceil(AGENT_LIVENESS_TTL_MS / 1000),
     Math.ceil(MAINTENANCE_INTERVAL_MS / 1000),
+    Math.ceil(A2A_EGRESS_RETRY_WINDOW_MS / 1000),
+    Math.ceil(A2A_EGRESS_RETRY_WINDOW_MS / 1000),
+    Math.ceil(A2A_EGRESS_RETRY_WINDOW_MS / 1000),
   ) as { due: number | bigint | null }[];
   if (row?.due === null || row?.due === undefined) return null;
   return Math.max(Number(row.due) * 1000, Date.now() + MIN_RETRY_MS);

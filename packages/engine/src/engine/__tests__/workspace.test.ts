@@ -4,6 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { makeNodeStack, type TestStack } from '../../__tests__/conformance/harness.js';
 import { channels, workspaceCreateIdempotency, workspaces } from '../../db/schema.js';
 import { sha256Hex } from '../../lib/crypto.js';
+import { configureCredentialFormat } from '../../auth/credentials.js';
 import type {
   AtomicWrite,
   BatchCapability,
@@ -666,5 +667,23 @@ describe('self-routing workspace key derivation', () => {
     expect(other.slice(-64)).not.toBe(first.slice(-64));
     expect(bootstrap).toMatch(/^relaycast_ws_111_[0-9a-f]{64}$/);
     expect(bootstrap).not.toBe(first);
+  });
+});
+
+describe('workspace create replay across credential families', () => {
+  it('returns the original key after the deployment changes the family it mints', async () => {
+    const stack = makeNodeStack();
+    const liveDb = stack.runtime.deps.db as unknown as EngineDb;
+    const requestDigest = await workspaceCreateRequestDigest({ name: 'family-change' });
+    const options = { ownerApiKey: 'rk_live_family_owner', idempotencyKey: 'family-job', requestDigest };
+    const first = await createWorkspace(liveDb, 'family-change', options);
+    expect(first.api_key).toMatch(/^rk_live_/);
+
+    // The same database behind a deployment that now mints self-routing credentials.
+    const routedDb = new Proxy(liveDb, {});
+    configureCredentialFormat(routedDb, 'self_routing');
+    const replay = await createWorkspace(routedDb, 'family-change', options);
+    expect(replay.created).toBe(false);
+    expect(replay.api_key).toBe(first.api_key);
   });
 });

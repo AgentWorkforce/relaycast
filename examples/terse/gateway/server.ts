@@ -5,6 +5,9 @@
 //   TERSE_ACTOR_URL   actors endpoint (default: local `terse actor dev`)
 //   TERSE_API_KEY     required for a hosted Terse project
 //   RELAYCAST_FILE_SIGNING_SECRET   shared with the actors
+//   RELAYCAST_FILE_DIR   where file bytes live (default ./files). Run one
+//                        gateway instance on persistent storage, or replace
+//                        serveFile with a shared object store.
 //   PORT              default 8787
 import { mkdir } from "node:fs/promises"
 import { dirname, resolve, sep } from "node:path"
@@ -33,7 +36,9 @@ const workspace = (id: string) => createActorStub<WorkspaceStub>("Workspace", id
 
 const fileSecret = process.env.RELAYCAST_FILE_SIGNING_SECRET
 if (!fileSecret) throw new Error("RELAYCAST_FILE_SIGNING_SECRET is not set")
-const fileRoot = resolve(import.meta.dir, "files")
+const fileRoot = resolve(process.env.RELAYCAST_FILE_DIR ?? resolve(import.meta.dir, "files"))
+/** Largest body the gateway reads; an upload token binds the exact size anyway. */
+const MAX_BODY_BYTES = 64 * 1024 * 1024
 
 /** The file for a storage key, or null if the key would resolve outside `fileRoot`. */
 function filePath(key: string): string | null {
@@ -67,6 +72,10 @@ async function serveFile(request: Request): Promise<Response> {
     const path = filePath(token.key)
     if (!path) return error(403, "forbidden", "Invalid storage key")
     if (request.method === "PUT" && token.op === "put") {
+        // Refuse a body of the wrong declared size before reading it.
+        if (Number(request.headers.get("content-length")) !== token.size) {
+            return error(400, "upload_mismatch", "Content-Length does not match the upload")
+        }
         const bytes = await request.arrayBuffer()
         if (bytes.byteLength !== token.size || request.headers.get("content-type") !== token.type) {
             return error(400, "upload_mismatch", "Size or content type does not match the upload")
@@ -93,6 +102,7 @@ async function serveFile(request: Request): Promise<Response> {
 
 const server = Bun.serve({
     port: Number(process.env.PORT ?? 8787),
+    maxRequestBodySize: MAX_BODY_BYTES,
     async fetch(request) {
         const url = new URL(request.url)
         if (url.pathname === ACTOR_FILE_ROUTE) return serveFile(request)
