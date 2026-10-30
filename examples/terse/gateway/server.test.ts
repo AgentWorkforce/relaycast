@@ -57,6 +57,25 @@ describe("/_relayfiles uploads", () => {
     })
 })
 
+describe("/_relayfiles deletes", () => {
+    const remove = async (key: string) => {
+        const token = await signFileToken(SECRET, { key, op: "delete", exp: Math.floor(Date.now() / 1000) + 60 })
+        return serveFile(new Request(`http://gateway/_relayfiles?token=${token}`, { method: "DELETE" }))
+    }
+
+    it("remove the bytes and the type, and remove a leftover type on retry", async () => {
+        expect((await put("w/f4/f4.txt", 5, "hello")).status).toBe(200)
+        expect((await remove("w/f4/f4.txt")).status).toBe(204)
+        expect(await Bun.file(join(dir, "w/f4/f4.txt")).exists()).toBe(false)
+        expect(await Bun.file(join(dir, "w/f4/f4.txt.type")).exists()).toBe(false)
+
+        // A retry after the bytes are already gone still removes the type.
+        await Bun.write(join(dir, "w/f4/f4.txt.type"), "text/plain")
+        expect((await remove("w/f4/f4.txt")).status).toBe(204)
+        expect(await Bun.file(join(dir, "w/f4/f4.txt.type")).exists()).toBe(false)
+    })
+})
+
 describe("workspace routing", () => {
     it("refuses a credential naming a workspace this gateway never minted, without calling an actor", async () => {
         const realFetch = globalThis.fetch

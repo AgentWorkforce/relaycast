@@ -236,6 +236,24 @@ describe('workspace actor runtime', () => {
     expect(rows(actor, 'SELECT COUNT(*) AS n FROM workspaces')).toEqual([{ n: 0 }]);
   });
 
+  it('runs the other maintenance steps when KV expiry fails', async () => {
+    const alerts: Record<string, unknown>[] = [];
+    const actor = new FakeWorkspaceActor(WORKSPACE_ID, {
+      telemetry: { capture() {}, captureException: (_error, context) => { if (context?.alert) alerts.push(context); } },
+    });
+    await call(actor, 'POST', '/v1/workspaces', { name: 'kv-expiry' });
+    actor.sql.raw.exec(`
+      INSERT INTO _actor_kv (key, value, expires_at) VALUES ('stale', '1', 0);
+      INSERT INTO _actor_outbound (created_at, method, url, headers, body) VALUES (0, 'POST', 'https://agent.example.com', '[]', NULL);
+      CREATE TRIGGER refuse_kv_delete BEFORE DELETE ON _actor_kv BEGIN SELECT RAISE(ABORT, 'refused'); END;
+    `);
+    actor.alarm.at = Date.now();
+    await actor.maintain();
+    expect(alerts.map((alert) => alert.step)).toEqual(['kv_expiry']);
+    expect(rows(actor, 'SELECT COUNT(*) AS n FROM _actor_outbound')).toEqual([{ n: 0 }]);
+    expect(actor.alarm.at).toBeGreaterThan(Date.now());
+  });
+
   it('requires an actor database with query and transaction (durable-actors >= 0.14.5)', () => {
     expect(() => createActorRuntime({
       sql: { exec: () => [] } as never,

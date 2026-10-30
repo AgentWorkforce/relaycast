@@ -113,9 +113,10 @@ export async function serveFile(request: Request): Promise<Response> {
             return error(400, "size_mismatch", "Body size does not match the upload")
         }
         await mkdir(dirname(path), { recursive: true })
-        await Bun.write(path, bytes)
         // Serve the signed type later, never one inferred from the key's extension.
+        // The type goes first: a failed write leaves no bytes for HEAD to report.
         await Bun.write(`${path}.type`, token.type!)
+        await Bun.write(path, bytes)
         return Response.json({ ok: true })
     }
     if (request.method === "GET" && token.op === "get") {
@@ -132,12 +133,15 @@ export async function serveFile(request: Request): Promise<Response> {
         return new Response(null, { headers: { [OBJECT_SIZE_HEADER]: String(file.size) } })
     }
     if (request.method === "DELETE" && token.op === "delete") {
-        try {
-            await Bun.file(path).delete()
-            await Bun.file(`${path}.type`).delete().catch(() => {})
-        } catch (err) {
-            // Already gone is success; anything else must fail so the engine's cleanup queue retries.
-            if ((err as { code?: string }).code !== "ENOENT") return error(500, "delete_failed", "Could not delete the file")
+        // Bytes, then type, each already-gone-is-success, so a retry after the
+        // bytes are gone still removes the type. Anything else fails, and the
+        // engine's cleanup queue retries.
+        for (const file of [path, `${path}.type`]) {
+            try {
+                await Bun.file(file).delete()
+            } catch (err) {
+                if ((err as { code?: string }).code !== "ENOENT") return error(500, "delete_failed", "Could not delete the file")
+            }
         }
         return new Response(null, { status: 204 })
     }
