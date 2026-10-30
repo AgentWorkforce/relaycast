@@ -535,8 +535,11 @@ export async function createWorkspace(
           throw error;
         }
         // An assigned id belongs to one workspace: the insert lost to the one
-        // already holding it.
-        if (assignedWorkspaceId) throw codedError('Workspace already exists', 'workspace_exists', 409);
+        // already holding it. Any other collision keeps its own error.
+        if (assignedWorkspaceId) {
+          const [holder] = await db.select({ id: workspaces.id }).from(workspaces).where(eq(workspaces.id, assignedWorkspaceId));
+          if (holder) throw codedError('Workspace already exists', 'workspace_exists', 409);
+        }
         throw codedError('Generated workspace identifier collision', 'workspace_id_collision', 500);
       }
     });

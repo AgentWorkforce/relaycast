@@ -3,6 +3,8 @@ import { signFileToken, type FileTokenPayload } from '../../lib/fileTokens.js';
 
 const URL_TTL_SECONDS = 3600;
 const DELETE_TTL_SECONDS = 300;
+/** A gateway that does not answer must not hold the actor's mailbox. */
+const DELETE_TIMEOUT_MS = 10_000;
 
 /** Path the gateway serves signed file URLs on. */
 export const ACTOR_FILE_ROUTE = '/_relayfiles';
@@ -25,6 +27,7 @@ export class SignedUrlFileStorage implements FileStorage {
     private readonly baseUrl: string,
     private readonly secret: string,
     private readonly fetch: typeof globalThis.fetch,
+    private readonly deleteTimeoutMs: number = DELETE_TIMEOUT_MS,
   ) {}
 
   private async url(payload: FileTokenPayload): Promise<string> {
@@ -47,7 +50,10 @@ export class SignedUrlFileStorage implements FileStorage {
   async deleteObjects(args: { storageKeys: string[] }): Promise<void> {
     const exp = Math.floor(Date.now() / 1000) + DELETE_TTL_SECONDS;
     for (const key of args.storageKeys) {
-      const response = await this.fetch(await this.url({ key, op: 'delete', exp }), { method: 'DELETE' });
+      const response = await this.fetch(await this.url({ key, op: 'delete', exp }), {
+        method: 'DELETE',
+        signal: AbortSignal.timeout(this.deleteTimeoutMs),
+      });
       await response.body?.cancel();
       if (!response.ok) throw new Error(`Blob delete failed for ${key} (HTTP ${response.status})`);
     }

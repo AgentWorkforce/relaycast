@@ -127,6 +127,20 @@ describe('workspace write durability', () => {
     });
   }
 
+  it('answers workspace_exists only when the assigned id is taken', async () => {
+    attachD1Batch({});
+    await seedDeletionWorkspace('assigned-taken');
+    await expect(createWorkspace(db, 'again', { workspaceId: 'assigned-taken' }))
+      .rejects.toMatchObject({ code: 'workspace_exists', status: 409 });
+
+    // A collision on anything else keeps its own error.
+    await seedDeletionWorkspace('other');
+    await db.insert(channels).values({ id: 'colliding-channel', workspaceId: 'other', name: 'general' });
+    vi.spyOn(snowflake, 'generateId').mockReturnValueOnce('colliding-channel');
+    await expect(createWorkspace(db, 'fresh', { workspaceId: 'assigned-free' }))
+      .rejects.toMatchObject({ code: 'workspace_id_collision', status: 500 });
+  });
+
   it('retries a transient D1 failure and commits workspace plus channel atomically', async () => {
     const batchCalls = attachD1Batch({ failBeforeFirst: true });
 

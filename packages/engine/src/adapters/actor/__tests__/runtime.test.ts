@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { callWorkspaceActor } from '../../../gateway.js';
 import { verifyFileToken } from '../../../lib/fileTokens.js';
-import { nextMaintenanceAt } from '../index.js';
+import { nextMaintenanceAt, SignedUrlFileStorage } from '../index.js';
 import { FakeWorkspaceActor, jsonRequest } from './fakeActor.js';
 
 const WORKSPACE_ID = '241764880589606912';
@@ -160,6 +160,35 @@ describe('workspace actor runtime', () => {
     actor.sql.exec('INSERT INTO file_cleanup_queue (storage_key, delete_after, process_after) VALUES (?, ?, ?)',
       `${WORKSPACE_ID}/f/x`, Math.floor(now / 1000), Math.floor(now / 1000) + 3600);
     expect(nextMaintenanceAt(actor.sql)).toBe((Math.floor(now / 1000) + 3600) * 1000);
+  });
+
+  it('arms the alarm at an A2A egress lease and not for an invocation queue waiting on its node', async () => {
+    const actor = new FakeWorkspaceActor(WORKSPACE_ID);
+    await call(actor, 'POST', '/v1/workspaces', { name: 'deadlines' });
+    actor.sql.raw.pragma('foreign_keys = OFF');
+    const nowSeconds = Math.floor(Date.now() / 1000);
+
+    // A pending invocation already dispatched once, with no retry time, waits for
+    // its node to reconnect; the sweep does nothing with it.
+    actor.sql.exec(
+      "INSERT INTO action_invocations (id, workspace_id, action_name, status, dispatch_attempts, created_at) VALUES ('inv1', ?, 'build', 'pending', 1, ?)",
+      WORKSPACE_ID, nowSeconds,
+    );
+    expect(nextMaintenanceAt(actor.sql)).toBeNull();
+
+    actor.sql.exec(
+      "INSERT INTO a2a_egress (id, workspace_id, message_id, target_id, external_url, fingerprint, status, lease_until) VALUES ('e1', ?, 'm1', 't1', 'https://agent.example.com', 'f', 'sending', ?)",
+      WORKSPACE_ID, nowSeconds + 120,
+    );
+    expect(nextMaintenanceAt(actor.sql)).toBe((nowSeconds + 120) * 1000);
+  });
+
+  it('bounds a blob delete when the gateway never answers', async () => {
+    const never: typeof fetch = (_input, init) => new Promise((_resolve, reject) => {
+      init?.signal?.addEventListener('abort', () => reject(init.signal!.reason));
+    });
+    const storage = new SignedUrlFileStorage('https://armadillo.test', 'file-secret', never, 50);
+    await expect(storage.deleteObjects({ storageKeys: ['w/f/a.txt'] })).rejects.toThrow();
   });
 
   it('queues ephemeral events during a request and sends them from maintenance', async () => {

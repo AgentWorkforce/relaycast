@@ -11,7 +11,12 @@ import { InProcessRateLimiter } from '../node/rate-limit.js';
 import { createDeliveryMaintenanceRunner } from '../node/delivery-maintenance.js';
 import { sweepOfflineNodes } from '../../engine/node.js';
 import { AGENT_LIVENESS_TTL_MS, sweepStaleAgents } from '../../engine/agent.js';
-import { ACTION_DISPATCH_TIMEOUT_MS, sweepTimedOutInvocations } from '../../engine/action.js';
+import {
+  ACTION_DISPATCH_TIMEOUT_MS,
+  ACTION_HANDLER_UNREACHABLE_TTL_MS,
+  PENDING_INVOCATION_MAX_AGE_MS,
+  sweepTimedOutInvocations,
+} from '../../engine/action.js';
 import { sweepPendingA2aEgress } from '../../engine/a2aEgress.js';
 import { reapExpiredWorkspaces } from '../../engine/workspace.js';
 import { createActorEngineDb, type ActorSql } from './database.js';
@@ -283,7 +288,9 @@ export function createActorRuntime(options: ActorRuntimeOptions): ActorRuntime {
 /**
  * When maintenance next has something to do, from the workspace's own
  * outstanding work: the nearest due time of the webhook outbox, unfinished
- * deliveries (redrive and expiry), A2A egress, open invocations, agent
+ * deliveries (redrive and expiry), A2A egress, the invocation timeouts the
+ * invocation sweep acts on (a queue waiting for its node to reconnect has
+ * none: the reconnect is a request, which re-arms), agent
  * liveness, blob cleanup, workspace expiry and queued ephemeral events, and
  * the sweep cadence while nodes are connected. `null` when nothing is
  * outstanding, so an idle workspace's actor goes dormant.
@@ -295,7 +302,10 @@ export function nextMaintenanceAt(sql: ActorSql): number | null {
       UNION ALL SELECT MIN(next_attempt_at) FROM deliveries WHERE status NOT IN ('acked', 'dead_lettered', 'failed')
       UNION ALL SELECT MIN(expires_at) FROM deliveries WHERE status NOT IN ('acked', 'dead_lettered', 'failed')
       UNION ALL SELECT MIN(COALESCE(lease_until, 0)) FROM a2a_egress WHERE status IN ('pending', 'sending')
-      UNION ALL SELECT MIN(COALESCE(retry_after_at, created_at + ?)) FROM action_invocations WHERE status IN ('pending', 'dispatched', 'invoked')
+      UNION ALL SELECT MIN(dispatched_at + ?) FROM action_invocations WHERE status = 'dispatched'
+      UNION ALL SELECT MIN(retry_after_at) FROM action_invocations WHERE status = 'pending'
+      UNION ALL SELECT MIN(created_at + ?) FROM action_invocations WHERE status = 'pending' AND dispatch_attempts = 0
+      UNION ALL SELECT MIN(handler_unreachable_since + ?) FROM action_invocations WHERE status IN ('pending', 'dispatched')
       UNION ALL SELECT MIN(last_seen + ?) FROM agents WHERE status IN ('active', 'online')
       UNION ALL SELECT MIN(unixepoch() + ?) FROM nodes WHERE status != 'offline'
       UNION ALL SELECT MIN(process_after) FROM file_cleanup_queue
@@ -303,6 +313,8 @@ export function nextMaintenanceAt(sql: ActorSql): number | null {
       UNION ALL SELECT MIN(0) FROM _actor_outbound
     )`,
     Math.ceil(ACTION_DISPATCH_TIMEOUT_MS / 1000),
+    Math.ceil(PENDING_INVOCATION_MAX_AGE_MS / 1000),
+    Math.ceil(ACTION_HANDLER_UNREACHABLE_TTL_MS / 1000),
     Math.ceil(AGENT_LIVENESS_TTL_MS / 1000),
     Math.ceil(MAINTENANCE_INTERVAL_MS / 1000),
   ) as { due: number | bigint | null }[];
