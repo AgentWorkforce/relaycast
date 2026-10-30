@@ -1,20 +1,16 @@
 import { describe, expect, it } from 'vitest';
-import { callWorkspaceActor } from '../../../gateway.js';
 import { verifyFileToken } from '../../../lib/fileTokens.js';
 import { sha256Hex } from '../../../lib/crypto.js';
-import { ActorReplayRequired, nextMaintenanceAt } from '../index.js';
+import { createActorRuntime, nextMaintenanceAt } from '../index.js';
 import { SignedUrlFileStorage } from '../files.js';
-import { FakeWorkspaceActor, jsonRequest } from './fakeActor.js';
+import { FakeAlarm, FakeWorkspaceActor, jsonRequest } from './fakeActor.js';
 
 const WORKSPACE_ID = '241764880589606912';
 
 interface Envelope<T> { ok: boolean; data: T; error?: { code: string; message: string } }
 
 async function call<T>(actor: FakeWorkspaceActor, method: string, path: string, body?: unknown, token?: string) {
-  const response = await callWorkspaceActor(
-    (request, replay) => actor.handle(request, replay),
-    jsonRequest(method, path, body, token),
-  );
+  const response = await actor.handle(jsonRequest(method, path, body, token));
   return { status: response.status, json: (response.body ? JSON.parse(response.body) : null) as Envelope<T> };
 }
 
@@ -56,9 +52,6 @@ describe('workspace actor runtime', () => {
     const search = await call<{ text: string }[]>(actor, 'GET', '/v1/search?q=durable', undefined, bob);
     expect(search.status).toBe(200);
     expect(search.json.data.map((hit) => hit.text)).toContain('hello from a durable actor');
-
-    // Every call committed in one pass.
-    expect(actor.calls.every((entry) => entry.replay === 0)).toBe(true);
   });
 
   it('verifies live-family credentials as well as the self-routing ones it mints', async () => {
@@ -82,7 +75,7 @@ describe('workspace actor runtime', () => {
     expect(again.json.error?.code).toBe('workspace_exists');
   });
 
-  it('rolls back a write group that failed after writing and still answers with the engine response', async () => {
+  it('rolls back a write group that failed after writing and answers with the engine response in one call', async () => {
     const actor = new FakeWorkspaceActor(WORKSPACE_ID);
     const { key } = await workspaceWithAgents(actor);
     const verifier = 'a'.repeat(64);
@@ -91,11 +84,11 @@ describe('workspace actor runtime', () => {
 
     // The registration group inserts the direct node and the agent, then the
     // recovery-credential insert hits the verifier's unique index.
-    actor.calls.length = 0;
+    actor.calls = 0;
     const thief = await call(actor, 'POST', '/v1/agents', { name: 'thief', recovery_proof_hash: verifier }, key);
     expect(thief.status).toBe(409);
     expect(thief.json.error?.code).toBe('agent_recovery_proof_conflict');
-    expect(actor.calls.map((entry) => entry.replay)).toEqual([0, 1]);
+    expect(actor.calls).toBe(1);
 
     // Nothing from the failed group survived: no agent, no implicit direct node.
     expect(rows(actor, 'SELECT id FROM agents WHERE name = ?', 'thief')).toEqual([]);
@@ -112,10 +105,10 @@ describe('workspace actor runtime', () => {
 
     // The group conflicts on the released holder's verifier after writing;
     // the engine reclaims the verifier and registers again in the same request.
-    actor.calls.length = 0;
+    actor.calls = 0;
     const again = await register();
     expect(again.status).toBe(201);
-    expect(actor.calls.map((entry) => entry.replay)).toEqual([0, 1]);
+    expect(actor.calls).toBe(1);
     expect(rows(actor, 'SELECT COUNT(*) AS n FROM agent_recovery_credentials WHERE verifier_hash = ?', verifier)).toEqual([{ n: 1 }]);
     expect(rows(actor, "SELECT COUNT(*) AS n FROM agents WHERE name = 'recycled'")).toEqual([{ n: 1 }]);
   });
@@ -123,17 +116,14 @@ describe('workspace actor runtime', () => {
   it('keeps idempotency records in the actor database', async () => {
     const actor = new FakeWorkspaceActor(WORKSPACE_ID);
     const { alice } = await workspaceWithAgents(actor);
-    const send = () => callWorkspaceActor(
-      (request, replay) => actor.handle(request, replay),
-      {
-        ...jsonRequest('POST', '/v1/channels/general/messages', { text: 'once' }, alice),
-        headers: [
-          ['content-type', 'application/json'],
-          ['authorization', `Bearer ${alice}`],
-          ['idempotency-key', 'send-once-1'],
-        ],
-      },
-    );
+    const send = () => actor.handle({
+      ...jsonRequest('POST', '/v1/channels/general/messages', { text: 'once' }, alice),
+      headers: [
+        ['content-type', 'application/json'],
+        ['authorization', `Bearer ${alice}`],
+        ['idempotency-key', 'send-once-1'],
+      ],
+    });
     const first = await send();
     const second = await send();
     expect(first.status).toBe(201);
@@ -203,45 +193,58 @@ describe('workspace actor runtime', () => {
     const never: typeof fetch = (_input, init) => new Promise((_resolve, reject) => {
       init?.signal?.addEventListener('abort', () => reject(init.signal!.reason));
     });
-    const storage = new SignedUrlFileStorage('https://armadillo.test', 'file-secret', never, 50);
+    const storage = new SignedUrlFileStorage({ baseUrl: 'https://armadillo.test', secret: 'file-secret', fetch: never, statFetch: never, deleteTimeoutMs: 50 });
     await expect(storage.deleteObjects({ storageKeys: ['w/f/a.txt'] })).rejects.toThrow();
   });
 
-  it('alerts on a maintenance pass that rolls back and retries it after a fixed interval', async () => {
+  it('rolls back a failing maintenance group alone, alerts, and commits the rest of the pass', async () => {
     const alerts: Record<string, unknown>[] = [];
     const actor = new FakeWorkspaceActor(WORKSPACE_ID, {
-      maintenanceRetryMs: 300_000,
       telemetry: { capture() {}, captureException: (_error, context) => { if (context?.alert) alerts.push(context); } },
     });
     await call(actor, 'POST', '/v1/workspaces', { name: 'doomed-maintenance' });
     // The expiry reaper's write group deletes the workspace's events, then its
-    // workspace delete aborts: a group that fails after writing.
+    // workspace delete aborts: a group that fails after writing. A later step
+    // (ephemeral events) has work of its own: a queued event past its age limit.
     actor.sql.raw.exec(`
       UPDATE workspaces SET expires_at = unixepoch() - 60;
       INSERT INTO workspace_events (workspace_id, seq, type, payload) VALUES ('${WORKSPACE_ID}', 999, 'probe', '{}');
+      INSERT INTO _actor_outbound (created_at, method, url, headers, body) VALUES (0, 'POST', 'https://agent.example.com', '[]', NULL);
       CREATE TRIGGER refuse_workspace_delete BEFORE DELETE ON workspaces BEGIN SELECT RAISE(ABORT, 'refused'); END;
     `);
 
     actor.alarm.at = Date.now();
-    const before = Date.now();
-    await expect(actor.maintain()).rejects.toBeInstanceOf(ActorReplayRequired);
+    await actor.maintain();
     expect(alerts).toEqual([{
       source: 'actor.maintenance',
       alert: 'maintenance_rolled_back',
       workspace_id: WORKSPACE_ID,
       step: 'workspace_expiry',
-      write_group: expect.any(Number),
+      write_group: 0,
       error_code: 'SQLITE_CONSTRAINT_TRIGGER',
     }]);
-    // The retry alarm survives the rollback, a fixed interval out.
-    expect(actor.alarm.at).toBeGreaterThanOrEqual(before + 300_000);
-    expect(actor.alarm.at).toBeLessThanOrEqual(Date.now() + 300_000);
-    expect(rows(actor, "SELECT COUNT(*) AS n FROM workspace_events WHERE seq = 999")).toEqual([{ n: 1 }]);
+    // The failing group rolled back alone; the later step committed in the same call.
+    expect(rows(actor, 'SELECT COUNT(*) AS n FROM workspace_events WHERE seq = 999')).toEqual([{ n: 1 }]);
+    expect(rows(actor, 'SELECT COUNT(*) AS n FROM _actor_outbound')).toEqual([{ n: 0 }]);
+    // The alarm follows the outstanding deadlines: the expired workspace is still due.
+    expect(actor.alarm.at).toBeGreaterThan(Date.now());
+    expect(actor.alarm.at).toBeLessThanOrEqual(Date.now() + 5_000);
 
-    // A pass that commits returns to deadline scheduling.
     actor.sql.raw.exec('DROP TRIGGER refuse_workspace_delete');
     await actor.maintain();
-    expect(actor.alarm.at).toBe(nextMaintenanceAt(actor.sql));
+    expect(alerts).toHaveLength(1);
+    expect(rows(actor, 'SELECT COUNT(*) AS n FROM workspaces')).toEqual([{ n: 0 }]);
+  });
+
+  it('requires an actor database with query and transaction (durable-actors >= 0.14.5)', () => {
+    expect(() => createActorRuntime({
+      sql: { exec: () => [] } as never,
+      workspaceId: WORKSPACE_ID,
+      baseUrl: 'https://armadillo.test',
+      fileSigningSecret: 'file-secret',
+      outboundFetch: fetch,
+      alarm: new FakeAlarm(),
+    })).toThrow('the relaycast actor adapter requires durable-actors >= 0.14.5');
   });
 
   it('bounds the time a maintenance pass spends on blob deletes when the gateway hangs', async () => {
@@ -288,6 +291,27 @@ describe('workspace actor runtime', () => {
     expect(sizes.length).toBeGreaterThan(2);
     expect([...deletedCount.values()].every((count) => count === 1)).toBe(true);
     expect(deletedCount.size).toBe(10);
+  });
+
+  it('refuses invalid maintenance durations at construction', () => {
+    expect(() => new FakeWorkspaceActor(WORKSPACE_ID, { blobDeleteBudgetMs: 0 })).toThrow(/blobDeleteBudgetMs/);
+    expect(() => new FakeWorkspaceActor(WORKSPACE_ID, { config: { maxUploadBytes: Number.NaN } })).toThrow(/maxUploadBytes/);
+  });
+
+  it('verifies the stored size through the gateway when an upload completes', async () => {
+    const statted: string[] = [];
+    const actor = new FakeWorkspaceActor(WORKSPACE_ID, {
+      outboundFetch: async (input, init) => {
+        statted.push(`${init?.method} ${new URL(new Request(input).url).pathname}`);
+        return new Response(null, { status: 200, headers: { 'x-relaycast-object-size': '3' } });
+      },
+    });
+    const { alice } = await workspaceWithAgents(actor);
+    const upload = await call<{ id: string }>(actor, 'POST', '/v1/files/upload', { filename: 'a.txt', content_type: 'text/plain', size_bytes: 5 }, alice);
+    const complete = await call(actor, 'POST', `/v1/files/${upload.json.data.id}/complete`, {}, alice);
+    expect(complete.status).toBe(409);
+    expect(complete.json.error?.code).toBe('upload_size_mismatch');
+    expect(statted).toEqual(['HEAD /_relayfiles']);
   });
 
   it('arms the alarm when an idempotency record expires', async () => {

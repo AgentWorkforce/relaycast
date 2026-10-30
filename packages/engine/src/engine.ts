@@ -70,6 +70,10 @@ import { routingRoutes } from './routes/routing.js';
 export function createEngine(deps: EngineDeps): Hono<AppEnv> {
   if (deps.nodeLiveness) configureNodeLiveness(deps.db, deps.nodeLiveness);
   configureCredentialFormat(deps.db, deps.config?.credentialFormat ?? 'live');
+  const maxUploadBytes = deps.config?.maxUploadBytes;
+  if (maxUploadBytes !== undefined && !(Number.isSafeInteger(maxUploadBytes) && maxUploadBytes > 0)) {
+    throw new Error('EngineConfig.maxUploadBytes must be a positive safe integer');
+  }
   const runtime: EngineRuntime = {
     db: deps.db,
     realtime: deps.realtime,

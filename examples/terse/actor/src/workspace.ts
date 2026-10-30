@@ -1,10 +1,9 @@
-import { Actor, Atomic, Ephemeral, type ActorContext } from "terse-sdk/actor"
+import { Actor, Ephemeral, type ActorContext } from "durable-actors"
 import {
     createActorRuntime,
     type ActorHttpRequest,
     type ActorHttpResponse,
     type ActorRuntime,
-    type ActorWriteGroupFailure,
 } from "@relaycast/engine/adapters/actor"
 
 function requiredEnv(name: string): string {
@@ -18,6 +17,9 @@ function requiredEnv(name: string): string {
  * engine runs on the actor's SQLite. A gateway calls `create` for
  * `POST /v1/workspaces` and `handle` for everything else, routing by the
  * workspace id inside each `relaycast_` credential.
+ *
+ * Each call is one transaction that rolls back if it throws; engine write
+ * groups nest inside it (`db.transaction`, durable-actors >= 0.14.5).
  */
 export class Workspace extends Actor {
     @Ephemeral private runtime: ActorRuntime
@@ -42,22 +44,19 @@ export class Workspace extends Actor {
         })
     }
 
-    @Atomic
-    async create(request: ActorHttpRequest, replay: ActorWriteGroupFailure[]): Promise<ActorHttpResponse> {
+    async create(request: ActorHttpRequest): Promise<ActorHttpResponse> {
         const { pathname } = new URL(request.url)
         if (request.method !== "POST" || pathname !== "/v1/workspaces") {
             throw new Error("create serves POST /v1/workspaces only")
         }
-        return this.runtime.handle(request, replay)
+        return this.runtime.handle(request)
     }
 
-    @Atomic
-    async handle(request: ActorHttpRequest, replay: ActorWriteGroupFailure[]): Promise<ActorHttpResponse> {
-        return this.runtime.handle(request, replay)
+    async handle(request: ActorHttpRequest): Promise<ActorHttpResponse> {
+        return this.runtime.handle(request)
     }
 
     /** Outbound HTTP (webhooks, http_push, A2A egress) and maintenance run here, never inside a request. */
-    @Atomic
     async onAlarm(): Promise<void> {
         await this.runtime.maintain()
     }

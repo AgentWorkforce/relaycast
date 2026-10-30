@@ -2,7 +2,7 @@
 // state: a `relaycast_<kind>_<workspace_id>_<secret>` credential names its
 // workspace, and that workspace's actor authenticates it.
 //
-//   TERSE_ACTOR_URL   actors endpoint (default: local `terse actor dev`)
+//   TERSE_ACTOR_URL   actors endpoint (default: local `durable-actors dev`)
 //   TERSE_API_KEY     required for a hosted Terse project
 //   RELAYCAST_FILE_SIGNING_SECRET   shared with the actors
 //   RELAYCAST_WORKSPACE_ID_KEYRING  {"current":"a","keys":{"a":"<secret>"}}: signs
@@ -16,16 +16,18 @@ import { mkdir } from "node:fs/promises"
 import { dirname, resolve, sep } from "node:path"
 import {
     ACTOR_FILE_ROUTE,
-    callWorkspaceActor,
+    OBJECT_SIZE_HEADER,
     createWorkspaceIdSigner,
     parseSelfRoutingCredential,
     parseWorkspaceIdKeyring,
     verifyFileToken,
-    type ActorHttpCall,
     type ActorHttpRequest,
     type ActorHttpResponse,
 } from "@relaycast/engine/gateway"
 import { createActorStub } from "terse-sdk/actors"
+
+/** One actor call: `create` or `handle` on the workspace actor. */
+type ActorHttpCall = (request: ActorHttpRequest) => Promise<ActorHttpResponse>
 
 interface WorkspaceStub {
     create: ActorHttpCall
@@ -71,8 +73,7 @@ async function forward(call: ActorHttpCall, request: Request): Promise<Response>
         headers: [...request.headers],
         body: request.method === "GET" || request.method === "HEAD" ? null : await request.text(),
     }
-    // Repeats a call that rolled back a failed write group (see the adapter's call-scope.ts).
-    const response: ActorHttpResponse = await callWorkspaceActor(call, actorRequest)
+    const response = await call(actorRequest)
     const empty = response.status === 204 || response.status === 304
     return new Response(empty ? null : response.body, { status: response.status, headers: response.headers })
 }
@@ -113,15 +114,27 @@ export async function serveFile(request: Request): Promise<Response> {
         }
         await mkdir(dirname(path), { recursive: true })
         await Bun.write(path, bytes)
+        // Serve the signed type later, never one inferred from the key's extension.
+        await Bun.write(`${path}.type`, token.type!)
         return Response.json({ ok: true })
     }
     if (request.method === "GET" && token.op === "get") {
         const file = Bun.file(path)
-        return (await file.exists()) ? new Response(file) : error(404, "not_found", "File not found")
+        if (!(await file.exists())) return error(404, "not_found", "File not found")
+        const type = await Bun.file(`${path}.type`).text().catch(() => "application/octet-stream")
+        return new Response(file.stream(), {
+            headers: { "content-type": type, "x-content-type-options": "nosniff", "content-length": String(file.size) },
+        })
+    }
+    if (request.method === "HEAD" && token.op === "stat") {
+        const file = Bun.file(path)
+        if (!(await file.exists())) return new Response(null, { status: 404 })
+        return new Response(null, { headers: { [OBJECT_SIZE_HEADER]: String(file.size) } })
     }
     if (request.method === "DELETE" && token.op === "delete") {
         try {
             await Bun.file(path).delete()
+            await Bun.file(`${path}.type`).delete().catch(() => {})
         } catch (err) {
             // Already gone is success; anything else must fail so the engine's cleanup queue retries.
             if ((err as { code?: string }).code !== "ENOENT") return error(500, "delete_failed", "Could not delete the file")
@@ -136,14 +149,14 @@ export async function handleRequest(request: Request): Promise<Response> {
     if (url.pathname === ACTOR_FILE_ROUTE) return serveFile(request)
     if (request.method === "POST" && url.pathname === "/v1/workspaces") {
         const id = await workspaceIds.mint()
-        return forward((req, replay) => workspace(id).create(req, replay), request)
+        return forward((req) => workspace(id).create(req), request)
     }
     const header = request.headers.get("authorization")
     const credential = header?.startsWith("Bearer ") ? parseSelfRoutingCredential(header.slice(7)) : undefined
     if (!credential || !(await workspaceIds.verify(credential.workspaceId))) {
         return error(401, "unauthorized", "A relaycast_ credential minted by this deployment is required")
     }
-    return forward((req, replay) => workspace(credential.workspaceId).handle(req, replay), request)
+    return forward((req) => workspace(credential.workspaceId).handle(req), request)
 }
 
 if (import.meta.main) {

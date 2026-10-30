@@ -20,7 +20,8 @@ export function isContainedStorageKey(key: string): boolean {
 export interface FileTokenPayload {
   /** Engine storage key (`<workspaceId>/<fileId>/<name>`). */
   key: string;
-  op: 'put' | 'get' | 'delete';
+  /** `stat` reads the stored size (`HEAD`), for upload completion. */
+  op: 'put' | 'get' | 'delete' | 'stat';
   /** Expiry, epoch seconds. */
   exp: number;
   /** `put` only: the exact byte length the upload must have. */
@@ -76,7 +77,7 @@ export async function verifyFileToken(
     const payload = JSON.parse(decoder.decode(fromBase64Url(body))) as Partial<FileTokenPayload>;
     if (
       typeof payload.key !== 'string' ||
-      (payload.op !== 'put' && payload.op !== 'get' && payload.op !== 'delete') ||
+      (payload.op !== 'put' && payload.op !== 'get' && payload.op !== 'delete' && payload.op !== 'stat') ||
       typeof payload.exp !== 'number'
     ) {
       return null;
