@@ -17,6 +17,12 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Fixed
 
+- Observer token create and update accept RFC 3339 numeric-offset timestamps for `expires_at` and `filters.created_after`; expiry is stored and returned as the equivalent UTC instant.
+
+## [12.2.1] - 2026-10-29
+
+### Fixed
+
 - A DM participant's inbox unread count drops after they mark a message read or acknowledge its delivery. Migration `0078_dm_participant_read_cursor.sql` seeds each cursor from existing read receipts.
 - Channel unread counts in the inbox no longer drop newer messages whose ids have more digits than the read cursor.
 
@@ -32,6 +38,7 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 - Registration admission: `AdmissionAction` gains `register_device`, `register_agent` and `register_human`, and `AdmissionContext.registered` carries how many of that kind the workspace has registered before this one. The engine admits at every path that creates a node or agent — `POST /v1/nodes` (any host-enrolled node), `POST /v1/agents` (`type: human` is `register_human`), a new `POST /v1/a2a/register` proxy and the `agent.register` node frame. A denial renders like any admission denial, and the node `error` frame carries the denial's `code` and `details`. An established node id or agent name is answered by its usual conflict or rotation, never by admission; an agent's implicit direct node is not a device, and the engine-provisioned inbound-webhook identity (`__relay_webhook__`) is not an agent. Registrations are not reported to `committed`.
 - `createRegistrationAdmission` builds the same check for a host's own node-control transport (`HandleNodeControlMessageArgs.admitRegistration`).
+- `DELETE /v1/nodes/:name` deletes a node by id (exact id first) or name, returning `{ id, name, deleted, cascaded_actions }`. It refuses an online node (`node_online`) or one hosting actions (`node_has_actions`) unless `force=true`, and returns `node_delete_conflict` when a heartbeat or action registration lands mid-delete.
 
 ### Changed
 

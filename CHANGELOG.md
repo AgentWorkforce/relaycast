@@ -30,6 +30,10 @@ Packages without a separate changelog are covered by the cross-package notes bel
 
 ### Fixed
 
+- Observer token `expires_at` and `filters.created_after` accept RFC 3339 numeric-offset timestamps (for example `+05:30`); the stored expiry is the same instant as the equivalent UTC timestamp.
+
+## [12.2.1] - 2026-10-29
+
 - A DM participant's inbox unread count drops after they mark a message read, and stays dropped across later inbox reads.
 - Inbox channel unread counts stay correct when message ids gain a digit.
 
@@ -43,6 +47,7 @@ Packages without a separate changelog are covered by the cross-package notes bel
 ### Added
 
 - Hosts can cap devices (nodes), agents and human members: every new registration passes through the host's admission hook with the workspace's live count, and a denial refuses it on HTTP and on the node `agent.register` frame. Re-enrolling an existing node or re-registering an existing name is never denied.
+- Self-hosted engines now serve `DELETE /v1/nodes/:name`, so `relay.nodes.delete()` can prune dead nodes from a self-hosted roster instead of returning 404.
 
 ### Changed
 
@@ -945,7 +950,8 @@ Packages without a separate changelog are covered by the cross-package notes bel
 
 Earlier releases are available on the [GitHub releases page](https://github.com/AgentWorkforce/relaycast/releases).
 
-[Unreleased]: https://github.com/AgentWorkforce/relaycast/compare/v12.2.0...HEAD
+[Unreleased]: https://github.com/AgentWorkforce/relaycast/compare/v12.2.1...HEAD
+[12.2.1]: https://github.com/AgentWorkforce/relaycast/compare/v12.2.0...v12.2.1
 [12.2.0]: https://github.com/AgentWorkforce/relaycast/compare/v12.1.0...v12.2.0
 [12.1.0]: https://github.com/AgentWorkforce/relaycast/compare/v12.0.0...v12.1.0
 [12.0.0]: https://github.com/AgentWorkforce/relaycast/compare/v11.1.1...v12.0.0

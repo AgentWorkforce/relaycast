@@ -471,6 +471,43 @@ nodeRoutes.delete('/nodes/:node/providers/:name', requireWorkspaceKey, rateLimit
   }
 });
 
+const NODE_DELETE_CONFLICTS = {
+  node_online: 'Node is online; pass force=true to delete it anyway',
+  node_has_actions: 'Node hosts registered actions; pass force=true to delete them with it',
+  node_delete_conflict: 'Node changed during deletion; retry',
+} as const;
+
+// DELETE /v1/nodes/:name?force= - delete a node by id or name
+nodeRoutes.delete('/nodes/:name', requireWorkspaceKey, rateLimit, async (c) => {
+  try {
+    const db = c.get('db');
+    const workspace = c.get('workspace');
+    const idOrName = c.req.param('name');
+    const node = await nodeEngine.getNodeById(db, workspace.id, idOrName)
+      ?? await nodeEngine.getNodeByName(db, workspace.id, idOrName);
+    if (!node) {
+      return jsonNotFound(c, 'node_not_found', 'Node not found');
+    }
+    // Serialize with node-control operations so a register/heartbeat in this
+    // isolate cannot interleave; the engine's guarded DELETE covers the rest.
+    // Only the resolved id crosses the lock: re-resolving the path inside it
+    // could pick a different node after a concurrent delete.
+    const result = await serializeNodeOp(workspace.id, node.id, () =>
+      nodeEngine.deleteNode(db, c.get('engine'), workspace.id, node.id, {
+        force: c.req.query('force') === 'true',
+      }),
+    );
+    if (!result.ok) {
+      return result.code === 'node_not_found'
+        ? jsonNotFound(c, 'node_not_found', 'Node not found')
+        : jsonError(c, result.code, NODE_DELETE_CONFLICTS[result.code], 409);
+    }
+    return jsonOk(c, { id: result.id, name: result.name, deleted: true, cascaded_actions: result.cascadedActions });
+  } catch (err: unknown) {
+    return errorResponse(c, err);
+  }
+});
+
 // GET /v1/nodes/:name - single node roster entry
 // GET /v1/node/me - the node a node token belongs to. A service handed the
 // token (Cloud, recording who owns a node) proves which node it is without

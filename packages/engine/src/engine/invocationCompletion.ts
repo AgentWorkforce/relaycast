@@ -247,16 +247,32 @@ export async function emitNodeStatusEffects(
       { db: deps.db, realtime: deps.realtime },
       workspaceId,
       { type: eventType, payload },
+      // Two writers can finish one claim (a forced delete completes another
+      // isolate's claim tail), so the transition is also skipped when the
+      // newest status event for the node since the claim (the row's
+      // heartbeat) is already offline. Part of the same INSERT, so the check
+      // is atomic; ordered by seq, so a reconnect's online event in between
+      // still lets a later offline through.
       sql`EXISTS (
         SELECT 1 FROM ${nodes}
         WHERE ${nodes.workspaceId} = ${workspaceId}
           AND ${nodes.id} = ${input.nodeId}
           AND ${nodes.status} = 'offline'
           AND ${nodes.livenessRevision} = ${input.claimRevision}
+          AND COALESCE((
+            SELECT we.type FROM workspace_events AS we INDEXED BY idx_workspace_events_created
+            WHERE we.workspace_id = ${workspaceId}
+              AND we.created_at >= ${nodes.lastHeartbeatAt}
+              AND we.type IN ('node.status.online', 'node.status.offline')
+              AND json_extract(we.payload, '$.node_id') = ${input.nodeId}
+            ORDER BY we.seq DESC
+            LIMIT 1
+          ), '') <> 'node.status.offline'
       )`,
     );
-    // A reconnect won the database race. Its online event is authoritative;
-    // publishing this older offline transition afterward would invert history.
+    // A reconnect won the database race (its online event is authoritative;
+    // publishing this older offline transition afterward would invert
+    // history), or this transition is already published.
     if (!appended) return;
   } else {
     await Promise.allSettled([

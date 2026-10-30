@@ -965,7 +965,7 @@ async function failOpenInvocationRows(
 }
 
 /** Emit `action.failed` to each failed invocation's caller. Best-effort per row. */
-async function emitFailedInvocationEffects(
+export async function emitFailedInvocationEffects(
   completionDeps: InvocationCompletionDeps,
   workspaceId: string,
   failed: InvocationRow[],
@@ -4151,6 +4151,69 @@ export async function rescheduleInvocationsForLostNode(
     }
   }
   return rescheduled;
+}
+
+/**
+ * Like rescheduleInvocationsForLostNode, but never sends: each attempt the claim
+ * covers goes back to pending for the next sweep to place. For a writer that
+ * finishes another writer's claim, whose own reschedule may be running: two
+ * writers sending the same attempt could reach two nodes before either
+ * dispatch CAS is checked.
+ */
+export async function detachInvocationsFromLostNode(
+  db: Db,
+  workspaceId: string,
+  nodeId: string,
+  opts: { claimRevision: number },
+) {
+  const rows = await db
+    .select()
+    .from(actionInvocations)
+    .where(and(
+      eq(actionInvocations.workspaceId, workspaceId),
+      eq(actionInvocations.dispatchedNodeId, nodeId),
+      inArray(actionInvocations.status, OPEN_INVOCATION_STATUSES),
+      lt(actionInvocations.nodeLivenessRevision, opts.claimRevision),
+    ));
+
+  let detached = 0;
+  for (const invocation of rows) {
+    // Work no retry could place stays attached, for the node's own cleanup to
+    // fail: a release is pinned to its agent's node, and an orphaned
+    // registered action is never rebound by name.
+    if (
+      isBuiltinReleaseInvocation(invocation)
+      || isDeletedRegisteredActionInvocation(invocation)
+      || isAcceptedDeletedRegisteredActionInvocation(invocation)
+    ) {
+      continue;
+    }
+    const [reset] = await db
+      .update(actionInvocations)
+      .set({
+        status: 'pending',
+        dispatchedNodeId: null,
+        dispatchedProvider: null,
+        dispatchedAt: null,
+        spawnReservedAt: null,
+        retryAfterAt: nextRetryAfter(invocation.dispatchAttempts + 1),
+      })
+      .where(and(
+        eq(actionInvocations.workspaceId, workspaceId),
+        eq(actionInvocations.id, invocation.id),
+        eq(actionInvocations.dispatchedNodeId, nodeId),
+        inArray(actionInvocations.status, OPEN_INVOCATION_STATUSES),
+        eq(actionInvocations.nodeLivenessRevision, invocation.nodeLivenessRevision),
+      ))
+      .returning({ id: actionInvocations.id });
+    if (!reset) continue;
+    detached++;
+    // Release only the reservation this row held and this CAS took from it.
+    if (isSpawnInvocation(invocation.actionName) && invocation.spawnReservedAt) {
+      await releaseNodeCapacity(db, workspaceId, nodeId);
+    }
+  }
+  return detached;
 }
 
 export async function completeInvocation(

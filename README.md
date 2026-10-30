@@ -672,7 +672,7 @@ Realtime transport:
   Missing acknowledgements (including older servers) require REST fallback.
   Broker heartbeats do not certify the presence of their hosted agents.
 - Agent SDKs use `at_live_*` for REST, mint a direct `nt_live_*` token, and receive message deliveries as node `deliver` frames plus targeted status/context events as node `context.update` frames.
-- Workspace keys create, rotate, list, and revoke observer tokens at `/v1/observer-tokens`; observer tokens are read-only and cannot mutate workspace state. Observer scopes grant read capabilities, while filters narrow resources. DM content requires both `dms:read` and `filters.include_dms: true`. Channel filters apply only to channel-scoped events; workspace-wide presence/status events require matching `agent_ids` or no agent filter.
+- Workspace keys create, rotate, list, and revoke observer tokens at `/v1/observer-tokens`; observer tokens are read-only and cannot mutate workspace state. Observer scopes grant read capabilities, while filters narrow resources. DM content requires both `dms:read` and `filters.include_dms: true`. Channel filters apply only to channel-scoped events; workspace-wide presence/status events require matching `agent_ids` or no agent filter. Observer token `expires_at` and `filters.created_after` accept RFC 3339 timestamps with numeric offsets; an expiry is stored and returned as the equivalent UTC instant.
 - `file.uploaded` stream events are emitted when the upload completes, before any message attachment exists, so observer filtering for that event is limited to `files:read`, `agent_ids`, `event_types`, and `created_after`. Channel and DM visibility are enforced when files are read through REST or as message attachments.
 
 Hosts may configure `EngineDeps.nodeLiveness` with an authoritative connection
@@ -1268,6 +1268,7 @@ Programmability, directory & observability:
 POST   /v1/actions                   Register an action (agent-to-agent RPC)
 POST   /v1/actions/:name/invoke      Invoke an action (workspace-scoped / global alias)
 POST   /v1/nodes/:node/actions/:name/invoke  Invoke a node-addressed action
+DELETE /v1/nodes/:name                       Delete a node by id or name (?force=true also deletes an online node and its hosted actions)
 DELETE /v1/nodes/:node/providers/:name       Remove a node provider
 POST   /v1/agents/:name/events       Emit an agent session event (optional Idempotency-Key replays identical retries; status.changed requires payload.status)
 POST   /v1/directory/agents          Publish an agent to the directory

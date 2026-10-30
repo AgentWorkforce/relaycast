@@ -23,7 +23,7 @@ import {
 
 export const observerTokenRoutes = new Hono<AppEnv>();
 
-const isoTimestamp = z.string().datetime({ message: 'expires_at must be an ISO-8601 timestamp' });
+const isoTimestamp = z.iso.datetime({ offset: true, message: 'expires_at must be an ISO-8601 timestamp' });
 
 const observerScopeSchema = z.enum(OBSERVER_SCOPES);
 
