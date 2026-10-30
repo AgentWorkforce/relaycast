@@ -53,7 +53,7 @@ import {
 } from '../lib/httpResponse.js';
 import { parsePaginationQuery, positiveIntQueryParam } from '../lib/httpQuery.js';
 import { runInBackground } from './background.js';
-import { credentialFormat, parseCredential, type CredentialFormat } from '../auth/credentials.js';
+import { parseSelfRoutingCredential } from '../auth/credentials.js';
 
 export const workspaceRoutes = new Hono<AppEnv>();
 
@@ -172,13 +172,11 @@ type OwnerAuthorization =
   | { kind: 'invalid' }
   | { kind: 'workspace'; token: string };
 
-function parseOwnerAuthorization(authHeader: string | undefined, format: CredentialFormat): OwnerAuthorization {
+function parseOwnerAuthorization(authHeader: string | undefined): OwnerAuthorization {
   if (authHeader === undefined) return { kind: 'absent' };
   if (!authHeader.startsWith('Bearer ')) return { kind: 'invalid' };
   const token = authHeader.slice(7);
-  const isWorkspaceKey = format === 'self_routing'
-    ? parseCredential(token, format)?.kind === 'workspace'
-    : token.startsWith('rk_');
+  const isWorkspaceKey = token.startsWith('rk_') || parseSelfRoutingCredential(token)?.kind === 'workspace';
   return isWorkspaceKey
     ? { kind: 'workspace', token }
     : { kind: 'invalid' };
@@ -237,7 +235,7 @@ workspaceRoutes.post('/workspaces', async (c) => {
       return jsonError(c, 'invalid_idempotency_key', idempotencyError, 400);
     }
     const db = c.get('db');
-    const ownerAuthorization = parseOwnerAuthorization(c.req.header('Authorization'), credentialFormat(db));
+    const ownerAuthorization = parseOwnerAuthorization(c.req.header('Authorization'));
     if (idempotencyKey && ownerAuthorization.kind === 'invalid') {
       return jsonError(c, 'unauthorized', 'Missing or invalid Authorization header', 401);
     }

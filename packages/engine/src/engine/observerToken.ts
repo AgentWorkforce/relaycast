@@ -319,13 +319,22 @@ export async function getActiveObserverTokenByHash(
   const [row] = await db
     .select()
     .from(observerTokens)
-    .where(and(
-      eq(observerTokens.tokenHash, tokenHash),
-      eq(observerTokens.status, 'active'),
-      or(isNull(observerTokens.expiresAt), gt(observerTokens.expiresAt, now)),
-    ));
+    .where(and(eq(observerTokens.tokenHash, tokenHash), activeObserverTokenCondition(now)));
   if (!row) return null;
+  noteObserverTokenUse(db, row, now);
+  return row;
+}
 
+/** The observer-token predicate for "usable now": active and unexpired. */
+export function activeObserverTokenCondition(now: Date) {
+  return and(
+    eq(observerTokens.status, 'active'),
+    or(isNull(observerTokens.expiresAt), gt(observerTokens.expiresAt, now)),
+  );
+}
+
+/** Record `last_used_at` (debounced, best effort, detached from the caller). */
+export function noteObserverTokenUse(db: Db, row: ObserverToken, now: Date = new Date()): void {
   if (!row.lastUsedAt || now.getTime() - row.lastUsedAt.getTime() > LAST_USED_DEBOUNCE_MS) {
     void (async () => {
       try {
@@ -339,7 +348,6 @@ export async function getActiveObserverTokenByHash(
       }
     })();
   }
-  return row;
 }
 
 export function hasObserverScope(observer: Pick<ObserverToken, 'scopes'>, scope: ObserverScope): boolean {

@@ -28,19 +28,8 @@ import { SignedUrlFileStorage } from './files.js';
 import { ActorEphemeralOutbox, ensureActorOutboundTable } from './ephemeral-outbox.js';
 import { isSafeExternalUrl } from '../../lib/ssrf.js';
 
-export { ACTOR_FILE_ROUTE, SignedUrlFileStorage } from './files.js';
-export { ActorKeyValueStore } from './kv.js';
-export { ActorEventQueue } from './event-queue.js';
-export { applyActorMigrations } from './migrations.js';
-export { createActorEngineDb, execPositional, isReadStatement } from './database.js';
-export type { ActorSql, ActorEngineDb, SqliteValue } from './database.js';
-export {
-  ActorCallScope,
-  ActorReplayRequired,
-  parseActorReplay,
-  rehydrateError,
-  serializeError,
-} from './call-scope.js';
+export type { ActorSql, SqliteValue } from './database.js';
+export { ActorReplayRequired } from './call-scope.js';
 export type { ActorWriteGroupFailure, ActorSerializedError } from './call-scope.js';
 export type { ActorHttpRequest, ActorHttpResponse } from './http.js';
 import type { ActorHttpRequest, ActorHttpResponse } from './http.js';

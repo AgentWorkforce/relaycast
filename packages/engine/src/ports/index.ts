@@ -118,10 +118,11 @@ export interface EngineDeps extends EnginePorts, EngineProviders {
 export interface EngineConfig {
   environment?: string;
   /**
-   * The credential family this deployment issues and accepts. `live` (the
-   * default) issues `rk_live_` / `at_live_` / `nt_live_` / `ot_live_` /
-   * `wh_live_`; `self_routing` issues `relaycast_<kind>_<workspace_id>_<secret>`
-   * so a stateless gateway can route by credential. See `auth/credentials.ts`.
+   * The credential family this deployment mints. `live` (the default) mints
+   * `rk_live_` / `at_live_` / `nt_live_` / `ot_live_` / `wh_live_`;
+   * `self_routing` mints `relaycast_<kind>_<workspace_id>_<secret>` so a
+   * stateless gateway can route by credential. Every deployment accepts both
+   * families. See `auth/credentials.ts`.
    */
   credentialFormat?: CredentialFormat;
   /**

@@ -1,0 +1,21 @@
+{
+  "name": "relaycast-terse-gateway",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "bun": ">=1.4.2"
+  },
+  "scripts": {
+    "start": "bun server.ts",
+    "drive": "bun drive.ts",
+    "check": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@relaycast/engine": "12.3.0",
+    "terse-sdk": "0.14.7"
+  },
+  "devDependencies": {
+    "@types/bun": "^1.4.4",
+    "typescript": "~5.9.3"
+  }
+}

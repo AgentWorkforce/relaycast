@@ -1,17 +1,19 @@
 import { randomHex } from '../lib/crypto.js';
 
 /**
- * The credential families a deployment can issue.
+ * The two credential families.
  *
  * - `live`: `rk_live_` / `at_live_` / `nt_live_` / `ot_live_` / `wh_live_` plus
- *   a random hex secret. The default.
+ *   a random hex secret.
  * - `self_routing`: `relaycast_<kind>_<workspace_id>_<secret>` with a 64-hex
  *   secret. The workspace id is readable from the credential itself, so a
  *   stateless gateway can route a request to its workspace without a lookup.
  *   The workspace id is not secret; the engine still authenticates by hashing
- *   the whole credential and looking it up in the table for its kind.
+ *   the whole credential and looking it up in the table for its kind, within
+ *   that workspace.
  *
- * A deployment issues and accepts exactly one family.
+ * Every deployment accepts both families. Which one it mints is per deployment
+ * (`EngineConfig.credentialFormat`, default `live`).
  */
 export type CredentialFormat = 'live' | 'self_routing';
 
@@ -48,11 +50,9 @@ const SELF_ROUTING_SECRET_HEX = 64;
 const WORKSPACE_ID_PATTERN = /^[A-Za-z0-9]+$/;
 const SELF_ROUTING_PATTERN = /^relaycast_(ws|ag|nd|ob|wh)_([A-Za-z0-9]+)_([0-9a-f]{64})$/;
 
-export interface ParsedCredential {
-  kind: CredentialKind;
-  /** Present for `self_routing` credentials. */
-  workspaceId?: string;
-}
+export type ParsedCredential =
+  | { family: 'live'; kind: CredentialKind }
+  | { family: 'self_routing'; kind: CredentialKind; workspaceId: string };
 
 /**
  * Parse a self-routing credential without consulting any deployment state.
@@ -66,16 +66,17 @@ export function parseSelfRoutingCredential(
   return { kind: KIND_BY_CODE[match[1] as SelfRoutingKindCode], workspaceId: match[2] };
 }
 
-/** Classify a presented credential under `format`. Other families do not parse. */
-export function parseCredential(token: string, format: CredentialFormat): ParsedCredential | undefined {
-  if (format === 'self_routing') return parseSelfRoutingCredential(token);
+/** Classify a presented credential of either family. */
+export function parseCredential(token: string): ParsedCredential | undefined {
+  const routed = parseSelfRoutingCredential(token);
+  if (routed) return { family: 'self_routing', ...routed };
   for (const [kind, family] of Object.entries(LIVE) as [CredentialKind, LiveFamily][]) {
-    if (token.startsWith(family.prefix)) return { kind };
+    if (token.startsWith(family.prefix)) return { family: 'live', kind };
   }
   return undefined;
 }
 
-/** Human-readable shape of a credential kind, for error messages. */
+/** Human-readable shape of a credential kind in the family a deployment mints, for error messages. */
 export function credentialShape(kind: CredentialKind, format: CredentialFormat): string {
   return format === 'self_routing'
     ? `relaycast_${SELF_ROUTING_CODES[kind]}_...`
@@ -119,16 +120,16 @@ export function mintCredential(format: CredentialFormat, kind: CredentialKind, w
 const formats = new WeakMap<object, CredentialFormat>();
 
 /**
- * Bind the deployment's credential family to a database handle. Every engine
- * path that mints or classifies a credential holds the handle, so the family
- * travels with it (the same binding pattern as node liveness).
+ * Bind the family a deployment mints to its database handle. Every engine path
+ * that mints a credential holds the handle, so the family travels with it (the
+ * same binding pattern as node liveness).
  */
 export function configureCredentialFormat(db: object, format: CredentialFormat): void {
   if (format === 'live') formats.delete(db);
   else formats.set(db, format);
 }
 
-/** The credential family bound to `db`; `live` unless configured otherwise. */
+/** The credential family `db`'s deployment mints; `live` unless configured otherwise. */
 export function credentialFormat(db: object): CredentialFormat {
   return formats.get(db) ?? 'live';
 }

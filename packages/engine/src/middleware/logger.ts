@@ -1,7 +1,6 @@
 import type { MiddlewareHandler } from 'hono';
 import type { AppEnv } from '../env.js';
 import { getAuthTokenKind } from '../auth/tokenKind.js';
-import { credentialFormat, type CredentialFormat } from '../auth/credentials.js';
 import { randomUuid, sha256Hex } from '../lib/crypto.js';
 import { createRequestLogger } from '../lib/logger.js';
 import { deriveClientName, extractOriginActor, extractOriginInfo } from '../lib/origin.js';
@@ -38,8 +37,8 @@ function parseBearerToken(authorization: string | undefined): string | undefined
   return rawToken;
 }
 
-function tokenType(token: string, format: CredentialFormat): 'agent' | 'workspace' | 'unknown' {
-  const tokenKind = getAuthTokenKind(token, format);
+function tokenType(token: string): 'agent' | 'workspace' | 'unknown' {
+  const tokenKind = getAuthTokenKind(token);
   if (tokenKind === 'agent' || tokenKind === 'workspace') return tokenKind;
   return 'unknown';
 }
@@ -56,22 +55,18 @@ function routeGroupForPath(path: string): string {
   return 'other';
 }
 
-function classifyAuthScheme(
-  authHeader: string | undefined,
-  queryToken: string | undefined,
-  format: CredentialFormat,
-): string {
+function classifyAuthScheme(authHeader: string | undefined, queryToken: string | undefined): string {
   if (authHeader) {
     const bearerToken = parseBearerToken(authHeader);
     if (!bearerToken) return 'authorization_other';
-    const type = tokenType(bearerToken, format);
+    const type = tokenType(bearerToken);
     if (type === 'agent') return 'bearer_agent_token';
     if (type === 'workspace') return 'bearer_workspace_key';
     return 'bearer_unknown';
   }
 
   if (queryToken) {
-    const type = tokenType(queryToken, format);
+    const type = tokenType(queryToken);
     if (type === 'agent') return 'query_agent_token';
     if (type === 'workspace') return 'query_workspace_key';
     return 'query_unknown';
@@ -138,7 +133,7 @@ export const loggerMiddleware: MiddlewareHandler<AppEnv> = async (c, next) => {
   const queryToken = c.req.query('token');
   const bearerToken = parseBearerToken(authHeader);
   const presentedToken = bearerToken ?? queryToken;
-  const authScheme = classifyAuthScheme(authHeader, queryToken, credentialFormat(c.get('engine').db));
+  const authScheme = classifyAuthScheme(authHeader, queryToken);
   const contentType = requestHeaders.get('content-type');
   const accept = requestHeaders.get('accept');
   const connectingIp = requestHeaders.get('cf-connecting-ip');

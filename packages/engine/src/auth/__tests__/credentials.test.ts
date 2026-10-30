@@ -28,19 +28,20 @@ describe('credential families', () => {
       const token = mintCredential('self_routing', kind, WS);
       expect(token).toMatch(new RegExp(`^relaycast_${code}_${WS}_[0-9a-f]{64}$`));
       expect(parseSelfRoutingCredential(token)).toEqual({ kind, workspaceId: WS });
-      expect(parseCredential(token, 'self_routing')).toEqual({ kind, workspaceId: WS });
+      expect(parseCredential(token)).toEqual({ family: 'self_routing', kind, workspaceId: WS });
     }
   });
 
-  it('classifies only the configured family', () => {
+  it('classifies both families', () => {
     const live = mintCredential('live', 'agent', WS);
     const routed = mintCredential('self_routing', 'agent', WS);
-    expect(getAuthTokenKind(live, 'live')).toBe('agent');
-    expect(getAuthTokenKind(routed, 'live')).toBeUndefined();
-    expect(getAuthTokenKind(routed, 'self_routing')).toBe('agent');
-    expect(getAuthTokenKind(live, 'self_routing')).toBeUndefined();
+    expect(parseCredential(live)).toEqual({ family: 'live', kind: 'agent' });
+    expect(getAuthTokenKind(live)).toBe('agent');
+    expect(getAuthTokenKind(routed)).toBe('agent');
+    expect(getAuthTokenKind('not_a_token')).toBeUndefined();
     // Webhook tokens never authenticate API calls.
-    expect(getAuthTokenKind(mintCredential('self_routing', 'webhook', WS), 'self_routing')).toBeUndefined();
+    expect(getAuthTokenKind(mintCredential('self_routing', 'webhook', WS))).toBeUndefined();
+    expect(getAuthTokenKind(mintCredential('live', 'webhook', WS))).toBeUndefined();
   });
 
   it('rejects malformed self-routing credentials', () => {

@@ -1,7 +1,9 @@
 import { describe, expect, it } from 'vitest';
 import { callWorkspaceActor } from '../../../gateway.js';
 import { verifyFileToken } from '../../../lib/fileTokens.js';
-import { nextMaintenanceAt, SignedUrlFileStorage } from '../index.js';
+import { sha256Hex } from '../../../lib/crypto.js';
+import { nextMaintenanceAt } from '../index.js';
+import { SignedUrlFileStorage } from '../files.js';
 import { FakeWorkspaceActor, jsonRequest } from './fakeActor.js';
 
 const WORKSPACE_ID = '241764880589606912';
@@ -59,12 +61,17 @@ describe('workspace actor runtime', () => {
     expect(actor.calls.every((entry) => entry.replay === 0)).toBe(true);
   });
 
-  it('rejects credentials from the other family', async () => {
+  it('verifies live-family credentials as well as the self-routing ones it mints', async () => {
     const actor = new FakeWorkspaceActor(WORKSPACE_ID);
-    await workspaceWithAgents(actor);
-    const legacy = await call(actor, 'GET', '/v1/agents', undefined, `rk_live_${'0'.repeat(32)}`);
-    expect(legacy.status).toBe(401);
-    expect(legacy.json.error?.message).toBe('Invalid token format');
+    const { alice } = await workspaceWithAgents(actor);
+    const unknown = await call(actor, 'GET', '/v1/agents', undefined, `rk_live_${'0'.repeat(32)}`);
+    expect(unknown.status).toBe(401);
+    expect(unknown.json.error?.message).toBe('Invalid API key');
+
+    const legacy = `at_live_${'cd'.repeat(16)}`;
+    actor.sql.raw.prepare('UPDATE agents SET token_hash = ? WHERE token_hash = ?')
+      .run(await sha256Hex(legacy), await sha256Hex(alice));
+    expect((await call(actor, 'GET', '/v1/inbox', undefined, legacy)).status).toBe(200);
   });
 
   it('refuses a second workspace in the same actor', async () => {

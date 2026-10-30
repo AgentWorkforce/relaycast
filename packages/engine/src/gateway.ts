@@ -11,7 +11,6 @@ export type { CredentialKind } from './auth/credentials.js';
 export { signFileToken, verifyFileToken } from './lib/fileTokens.js';
 export type { FileTokenPayload } from './lib/fileTokens.js';
 export { generateId as generateWorkspaceId } from './engine/snowflake.js';
-export { parseActorReplay } from './adapters/actor/call-scope.js';
 export type { ActorWriteGroupFailure, ActorSerializedError } from './adapters/actor/call-scope.js';
 export type { ActorHttpRequest, ActorHttpResponse } from './adapters/actor/http.js';
 export { ACTOR_FILE_ROUTE } from './adapters/actor/files.js';

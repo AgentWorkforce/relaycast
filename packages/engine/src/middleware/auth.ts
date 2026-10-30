@@ -107,7 +107,7 @@ export function requireWorkspaceRead(
     }
 
     const db = c.get('db');
-    const require: AuthRequire = getAuthTokenKind(token, credentialFormat(db)) === 'observer'
+    const require: AuthRequire = getAuthTokenKind(token) === 'observer'
       ? 'observer'
       : allowAgent || allowNode
         ? 'any'

@@ -7,15 +7,15 @@ import {
 
 describe('auth token kind parsing', () => {
   it('parses supported live token prefixes with zod schemas', () => {
-    expect(parseAuthToken('rk_live_workspace', 'live')).toEqual({ kind: 'workspace', token: 'rk_live_workspace' });
-    expect(parseAuthToken('at_live_agent', 'live')).toEqual({ kind: 'agent', token: 'at_live_agent' });
-    expect(parseAuthToken('nt_live_node', 'live')).toEqual({ kind: 'node', token: 'nt_live_node' });
-    expect(parseAuthToken('ot_live_observer', 'live')).toEqual({ kind: 'observer', token: 'ot_live_observer' });
+    expect(parseAuthToken('rk_live_workspace')).toEqual({ kind: 'workspace', token: 'rk_live_workspace' });
+    expect(parseAuthToken('at_live_agent')).toEqual({ kind: 'agent', token: 'at_live_agent' });
+    expect(parseAuthToken('nt_live_node')).toEqual({ kind: 'node', token: 'nt_live_node' });
+    expect(parseAuthToken('ot_live_observer')).toEqual({ kind: 'observer', token: 'ot_live_observer' });
   });
 
   it('rejects unsupported token formats', () => {
-    expect(getAuthTokenKind('not_a_token', 'live')).toBeUndefined();
-    expect(getAuthTokenKind('rk_test_workspace', 'live')).toBeUndefined();
+    expect(getAuthTokenKind('not_a_token')).toBeUndefined();
+    expect(getAuthTokenKind('rk_test_workspace')).toBeUndefined();
   });
 });
 

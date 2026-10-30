@@ -13,17 +13,21 @@ export type AuthTokenKind = keyof typeof tokenKindLabel;
 export interface ParsedAuthToken {
   kind: AuthTokenKind;
   token: string;
+  /** The workspace a self-routing credential names. */
+  workspaceId?: string;
 }
 
-/** Classify an API credential under the deployment's credential family. */
-export function parseAuthToken(token: string, format: CredentialFormat): ParsedAuthToken | undefined {
-  const parsed = parseCredential(token, format);
+/** Classify an API credential of either family. */
+export function parseAuthToken(token: string): ParsedAuthToken | undefined {
+  const parsed = parseCredential(token);
   if (!parsed || parsed.kind === 'webhook') return undefined;
-  return { kind: parsed.kind, token };
+  return parsed.family === 'self_routing'
+    ? { kind: parsed.kind, token, workspaceId: parsed.workspaceId }
+    : { kind: parsed.kind, token };
 }
 
-export function getAuthTokenKind(token: string, format: CredentialFormat): AuthTokenKind | undefined {
-  return parseAuthToken(token, format)?.kind;
+export function getAuthTokenKind(token: string): AuthTokenKind | undefined {
+  return parseAuthToken(token)?.kind;
 }
 
 export function requiredTokenMessage(
