@@ -359,11 +359,26 @@ export async function createWorkspace(
     ? await hashApiKey(`bootstrap:${idempotencyKey}`)
     : ownerApiKeyHash;
   const format = credentialFormat(db);
-  const deriveDeterministicApiKey = async (forWorkspaceId: string): Promise<string | undefined> => {
+  const deriveDeterministicApiKey = async (
+    forWorkspaceId: string,
+    family: CredentialFormat = format,
+  ): Promise<string | undefined> => {
     if (!idempotencyKey || !requestDigest) return undefined;
     return providedOwnerApiKey
-      ? deriveIdempotentWorkspaceApiKey(format, forWorkspaceId, providedOwnerApiKey, idempotencyKey, requestDigest)
-      : deriveBootstrapWorkspaceApiKey(format, forWorkspaceId, bootstrapSecret!, idempotencyKey, requestDigest);
+      ? deriveIdempotentWorkspaceApiKey(family, forWorkspaceId, providedOwnerApiKey, idempotencyKey, requestDigest)
+      : deriveBootstrapWorkspaceApiKey(family, forWorkspaceId, bootstrapSecret!, idempotencyKey, requestDigest);
+  };
+  // A replay recovers the key the workspace was created with. The family is
+  // whichever derivation matches the stored hash, so a deployment that changed
+  // the family it mints still replays creates made before the change.
+  const recoverDeterministicApiKey = async (
+    workspace: { id: string; apiKeyHash: string },
+  ): Promise<string | undefined> => {
+    for (const family of [format, format === 'live' ? 'self_routing' : 'live'] as const) {
+      const key = await deriveDeterministicApiKey(workspace.id, family);
+      if (key && await hashApiKey(key) === workspace.apiKeyHash) return key;
+    }
+    return undefined;
   };
 
   if (ownerScopeHash && idempotencyKeyHash && requestDigest) {
@@ -385,8 +400,8 @@ export async function createWorkspace(
         );
       }
       const [existing] = await db.select().from(workspaces).where(eq(workspaces.id, binding.workspaceId));
-      const replayApiKey = await deriveDeterministicApiKey(binding.workspaceId);
-      if (!existing || existing.apiKeyHash !== await hashApiKey(replayApiKey!)) {
+      const replayApiKey = existing ? await recoverDeterministicApiKey(existing) : undefined;
+      if (!existing || !replayApiKey) {
         throw idempotencyConflict(
           'The workspace create idempotency binding cannot recover its child workspace',
           'workspace_create_idempotency_unusable',
@@ -486,8 +501,8 @@ export async function createWorkspace(
               );
             }
             const [existing] = await db.select().from(workspaces).where(eq(workspaces.id, binding.workspaceId));
-            replayedApiKey = await deriveDeterministicApiKey(binding.workspaceId);
-            if (!existing || existing.apiKeyHash !== await hashApiKey(replayedApiKey!)) {
+            replayedApiKey = existing ? await recoverDeterministicApiKey(existing) : undefined;
+            if (!existing || !replayedApiKey) {
               throw idempotencyConflict(
                 'The workspace create idempotency binding cannot recover its child workspace',
                 'workspace_create_idempotency_unusable',

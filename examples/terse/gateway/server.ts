@@ -5,14 +5,21 @@
 //   TERSE_ACTOR_URL   actors endpoint (default: local `terse actor dev`)
 //   TERSE_API_KEY     required for a hosted Terse project
 //   RELAYCAST_FILE_SIGNING_SECRET   shared with the actors
+//   RELAYCAST_WORKSPACE_ID_KEYRING  {"current":"a","keys":{"a":"<secret>"}}: signs
+//                        workspace ids. Rotate by adding a version and making it
+//                        current; removing a version locks out its workspaces.
+//   RELAYCAST_FILE_DIR   where file bytes live (default ./files). Run one
+//                        gateway instance on persistent storage, or replace
+//                        serveFile with a shared object store.
 //   PORT              default 8787
 import { mkdir } from "node:fs/promises"
 import { dirname, resolve, sep } from "node:path"
 import {
     ACTOR_FILE_ROUTE,
     callWorkspaceActor,
-    generateWorkspaceId,
+    createWorkspaceIdSigner,
     parseSelfRoutingCredential,
+    parseWorkspaceIdKeyring,
     verifyFileToken,
     type ActorHttpCall,
     type ActorHttpRequest,
@@ -33,7 +40,14 @@ const workspace = (id: string) => createActorStub<WorkspaceStub>("Workspace", id
 
 const fileSecret = process.env.RELAYCAST_FILE_SIGNING_SECRET
 if (!fileSecret) throw new Error("RELAYCAST_FILE_SIGNING_SECRET is not set")
-const fileRoot = resolve(import.meta.dir, "files")
+const workspaceIdKeyring = process.env.RELAYCAST_WORKSPACE_ID_KEYRING
+if (!workspaceIdKeyring) throw new Error("RELAYCAST_WORKSPACE_ID_KEYRING is not set")
+// Workspace ids carry a tag only this gateway can mint, so a credential naming
+// a made-up workspace is refused here and never creates an actor.
+const workspaceIds = createWorkspaceIdSigner(parseWorkspaceIdKeyring(workspaceIdKeyring))
+const fileRoot = resolve(process.env.RELAYCAST_FILE_DIR ?? resolve(import.meta.dir, "files"))
+/** Largest body the gateway reads; an upload token binds the exact size anyway. */
+const MAX_BODY_BYTES = 64 * 1024 * 1024
 
 /** The file for a storage key, or null if the key would resolve outside `fileRoot`. */
 function filePath(key: string): string | null {
@@ -58,8 +72,20 @@ async function forward(call: ActorHttpCall, request: Request): Promise<Response>
     return new Response(empty ? null : response.body, { status: response.status, headers: response.headers })
 }
 
+/** The request body, or null once it exceeds `limit` bytes (read stops there). */
+async function readAtMost(request: Request, limit: number): Promise<Uint8Array | null> {
+    const chunks: Uint8Array[] = []
+    let length = 0
+    for await (const chunk of request.body ?? []) {
+        length += chunk.byteLength
+        if (length > limit) return null
+        chunks.push(chunk)
+    }
+    return Buffer.concat(chunks, length)
+}
+
 // Signed file URLs: bytes live on this server's disk, never in an actor.
-async function serveFile(request: Request): Promise<Response> {
+export async function serveFile(request: Request): Promise<Response> {
     const token = await verifyFileToken(fileSecret!, new URL(request.url).searchParams.get("token"))
     if (!token) return error(403, "forbidden", "Invalid or expired token")
     // verifyFileToken already refuses keys outside `<workspace>/<file>/<name>`;
@@ -67,9 +93,15 @@ async function serveFile(request: Request): Promise<Response> {
     const path = filePath(token.key)
     if (!path) return error(403, "forbidden", "Invalid storage key")
     if (request.method === "PUT" && token.op === "put") {
-        const bytes = await request.arrayBuffer()
-        if (bytes.byteLength !== token.size || request.headers.get("content-type") !== token.type) {
+        // The token signs the exact size: refuse a wrong declared length before
+        // reading, and stop reading a chunked body as soon as it runs past it.
+        const declared = request.headers.get("content-length")
+        if ((declared !== null && Number(declared) !== token.size) || request.headers.get("content-type") !== token.type) {
             return error(400, "upload_mismatch", "Size or content type does not match the upload")
+        }
+        const bytes = await readAtMost(request, token.size!)
+        if (!bytes || bytes.byteLength !== token.size) {
+            return error(400, "upload_mismatch", "Body size does not match the upload")
         }
         await mkdir(dirname(path), { recursive: true })
         await Bun.write(path, bytes)
@@ -91,19 +123,26 @@ async function serveFile(request: Request): Promise<Response> {
     return error(405, "method_not_allowed", "Token/method mismatch")
 }
 
-const server = Bun.serve({
-    port: Number(process.env.PORT ?? 8787),
-    async fetch(request) {
-        const url = new URL(request.url)
-        if (url.pathname === ACTOR_FILE_ROUTE) return serveFile(request)
-        if (request.method === "POST" && url.pathname === "/v1/workspaces") {
-            const id = generateWorkspaceId()
-            return forward((req, replay) => workspace(id).create(req, replay), request)
-        }
-        const header = request.headers.get("authorization")
-        const credential = header?.startsWith("Bearer ") ? parseSelfRoutingCredential(header.slice(7)) : undefined
-        if (!credential) return error(401, "unauthorized", "A relaycast_ credential is required")
-        return forward((req, replay) => workspace(credential.workspaceId).handle(req, replay), request)
-    },
-})
-console.log(`relaycast gateway on http://127.0.0.1:${server.port}`)
+export async function handleRequest(request: Request): Promise<Response> {
+    const url = new URL(request.url)
+    if (url.pathname === ACTOR_FILE_ROUTE) return serveFile(request)
+    if (request.method === "POST" && url.pathname === "/v1/workspaces") {
+        const id = await workspaceIds.mint()
+        return forward((req, replay) => workspace(id).create(req, replay), request)
+    }
+    const header = request.headers.get("authorization")
+    const credential = header?.startsWith("Bearer ") ? parseSelfRoutingCredential(header.slice(7)) : undefined
+    if (!credential || !(await workspaceIds.verify(credential.workspaceId))) {
+        return error(401, "unauthorized", "A relaycast_ credential minted by this deployment is required")
+    }
+    return forward((req, replay) => workspace(credential.workspaceId).handle(req, replay), request)
+}
+
+if (import.meta.main) {
+    const server = Bun.serve({
+        port: Number(process.env.PORT ?? 8787),
+        maxRequestBodySize: MAX_BODY_BYTES,
+        fetch: handleRequest,
+    })
+    console.log(`relaycast gateway on http://127.0.0.1:${server.port}`)
+}

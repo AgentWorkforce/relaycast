@@ -8,14 +8,15 @@ import { codedError } from '../lib/httpError.js';
 type Db = ReturnType<typeof getDb>;
 
 /**
- * A client filename as one storage-key segment. The key is
- * `<workspace_id>/<file_id>/<segment>`; a raw name such as `../../other/x`
- * would leave its own workspace and file directory wherever a store resolves
- * keys as paths, so separators and dot segments are percent-encoded.
+ * The object name of a file in storage: its id plus at most a short
+ * alphanumeric extension from the client filename. Storage keys are
+ * `<workspace_id>/<file_id>/<object_name>`; the client's filename never
+ * appears in them (it lives only in file metadata), so a key cannot traverse,
+ * exceed a filesystem name limit, or depend on the filename's encoding.
  */
-export function storageKeySegment(filename: string): string {
-  const encoded = encodeURIComponent(filename);
-  return encoded === '.' || encoded === '..' ? encoded.replace(/\./g, '%2E') : encoded;
+export function storageObjectName(fileId: string, filename: string): string {
+  const extension = /\.([A-Za-z0-9]{1,10})$/.exec(filename)?.[1]?.toLowerCase();
+  return extension ? `${fileId}.${extension}` : fileId;
 }
 
 export async function createUpload(
@@ -26,7 +27,7 @@ export async function createUpload(
   data: { filename: string; content_type: string; size_bytes: number },
 ) {
   const id = generateId();
-  const storageKey = `${workspaceId}/${id}/${storageKeySegment(data.filename)}`;
+  const storageKey = `${workspaceId}/${id}/${storageObjectName(id, data.filename)}`;
 
   // Sign the upload URL before persisting, so a storage error doesn't leave an
   // orphaned `pending` row behind.

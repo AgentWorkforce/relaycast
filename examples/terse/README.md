@@ -14,11 +14,16 @@ client ──HTTP──▶ gateway (gateway/server.ts)
 | Path | What it is |
 |---|---|
 | `actor/src/workspace.ts` | The `Workspace` actor: `createActorRuntime` from `@relaycast/engine/adapters/actor` on the actor's database and alarm |
-| `gateway/server.ts` | Bun server: routes by the workspace id in each credential, calls actors with `terse-sdk`, serves signed file URLs |
+| `gateway/server.ts` | Bun server: routes by the workspace id in each credential, calls actors with `terse-sdk`, serves signed file URLs from its disk |
+| `gateway/server.test.ts` | `bun test`: signed uploads, chunked or not, are held to the signed size |
 | `gateway/drive.ts` | End-to-end check: workspace, agents, channel post and read, DM, inbox, search, a rolled-back write group, file upload/download |
 
 How it behaves:
 
+- The gateway mints workspace ids with an HMAC tag
+  (`<snowflake><key version><tag>`) and verifies it before calling an actor, so
+  a credential naming a workspace it never minted is refused without creating
+  an actor.
 - Workspaces created here issue self-routing credentials
   (`relaycast_ws_…`, `relaycast_ag_…`), so the gateway finds the workspace
   without a lookup. The actor still verifies every credential against its own
@@ -27,8 +32,14 @@ How it behaves:
   after writing, the call rolls back and `callWorkspaceActor` calls again with
   that group failing up front; the client gets the response of the pass that
   commits.
-- Outbound HTTP (webhooks, http_push nodes, A2A) runs from the actor alarm,
-  never while a request holds the actor.
+- Outbound HTTP (webhooks, http_push nodes, A2A egress retries) runs from the
+  actor alarm, never while a request holds the actor. A DM to an external A2A
+  agent is still sent inline, bounded by its 15s timeout.
+- A maintenance pass whose write group fails after writing rolls back with no
+  caller to replay it. The runtime reports it to telemetry
+  (`alert: 'maintenance_rolled_back'`, with step, write group, error code and
+  the count of consecutive failures) and retries with backoff. A runtime
+  savepoint (TerseAI/durable-actors#370) removes this case.
 - WebSocket endpoints (`/v1/ws`, `/v1/node/ws`) are not served by this example.
 
 ## Run locally
@@ -42,7 +53,8 @@ RELAYCAST_PUBLIC_URL=http://127.0.0.1:8787 RELAYCAST_FILE_SIGNING_SECRET=dev-sec
 
 # Gateway, in a second terminal
 cd gateway && bun install
-RELAYCAST_FILE_SIGNING_SECRET=dev-secret bun run start
+RELAYCAST_FILE_SIGNING_SECRET=dev-secret \
+  RELAYCAST_WORKSPACE_ID_KEYRING='{"current":"a","keys":{"a":"dev-workspace-id-secret"}}' bun run start
 
 # Drive it
 bun gateway/drive.ts
@@ -50,6 +62,15 @@ bun gateway/drive.ts
 
 Point any relaycast client at `http://127.0.0.1:8787` with the `relaycast_ws_…`
 key the drive script prints.
+
+In this repository both packages link the engine from `packages/engine`;
+build it first (`npm ci && npx turbo build --filter=@relaycast/engine` at the
+repository root). Outside it, and for `terse deploy` (which uploads only
+`actor/`), depend on the published `@relaycast/engine` instead.
+
+The gateway keeps file bytes on its own disk (`RELAYCAST_FILE_DIR`), so run a
+single instance on persistent storage, or point `serveFile` at a shared object
+store.
 
 ## Deploy to Terse
 
@@ -61,5 +82,9 @@ terse secrets add RELAYCAST_PUBLIC_URL   # your gateway's public origin
 terse deploy                         # prints TERSE_ACTOR_URL
 ```
 
-Run the gateway anywhere with `TERSE_ACTOR_URL`, `TERSE_API_KEY` and the same
-`RELAYCAST_FILE_SIGNING_SECRET`.
+Run the gateway anywhere with `TERSE_ACTOR_URL`, `TERSE_API_KEY`, the same
+`RELAYCAST_FILE_SIGNING_SECRET`, and `RELAYCAST_WORKSPACE_ID_KEYRING`
+(`{"current":"a","keys":{"a":"<secret>"}}`). Workspace ids are permanent, so
+rotation adds a key version and makes it current, and never drops one: an id
+verifies with the version it names. Removing a version locks out every
+workspace minted under it.

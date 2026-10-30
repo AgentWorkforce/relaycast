@@ -17,7 +17,7 @@ import {
   PENDING_INVOCATION_MAX_AGE_MS,
   sweepTimedOutInvocations,
 } from '../../engine/action.js';
-import { sweepPendingA2aEgress } from '../../engine/a2aEgress.js';
+import { A2A_EGRESS_RETRY_WINDOW_MS, sweepPendingA2aEgress } from '../../engine/a2aEgress.js';
 import { reapExpiredWorkspaces } from '../../engine/workspace.js';
 import { createActorEngineDb, type ActorSql } from './database.js';
 import { ActorCallScope, ActorReplayRequired, type ActorWriteGroupFailure } from './call-scope.js';
@@ -36,6 +36,8 @@ import type { ActorHttpRequest, ActorHttpResponse } from './http.js';
 
 /** Liveness sweeps for connected nodes run on the self-host sweep cadence. */
 const MAINTENANCE_INTERVAL_MS = 15_000;
+/** Longest wait between retries of a maintenance pass that keeps rolling back. */
+const MAX_MAINTENANCE_BACKOFF_MS = 60 * 60_000;
 /** Work already due is retried no sooner than this, so a stuck row cannot spin the alarm. */
 const MIN_RETRY_MS = 5_000;
 
@@ -121,11 +123,14 @@ export function createActorRuntime(options: ActorRuntimeOptions): ActorRuntime {
     },
   });
 
+  // Scheduled maintenance lands on whole seconds; the millisecond part of an
+  // alarm counts consecutive failed maintenance passes (see maintain()).
   const requestMaintenance = (atMs: number = Date.now()): void => {
+    const at = Math.ceil(atMs / 1000) * 1000;
     const current = options.alarm.get();
     // A past timestamp is an alarm that already fired (or is firing now).
-    if (current !== null && current > Date.now() && current <= atMs) return;
-    options.alarm.set(atMs);
+    if (current !== null && current > Date.now() && current <= at) return;
+    options.alarm.set(at);
   };
 
   // Outbound HTTP holds the actor's mailbox for its whole duration, so it runs
@@ -245,31 +250,60 @@ export function createActorRuntime(options: ActorRuntimeOptions): ActorRuntime {
       });
     },
 
-    maintain() {
-      return inScope([], async () => {
-        maintaining = true;
-        try {
-          kv.prune();
-          await presence.sweep().catch((err) => telemetry.captureException(err, { source: 'actor.maintenance', op: 'presence' }));
-          const steps: [string, () => Promise<unknown>][] = [
-            ['stale_agents', () => sweepStaleAgents(db)],
-            ['offline_nodes', () => sweepOfflineNodes(db, realtime, deps)],
-            ['invocations', () => sweepTimedOutInvocations(db, realtime, { completionDeps: deps })],
-            ['workspace_expiry', () => reapExpiredWorkspaces(db, files)],
-            ['deliveries', () => runDeliveryMaintenance()],
-            ['a2a_egress', () => sweepPendingA2aEgress(db, undefined, outboundFetch)],
-            ['webhooks', () => webhookQueue.drain()],
-            ['ephemeral_events', () => ephemeralOutbox.drain()],
-          ];
-          for (const [op, step] of steps) {
-            await step().catch((err) => telemetry.captureException(err, { source: 'actor.maintenance', op }));
+    async maintain() {
+      // The firing alarm's millisecond part is the number of passes in a row
+      // that rolled back; it is set outside the transaction, so it survives the
+      // rollback that discards everything else this pass wrote.
+      const firing = options.alarm.get();
+      const previousFailures = firing === null ? 0 : firing % 1000;
+      let failedStep: string | undefined;
+      let pass: ActorCallScope | undefined;
+      try {
+        await inScope([], async () => {
+          pass = scope;
+          maintaining = true;
+          try {
+            kv.prune();
+            await presence.sweep().catch((err) => telemetry.captureException(err, { source: 'actor.maintenance', op: 'presence' }));
+            const steps: [string, () => Promise<unknown>][] = [
+              ['stale_agents', () => sweepStaleAgents(db)],
+              ['offline_nodes', () => sweepOfflineNodes(db, realtime, deps)],
+              ['invocations', () => sweepTimedOutInvocations(db, realtime, { completionDeps: deps })],
+              ['workspace_expiry', () => reapExpiredWorkspaces(db, files)],
+              ['deliveries', () => runDeliveryMaintenance()],
+              ['a2a_egress', () => sweepPendingA2aEgress(db, undefined, outboundFetch)],
+              ['webhooks', () => webhookQueue.drain()],
+              ['ephemeral_events', () => ephemeralOutbox.drain()],
+            ];
+            for (const [op, step] of steps) {
+              await step().catch((err) => telemetry.captureException(err, { source: 'actor.maintenance', op }));
+              if (!failedStep && pass?.mustRollBack) failedStep = op;
+            }
+          } finally {
+            maintaining = false;
           }
-        } finally {
-          maintaining = false;
-        }
-        const next = nextMaintenanceAt(sql);
-        if (next !== null) requestMaintenance(next);
-      });
+          const next = nextMaintenanceAt(sql);
+          if (next !== null) requestMaintenance(next);
+        });
+      } catch (error) {
+        // A rolled-back pass has no caller to replay it (an alarm has no
+        // outside caller), so it alerts and retries with backoff. A runtime
+        // savepoint (TerseAI/durable-actors#370) removes this case.
+        const consecutiveFailures = Math.min(previousFailures + 1, 999);
+        const failure = error instanceof ActorReplayRequired ? error.failures.at(-1) : undefined;
+        telemetry.captureException(error, {
+          source: 'actor.maintenance',
+          alert: 'maintenance_rolled_back',
+          workspace_id: options.workspaceId,
+          step: failedStep ?? null,
+          write_group: failure?.index ?? null,
+          error_code: maintenanceErrorCode(failure, error),
+          consecutive_failures: consecutiveFailures,
+        });
+        const backoffMs = Math.min(MAINTENANCE_INTERVAL_MS * 2 ** (consecutiveFailures - 1), MAX_MAINTENANCE_BACKOFF_MS);
+        options.alarm.set(Math.ceil((Date.now() + backoffMs) / 1000) * 1000 + consecutiveFailures);
+        throw error;
+      }
     },
   };
 }
@@ -281,7 +315,8 @@ export function createActorRuntime(options: ActorRuntimeOptions): ActorRuntime {
  * invocation sweep acts on, including task deadlines (a plain queue waiting
  * for its node to reconnect has none: the reconnect is a request, which
  * re-arms), agent
- * liveness, blob cleanup, workspace expiry and queued ephemeral events, and
+ * liveness, blob cleanup, workspace expiry, idempotency-record expiry, A2A
+ * retention, and queued ephemeral events, and
  * the sweep cadence while nodes are connected. `null` when nothing is
  * outstanding, so an idle workspace's actor goes dormant.
  */
@@ -302,6 +337,10 @@ export function nextMaintenanceAt(sql: ActorSql): number | null {
       UNION ALL SELECT MIN(unixepoch() + ?) FROM nodes WHERE status != 'offline'
       UNION ALL SELECT MIN(process_after) FROM file_cleanup_queue
       UNION ALL SELECT MIN(expires_at) FROM workspaces
+      UNION ALL SELECT MIN(expires_at) / 1000 FROM _actor_kv
+      UNION ALL SELECT MIN(created_at + ?) FROM a2a_egress WHERE status NOT IN ('pending', 'sending')
+      UNION ALL SELECT MIN(created_at + ?) FROM a2a_inbound
+      UNION ALL SELECT MIN(created_at + ?) FROM direct_dm_idempotency
       UNION ALL SELECT MIN(0) FROM _actor_outbound
     )`,
     Math.ceil(ACTION_DISPATCH_TIMEOUT_MS / 1000),
@@ -309,7 +348,20 @@ export function nextMaintenanceAt(sql: ActorSql): number | null {
     Math.ceil(ACTION_HANDLER_UNREACHABLE_TTL_MS / 1000),
     Math.ceil(AGENT_LIVENESS_TTL_MS / 1000),
     Math.ceil(MAINTENANCE_INTERVAL_MS / 1000),
+    Math.ceil(A2A_EGRESS_RETRY_WINDOW_MS / 1000),
+    Math.ceil(A2A_EGRESS_RETRY_WINDOW_MS / 1000),
+    Math.ceil(A2A_EGRESS_RETRY_WINDOW_MS / 1000),
   ) as { due: number | bigint | null }[];
   if (row?.due === null || row?.due === undefined) return null;
   return Math.max(Number(row.due) * 1000, Date.now() + MIN_RETRY_MS);
+}
+
+/** The most specific code of a maintenance failure: the failing group's error chain, else the thrown error. */
+function maintenanceErrorCode(failure: ActorWriteGroupFailure | undefined, error: unknown): string | null {
+  for (const link of failure?.error ?? []) {
+    const code = (JSON.parse(link.fields) as { code?: unknown }).code;
+    if (typeof code === 'string') return code;
+  }
+  const code = (error as { code?: unknown } | null)?.code;
+  return typeof code === 'string' ? code : null;
 }
