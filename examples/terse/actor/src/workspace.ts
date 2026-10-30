@@ -32,6 +32,11 @@ export class Workspace extends Actor {
             fileSigningSecret: requiredEnv("RELAYCAST_FILE_SIGNING_SECRET"),
             outboundFetch: (input, init) => globalThis.fetch(input, init),
             alarm: this.alarm,
+            // Engine errors and alerts (e.g. alert: "maintenance_rolled_back") go to the actor's log.
+            telemetry: {
+                capture() {},
+                captureException: (error, context) => console.error("relaycast", JSON.stringify(context ?? {}), error),
+            },
         })
     }
 
