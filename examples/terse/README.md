@@ -37,9 +37,11 @@ How it behaves:
   agent is still sent inline, bounded by its 15s timeout.
 - A maintenance pass whose write group fails after writing rolls back with no
   caller to replay it. The runtime reports it to telemetry
-  (`alert: 'maintenance_rolled_back'`, with step, write group, error code and
-  the count of consecutive failures) and retries with backoff. A runtime
-  savepoint (TerseAI/durable-actors#370) removes this case.
+  (`alert: 'maintenance_rolled_back'`, with workspace, step, write group and
+  error code) and runs maintenance again after `maintenanceRetryMs` (default 5
+  minutes). A request can pull that retry earlier, to the request's own
+  maintenance deadline (at least 5 seconds out). A runtime savepoint
+  (TerseAI/durable-actors#370) removes this case.
 - WebSocket endpoints (`/v1/ws`, `/v1/node/ws`) are not served by this example.
 
 ## Run locally
