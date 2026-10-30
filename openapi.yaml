@@ -4970,7 +4970,11 @@ paths:
   /files/upload:
     post:
       summary: Create file upload
-      description: Create a file record and return a presigned upload URL
+      description: |
+        Create a file record and return a presigned upload URL. The URL accepts exactly
+        `size_bytes` bytes with the given `content_type`. `filename` is kept as file
+        metadata; it does not appear in the storage key. A deployment may cap uploads
+        (`maxUploadBytes`; no cap unless configured).
       tags:
         - Files
       security:
@@ -4992,6 +4996,9 @@ paths:
                   type: string
                 size_bytes:
                   type: integer
+                  minimum: 1
+                  maximum: 9007199254740991
+                  description: Exact byte length of the upload; a positive safe integer.
       responses:
         '201':
           description: Upload initialized
@@ -4999,6 +5006,18 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/SuccessResponse'
+        '400':
+          description: Invalid body. A missing `size_bytes` answers `size_bytes is required`; one that is not a positive safe integer answers `size_bytes must be a positive integer`.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '413':
+          description: '`file_too_large`: `size_bytes` exceeds the deployment''s upload limit.'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
 
   /files/{id}/complete:
     post:

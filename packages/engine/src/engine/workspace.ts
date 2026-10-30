@@ -872,19 +872,29 @@ async function deleteCleanupRows(
       progressed: await markCleanupFailure(db, storageKeys, error, now),
     };
   }
+  let deleted: Set<string>;
   try {
-    await storage.deleteObjects({ storageKeys });
+    const result = await storage.deleteObjects({ storageKeys });
+    deleted = new Set(result ? result.deletedKeys : storageKeys);
   } catch (err) {
     return {
       settled: 0,
       progressed: await markCleanupFailure(db, storageKeys, err, now),
     };
   }
+  // A partial delete settles what it removed and keeps the rest queued.
+  const remaining = storageKeys.filter((key) => !deleted.has(key));
+  if (remaining.length > 0) {
+    const error = codedError('File storage deleted part of the batch', 'file_storage_delete_partial', 503);
+    const progressed = await markCleanupFailure(db, remaining, error, now);
+    if (deleted.size === 0) return { settled: 0, progressed };
+  }
+  const done = rows.filter((row) => deleted.has(row.storageKey));
 
-  const settledKeys = rows
+  const settledKeys = done
     .filter((row) => row.deleteAfter.getTime() <= now.getTime())
     .map((row) => row.storageKey);
-  const deferredKeys = rows
+  const deferredKeys = done
     .filter((row) => row.deleteAfter.getTime() > now.getTime())
     .map((row) => row.storageKey);
   if (settledKeys.length > 0) {

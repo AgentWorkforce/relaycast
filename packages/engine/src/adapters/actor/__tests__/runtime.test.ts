@@ -270,6 +270,36 @@ describe('workspace actor runtime', () => {
     expect(rows(actor, 'SELECT COUNT(*) AS n FROM file_cleanup_queue')).toEqual([{ n: 30 }]);
   });
 
+  it('drains blob cleanup across passes when only part of a batch fits the budget', async () => {
+    const deletedCount = new Map<string, number>();
+    const slow: typeof fetch = (input, init) => new Promise((resolve, reject) => {
+      const timer = setTimeout(() => {
+        const token = new URL(new Request(input).url).searchParams.get('token')!;
+        const key = JSON.parse(atob(token.split('.')[0].replace(/-/g, '+').replace(/_/g, '/'))).key as string;
+        deletedCount.set(key, (deletedCount.get(key) ?? 0) + 1);
+        resolve(new Response(null, { status: 204 }));
+      }, 60);
+      init?.signal?.addEventListener('abort', () => { clearTimeout(timer); reject(init.signal!.reason); });
+    });
+    const actor = new FakeWorkspaceActor(WORKSPACE_ID, { outboundFetch: slow, blobDeleteBudgetMs: 200 });
+    await call(actor, 'POST', '/v1/workspaces', { name: 'slow-gateway' });
+    for (let i = 0; i < 10; i += 1) {
+      actor.sql.exec('INSERT INTO file_cleanup_queue (storage_key, delete_after, process_after) VALUES (?, 0, 0)', `${WORKSPACE_ID}/f${i}/f${i}`);
+    }
+    const queued = () => (rows(actor, 'SELECT COUNT(*) AS n FROM file_cleanup_queue')[0] as { n: number }).n;
+    const sizes = [queued()];
+    for (let pass = 0; pass < 10 && queued() > 0; pass += 1) {
+      actor.sql.exec('UPDATE file_cleanup_queue SET process_after = 0');
+      await actor.maintain();
+      sizes.push(queued());
+    }
+    expect(sizes.at(-1)).toBe(0);
+    for (let i = 1; i < sizes.length; i += 1) expect(sizes[i]).toBeLessThan(sizes[i - 1]);
+    expect(sizes.length).toBeGreaterThan(2);
+    expect([...deletedCount.values()].every((count) => count === 1)).toBe(true);
+    expect(deletedCount.size).toBe(10);
+  });
+
   it('arms the alarm when an idempotency record expires', async () => {
     const actor = new FakeWorkspaceActor(WORKSPACE_ID);
     await call(actor, 'POST', '/v1/workspaces', { name: 'kv-expiry' });
