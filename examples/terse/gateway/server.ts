@@ -16,6 +16,7 @@ import { mkdir } from "node:fs/promises"
 import { dirname, resolve, sep } from "node:path"
 import {
     ACTOR_FILE_ROUTE,
+    OBJECT_SIZE_HEADER,
     callWorkspaceActor,
     createWorkspaceIdSigner,
     parseSelfRoutingCredential,
@@ -113,15 +114,27 @@ export async function serveFile(request: Request): Promise<Response> {
         }
         await mkdir(dirname(path), { recursive: true })
         await Bun.write(path, bytes)
+        // Serve the signed type later, never one inferred from the key's extension.
+        await Bun.write(`${path}.type`, token.type!)
         return Response.json({ ok: true })
     }
     if (request.method === "GET" && token.op === "get") {
         const file = Bun.file(path)
-        return (await file.exists()) ? new Response(file) : error(404, "not_found", "File not found")
+        if (!(await file.exists())) return error(404, "not_found", "File not found")
+        const type = await Bun.file(`${path}.type`).text().catch(() => "application/octet-stream")
+        return new Response(file.stream(), {
+            headers: { "content-type": type, "x-content-type-options": "nosniff", "content-length": String(file.size) },
+        })
+    }
+    if (request.method === "HEAD" && token.op === "stat") {
+        const file = Bun.file(path)
+        if (!(await file.exists())) return new Response(null, { status: 404 })
+        return new Response(null, { headers: { [OBJECT_SIZE_HEADER]: String(file.size) } })
     }
     if (request.method === "DELETE" && token.op === "delete") {
         try {
             await Bun.file(path).delete()
+            await Bun.file(`${path}.type`).delete().catch(() => {})
         } catch (err) {
             // Already gone is success; anything else must fail so the engine's cleanup queue retries.
             if ((err as { code?: string }).code !== "ENOENT") return error(500, "delete_failed", "Could not delete the file")

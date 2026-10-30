@@ -290,6 +290,28 @@ describe('workspace actor runtime', () => {
     expect(deletedCount.size).toBe(10);
   });
 
+  it('refuses invalid maintenance durations at construction', () => {
+    expect(() => new FakeWorkspaceActor(WORKSPACE_ID, { blobDeleteBudgetMs: 0 })).toThrow(/blobDeleteBudgetMs/);
+    expect(() => new FakeWorkspaceActor(WORKSPACE_ID, { maintenanceRetryMs: 1_000 })).toThrow(/maintenanceRetryMs/);
+    expect(() => new FakeWorkspaceActor(WORKSPACE_ID, { config: { maxUploadBytes: Number.NaN } })).toThrow(/maxUploadBytes/);
+  });
+
+  it('verifies the stored size through the gateway when an upload completes', async () => {
+    const statted: string[] = [];
+    const actor = new FakeWorkspaceActor(WORKSPACE_ID, {
+      outboundFetch: async (input, init) => {
+        statted.push(`${init?.method} ${new URL(new Request(input).url).pathname}`);
+        return new Response(null, { status: 200, headers: { 'x-relaycast-object-size': '3' } });
+      },
+    });
+    const { alice } = await workspaceWithAgents(actor);
+    const upload = await call<{ id: string }>(actor, 'POST', '/v1/files/upload', { filename: 'a.txt', content_type: 'text/plain', size_bytes: 5 }, alice);
+    const complete = await call(actor, 'POST', `/v1/files/${upload.json.data.id}/complete`, {}, alice);
+    expect(complete.status).toBe(409);
+    expect(complete.json.error?.code).toBe('upload_size_mismatch');
+    expect(statted).toEqual(['HEAD /_relayfiles']);
+  });
+
   it('arms the alarm when an idempotency record expires', async () => {
     const actor = new FakeWorkspaceActor(WORKSPACE_ID);
     await call(actor, 'POST', '/v1/workspaces', { name: 'kv-expiry' });

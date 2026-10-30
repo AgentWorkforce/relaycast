@@ -65,13 +65,14 @@ export interface ActorRuntimeOptions {
    */
   alarm: { get(): number | null; set(timestampMs: number): void };
   /**
-   * When a maintenance pass rolls back, the next one runs this long after it.
-   * Default 5 minutes.
+   * When a maintenance pass rolls back, the next one runs this long after it
+   * (a request can pull it earlier, to its own maintenance deadline). At
+   * least 5 seconds; default 5 minutes.
    */
   maintenanceRetryMs?: number;
   /**
    * Total time one maintenance pass may spend deleting blobs through the
-   * gateway; the rest wait for the next pass. Default 15s.
+   * gateway; the rest wait for the next pass. Positive; default 15s.
    */
   blobDeleteBudgetMs?: number;
   /**
@@ -115,6 +116,8 @@ class ExternalIoOutsideMaintenance extends Error {
 
 export function createActorRuntime(options: ActorRuntimeOptions): ActorRuntime {
   const { sql } = options;
+  const blobDeleteBudgetMs = positiveDuration('blobDeleteBudgetMs', options.blobDeleteBudgetMs, DEFAULT_BLOB_DELETE_BUDGET_MS, 1);
+  const maintenanceRetryMs = positiveDuration('maintenanceRetryMs', options.maintenanceRetryMs, DEFAULT_MAINTENANCE_RETRY_MS, MIN_RETRY_MS);
   // Self-routing credentials embed the workspace id between `_` separators.
   if (!/^[A-Za-z0-9]+$/.test(options.workspaceId)) {
     throw new Error(`Workspace actor id ${JSON.stringify(options.workspaceId)} must be alphanumeric`);
@@ -185,7 +188,10 @@ export function createActorRuntime(options: ActorRuntimeOptions): ActorRuntime {
     const budget = AbortSignal.timeout(remaining);
     return options.outboundFetch(input, { ...init, signal: init?.signal ? AbortSignal.any([init.signal, budget]) : budget });
   };
-  const files = new SignedUrlFileStorage(options.baseUrl, options.fileSigningSecret, maintenanceOnly(blobDeleteFetch));
+  // Completion's size check runs in the request: a short, bounded call to our
+  // own gateway (not an outside destination).
+  const statFetch: typeof globalThis.fetch = (input, init) => options.outboundFetch(input, init);
+  const files = new SignedUrlFileStorage(options.baseUrl, options.fileSigningSecret, maintenanceOnly(blobDeleteFetch), statFetch);
   const messageTtlDays = options.config?.retention?.messageTtlDays ?? null;
   const webhookQueue = new ActorEventQueue(
     db,
@@ -274,7 +280,7 @@ export function createActorRuntime(options: ActorRuntimeOptions): ActorRuntime {
         await inScope([], async () => {
           pass = scope;
           maintaining = true;
-          blobDeadline = Date.now() + (options.blobDeleteBudgetMs ?? DEFAULT_BLOB_DELETE_BUDGET_MS);
+          blobDeadline = Date.now() + blobDeleteBudgetMs;
           try {
             kv.prune();
             await presence.sweep().catch((err) => telemetry.captureException(err, { source: 'actor.maintenance', op: 'presence' }));
@@ -312,7 +318,7 @@ export function createActorRuntime(options: ActorRuntimeOptions): ActorRuntime {
           write_group: failure?.index ?? null,
           error_code: maintenanceErrorCode(failure, error),
         });
-        options.alarm.set(Date.now() + (options.maintenanceRetryMs ?? DEFAULT_MAINTENANCE_RETRY_MS));
+        options.alarm.set(Date.now() + maintenanceRetryMs);
         throw error;
       }
     },
@@ -375,4 +381,12 @@ function maintenanceErrorCode(failure: ActorWriteGroupFailure | undefined, error
   }
   const code = (error as { code?: unknown } | null)?.code;
   return typeof code === 'string' ? code : null;
+}
+
+function positiveDuration(name: string, value: number | undefined, fallback: number, minimum: number): number {
+  if (value === undefined) return fallback;
+  if (!Number.isFinite(value) || value < minimum) {
+    throw new Error(`${name} must be a finite number of milliseconds, at least ${minimum}`);
+  }
+  return value;
 }

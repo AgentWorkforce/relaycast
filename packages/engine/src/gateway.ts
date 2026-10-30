@@ -14,7 +14,7 @@ export { signFileToken, verifyFileToken } from './lib/fileTokens.js';
 export type { FileTokenPayload } from './lib/fileTokens.js';
 export type { ActorWriteGroupFailure, ActorSerializedError } from './adapters/actor/call-scope.js';
 export type { ActorHttpRequest, ActorHttpResponse } from './adapters/actor/http.js';
-export { ACTOR_FILE_ROUTE } from './adapters/actor/files.js';
+export { ACTOR_FILE_ROUTE, OBJECT_SIZE_HEADER } from './adapters/actor/files.js';
 
 /** One actor call: `handle` or `create` on the workspace actor, with the failures to replay. */
 export type ActorHttpCall = (
