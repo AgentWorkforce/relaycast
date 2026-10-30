@@ -5,7 +5,8 @@
  * Actor code can't read the filesystem, and an actor database executes one
  * statement per call, so this writes `src/adapters/actor/migrations.generated.ts`
  * with every migration already split into statements, plus the supersession
- * manifest. `npm run build` regenerates it; a unit test fails when it is stale.
+ * manifest. Run `npm run generate:actor-migrations` after adding a migration;
+ * a unit test fails when the module is stale.
  *
  * Usage: node scripts/generate-actor-migrations.mjs [--check]
  */

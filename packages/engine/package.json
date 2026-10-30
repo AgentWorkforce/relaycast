@@ -60,7 +60,8 @@
     "dist"
   ],
   "scripts": {
-    "build": "node scripts/generate-actor-migrations.mjs && tsc && node -e \"require('fs').cpSync('src/db/migrations','dist/db/migrations',{recursive:true})\"",
+    "build": "tsc && node -e \"require('fs').cpSync('src/db/migrations','dist/db/migrations',{recursive:true})\"",
+    "generate:actor-migrations": "node scripts/generate-actor-migrations.mjs",
     "build:standalone": "bun standalone/build.ts",
     "test": "vitest run",
     "test:bun": "bun --bun x vitest run",
