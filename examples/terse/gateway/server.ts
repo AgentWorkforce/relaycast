@@ -101,12 +101,15 @@ export async function serveFile(request: Request): Promise<Response> {
         // The token signs the exact size: refuse a wrong declared length before
         // reading, and stop reading a chunked body as soon as it runs past it.
         const declared = request.headers.get("content-length")
-        if ((declared !== null && Number(declared) !== token.size) || request.headers.get("content-type") !== token.type) {
-            return error(400, "upload_mismatch", "Size or content type does not match the upload")
+        if (request.headers.get("content-type") !== token.type) {
+            return error(400, "content_type_mismatch", "Content-Type does not match the upload")
+        }
+        if (declared !== null && Number(declared) !== token.size) {
+            return error(400, "size_mismatch", "Body size does not match the upload")
         }
         const bytes = await readAtMost(request, token.size!)
         if (!bytes || bytes.byteLength !== token.size) {
-            return error(400, "upload_mismatch", "Body size does not match the upload")
+            return error(400, "size_mismatch", "Body size does not match the upload")
         }
         await mkdir(dirname(path), { recursive: true })
         await Bun.write(path, bytes)

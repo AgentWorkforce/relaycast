@@ -22,6 +22,7 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 - File storage keys are `<workspace_id>/<file_id>/<file_id>[.<ext>]`; the client filename stays in file metadata only. Existing files keep their stored keys.
 - `POST /v1/files/upload` requires `size_bytes` to be a positive safe integer (`400 size_bytes must be a positive integer`), and `EngineConfig.maxUploadBytes` caps it (`413 file_too_large`).
 - Binding a second credential format to a database handle that already mints another one throws.
+- Completing an upload refuses stored bytes whose size differs from the declared `size_bytes` (`409 upload_size_mismatch`) instead of recording the stored size. The Node adapter's file route refuses a PUT body of another size or content type (`400 size_mismatch` / `content_type_mismatch`).
 - `FileStorage.deleteObjects` may resolve with `{ deletedKeys }` to report a partial delete; the engine settles those keys and keeps the rest queued.
 
 ### Fixed

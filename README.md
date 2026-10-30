@@ -679,7 +679,10 @@ Realtime transport:
 - Agent SDKs use `at_live_*` for REST, mint a direct `nt_live_*` token, and receive message deliveries as node `deliver` frames plus targeted status/context events as node `context.update` frames.
 - Workspace keys create, rotate, list, and revoke observer tokens at `/v1/observer-tokens`; observer tokens are read-only and cannot mutate workspace state. Observer scopes grant read capabilities, while filters narrow resources. DM content requires both `dms:read` and `filters.include_dms: true`. Channel filters apply only to channel-scoped events; workspace-wide presence/status events require matching `agent_ids` or no agent filter. Observer token `expires_at` and `filters.created_after` accept RFC 3339 timestamps with numeric offsets; an expiry is stored and returned as the equivalent UTC instant.
 - File uploads: `POST /v1/files/upload` takes `filename`, `content_type` and `size_bytes` (the exact
-  byte length, a positive safe integer) and returns a URL that accepts exactly those bytes. A missing
+  byte length, a positive safe integer) and returns a URL for exactly those bytes. Completion refuses
+  stored bytes of another size (`409 upload_size_mismatch`); whether the PUT itself refuses a wrong
+  size or content type (`400 size_mismatch` / `content_type_mismatch`) depends on the storage adapter
+  (the Node self-host adapter and the Terse example gateway do). A missing
   size answers `400 size_bytes is required`, an invalid one `400 size_bytes must be a positive integer`.
   A deployment may cap uploads with the engine's `maxUploadBytes` (no cap unless set; the Terse
   example sets 64 MiB to match its gateway's body limit); larger uploads answer `413 file_too_large`.
