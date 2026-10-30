@@ -8,7 +8,8 @@
   "scripts": {
     "start": "bun server.ts",
     "drive": "bun drive.ts",
-    "check": "tsc --noEmit"
+    "check": "tsc --noEmit",
+    "test": "bun test"
   },
   "dependencies": {
     "@relaycast/engine": "link:../../../packages/engine",

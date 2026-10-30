@@ -15,6 +15,7 @@ client ──HTTP──▶ gateway (gateway/server.ts)
 |---|---|
 | `actor/src/workspace.ts` | The `Workspace` actor: `createActorRuntime` from `@relaycast/engine/adapters/actor` on the actor's database and alarm |
 | `gateway/server.ts` | Bun server: routes by the workspace id in each credential, calls actors with `terse-sdk`, serves signed file URLs from its disk |
+| `gateway/server.test.ts` | `bun test`: signed uploads, chunked or not, are held to the signed size |
 | `gateway/drive.ts` | End-to-end check: workspace, agents, channel post and read, DM, inbox, search, a rolled-back write group, file upload/download |
 
 How it behaves:

@@ -67,10 +67,18 @@ describe('credential families', () => {
   it('binds one family to a database handle, defaulting to live', () => {
     const db = {};
     expect(credentialFormat(db)).toBe('live');
+    expect(issueCredential(db, 'workspace', WS)).toMatch(/^rk_live_/);
     configureCredentialFormat(db, 'self_routing');
     expect(issueCredential(db, 'workspace', WS)).toMatch(/^relaycast_ws_/);
+    // Repeating the same family is idempotent; switching is refused.
     configureCredentialFormat(db, 'self_routing');
     expect(() => configureCredentialFormat(db, 'live')).toThrow(/one credential format/);
-    expect(issueCredential({}, 'workspace', WS)).toMatch(/^rk_live_/);
+    expect(issueCredential(db, 'workspace', WS)).toMatch(/^relaycast_ws_/);
+
+    const live = {};
+    configureCredentialFormat(live, 'live');
+    configureCredentialFormat(live, 'live');
+    expect(() => configureCredentialFormat(live, 'self_routing')).toThrow(/one credential format/);
+    expect(issueCredential(live, 'workspace', WS)).toMatch(/^rk_live_/);
   });
 });
