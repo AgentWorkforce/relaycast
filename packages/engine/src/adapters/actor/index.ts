@@ -289,8 +289,9 @@ export function createActorRuntime(options: ActorRuntimeOptions): ActorRuntime {
  * When maintenance next has something to do, from the workspace's own
  * outstanding work: the nearest due time of the webhook outbox, unfinished
  * deliveries (redrive and expiry), A2A egress, the invocation timeouts the
- * invocation sweep acts on (a queue waiting for its node to reconnect has
- * none: the reconnect is a request, which re-arms), agent
+ * invocation sweep acts on, including task deadlines (a plain queue waiting
+ * for its node to reconnect has none: the reconnect is a request, which
+ * re-arms), agent
  * liveness, blob cleanup, workspace expiry and queued ephemeral events, and
  * the sweep cadence while nodes are connected. `null` when nothing is
  * outstanding, so an idle workspace's actor goes dormant.
@@ -306,6 +307,8 @@ export function nextMaintenanceAt(sql: ActorSql): number | null {
       UNION ALL SELECT MIN(retry_after_at) FROM action_invocations WHERE status = 'pending'
       UNION ALL SELECT MIN(created_at + ?) FROM action_invocations WHERE status = 'pending' AND dispatch_attempts = 0
       UNION ALL SELECT MIN(handler_unreachable_since + ?) FROM action_invocations WHERE status IN ('pending', 'dispatched')
+      UNION ALL SELECT MIN(unixepoch(json_extract(task_state, '$.deadline'))) FROM action_invocations
+        WHERE task_state IS NOT NULL AND status IN ('pending', 'dispatched', 'running')
       UNION ALL SELECT MIN(last_seen + ?) FROM agents WHERE status IN ('active', 'online')
       UNION ALL SELECT MIN(unixepoch() + ?) FROM nodes WHERE status != 'offline'
       UNION ALL SELECT MIN(process_after) FROM file_cleanup_queue

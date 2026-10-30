@@ -162,7 +162,7 @@ describe('workspace actor runtime', () => {
     expect(nextMaintenanceAt(actor.sql)).toBe((Math.floor(now / 1000) + 3600) * 1000);
   });
 
-  it('arms the alarm at an A2A egress lease and not for an invocation queue waiting on its node', async () => {
+  it('arms the alarm at A2A egress leases and task deadlines, not for a queue waiting on its node', async () => {
     const actor = new FakeWorkspaceActor(WORKSPACE_ID);
     await call(actor, 'POST', '/v1/workspaces', { name: 'deadlines' });
     actor.sql.raw.pragma('foreign_keys = OFF');
@@ -175,6 +175,15 @@ describe('workspace actor runtime', () => {
       WORKSPACE_ID, nowSeconds,
     );
     expect(nextMaintenanceAt(actor.sql)).toBeNull();
+
+    // A task queued the same way still expires at its deadline.
+    const deadline = new Date((nowSeconds + 600) * 1000).toISOString();
+    actor.sql.exec(
+      "INSERT INTO action_invocations (id, workspace_id, action_name, status, dispatch_attempts, created_at, task_state) VALUES ('task1', ?, 'build', 'pending', 1, ?, ?)",
+      WORKSPACE_ID, nowSeconds, JSON.stringify({ deadline }),
+    );
+    expect(nextMaintenanceAt(actor.sql)).toBe((nowSeconds + 600) * 1000);
+    actor.sql.exec("DELETE FROM action_invocations WHERE id = 'task1'");
 
     actor.sql.exec(
       "INSERT INTO a2a_egress (id, workspace_id, message_id, target_id, external_url, fingerprint, status, lease_until) VALUES ('e1', ?, 'm1', 't1', 'https://agent.example.com', 'f', 'sending', ?)",
