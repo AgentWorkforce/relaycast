@@ -7,6 +7,17 @@ import { codedError } from '../lib/httpError.js';
 
 type Db = ReturnType<typeof getDb>;
 
+/**
+ * A client filename as one storage-key segment. The key is
+ * `<workspace_id>/<file_id>/<segment>`; a raw name such as `../../other/x`
+ * would leave its own workspace and file directory wherever a store resolves
+ * keys as paths, so separators and dot segments are percent-encoded.
+ */
+export function storageKeySegment(filename: string): string {
+  const encoded = encodeURIComponent(filename);
+  return encoded === '.' || encoded === '..' ? encoded.replace(/\./g, '%2E') : encoded;
+}
+
 export async function createUpload(
   db: Db,
   storage: FileStorage,
@@ -15,7 +26,7 @@ export async function createUpload(
   data: { filename: string; content_type: string; size_bytes: number },
 ) {
   const id = generateId();
-  const storageKey = `${workspaceId}/${id}/${data.filename}`;
+  const storageKey = `${workspaceId}/${id}/${storageKeySegment(data.filename)}`;
 
   // Sign the upload URL before persisting, so a storage error doesn't leave an
   // orphaned `pending` row behind.

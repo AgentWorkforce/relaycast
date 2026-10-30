@@ -7,7 +7,7 @@
 //   RELAYCAST_FILE_SIGNING_SECRET   shared with the actors
 //   PORT              default 8787
 import { mkdir } from "node:fs/promises"
-import { dirname, join, normalize } from "node:path"
+import { dirname, resolve, sep } from "node:path"
 import {
     ACTOR_FILE_ROUTE,
     callWorkspaceActor,
@@ -33,7 +33,13 @@ const workspace = (id: string) => createActorStub<WorkspaceStub>("Workspace", id
 
 const fileSecret = process.env.RELAYCAST_FILE_SIGNING_SECRET
 if (!fileSecret) throw new Error("RELAYCAST_FILE_SIGNING_SECRET is not set")
-const fileRoot = join(import.meta.dir, "files")
+const fileRoot = resolve(import.meta.dir, "files")
+
+/** The file for a storage key, or null if the key would resolve outside `fileRoot`. */
+function filePath(key: string): string | null {
+    const path = resolve(fileRoot, ...key.split("/"))
+    return path.startsWith(fileRoot + sep) ? path : null
+}
 
 function error(status: number, code: string, message: string): Response {
     return Response.json({ ok: false, error: { code, message } }, { status })
@@ -56,7 +62,10 @@ async function forward(call: ActorHttpCall, request: Request): Promise<Response>
 async function serveFile(request: Request): Promise<Response> {
     const token = await verifyFileToken(fileSecret!, new URL(request.url).searchParams.get("token"))
     if (!token) return error(403, "forbidden", "Invalid or expired token")
-    const path = join(fileRoot, normalize(token.key).replace(/^(\.\.(\/|$))+/, ""))
+    // verifyFileToken already refuses keys outside `<workspace>/<file>/<name>`;
+    // resolving against the root is the second fence.
+    const path = filePath(token.key)
+    if (!path) return error(403, "forbidden", "Invalid storage key")
     if (request.method === "PUT" && token.op === "put") {
         const bytes = await request.arrayBuffer()
         if (bytes.byteLength !== token.size || request.headers.get("content-type") !== token.type) {
@@ -71,7 +80,12 @@ async function serveFile(request: Request): Promise<Response> {
         return (await file.exists()) ? new Response(file) : error(404, "not_found", "File not found")
     }
     if (request.method === "DELETE" && token.op === "delete") {
-        await Bun.file(path).delete().catch(() => {})
+        try {
+            await Bun.file(path).delete()
+        } catch (err) {
+            // Already gone is success; anything else must fail so the engine's cleanup queue retries.
+            if ((err as { code?: string }).code !== "ENOENT") return error(500, "delete_failed", "Could not delete the file")
+        }
         return new Response(null, { status: 204 })
     }
     return error(405, "method_not_allowed", "Token/method mismatch")
