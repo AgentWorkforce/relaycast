@@ -47,16 +47,28 @@ export class SignedUrlFileStorage implements FileStorage {
     return this.url({ key: args.storageKey, op: 'get', exp: Math.floor(Date.now() / 1000) + URL_TTL_SECONDS });
   }
 
-  async deleteObjects(args: { storageKeys: string[] }): Promise<void> {
+  /** Deletes in order; when one fails (or the pass's budget runs out) it reports the keys already gone. */
+  async deleteObjects(args: { storageKeys: string[] }): Promise<void | { deletedKeys: string[] }> {
+    const deletedKeys: string[] = [];
     for (const key of args.storageKeys) {
-      // A fresh token per key: a long batch must not outlive one shared expiry.
-      const exp = Math.floor(Date.now() / 1000) + DELETE_TTL_SECONDS;
-      const response = await this.fetch(await this.url({ key, op: 'delete', exp }), {
-        method: 'DELETE',
-        signal: AbortSignal.timeout(this.deleteTimeoutMs),
-      });
-      await response.body?.cancel();
-      if (!response.ok) throw new Error(`Blob delete failed for ${key} (HTTP ${response.status})`);
+      try {
+        await this.deleteObject(key);
+      } catch (error) {
+        if (deletedKeys.length === 0) throw error;
+        return { deletedKeys };
+      }
+      deletedKeys.push(key);
     }
+  }
+
+  private async deleteObject(key: string): Promise<void> {
+    // A fresh token per key: a long batch must not outlive one shared expiry.
+    const exp = Math.floor(Date.now() / 1000) + DELETE_TTL_SECONDS;
+    const response = await this.fetch(await this.url({ key, op: 'delete', exp }), {
+      method: 'DELETE',
+      signal: AbortSignal.timeout(this.deleteTimeoutMs),
+    });
+    await response.body?.cancel();
+    if (!response.ok) throw new Error(`Blob delete failed for ${key} (HTTP ${response.status})`);
   }
 }

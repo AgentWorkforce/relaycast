@@ -33,6 +33,10 @@ export interface FileStorage {
    * idempotent and resolve only after the currently stored bytes are gone.
    * The engine retains a durable tombstone through every issued PUT URL's
    * expiry and calls this again afterward to remove any late upload.
+   *
+   * Resolving with nothing means every key is gone. A store that can stop
+   * partway (a time budget, a failed request) resolves with the keys it did
+   * remove; the engine settles only those and keeps the rest queued.
    */
-  deleteObjects?(args: { storageKeys: string[] }): Promise<void>;
+  deleteObjects?(args: { storageKeys: string[] }): Promise<void | { deletedKeys: string[] }>;
 }
