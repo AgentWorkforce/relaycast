@@ -24,6 +24,7 @@ import {
   jsonOk,
   parseJsonBody,
 } from '../lib/httpResponse.js';
+import { ephemeralEventFetch } from '../ports/index.js';
 
 export const reactionRoutes = new Hono<AppEnv>();
 
@@ -96,7 +97,7 @@ reactionRoutes.post(
               nodeConnections: c.get('engine').nodeConnections,
               environment: c.get('engine').config?.environment,
               httpPushProxy: c.get('engine').config?.httpPushProxy,
-              outboundWebhookFetch: c.get('engine').config?.outboundWebhookFetch,
+              ephemeralEventFetch: ephemeralEventFetch(c.get('engine').config),
               workspaceId: workspace.id,
             },
             {
@@ -189,7 +190,7 @@ reactionRoutes.delete(
                 nodeConnections: c.get('engine').nodeConnections,
                 environment: c.get('engine').config?.environment,
                 httpPushProxy: c.get('engine').config?.httpPushProxy,
-                outboundWebhookFetch: c.get('engine').config?.outboundWebhookFetch,
+                ephemeralEventFetch: ephemeralEventFetch(c.get('engine').config),
                 workspaceId: workspace.id,
               },
               {

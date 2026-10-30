@@ -139,6 +139,13 @@ export interface EngineConfig {
    */
   outboundWebhookFetch?: typeof globalThis.fetch;
   /**
+   * Transport for best-effort ephemeral http_push events (context updates,
+   * reactions, receipts), which have no delivery row to retry from. Defaults
+   * to `outboundWebhookFetch`. A host that cannot do outbound HTTP while it
+   * serves a request queues them here instead.
+   */
+  ephemeralEventFetch?: typeof globalThis.fetch;
+  /**
    * Effective deployment-wide retention fallback. Adapters must provide an
    * explicit value (`null` means never prune); omission is reported as unknown
    * so a hosted deployment can never accidentally advertise replay coverage.
@@ -229,3 +236,8 @@ export interface EngineConfig {
 }
 
 export type { WorkspaceDeliveryPolicy, WorkspaceDeliveryPolicyConfig } from './workspaceDelivery.js';
+
+/** The transport for ephemeral http_push events under `config`. */
+export function ephemeralEventFetch(config: EngineConfig | undefined): typeof globalThis.fetch | undefined {
+  return config?.ephemeralEventFetch ?? config?.outboundWebhookFetch;
+}

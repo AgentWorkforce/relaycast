@@ -10,8 +10,8 @@ import { InProcessPresence } from '../node/presence.js';
 import { InProcessRateLimiter } from '../node/rate-limit.js';
 import { createDeliveryMaintenanceRunner } from '../node/delivery-maintenance.js';
 import { sweepOfflineNodes } from '../../engine/node.js';
-import { sweepStaleAgents } from '../../engine/agent.js';
-import { sweepTimedOutInvocations } from '../../engine/action.js';
+import { AGENT_LIVENESS_TTL_MS, sweepStaleAgents } from '../../engine/agent.js';
+import { ACTION_DISPATCH_TIMEOUT_MS, sweepTimedOutInvocations } from '../../engine/action.js';
 import { sweepPendingA2aEgress } from '../../engine/a2aEgress.js';
 import { reapExpiredWorkspaces } from '../../engine/workspace.js';
 import { createActorEngineDb, type ActorSql } from './database.js';
@@ -20,6 +20,7 @@ import { applyActorMigrations } from './migrations.js';
 import { ActorKeyValueStore, ensureActorKvTable } from './kv.js';
 import { ActorEventQueue } from './event-queue.js';
 import { SignedUrlFileStorage } from './files.js';
+import { ActorEphemeralOutbox, ensureActorOutboundTable } from './ephemeral-outbox.js';
 import { isSafeExternalUrl } from '../../lib/ssrf.js';
 
 export { ACTOR_FILE_ROUTE, SignedUrlFileStorage } from './files.js';
@@ -39,10 +40,10 @@ export type { ActorWriteGroupFailure, ActorSerializedError } from './call-scope.
 export type { ActorHttpRequest, ActorHttpResponse } from './http.js';
 import type { ActorHttpRequest, ActorHttpResponse } from './http.js';
 
-/** How long the actor keeps its maintenance alarm armed after the last call. */
-const ACTIVE_WINDOW_MS = 10 * 60_000;
-/** Maintenance cadence while the workspace is active (the self-host sweep cadence). */
+/** Liveness sweeps for connected nodes run on the self-host sweep cadence. */
 const MAINTENANCE_INTERVAL_MS = 15_000;
+/** Work already due is retried no sooner than this, so a stuck row cannot spin the alarm. */
+const MIN_RETRY_MS = 5_000;
 
 export interface ActorRuntimeOptions {
   /** The actor's database (`this.db`). */
@@ -54,10 +55,11 @@ export interface ActorRuntimeOptions {
   /** HMAC secret shared with the gateway that serves `/_relayfiles`. */
   fileSigningSecret: string;
   /**
-   * Outbound HTTP for webhooks and http_push nodes. Called only from
-   * {@link ActorRuntime.maintain}, only for HTTPS URLs whose host is a public
-   * name or global IP literal, and with redirects off. The host's transport
-   * owns DNS-level SSRF protection (resolved-address checks).
+   * Outbound HTTP. Called only from {@link ActorRuntime.maintain}. Webhooks,
+   * http_push nodes, ephemeral events and A2A egress reach it only for HTTPS
+   * URLs whose host is a public name or global IP literal, with redirects off;
+   * the host's transport owns DNS-level SSRF protection (resolved-address
+   * checks). Blob deletes go to `baseUrl`.
    */
   outboundFetch: typeof globalThis.fetch;
   /**
@@ -65,8 +67,12 @@ export interface ActorRuntimeOptions {
    * when outbound work is queued, never pushing an earlier pending alarm back.
    */
   alarm: { get(): number | null; set(timestampMs: number): void };
-  /** Engine config; `workspaceId` is set from the actor id. */
-  config?: Omit<EngineConfig, 'workspaceId' | 'outboundWebhookFetch'>;
+  /**
+   * Engine config. The runtime sets `workspaceId` (the actor id),
+   * `credentialFormat: 'self_routing'` (a gateway routes by credential) and
+   * the outbound transports.
+   */
+  config?: Omit<EngineConfig, 'workspaceId' | 'credentialFormat' | 'outboundWebhookFetch' | 'ephemeralEventFetch'>;
   auth?: AuthProvider;
   telemetry?: TelemetrySink;
 }
@@ -83,11 +89,12 @@ export interface ActorRuntime {
    */
   handle(request: ActorHttpRequest, replay: readonly ActorWriteGroupFailure[]): Promise<ActorHttpResponse>;
   /**
-   * Run maintenance from the actor alarm: deliver the webhook outbox, redrive
-   * node deliveries, A2A egress, liveness and presence sweeps, expiry and
-   * retention. Re-arms the alarm while the workspace is active or outbound
-   * work remains. Throws {@link ActorReplayRequired} when a maintenance write
-   * group failed after writing, so the alarm call rolls back.
+   * Run maintenance from the actor alarm: deliver the webhook outbox and
+   * queued ephemeral events, redrive node deliveries and A2A egress, delete
+   * blobs, run liveness and presence sweeps, expiry and retention. Re-arms the
+   * alarm for the nearest outstanding deadline (see {@link nextMaintenanceAt}).
+   * Throws {@link ActorReplayRequired} when a maintenance write group failed
+   * after writing, so the alarm call rolls back.
    */
   maintain(): Promise<void>;
 }
@@ -103,10 +110,10 @@ export function createActorRuntime(options: ActorRuntimeOptions): ActorRuntime {
   const { sql } = options;
   let scope: ActorCallScope | undefined;
   let maintaining = false;
-  let lastCallAt = 0;
 
   applyActorMigrations(sql);
   ensureActorKvTable(sql);
+  ensureActorOutboundTable(sql);
 
   const db = createActorEngineDb(sql, {
     observer: { onWrite: () => scope?.onWrite() },
@@ -124,18 +131,33 @@ export function createActorRuntime(options: ActorRuntimeOptions): ActorRuntime {
   };
 
   // Outbound HTTP holds the actor's mailbox for its whole duration, so it runs
-  // only from maintenance. In a request it fails fast; the engine records
-  // the attempt as retryable, and maintenance redrives it.
-  const outboundFetch: typeof globalThis.fetch = (input, init) => {
+  // only from maintenance. In a request it fails fast; durable work (webhook
+  // outbox, http_push deliveries, A2A egress, blob cleanup) records a
+  // retryable attempt, and maintenance redrives it.
+  const maintenanceOnly = (fetchImpl: typeof globalThis.fetch): typeof globalThis.fetch => (input, init) => {
     if (!maintaining) {
       requestMaintenance();
       return Promise.reject(new ExternalIoOutsideMaintenance());
     }
+    return fetchImpl(input, init);
+  };
+  const guardedFetch: typeof globalThis.fetch = (input, init) => {
     const url = input instanceof Request ? input.url : String(input);
     if (!isSafeExternalUrl(url, { strict: true, requireHttps: true })) {
       return Promise.reject(new Error('Outbound HTTP destination is not a public HTTPS URL'));
     }
     return options.outboundFetch(input, { ...init, redirect: 'manual' });
+  };
+  const outboundFetch = maintenanceOnly(guardedFetch);
+  // Ephemeral events have no delivery row to retry from, so a request queues
+  // them in the actor database (they commit or roll back with the call) and
+  // maintenance sends them.
+  const ephemeralOutbox = new ActorEphemeralOutbox(sql, guardedFetch);
+  const ephemeralEventFetch: typeof globalThis.fetch = async (input, init) => {
+    if (maintaining) return guardedFetch(input, init);
+    await ephemeralOutbox.enqueue(new Request(input, init));
+    requestMaintenance();
+    return new Response(null, { status: 202 });
   };
 
   const telemetry = safeTelemetrySink(options.telemetry ?? new NoopTelemetrySink());
@@ -143,19 +165,22 @@ export function createActorRuntime(options: ActorRuntimeOptions): ActorRuntime {
   const presence = new InProcessPresence(realtime, { db, sweepIntervalMs: 0 });
   realtime.setPresenceTracker(presence);
   const kv = new ActorKeyValueStore(sql);
-  const files = new SignedUrlFileStorage(options.baseUrl, options.fileSigningSecret);
+  const files = new SignedUrlFileStorage(options.baseUrl, options.fileSigningSecret, maintenanceOnly(options.outboundFetch));
+  const messageTtlDays = options.config?.retention?.messageTtlDays ?? null;
   const webhookQueue = new ActorEventQueue(
     db,
     () => requestMaintenance(),
     (err, ctx) => telemetry.captureException(err, ctx),
-    { fetch: outboundFetch },
+    { fetch: outboundFetch, retention: { defaults: { messageTtlDays } } },
   );
 
   const config: EngineConfig = {
     ...options.config,
     workspaceId: options.workspaceId,
+    credentialFormat: 'self_routing',
     outboundWebhookFetch: outboundFetch,
-    retention: options.config?.retention ?? { messageTtlDays: null },
+    ephemeralEventFetch,
+    retention: { messageTtlDays },
   };
 
   const deps: EngineDeps = {
@@ -216,8 +241,8 @@ export function createActorRuntime(options: ActorRuntimeOptions): ActorRuntime {
         for (let settled = 0; settled < background.length; settled = background.length) {
           await Promise.allSettled(background.slice(settled));
         }
-        lastCallAt = Date.now();
-        requestMaintenance(lastCallAt + MAINTENANCE_INTERVAL_MS);
+        const next = nextMaintenanceAt(sql);
+        if (next !== null) requestMaintenance(next);
         return { status: response.status, headers: [...response.headers], body };
       });
     },
@@ -234,8 +259,9 @@ export function createActorRuntime(options: ActorRuntimeOptions): ActorRuntime {
             ['invocations', () => sweepTimedOutInvocations(db, realtime, { completionDeps: deps })],
             ['workspace_expiry', () => reapExpiredWorkspaces(db, files)],
             ['deliveries', () => runDeliveryMaintenance()],
-            ['a2a_egress', () => sweepPendingA2aEgress(db)],
+            ['a2a_egress', () => sweepPendingA2aEgress(db, undefined, outboundFetch)],
             ['webhooks', () => webhookQueue.drain()],
+            ['ephemeral_events', () => ephemeralOutbox.drain()],
           ];
           for (const [op, step] of steps) {
             await step().catch((err) => telemetry.captureException(err, { source: 'actor.maintenance', op }));
@@ -243,13 +269,39 @@ export function createActorRuntime(options: ActorRuntimeOptions): ActorRuntime {
         } finally {
           maintaining = false;
         }
-        const pending = sql.exec(
-          "SELECT 1 AS pending FROM pending_events WHERE status = 'pending' LIMIT 1",
-        );
-        if (pending.length > 0 || Date.now() - lastCallAt < ACTIVE_WINDOW_MS) {
-          requestMaintenance(Date.now() + MAINTENANCE_INTERVAL_MS);
-        }
+        const next = nextMaintenanceAt(sql);
+        if (next !== null) requestMaintenance(next);
       });
     },
   };
+}
+
+/**
+ * When maintenance next has something to do, from the workspace's own
+ * outstanding work: the nearest due time of the webhook outbox, unfinished
+ * deliveries (redrive and expiry), A2A egress, open invocations, agent
+ * liveness, blob cleanup, workspace expiry and queued ephemeral events, and
+ * the sweep cadence while nodes are connected. `null` when nothing is
+ * outstanding, so an idle workspace's actor goes dormant.
+ */
+export function nextMaintenanceAt(sql: ActorSql): number | null {
+  const [row] = sql.exec(
+    `SELECT MIN(due) AS due FROM (
+      SELECT MIN(process_after) AS due FROM pending_events WHERE status = 'pending'
+      UNION ALL SELECT MIN(next_attempt_at) FROM deliveries WHERE status NOT IN ('acked', 'dead_lettered', 'failed')
+      UNION ALL SELECT MIN(expires_at) FROM deliveries WHERE status NOT IN ('acked', 'dead_lettered', 'failed')
+      UNION ALL SELECT MIN(COALESCE(lease_until, 0)) FROM a2a_egress WHERE status IN ('pending', 'sending')
+      UNION ALL SELECT MIN(COALESCE(retry_after_at, created_at + ?)) FROM action_invocations WHERE status IN ('pending', 'dispatched', 'invoked')
+      UNION ALL SELECT MIN(last_seen + ?) FROM agents WHERE status IN ('active', 'online')
+      UNION ALL SELECT MIN(unixepoch() + ?) FROM nodes WHERE status != 'offline'
+      UNION ALL SELECT MIN(process_after) FROM file_cleanup_queue
+      UNION ALL SELECT MIN(expires_at) FROM workspaces
+      UNION ALL SELECT MIN(0) FROM _actor_outbound
+    )`,
+    Math.ceil(ACTION_DISPATCH_TIMEOUT_MS / 1000),
+    Math.ceil(AGENT_LIVENESS_TTL_MS / 1000),
+    Math.ceil(MAINTENANCE_INTERVAL_MS / 1000),
+  ) as { due: number | bigint | null }[];
+  if (row?.due === null || row?.due === undefined) return null;
+  return Math.max(Number(row.due) * 1000, Date.now() + MIN_RETRY_MS);
 }

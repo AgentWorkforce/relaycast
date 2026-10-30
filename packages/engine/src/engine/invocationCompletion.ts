@@ -7,6 +7,7 @@ import type { EngineDb } from '../ports/database.js';
 import type { EngineDeps } from '../ports/index.js';
 import { sendNodeDeliveriesToAgents } from './nodeDeliver.js';
 import { appendAndPublishWorkspaceEvent, appendAndPublishWorkspaceEventWhen } from './workspaceEvents.js';
+import { ephemeralEventFetch } from '../ports/index.js';
 
 export type InvocationCompletionDeps = Pick<EngineDeps, 'db' | 'realtime' | 'webhookQueue' | 'nodeConnections' | 'config'>;
 
@@ -53,7 +54,7 @@ export async function emitInvocationCompletionEffects(
         workspaceId,
         environment: deps.config?.environment,
         httpPushProxy: deps.config?.httpPushProxy,
-        outboundWebhookFetch: deps.config?.outboundWebhookFetch,
+        ephemeralEventFetch: ephemeralEventFetch(deps.config),
       }, {
         agentIds: [result.caller_id],
         event: eventType,
@@ -185,7 +186,7 @@ export async function emitAgentExitedEffects(
         workspaceId,
         environment: deps.config?.environment,
         httpPushProxy: deps.config?.httpPushProxy,
-        outboundWebhookFetch: deps.config?.outboundWebhookFetch,
+        ephemeralEventFetch: ephemeralEventFetch(deps.config),
       }, {
         agentIds: [callerId],
         event: eventType,

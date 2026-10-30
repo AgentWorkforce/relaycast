@@ -7,6 +7,7 @@ import { applyActorMigrations } from '../migrations.js';
 import { FakeActorDatabase } from './fakeActor.js';
 import { channels, messages, workspaces } from '../../../db/schema.js';
 import { desc, eq } from 'drizzle-orm';
+import { appendWorkspaceEventBatch } from '../../../engine/workspaceEvents.js';
 
 function engineDb(fake: FakeActorDatabase) {
   return createActorEngineDb(fake, { runGroup: (body) => body() });
@@ -24,11 +25,10 @@ describe('actor SQL shim', () => {
 
   it('recovers column order around integer-named columns', () => {
     const fake = new FakeActorDatabase();
-    // JS enumerates the "0" key first; the result order is id, name, 0.
+    // A V8 row object enumerates the "0" key first; the result order is id, name, 0.
     fake.exec('CREATE TABLE t (id TEXT, name TEXT)');
     fake.exec("INSERT INTO t VALUES ('a', 'alice'), ('b', 'bob')");
     const statement = 'select "id", "name", 0 from "t" order by "id" desc';
-    expect(Object.keys(fake.exec(statement)[0])).toEqual(['0', 'id', 'name']);
     expect(execPositional(fake, statement, []).map((row) => [...row])).toEqual([['b', 'bob', 0], ['a', 'alice', 0]]);
     // Once seen, the statement runs positionally from the start.
     const before = fake.statements;
@@ -47,10 +47,31 @@ describe('actor SQL shim', () => {
     expect(rows.map((row) => [...row])).toEqual([[1, 'a']]);
   });
 
-  it('classifies reads behind comments and CTEs', () => {
+  it('classifies statements by what they run, behind comments and CTEs', () => {
     expect(isReadStatement('  -- note\n/* x */ with page AS (SELECT 1) SELECT * FROM page')).toBe(true);
     expect(isReadStatement('select 1')).toBe(true);
     expect(isReadStatement('UPDATE t SET a = 1')).toBe(false);
+    expect(isReadStatement(`WITH
+      input_events(ord, v) AS (VALUES (0, 'a')),
+      bases AS MATERIALIZED (SELECT 'insert' AS "select" FROM input_events)
+      INSERT INTO t (name) SELECT v FROM input_events RETURNING id`)).toBe(false);
+    expect(isReadStatement('WITH RECURSIVE n(x) AS (SELECT 1 UNION ALL SELECT x + 1 FROM n WHERE x < 3) DELETE FROM t WHERE id IN n')).toBe(false);
+  });
+
+  it('appends a workspace event batch (a CTE INSERT ... RETURNING) through the actor database', async () => {
+    const fake = new FakeActorDatabase();
+    applyActorMigrations(fake);
+    const db = engineDb(fake);
+    await db.insert(workspaces).values({ id: 'w1', name: 'w', apiKeyHash: 'h' });
+    const seqs = await appendWorkspaceEventBatch(db, [
+      { workspaceId: 'w1', input: { type: 'delivery.failed', payload: { n: 1 } } },
+      { workspaceId: 'w1', input: { type: 'delivery.failed', payload: { n: 2 } } },
+    ]);
+    expect(seqs).toEqual([1, 2]);
+    expect(fake.exec('SELECT seq, type FROM workspace_events ORDER BY seq')).toEqual([
+      { seq: 1, type: 'delivery.failed' },
+      { seq: 2, type: 'delivery.failed' },
+    ]);
   });
 
   it('keeps the order of ordered engine queries, joins, and CTE pages', async () => {

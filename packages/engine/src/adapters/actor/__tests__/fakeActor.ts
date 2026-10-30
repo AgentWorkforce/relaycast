@@ -82,7 +82,7 @@ export class FakeWorkspaceActor {
       outboundFetch: () => Promise.reject(new Error('no network in tests')),
       alarm: this.alarm,
       ...options,
-      config: { environment: 'test', credentialFormat: 'self_routing', ...options.config },
+      config: { environment: 'test', ...options.config },
     });
   }
 

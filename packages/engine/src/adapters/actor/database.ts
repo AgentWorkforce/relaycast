@@ -28,12 +28,58 @@ export interface StatementObserver {
   onWrite(): void;
 }
 
-const READ_STATEMENT = /^(?:\s|--[^\n]*(?:\n|$)|\/\*[\s\S]*?\*\/)*(select|with)\b/i;
 const INTEGER_KEY = /^(?:0|[1-9]\d*)$/;
+const STATEMENT_VERBS = new Set(['SELECT', 'VALUES', 'INSERT', 'REPLACE', 'UPDATE', 'DELETE']);
+
+/**
+ * The verb of the statement `sql` runs: its first keyword, or for a `WITH`
+ * statement the first statement keyword after the common table expressions
+ * (`WITH x AS (...) INSERT ...` is an INSERT). Comments, literals and
+ * parenthesized text are skipped.
+ */
+export function statementVerb(sql: string): string | undefined {
+  let depth = 0;
+  let sawWith = false;
+  let i = 0;
+  while (i < sql.length) {
+    const ch = sql[i];
+    if (ch === '-' && sql[i + 1] === '-') {
+      const end = sql.indexOf('\n', i);
+      i = end === -1 ? sql.length : end + 1;
+    } else if (ch === '/' && sql[i + 1] === '*') {
+      const end = sql.indexOf('*/', i + 2);
+      i = end === -1 ? sql.length : end + 2;
+    } else if (ch === "'" || ch === '"' || ch === '`' || ch === '[') {
+      const end = sql.indexOf(ch === '[' ? ']' : ch, i + 1);
+      i = end === -1 ? sql.length : end + 1;
+    } else if (ch === '(') {
+      depth += 1;
+      i += 1;
+    } else if (ch === ')') {
+      depth -= 1;
+      i += 1;
+    } else if (/[A-Za-z_]/.test(ch)) {
+      const word = /^[A-Za-z_][A-Za-z0-9_]*/.exec(sql.slice(i))![0];
+      i += word.length;
+      if (depth > 0) continue;
+      const upper = word.toUpperCase();
+      if (!sawWith) {
+        if (upper !== 'WITH') return upper;
+        sawWith = true;
+      } else if (STATEMENT_VERBS.has(upper)) {
+        return upper;
+      }
+    } else {
+      i += 1;
+    }
+  }
+  return undefined;
+}
 
 /** Whether `sql` is a query whose result columns the shim must recover by position. */
 export function isReadStatement(sql: string): boolean {
-  return READ_STATEMENT.test(sql);
+  const verb = statementVerb(sql);
+  return verb === 'SELECT' || verb === 'VALUES';
 }
 
 /**

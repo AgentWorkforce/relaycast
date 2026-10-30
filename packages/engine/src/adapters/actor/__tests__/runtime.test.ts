@@ -1,5 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { callWorkspaceActor } from '../../../gateway.js';
+import { verifyFileToken } from '../../../lib/fileTokens.js';
+import { nextMaintenanceAt } from '../index.js';
 import { FakeWorkspaceActor, jsonRequest } from './fakeActor.js';
 
 const WORKSPACE_ID = '241764880589606912';
@@ -131,6 +133,96 @@ describe('workspace actor runtime', () => {
     expect(JSON.parse(second.body).data.id).toBe(JSON.parse(first.body).data.id);
     expect(rows(actor, "SELECT COUNT(*) AS n FROM messages WHERE body = 'once'")).toEqual([{ n: 1 }]);
     expect(rows(actor, 'SELECT COUNT(*) AS n FROM _actor_kv')[0].n).toBeGreaterThan(0);
+  });
+
+  it('issues self-routing credentials without being configured to', async () => {
+    const actor = new FakeWorkspaceActor(WORKSPACE_ID, { config: {} });
+    const { key } = await workspaceWithAgents(actor);
+    expect(key).toMatch(/^relaycast_ws_/);
+  });
+
+  it('arms the alarm from outstanding work and lets an idle workspace go dormant', async () => {
+    const actor = new FakeWorkspaceActor(WORKSPACE_ID);
+    await call(actor, 'POST', '/v1/workspaces', { name: 'idle' });
+    expect(nextMaintenanceAt(actor.sql)).toBeNull();
+
+    const now = Date.now();
+    // A registered agent is live until its liveness TTL; maintenance must run then.
+    actor.sql.exec("INSERT INTO agents (id, workspace_id, name, token_hash, status, last_seen) VALUES ('a1', ?, 'a', 't', 'active', ?)",
+      WORKSPACE_ID, Math.floor(now / 1000));
+    const due = nextMaintenanceAt(actor.sql)!;
+    expect(due).toBeGreaterThan(now + 4 * 60_000);
+    expect(due).toBeLessThanOrEqual(now + 5 * 60_000 + 1_000);
+
+    // An unfinished delivery keeps it armed until its expiry, independent of activity.
+    actor.sql.exec("UPDATE agents SET status = 'offline' WHERE id = 'a1'");
+    expect(nextMaintenanceAt(actor.sql)).toBeNull();
+    actor.sql.exec('INSERT INTO file_cleanup_queue (storage_key, delete_after, process_after) VALUES (?, ?, ?)',
+      `${WORKSPACE_ID}/f/x`, Math.floor(now / 1000), Math.floor(now / 1000) + 3600);
+    expect(nextMaintenanceAt(actor.sql)).toBe((Math.floor(now / 1000) + 3600) * 1000);
+  });
+
+  it('queues ephemeral events during a request and sends them from maintenance', async () => {
+    const sent: string[] = [];
+    const actor = new FakeWorkspaceActor(WORKSPACE_ID, {
+      outboundFetch: async (input) => {
+        sent.push(new Request(input).url);
+        return new Response('ok');
+      },
+    });
+    await workspaceWithAgents(actor);
+    const ephemeral = actor.runtime.deps.config!.ephemeralEventFetch!;
+    await actor.sql.atomic(async () => {
+      const response = await ephemeral('https://hooks.example.com/push', { method: 'POST', body: '{"type":"typing"}' });
+      expect(response.status).toBe(202);
+    });
+    expect(sent).toEqual([]);
+    expect(nextMaintenanceAt(actor.sql)).not.toBeNull();
+    await actor.maintain();
+    expect(sent).toEqual(['https://hooks.example.com/push']);
+    expect(actor.sql.exec('SELECT COUNT(*) AS n FROM _actor_outbound')).toEqual([{ n: 0 }]);
+  });
+
+  it('sends outbound HTTP from maintenance only to public HTTPS destinations', async () => {
+    const sent: string[] = [];
+    const actor = new FakeWorkspaceActor(WORKSPACE_ID, {
+      outboundFetch: async (input) => {
+        sent.push(new Request(input).url);
+        return new Response('ok');
+      },
+    });
+    await workspaceWithAgents(actor);
+    const outbound = actor.runtime.deps.config!.outboundWebhookFetch!;
+    await expect(outbound('https://hooks.example.com/a')).rejects.toThrow(/deferred to actor maintenance/);
+    const ephemeral = actor.runtime.deps.config!.ephemeralEventFetch!;
+    await actor.sql.atomic(async () => {
+      await ephemeral('http://169.254.169.254/latest', { method: 'POST' });
+      await ephemeral('https://10.0.0.1/hook', { method: 'POST' });
+    });
+    await actor.maintain();
+    expect(sent).toEqual([]);
+  });
+
+  it('signs upload size and type, and deletes blobs through the gateway from maintenance', async () => {
+    const requests: { method: string; url: string }[] = [];
+    const actor = new FakeWorkspaceActor(WORKSPACE_ID, {
+      outboundFetch: async (input, init) => {
+        requests.push({ method: init?.method ?? 'GET', url: new Request(input).url });
+        return new Response(null, { status: 204 });
+      },
+    });
+    const { files } = actor.runtime.deps;
+    const { uploadUrl } = await files.createUploadUrl({ storageKey: `${WORKSPACE_ID}/f1/a.txt`, contentType: 'text/plain', sizeBytes: 5 });
+    const token = new URL(uploadUrl).searchParams.get('token');
+    expect(await verifyFileToken('file-secret', token)).toMatchObject({ op: 'put', size: 5, type: 'text/plain' });
+
+    await expect(files.deleteObjects!({ storageKeys: [`${WORKSPACE_ID}/f1/a.txt`] })).rejects.toThrow(/deferred/);
+    expect(requests).toEqual([]);
+    actor.sql.exec('INSERT INTO file_cleanup_queue (storage_key, delete_after, process_after) VALUES (?, 0, 0)', `${WORKSPACE_ID}/f1/a.txt`);
+    await actor.maintain();
+    expect(requests.map((request) => request.method)).toEqual(['DELETE']);
+    const deleteToken = new URL(requests[0].url).searchParams.get('token');
+    expect(await verifyFileToken('file-secret', deleteToken)).toMatchObject({ op: 'delete', key: `${WORKSPACE_ID}/f1/a.txt` });
   });
 
   it('defers outbound HTTP to maintenance and arms the alarm', async () => {

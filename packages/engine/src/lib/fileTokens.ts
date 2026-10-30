@@ -8,9 +8,13 @@
 export interface FileTokenPayload {
   /** Engine storage key (`<workspaceId>/<fileId>/<name>`). */
   key: string;
-  op: 'put' | 'get';
+  op: 'put' | 'get' | 'delete';
   /** Expiry, epoch seconds. */
   exp: number;
+  /** `put` only: the exact byte length the upload must have. */
+  size?: number;
+  /** `put` only: the content type the upload must declare. */
+  type?: string;
 }
 
 const encoder = new TextEncoder();
@@ -59,13 +63,16 @@ export async function verifyFileToken(
     const payload = JSON.parse(decoder.decode(fromBase64Url(body))) as Partial<FileTokenPayload>;
     if (
       typeof payload.key !== 'string' ||
-      (payload.op !== 'put' && payload.op !== 'get') ||
+      (payload.op !== 'put' && payload.op !== 'get' && payload.op !== 'delete') ||
       typeof payload.exp !== 'number'
     ) {
       return null;
     }
+    if (payload.op === 'put' && (!Number.isSafeInteger(payload.size) || typeof payload.type !== 'string')) return null;
     if (payload.exp * 1000 < nowMs) return null;
-    return { key: payload.key, op: payload.op, exp: payload.exp };
+    return payload.op === 'put'
+      ? { key: payload.key, op: payload.op, exp: payload.exp, size: payload.size, type: payload.type }
+      : { key: payload.key, op: payload.op, exp: payload.exp };
   } catch {
     return null;
   }

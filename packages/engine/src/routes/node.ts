@@ -34,6 +34,7 @@ import {
   observerAllowsAgent,
 } from '../engine/observerToken.js';
 import { credentialFormat, credentialFromHex } from '../auth/credentials.js';
+import { ephemeralEventFetch } from '../ports/index.js';
 
 export const nodeRoutes = new Hono<AppEnv>();
 
@@ -436,7 +437,7 @@ nodeRoutes.post('/nodes/:node/actions/:name/invoke', requireAuth, rateLimit, asy
             nodeConnections: c.get('engine').nodeConnections,
             environment: c.get('engine').config?.environment,
             httpPushProxy: c.get('engine').config?.httpPushProxy,
-            outboundWebhookFetch: c.get('engine').config?.outboundWebhookFetch,
+            ephemeralEventFetch: ephemeralEventFetch(c.get('engine').config),
             workspaceId: workspace.id,
           },
           {
