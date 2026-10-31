@@ -21,10 +21,10 @@ on:
         required: true
         type: string
       latest:
-        description: "Also tag as :latest"
+        description: "Also tag as :latest (released versions only: the unsuffixed tag, dispatched from its v<version> release tag)"
         required: false
         type: boolean
-        default: true
+        default: false
 
 concurrency:
   group: publish-container
@@ -66,6 +66,8 @@ jobs:
         id: pin
         env:
           TAG: ${{ inputs.tag }}
+          LATEST: ${{ inputs.latest }}
+          REF: ${{ github.ref }}
         run: |
           set -euo pipefail
           pinned="$(node -p "require('./docker/package.json').dependencies['@relaycast/engine']")"
@@ -86,6 +88,27 @@ jobs:
               exit 1
               ;;
           esac
+          # The plain version tag and :latest are what customers pin and pull, so
+          # they may only name the released build. The image compiles the engine
+          # from this checkout, and main keeps the pinned version after a release
+          # while its source moves on, so only the release tag itself proves the
+          # checkout is the release. A suffixed tag from any ref stays possible.
+          released_ref=false
+          if [ "$REF" = "refs/tags/v$pinned" ]; then released_ref=true; fi
+          if [ "$TAG" != "$pinned" ] && [ "$LATEST" = "true" ]; then
+            echo "refusing :latest for suffixed tag '$TAG': :latest names a released version only" >&2
+            exit 1
+          fi
+          if [ "$released_ref" != "true" ]; then
+            if [ "$TAG" = "$pinned" ]; then
+              echo "refusing release tag '$TAG' from $REF: dispatch from refs/tags/v$pinned, or add a suffix" >&2
+              exit 1
+            fi
+            if [ "$LATEST" = "true" ]; then
+              echo "refusing :latest from $REF: dispatch from refs/tags/v$pinned" >&2
+              exit 1
+            fi
+          fi
           echo "pinned=$pinned" >> "$GITHUB_OUTPUT"
           echo "tag $TAG matches pinned engine version: $pinned"
 

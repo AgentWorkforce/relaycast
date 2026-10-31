@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { startServer } from '../../entrypoints/node.js';
 import { beginInternalWorkspaceDeletion, pushWorkspaceKey } from '../../engine/internalAdmin.js';
+import { sha256Hex } from '../../lib/crypto.js';
 import { makeNodeStack, registerAgent, type TestStack } from './harness.js';
 
 /**
@@ -217,6 +218,99 @@ describe('internal admin API', () => {
       expect(result.apiKeyGeneration).toBe(2);
       expect(result.mintedApiKey).toMatch(/^rk_live_/);
       expect((await readWorkspace(result.mintedApiKey!)).status).toBe(200);
+    });
+
+    it('a create push fenced by a deletion during its ownership check writes nothing', async () => {
+      stack = makeNodeStack({ internalSecret: SECRET });
+      const realDb = stack.runtime.deps.db as Parameters<typeof pushWorkspaceKey>[0];
+      let selects = 0;
+      let fenced = false;
+      // The first select is the absent-row read; the second is the awaited
+      // ownership check. A delete claims the id while that check is in flight.
+      const racingDb = new Proxy(realDb, {
+        get(target, prop, receiver) {
+          if (prop === 'select' && ++selects === 2) {
+            fenced = true;
+            beginInternalWorkspaceDeletion(receiver, 'cloud-ws-fenced').commit();
+          }
+          return Reflect.get(target, prop, receiver);
+        },
+      });
+      await expect(pushWorkspaceKey(racingDb, 'cloud-ws-fenced', {
+        apiKey: `rk_${'live'}_fenced_during_check_0000000000000`,
+      })).rejects.toMatchObject({ code: 'workspace_deleted' });
+      expect(fenced).toBe(true);
+      const rows = stack.runtime.handle.sqlite
+        .prepare('SELECT count(*) AS n FROM workspaces WHERE id = ?')
+        .get('cloud-ws-fenced') as { n: number };
+      expect(rows.n).toBe(0);
+    });
+
+    it('a create push loses to a key that entered another workspace grace slot after its check', async () => {
+      stack = makeNodeStack({ internalSecret: SECRET });
+      const owner = await createViaAdmin('grace-owner');
+      const key = `rk_${'live'}_grace_slot_raced_0000000000000000`;
+      const keyHash = await sha256Hex(key);
+      const realDb = stack.runtime.deps.db as Parameters<typeof pushWorkspaceKey>[0];
+      let raced = false;
+      // The ownership pre-check has already passed when the atomic write opens;
+      // a concurrent rotation moves the key into the owner's grace slot first.
+      const racingDb = new Proxy(realDb, {
+        get(target, prop, receiver) {
+          if (prop === 'withTransaction' && !raced) {
+            raced = true;
+            stack.runtime.handle.sqlite
+              .prepare('UPDATE workspaces SET previous_api_key_hash = ?, previous_api_key_expires_at = ? WHERE id = ?')
+              .run(keyHash, Math.floor(Date.now() / 1000) + 3600, owner.workspace_id);
+          }
+          return Reflect.get(target, prop, receiver);
+        },
+      });
+      await expect(pushWorkspaceKey(racingDb, 'cloud-ws-grace-thief', { apiKey: key }))
+        .rejects.toMatchObject({ code: 'api_key_conflict' });
+      expect(raced).toBe(true);
+      // Nothing was created, and the grace key still belongs to its owner.
+      const rows = stack.runtime.handle.sqlite
+        .prepare('SELECT count(*) AS n FROM workspaces WHERE id = ?')
+        .get('cloud-ws-grace-thief') as { n: number };
+      expect(rows.n).toBe(0);
+      const who = await readWorkspace(key);
+      expect(who.status).toBe(200);
+      expect(await data<{ id: string }>(who)).toMatchObject({ id: owner.workspace_id });
+    });
+
+    it('a push that loses its CAS to the same key at a lower generation still raises the fence', async () => {
+      stack = makeNodeStack({ internalSecret: SECRET });
+      const path = '/workspaces/cloud-ws-cas/api-key';
+      const first = `rk_${'live'}_cas_first_key_00000000000000000000`;
+      const next = `rk_${'live'}_cas_same_key_000000000000000000000`;
+      expect((await internal(path, { method: 'POST', body: { api_key: first, key_generation: 1 } })).status).toBe(201);
+      const nextHash = await sha256Hex(next);
+      const realDb = stack.runtime.deps.db as Parameters<typeof pushWorkspaceKey>[0];
+      let raced = false;
+      // A concurrent push of the same key at generation 5 commits between this
+      // call's read and its CAS (which asks for generation 7).
+      const racingDb = new Proxy(realDb, {
+        get(target, prop, receiver) {
+          if (prop === 'update' && !raced) {
+            raced = true;
+            stack.runtime.handle.sqlite
+              .prepare('UPDATE workspaces SET api_key_hash = ?, api_key_generation = 5 WHERE id = ?')
+              .run(nextHash, 'cloud-ws-cas');
+          }
+          return Reflect.get(target, prop, receiver);
+        },
+      });
+      const result = await pushWorkspaceKey(racingDb, 'cloud-ws-cas', { apiKey: next, keyGeneration: 7 });
+      expect(raced).toBe(true);
+      expect(result.apiKeyGeneration).toBe(7);
+      expect((await readWorkspace(next)).status).toBe(200);
+      // The fence is really at 7: a push at 6 is stale.
+      const stale = await internal(path, {
+        method: 'POST', body: { api_key: `rk_${'live'}_cas_between_key_000000000000000000`, key_generation: 6 },
+      });
+      expect(stale.status).toBe(409);
+      expect(await stale.json()).toMatchObject({ error: { code: 'stale_key_generation' } });
     });
 
     it('server-minted rotation refuses to derive a generation past MAX_SAFE_INTEGER', async () => {
