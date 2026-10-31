@@ -5,6 +5,7 @@ import { Hono } from 'hono';
 import { serve, type ServerType } from '@hono/node-server';
 import { WebSocketServer, type WebSocket as WsSocket } from 'ws';
 import { createEngine } from '../engine.js';
+import { assertInternalSecretStrength } from '../engine/internalAdmin.js';
 import { jsonNotFound } from '../lib/httpResponse.js';
 import type { AppEnv } from '../env.js';
 import type { EngineConfig } from '../ports/index.js';
@@ -75,6 +76,9 @@ function rejectUpgrade(socket: { write: (s: string) => void; destroy: () => void
  */
 export function startServer(options: StartServerOptions): RunningServer {
   const baseUrl = options.baseUrl ?? `http://localhost:${options.port}`;
+  // Refuse a weak admin secret before opening SQLite or starting the queue
+  // and sweeper, so a rejected config leaves nothing running.
+  assertInternalSecretStrength(options.config?.internalSecret);
   const runtime = createNodeRuntime({
     dbPath: options.dbPath,
     baseUrl,
@@ -89,7 +93,14 @@ export function startServer(options: StartServerOptions): RunningServer {
     eventQueue: options.eventQueue,
   });
 
-  const engine = createEngine(runtime.deps);
+  let engine: ReturnType<typeof createEngine>;
+  try {
+    engine = createEngine(runtime.deps);
+  } catch (err) {
+    // Fail closed: never leave the DB handle and background workers behind.
+    runtime.close();
+    throw err;
+  }
 
   // Parent app: serve local files, then delegate everything else to the engine.
   const app = new Hono<AppEnv>();

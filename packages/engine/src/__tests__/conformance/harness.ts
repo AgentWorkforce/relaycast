@@ -52,6 +52,8 @@ export function makeNodeStack(options?: {
   workspaceBootstrapSecret?: string;
   workspaceBootstrapProofRequired?: boolean;
   allowWorkspaceKeyRotation?: boolean;
+  internalSecret?: string;
+  publicWorkspaceCreate?: boolean;
   admission?: AdmissionHooks;
   rateLimitPerMinute?: number;
   credentialFormat?: EngineConfig['credentialFormat'];
@@ -82,6 +84,8 @@ export function makeNodeStack(options?: {
         workspaceBootstrapSecret: options?.workspaceBootstrapSecret ?? 'test-bootstrap-secret',
         workspaceBootstrapProofRequired: options?.workspaceBootstrapProofRequired,
         allowWorkspaceKeyRotation: options?.allowWorkspaceKeyRotation,
+        internalSecret: options?.internalSecret,
+        publicWorkspaceCreate: options?.publicWorkspaceCreate,
         rateLimitPerMinute: options?.rateLimitPerMinute,
         credentialFormat: options?.credentialFormat,
         maxUploadBytes: options?.maxUploadBytes,
