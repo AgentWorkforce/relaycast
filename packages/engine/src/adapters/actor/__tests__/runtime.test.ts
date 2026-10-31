@@ -3,7 +3,7 @@ import { verifyFileToken } from '../../../lib/fileTokens.js';
 import { sha256Hex } from '../../../lib/crypto.js';
 import { createActorRuntime, nextMaintenanceAt } from '../index.js';
 import { SignedUrlFileStorage } from '../files.js';
-import { FakeAlarm, FakeWorkspaceActor, jsonRequest } from './fakeActor.js';
+import { FakeAlarm, FakeWorkspaceActor, TEST_CREDENTIAL_TAGS, jsonRequest } from './fakeActor.js';
 
 const WORKSPACE_ID = '241764880589606912';
 
@@ -28,13 +28,15 @@ function rows(actor: FakeWorkspaceActor, sql: string, ...bindings: string[]) {
 }
 
 describe('workspace actor runtime', () => {
-  it('serves the engine for its own workspace with self-routing credentials', async () => {
+  it('serves the engine for its own workspace with ar_ credentials carrying the gateway\'s tag', async () => {
     const actor = new FakeWorkspaceActor(WORKSPACE_ID);
     const { created, key, alice, bob } = await workspaceWithAgents(actor);
 
     expect(created.json.data.workspace_id).toBe(WORKSPACE_ID);
-    expect(key).toMatch(new RegExp(`^relaycast_ws_${WORKSPACE_ID}_[0-9a-f]{64}$`));
-    expect(alice).toMatch(new RegExp(`^relaycast_ag_${WORKSPACE_ID}_[0-9a-f]{64}$`));
+    const tag = await TEST_CREDENTIAL_TAGS.tag(WORKSPACE_ID);
+    expect(key).toMatch(new RegExp(`^ar_ws_[0-9A-Za-z]{11}_${tag}_[0-9A-Za-z]{49}$`));
+    expect(alice).toMatch(new RegExp(`^ar_ag_[0-9A-Za-z]{11}_${tag}_[0-9A-Za-z]{49}$`));
+    expect(await TEST_CREDENTIAL_TAGS.verify(key)).toBe(true);
 
     expect((await call(actor, 'POST', '/v1/channels', { name: 'general-2' }, alice)).status).toBe(201);
     expect((await call(actor, 'POST', '/v1/channels/general-2/join', {}, bob)).status).toBe(200);
@@ -54,17 +56,29 @@ describe('workspace actor runtime', () => {
     expect(search.json.data.map((hit) => hit.text)).toContain('hello from a durable actor');
   });
 
-  it('verifies live-family credentials as well as the self-routing ones it mints', async () => {
+  it('accepts only ar_ credentials: legacy ones get 401 and there is no upgrade route', async () => {
     const actor = new FakeWorkspaceActor(WORKSPACE_ID);
-    const { alice } = await workspaceWithAgents(actor);
-    const unknown = await call(actor, 'GET', '/v1/agents', undefined, `rk_live_${'0'.repeat(32)}`);
-    expect(unknown.status).toBe(401);
-    expect(unknown.json.error?.message).toBe('Invalid API key');
+    const { key, alice } = await workspaceWithAgents(actor);
+    for (const legacy of [`rk_live_${'0'.repeat(32)}`, `at_live_${'cd'.repeat(16)}`]) {
+      // Even a legacy credential whose hash the actor holds is refused.
+      actor.sql.raw.prepare('UPDATE agents SET token_hash = ? WHERE token_hash = ?')
+        .run(await sha256Hex(legacy), await sha256Hex(alice));
+      const refused = await actor.handle(jsonRequest('GET', '/v1/agents', undefined, legacy));
+      expect(refused.status).toBe(401);
+      expect(new Headers(refused.headers).get('deprecation')).toBeNull();
+    }
+    expect((await call(actor, 'POST', '/v1/credentials/upgrade', undefined, `rk_live_${'0'.repeat(32)}`)).status).toBe(404);
+    const ok = await actor.handle(jsonRequest('GET', '/v1/agents', undefined, key));
+    expect(ok.status).toBe(200);
+    expect(new Headers(ok.headers).get('deprecation')).toBeNull();
+  });
 
-    const legacy = `at_live_${'cd'.repeat(16)}`;
-    actor.sql.raw.prepare('UPDATE agents SET token_hash = ? WHERE token_hash = ?')
-      .run(await sha256Hex(legacy), await sha256Hex(alice));
-    expect((await call(actor, 'GET', '/v1/inbox', undefined, legacy)).status).toBe(200);
+  it('keeps the credential tag its gateway handed over at create', async () => {
+    const actor = new FakeWorkspaceActor(WORKSPACE_ID);
+    await workspaceWithAgents(actor);
+    const other = jsonRequest('POST', '/v1/workspaces', { name: 'again' });
+    await expect(actor.sql.atomic(() => actor.runtime.create(other, 'bAAAAAAAAAA'))).rejects.toThrow(/different credential tag/);
+    expect(() => new FakeWorkspaceActor('ws_not_a_snowflake')).toThrow(/64-bit snowflake/);
   });
 
   it('refuses a second workspace in the same actor', async () => {
@@ -132,10 +146,10 @@ describe('workspace actor runtime', () => {
     expect(rows(actor, 'SELECT COUNT(*) AS n FROM _actor_kv')[0].n).toBeGreaterThan(0);
   });
 
-  it('issues self-routing credentials without being configured to', async () => {
+  it('issues ar_ credentials without being configured to', async () => {
     const actor = new FakeWorkspaceActor(WORKSPACE_ID, { config: {} });
     const { key } = await workspaceWithAgents(actor);
-    expect(key).toMatch(/^relaycast_ws_/);
+    expect(key).toMatch(/^ar_ws_/);
   });
 
   it('arms the alarm from outstanding work and lets an idle workspace go dormant', async () => {

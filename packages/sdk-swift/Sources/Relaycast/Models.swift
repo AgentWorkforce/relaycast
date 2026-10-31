@@ -131,6 +131,16 @@ public struct TokenRotateResponse: Codable, Equatable, Sendable {
     public let token: String
 }
 
+/// `POST /v1/credentials/upgrade`: the `ar_` credential that replaces a legacy one.
+public struct CredentialUpgradeResponse: Codable, Equatable, Sendable {
+    /// The `ar_` credential for the same principal.
+    public let credential: String
+    /// `workspace`, `agent`, `node`, `observer` or `webhook`.
+    public let kind: String
+    /// When the legacy credential stops working (RFC 3339).
+    public let legacyExpiresAt: String
+}
+
 public struct RecoverAgentRequest: Codable, Equatable, Sendable {
     public var expectedAgentId: String
     public var recoveryProof: String?

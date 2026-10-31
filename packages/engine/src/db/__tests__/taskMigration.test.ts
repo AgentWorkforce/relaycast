@@ -42,6 +42,7 @@ it('upgrades existing actions and results additively, preserving rows and every 
       '0076_deliveries_agent_status_created_index.sql',
       '0077_drop_workspace_plan.sql',
       '0078_dm_participant_read_cursor.sql',
+      '0079_credential_upgrades.sql',
     ]);
     for (const table of before) {
       const columns = db.pragma(`table_info(${table.name})`) as { name: string }[];

@@ -1,12 +1,14 @@
+import type { Context } from 'hono';
 import { createMiddleware } from 'hono/factory';
 import type { ContentfulStatusCode } from 'hono/utils/http-status';
 import { touchLastSeen } from '../engine/agent.js';
 import type { AppEnv } from '../env.js';
-import type { AuthRequire } from '../ports/auth.js';
+import type { AuthRequire, AuthResult } from '../ports/auth.js';
 import { getAuthTokenKind, requiredTokenMessage } from '../auth/tokenKind.js';
 import { credentialFormat } from '../auth/credentials.js';
 import { authenticateUnexpired } from '../auth/workspaceExpiry.js';
 import { jsonError } from '../lib/httpResponse.js';
+import { noteAuthenticatedCredential } from '../lib/credentialNotice.js';
 import { sha256Hex } from '../lib/crypto.js';
 import {
   hasAnyObserverScope,
@@ -46,6 +48,19 @@ function missingPrincipal(
   return null;
 }
 
+/** Put the authenticated principal on the request, so telemetry attributes the request to it. */
+async function rememberPrincipal(
+  c: Context<AppEnv>,
+  token: string,
+  result: Extract<AuthResult, { ok: true }>,
+): Promise<void> {
+  c.set('workspace', result.workspace);
+  c.set('agent', result.agent);
+  c.set('agentCredentialHash', result.agent ? await presentedCredentialHash(token) : undefined);
+  c.set('node', result.node);
+  c.set('observerToken', result.observerToken);
+}
+
 function makeAuthMiddleware(require: AuthRequire) {
   return createMiddleware<AppEnv>(async (c, next) => {
     const token = extractToken(c.req.header('Authorization'));
@@ -63,20 +78,11 @@ function makeAuthMiddleware(require: AuthRequire) {
       return jsonError(c, 'unauthorized', requiredTokenMessage(missing, credentialFormat(db)), 401);
     }
 
-    c.set('workspace', result.workspace);
-    c.set('agentCredentialHash', result.agent ? await presentedCredentialHash(token) : undefined);
-    if (result.agent) {
-      c.set('agent', result.agent);
-      // Touch lastSeen (debounced, fire-and-forget)
-      if (Date.now() - result.agent.lastSeen.getTime() > LAST_SEEN_DEBOUNCE_MS) {
-        touchLastSeen(db, result.agent.id).catch(() => {});
-      }
-    }
-    if (result.node) {
-      c.set('node', result.node);
-    }
-    if (result.observerToken) {
-      c.set('observerToken', result.observerToken);
+    await rememberPrincipal(c, token, result);
+    noteAuthenticatedCredential(c, token, result.workspace.id);
+    // Touch lastSeen (debounced, fire-and-forget)
+    if (result.agent && Date.now() - result.agent.lastSeen.getTime() > LAST_SEEN_DEBOUNCE_MS) {
+      touchLastSeen(db, result.agent.id).catch(() => {});
     }
 
     await next();
@@ -123,15 +129,14 @@ export function requireWorkspaceRead(
       return jsonError(c, 'unauthorized', requiredTokenMessage(missing, credentialFormat(db)), 401);
     }
 
+    // An observer token reads as the observer alone.
+    await rememberPrincipal(c, token, result.observerToken ? { ...result, agent: undefined, node: undefined } : result);
+    noteAuthenticatedCredential(c, token, result.workspace.id);
+
     if (result.observerToken) {
       if (!hasAnyObserverScope(result.observerToken, requiredScopes)) {
         return jsonError(c, 'insufficient_scope', 'Observer token lacks the required scope', 403);
       }
-      c.set('workspace', result.workspace);
-      c.set('agent', undefined);
-      c.set('agentCredentialHash', undefined);
-      c.set('node', undefined);
-      c.set('observerToken', result.observerToken);
       await next();
       return;
     }
@@ -142,17 +147,8 @@ export function requireWorkspaceRead(
     if (result.node && !allowNode) {
       return jsonError(c, 'forbidden', 'Node token cannot access this resource', 403);
     }
-
-    c.set('workspace', result.workspace);
-    c.set('agentCredentialHash', result.agent ? await presentedCredentialHash(token) : undefined);
-    if (result.agent) {
-      c.set('agent', result.agent);
-      if (Date.now() - result.agent.lastSeen.getTime() > LAST_SEEN_DEBOUNCE_MS) {
-        touchLastSeen(db, result.agent.id).catch(() => {});
-      }
-    }
-    if (result.node) {
-      c.set('node', result.node);
+    if (result.agent && Date.now() - result.agent.lastSeen.getTime() > LAST_SEEN_DEBOUNCE_MS) {
+      touchLastSeen(db, result.agent.id).catch(() => {});
     }
 
     await next();

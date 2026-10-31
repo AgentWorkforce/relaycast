@@ -6,8 +6,8 @@ stateless gateway.
 
 ```
 client ──HTTP──▶ gateway (gateway/server.ts)
-                  ├─ POST /v1/workspaces ──▶ Workspace[<new id>].create
-                  ├─ Bearer relaycast_<kind>_<workspace_id>_<secret> ──▶ Workspace[workspace_id].handle
+                  ├─ POST /v1/workspaces ──▶ Workspace[<new snowflake>].create(request, tag)
+                  ├─ Bearer ar_<kind>_<wsid>_<tag>_<secret><crc> ──▶ tag verified ──▶ Workspace[workspace id].handle
                   └─ /_relayfiles?token=… ──▶ files on the gateway's disk
 ```
 
@@ -15,19 +15,23 @@ client ──HTTP──▶ gateway (gateway/server.ts)
 |---|---|
 | `actor/src/workspace.ts` | The `Workspace` actor: `createActorRuntime` from `@relaycast/engine/adapters/actor` on the actor's database and alarm |
 | `gateway/server.ts` | Bun server: routes by the workspace id in each credential, calls actors with `terse-sdk`, serves signed file URLs (PUT, GET, HEAD stat, DELETE) from its disk |
-| `gateway/server.test.ts` | `bun test`: signed uploads, chunked or not, are held to the signed size |
-| `gateway/drive.ts` | End-to-end check: workspace, agents, channel post and read, DM, inbox, search, a rolled-back write group, file upload, completion and download |
+| `gateway/server.test.ts` | `bun test`: signed uploads are held to the signed size, deletes, and forged or legacy credentials refused without an actor call |
+| `gateway/drive.ts` | End-to-end check: `ar_` keys, refused typo / forged tag / legacy key, workspace, agents, channel post and read, DM, inbox, search, a rolled-back write group, file upload, completion and download |
 
 How it behaves:
 
-- The gateway mints workspace ids with an HMAC tag
-  (`<snowflake><key version><tag>`) and verifies it before calling an actor, so
-  a credential naming a workspace it never minted is refused without creating
-  an actor.
-- Workspaces created here issue self-routing credentials
-  (`relaycast_ws_…`, `relaycast_ag_…`), so the gateway finds the workspace
-  without a lookup. The actor still verifies every credential against its own
-  tables.
+- Workspace ids are plain snowflakes. At create the gateway signs the
+  workspace's routing tag with its keyring (`RELAYCAST_CREDENTIAL_KEYRING`)
+  and hands it to the actor, which puts it in every credential it mints:
+  `ar_ws_…`, `ar_ag_…`. The gateway reads the workspace from a credential,
+  checks its checksum and verifies its tag before calling an actor, so a typo
+  or a credential naming a workspace this keyring never tagged is refused
+  without creating an actor. The actor still verifies every credential against
+  its own tables.
+- The actor accepts only `ar_` credentials: legacy `rk_live_` / `at_live_` …
+  credentials get 401 even past the gateway, it serves no
+  `POST /v1/credentials/upgrade`, and its responses carry no deprecation
+  headers (its workspaces never had legacy credentials).
 - The actor runs on durable-actors 0.14.5. Each actor call is one SQLite
   transaction, and each engine write group nests inside it
   (`db.transaction`), so a failed group rolls back alone and the request goes
@@ -59,14 +63,14 @@ RELAYCAST_PUBLIC_URL=http://127.0.0.1:8787 RELAYCAST_FILE_SIGNING_SECRET=dev-sec
 # Gateway, in a second terminal
 cd gateway && bun install
 RELAYCAST_FILE_SIGNING_SECRET=dev-secret \
-  RELAYCAST_WORKSPACE_ID_KEYRING='{"current":"a","keys":{"a":"dev-workspace-id-secret"}}' bun run start
+  RELAYCAST_CREDENTIAL_KEYRING='{"current":"a","keys":{"a":"dev-credential-tag-secret"}}' bun run start
 
 # Drive it
 bun gateway/drive.ts
 ```
 
-Point any relaycast client at `http://127.0.0.1:8787` with the `relaycast_ws_…`
-key the drive script prints.
+Point any relaycast client at `http://127.0.0.1:8787` with the `ar_ws_…` key
+the drive script prints.
 
 The gateway keeps file bytes on its own disk (`RELAYCAST_FILE_DIR`), so run a
 single instance on persistent storage, or point `serveFile` at a shared object
@@ -90,8 +94,8 @@ terse deploy                         # prints TERSE_ACTOR_URL
 ```
 
 Run the gateway anywhere with `TERSE_ACTOR_URL`, `TERSE_API_KEY`, the same
-`RELAYCAST_FILE_SIGNING_SECRET`, and `RELAYCAST_WORKSPACE_ID_KEYRING`
-(`{"current":"a","keys":{"a":"<secret>"}}`). Workspace ids are permanent, so
-rotation adds a key version and makes it current, and never drops one: an id
-verifies with the version it names. Removing a version locks out every
-workspace minted under it.
+`RELAYCAST_FILE_SIGNING_SECRET`, and `RELAYCAST_CREDENTIAL_KEYRING`
+(`{"current":"a","keys":{"a":"<secret>"}}`). Credentials outlive key changes,
+so rotation adds a key version and makes it current, and never drops one: a
+tag verifies with the version it names. Removing a version locks out every
+credential tagged under it.

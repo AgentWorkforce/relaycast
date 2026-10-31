@@ -1,5 +1,5 @@
 import { configureNodeLiveness, nodeLivenessAuthority } from './nodeLiveness.js';
-import { configureCredentialFormat, credentialFormat } from '../auth/credentials.js';
+import { inheritCredentials } from '../auth/credentials.js';
 import { WorkspaceDeliveryCapacityError } from '../engine/workspaceDeliveryPolicy.js';
 import type { BatchItem } from 'drizzle-orm/batch';
 import type { BaseSQLiteDatabase } from 'drizzle-orm/sqlite-core';
@@ -104,7 +104,7 @@ export interface BatchCapability {
 /** A transaction handle carries the bindings of the handle it was opened from. */
 function inheritHandleBindings(tx: EngineDb, db: EngineDb): void {
   configureNodeLiveness(tx, nodeLivenessAuthority(db));
-  configureCredentialFormat(tx, credentialFormat(db));
+  inheritCredentials(tx, db);
 }
 
 function buildStatements(input: AtomicWriteInput, db: EngineDb): readonly AtomicWrite[] {

@@ -471,11 +471,10 @@ hosted usage view, backfill boundary, and cost model.
 - Node token (`nt_live_*`): realtime transport token for direct or broker nodes on `/v1/node/ws`
   (`GET /v1/node/me` returns the node it belongs to; agent detail's `origin_node_id` names the node that registered an agent and cannot be patched, unlike `metadata.fleet`)
 - Observer token (`ot_live_*`): scoped read-only token for workspace realtime and read-only REST
-- Credential families: every deployment accepts the `*_live_*` family above and self-routing
-  credentials, `relaycast_<kind>_<workspace_id>_<secret>` with kind `ws` | `ag` | `nd` | `ob` | `wh`
-  and a 64-hex secret. A deployment mints one family (engine `credentialFormat`, default `live`).
-  A self-routing credential names its workspace, so a stateless gateway routes it without a lookup;
-  the engine verifies it with one lookup in that workspace.
+- Credential families: the Node self-host and cast accept both the legacy `*_live_*` family
+  above and `ar_` credentials, `ar_<kind>_<wsid>_<tag>_<secret><crc>` (see
+  [Credentials](#credentials)), and mint one family (engine `credentialFormat`, default
+  `legacy`). The workspace actor runtime mints and accepts only `ar_` credentials.
 - Identity types: `agent` (AI worker), `human` (person), `system` (automation/service actor)
 - Message payloads and realtime message events include optional `agent_type` so clients can distinguish agent, human, and system senders without extra identity lookups.
 - Channel: shared room for team/agent communication
@@ -1339,6 +1338,13 @@ accepted; a wrong secret is `401`).
 | `DELETE /internal/workspaces/:id` | Idempotently delete by ID with the internal secret (`204`, including when already gone) |
 | `POST /internal/workspaces/:id/api-key` | Push a control-plane-minted key (`{ api_key, key_generation?, grace_ms? }`, upserts a missing workspace with `201`) or omit `api_key` to have the engine mint and return one. Generation-fenced: stale pushes are `409 stale_key_generation`, generationless key changes on a fenced workspace are `409 key_generation_required`, and a key that is live in another workspace (current, or previous within its grace window) is `409 api_key_conflict`. After an internal delete claims this ID, same-process pushes are `410 workspace_deleted`; deleted IDs are not reusable without restarting the engine. |
 
+Workspace IDs match `^[A-Za-z0-9_-]{1,128}$`. A deployment that mints `ar_` credentials
+(`RELAYCAST_CREDENTIAL_FORMAT=ar`) carries the workspace in every credential as a 64-bit snowflake,
+so its key pushes take only snowflake IDs (`400 invalid_request`, "workspace ids must be snowflakes
+on deployments that mint ar_ credentials", before any write); workspaces the engine creates are
+always snowflakes. `DELETE /internal/workspaces/:id` takes any ID, so existing custom-ID
+workspaces stay removable.
+
 Set `RELAYCAST_PUBLIC_WORKSPACE_CREATE=false` so the anonymous `POST /v1/workspaces` answers the
 generic `404` and workspaces come only from the control plane (the Helm chart does this when the
 internal secret is configured). Schemas are in [`openapi.yaml`](./openapi.yaml); details in
@@ -1377,21 +1383,81 @@ The hosted dashboard runs as a Cloudflare Worker built with the [OpenNext adapte
 npm run -w @relaycast/observer-dashboard preview
 ```
 
+## Credentials
+
+An `ar_` credential is `ar_<kind>_<wsid>_<tag>_<secret><crc>`, about 79 characters:
+
+| Segment | Content |
+|---|---|
+| `kind` | `ws` workspace key, `ag` agent, `nd` node, `ob` observer, `wh` inbound webhook |
+| `wsid` | The workspace snowflake in base62, 11 characters |
+| `tag` | A keyring version letter plus 10 base62 characters of HMAC-SHA256(keyring[version], wsid) |
+| `secret` | 32 random bytes in base62, 43 characters |
+| `crc` | CRC-32 of everything before it, base62, 6 characters |
+
+A gateway routes an `ar_` credential to its workspace and verifies its tag with
+the keyring alone (`createCredentialTagSigner(keyring).verify` from
+`@relaycast/engine/gateway`), so a forged workspace is refused with no lookup;
+the checksum rejects a typo offline. `@relaycast/types` classifies, masks and
+redacts both families (`parseCredential`, `maskCredential`,
+`redactCredentials`). The `ar_` prefix is shared across agent relay services:
+RelayAuth will use `ar_au_<kind>_…`, and its current `relay_*_` tokens are not
+relaycast credentials.
+
+A deployment mints `ar_` credentials with `credentialFormat: 'ar'` and a
+`credentialTagger` (`createCredentialTagSigner(parseCredentialKeyring(json))`,
+keyring `{"current":"a","keys":{"a":"<secret>"}}`). Rotation adds a key version
+and makes it current, and never drops one. The Node self-host reads the keyring
+from `RELAYCAST_CREDENTIAL_KEYRING` and the family from
+`RELAYCAST_CREDENTIAL_FORMAT`.
+
+### Credential upgrade
+
+`POST /v1/credentials/upgrade`, authenticated by a legacy credential of any
+kind, returns the `ar_` credential for the same principal:
+
+```bash
+curl -XPOST https://cast.agentrelay.com/v1/credentials/upgrade -H "authorization: Bearer $RELAY_AGENT_TOKEN"
+# {"ok":true,"data":{"credential":"ar_ag_…","kind":"agent","legacy_expires_at":"…"}}
+```
+
+A workspace key upgrades here only where the engine owns workspace keys
+(`allowWorkspaceKeyRotation`). Where a control plane owns them, as on
+`cast.agentrelay.com`, the route answers `403 workspace_key_rotation_disabled`
+and the control plane issues the `ar_ws_` key.
+
+The legacy credential keeps working until `legacy_expires_at`
+(`legacyCredentialGraceSeconds`, default 30 days, at most 10 years), and only while the
+principal holds the returned credential. Its secret is random; upgrading the
+same legacy credential again during the grace returns it from the server's sealed
+record (after the grace the legacy credential gets 401: use the `ar_` credential, or
+rotate it if lost); upgrades are limited to 10 per principal per minute. The route needs
+a `credentialTagger`. The final response to every request a legacy credential
+authenticated, whatever its status, carries `Deprecation: @1793318400` (RFC 9745: the legacy family was deprecated on
+2026-10-30), a `Link` to this section (`rel="deprecation"`), and `Sunset` (RFC 8594) when
+`legacyCredentialSunset` is set. Every authenticated request and WebSocket connect reports a
+`request.authenticated` observation with `credential_family` (`legacy` | `ar`)
+and `credential_kind`, plus the workspace and origin client and version.
+
 ## Run relaycast on Terse
 
 The engine also runs on [Terse](https://docs.useterse.ai) durable actors: one
 actor per workspace, each holding that workspace on its own SQLite, behind a
-stateless gateway that routes by the workspace id inside each
-`relaycast_<kind>_<workspace_id>_<secret>` credential.
+stateless gateway that routes by the workspace inside each `ar_` credential
+and verifies its tag with the keyring.
 
 - `@relaycast/engine/adapters/actor`: `createActorRuntime` runs the engine on an
   actor's database and alarm. It requires durable-actors >= 0.14.5 (`db.query`
   and nested `db.transaction`) and throws on an older runtime. Each engine
   write group is a nested transaction, so a failed group rolls back alone and
-  the request goes on, as on the Node adapter. It is written against a minimal
+  the request goes on, as on the Node adapter. The actor runtime mints and
+  accepts only `ar_` credentials: legacy ones get 401, and it serves no
+  credential upgrade or deprecation headers. It is written against a minimal
   database/alarm interface; the engine does not depend on Terse.
-- `@relaycast/engine/gateway`: credential parsing, signed workspace ids, and
-  signed file URLs.
+- `@relaycast/engine/gateway`: `ar_` credential parsing and tag signing and
+  verification (`parseArCredential`, `createCredentialTagSigner`,
+  `parseCredentialKeyring`), workspace ids (`generateWorkspaceId`, plain
+  snowflakes), and signed file URLs.
 
 [`examples/terse`](examples/terse) is a complete deployment: the `Workspace`
 actor, a small Bun gateway, local and hosted steps, and an end-to-end check.

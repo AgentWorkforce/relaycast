@@ -10,6 +10,7 @@ import type { AuthProvider, AuthResult, AuthRequire } from '../ports/auth.js';
 import type { EngineDb } from '../ports/database.js';
 import { parseAuthToken, validateTokenRequirement } from './tokenKind.js';
 import { credentialFormat } from './credentials.js';
+import { upgradedLegacyCredential } from '../engine/credentialUpgrade.js';
 import { isWorkspaceExpired, workspaceExpiredAuthResult } from './workspaceExpiry.js';
 
 export {
@@ -45,12 +46,13 @@ function resolved(
 /**
  * The built-in, self-host authentication provider.
  *
- * Reproduces the original `middleware/auth.ts` behavior: bearer tokens prefixed
- * workspace, agent, node and observer credentials of either family
+ * Workspace, agent, node and observer credentials of either family
  * (`auth/credentials.ts`) are SHA-256 hashed and looked up in the table their
- * kind names. A self-routing credential is looked up within the workspace it
- * names, in one indexed query. The cloud product replaces this with a
- * provider backed by its own accounts/billing system.
+ * kind names. An `ar_` credential is looked up within the workspace it names,
+ * in one indexed query. A legacy credential replaced through
+ * `POST /v1/credentials/upgrade` keeps authenticating during its grace
+ * (`credential_upgrades`). The cloud product replaces this with a provider
+ * backed by its own accounts/billing system.
  */
 export class SqliteApiKeyAuthProvider implements AuthProvider {
   hashToken(token: string): Promise<string> {
@@ -71,74 +73,97 @@ export class SqliteApiKeyAuthProvider implements AuthProvider {
 
     const hash = await hashToken(token);
     if (parsedToken.workspaceId !== undefined) {
-      return authenticateSelfRouting(db, parsedToken.kind, parsedToken.workspaceId, hash);
+      return authenticateAr(db, parsedToken.kind, parsedToken.workspaceId, hash);
     }
-
-    if (parsedToken.kind === 'workspace') {
-      // Current slot first — same shape as the agent-token lookup below.
-      let [workspace] = await db.select().from(workspaces).where(eq(workspaces.apiKeyHash, hash));
-      if (!workspace) {
-        // Superseded key inside its rotation grace window. A rotation with
-        // zero grace writes no usable previous slot, so a compromised key
-        // never lands here.
-        [workspace] = await db
-          .select()
-          .from(workspaces)
-          .where(and(
-            eq(workspaces.previousApiKeyHash, hash),
-            gt(workspaces.previousApiKeyExpiresAt, new Date()),
-          ));
-      }
-      if (!workspace) return unauthorized('Invalid API key');
-      return resolved(workspace);
-    }
-
-    if (parsedToken.kind === 'agent') {
-      // Current slot first — the common case is a token that has not been
-      // rotated out from under this caller.
-      let [agent] = await db.select().from(agents).where(eq(agents.tokenHash, hash));
-      if (!agent) {
-        // Fall back to the previous slot inside its grace window. This is the
-        // credential a caller that lost a concurrent self-rollover race was
-        // handed (relay#1542); it must remain live long enough for that caller
-        // to upgrade to a persistent session.
-        [agent] = await db
-          .select()
-          .from(agents)
-          .where(and(eq(agents.previousTokenHash, hash), gt(agents.previousTokenExpiresAt, new Date())));
-      }
-      if (!agent) return unauthorized('Invalid agent token', 'agent_token_invalid');
-      const [workspace] = await db.select().from(workspaces).where(eq(workspaces.id, agent.workspaceId));
-      if (!workspace) return unauthorized('Workspace not found');
-      return resolved(workspace, { agent });
-    }
-
-    if (parsedToken.kind === 'node') {
-      const [node] = await db.select().from(nodes).where(eq(nodes.tokenHash, hash));
-      if (!node) return unauthorized('Invalid node token', 'node_token_invalid');
-      const [workspace] = await db.select().from(workspaces).where(eq(workspaces.id, node.workspaceId));
-      if (!workspace) return unauthorized('Workspace not found');
-      return resolved(workspace, { node });
-    }
-
-    if (parsedToken.kind === 'observer') {
-      const observerToken = await getActiveObserverTokenByHash(db, hash);
-      if (!observerToken) return unauthorized('Invalid observer token', 'observer_token_invalid');
-      const [workspace] = await db.select().from(workspaces).where(eq(workspaces.id, observerToken.workspaceId));
-      if (!workspace) return unauthorized('Workspace not found');
-      return resolved(workspace, { observerToken });
-    }
-
-    return unauthorized('Invalid token format');
+    const legacy = await authenticateLegacy(db, parsedToken.kind, hash);
+    if (legacy.ok || legacy.code === 'workspace_expired') return legacy;
+    return await authenticateUpgradedLegacy(db, parsedToken.kind, hash) ?? legacy;
   }
 }
 
+async function authenticateLegacy(
+  db: EngineDb,
+  kind: 'workspace' | 'agent' | 'node' | 'observer',
+  hash: string,
+): Promise<AuthResult> {
+  if (kind === 'workspace') {
+    // Current slot first — same shape as the agent-token lookup below.
+    let [workspace] = await db.select().from(workspaces).where(eq(workspaces.apiKeyHash, hash));
+    if (!workspace) {
+      // Superseded key inside its rotation grace window. A rotation with
+      // zero grace writes no usable previous slot, so a compromised key
+      // never lands here.
+      [workspace] = await db
+        .select()
+        .from(workspaces)
+        .where(and(
+          eq(workspaces.previousApiKeyHash, hash),
+          gt(workspaces.previousApiKeyExpiresAt, new Date()),
+        ));
+    }
+    if (!workspace) return unauthorized('Invalid API key');
+    return resolved(workspace);
+  }
+
+  if (kind === 'agent') {
+    // Current slot first — the common case is a token that has not been
+    // rotated out from under this caller.
+    let [agent] = await db.select().from(agents).where(eq(agents.tokenHash, hash));
+    if (!agent) {
+      // Fall back to the previous slot inside its grace window. This is the
+      // credential a caller that lost a concurrent self-rollover race was
+      // handed (relay#1542); it must remain live long enough for that caller
+      // to upgrade to a persistent session.
+      [agent] = await db
+        .select()
+        .from(agents)
+        .where(and(eq(agents.previousTokenHash, hash), gt(agents.previousTokenExpiresAt, new Date())));
+    }
+    if (!agent) return unauthorized('Invalid agent token', 'agent_token_invalid');
+    const [workspace] = await db.select().from(workspaces).where(eq(workspaces.id, agent.workspaceId));
+    if (!workspace) return unauthorized('Workspace not found');
+    return resolved(workspace, { agent });
+  }
+
+  if (kind === 'node') {
+    const [node] = await db.select().from(nodes).where(eq(nodes.tokenHash, hash));
+    if (!node) return unauthorized('Invalid node token', 'node_token_invalid');
+    const [workspace] = await db.select().from(workspaces).where(eq(workspaces.id, node.workspaceId));
+    if (!workspace) return unauthorized('Workspace not found');
+    return resolved(workspace, { node });
+  }
+
+  if (kind === 'observer') {
+    const observerToken = await getActiveObserverTokenByHash(db, hash);
+    if (!observerToken) return unauthorized('Invalid observer token', 'observer_token_invalid');
+    const [workspace] = await db.select().from(workspaces).where(eq(workspaces.id, observerToken.workspaceId));
+    if (!workspace) return unauthorized('Workspace not found');
+    return resolved(workspace, { observerToken });
+  }
+
+  return unauthorized('Invalid token format');
+}
+
 /**
- * Verify a self-routing credential: one indexed query against the table its
- * kind names, scoped to the workspace it names, returning the principal and its
- * workspace together. Rotation grace slots match as in the `live` lookups.
+ * A legacy credential replaced through `POST /v1/credentials/upgrade`, inside
+ * its grace: the principal it was upgraded from, while that principal still
+ * holds the `ar_` credential. `undefined` when the hash is no such credential.
  */
-async function authenticateSelfRouting(
+async function authenticateUpgradedLegacy(
+  db: EngineDb,
+  kind: 'workspace' | 'agent' | 'node' | 'observer',
+  hash: string,
+): Promise<AuthResult | undefined> {
+  const upgraded = await upgradedLegacyCredential(db, kind, hash);
+  return upgraded ? authenticateAr(db, kind, upgraded.workspaceId, upgraded.arHash) : undefined;
+}
+
+/**
+ * Verify an `ar_` credential: one indexed query against the table its kind
+ * names, scoped to the workspace it names, returning the principal and its
+ * workspace together. Rotation grace slots match as in the legacy lookups.
+ */
+async function authenticateAr(
   db: EngineDb,
   kind: 'workspace' | 'agent' | 'node' | 'observer',
   workspaceId: string,

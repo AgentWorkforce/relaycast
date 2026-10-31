@@ -15,8 +15,12 @@ import { routeDeliveryOutcomes } from './deliveryRouting.js';
 import { runInBackground } from './background.js';
 import { sendWebhookEvent } from './webhookOutbox.js';
 import { emitServerEvent } from '../lib/serverTelemetry.js';
+import { noteAuthenticatedCredential } from '../lib/credentialNotice.js';
+import { acceptsOnlyAr } from '../auth/credentials.js';
+import { parseCredential } from '@relaycast/types';
 import {
   jsonCreated,
+  jsonError,
   jsonNoContent,
   jsonNotFound,
   jsonOk,
@@ -122,6 +126,9 @@ inboundWebhookRoutes.post('/hooks/:webhookId', async (c) => {
   try {
     const db = c.get('db');
     const token = extractBearerToken(c.req.header('Authorization'));
+    if (token && acceptsOnlyAr(db) && parseCredential(token)?.family !== 'ar') {
+      return jsonError(c, 'webhook_token_invalid', 'Invalid webhook bearer token', 401);
+    }
     const parsed = await parseJsonBody(c, triggerInboundWebhookSchema, 'invalid webhook payload');
     if (!parsed.ok) {
       return parsed.response;
@@ -153,7 +160,9 @@ inboundWebhookRoutes.post('/hooks/:webhookId', async (c) => {
     if (!result) {
       return jsonNotFound(c, 'webhook_not_found', 'Webhook not found or inactive');
     }
-    const { workspace_id, channel_id, agent_id, _deliveries, _delivery_rejections, ...responseData } = result;
+    // Only a token the webhook required and verified authenticated this call.
+    if (token && result._token_verified) noteAuthenticatedCredential(c, token, result.workspace_id);
+    const { workspace_id, channel_id, agent_id, _deliveries, _delivery_rejections, _token_verified, ...responseData } = result;
 
     const eventData = { ...responseData, id: responseData.message_id, channel_id, agent_id };
     const messageEventData = buildMessageCreatedEventData(eventData, { channelName: result.channel, fromName: result.author });

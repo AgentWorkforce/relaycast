@@ -2,6 +2,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import type { AddressInfo } from 'node:net';
 import WebSocket from 'ws';
 import { startServer, type RunningServer } from '../entrypoints/node.js';
+import type { EngineObservation } from '../ports/telemetry.js';
 
 /**
  * Regression guard for the self-host WebSocket upgrade handler in
@@ -18,6 +19,7 @@ describe('node control WS upgrade auth (self-host)', () => {
   let running: RunningServer;
   let base: string;
   let wsBase: string;
+  const observations: EngineObservation[] = [];
 
   beforeAll(async () => {
     running = startServer({
@@ -25,6 +27,7 @@ describe('node control WS upgrade auth (self-host)', () => {
       port: 0,
       migrate: true,
       config: { environment: 'test' },
+      telemetry: { capture: (event) => { observations.push(event); }, captureException() {} },
     });
     const addr = running.server.address() as AddressInfo;
     base = `http://127.0.0.1:${addr.port}`;
@@ -121,5 +124,36 @@ describe('node control WS upgrade auth (self-host)', () => {
   it('rejects a missing or malformed token (401)', async () => {
     expect(await tryUpgrade({})).toBe(401);
     expect(await tryUpgrade({ authorization: 'Bearer not_a_node_token' })).toBe(401);
+  });
+
+  it('reports request.authenticated for each WebSocket connect, with the origin', async () => {
+    const ws = await api('/v1/workspaces', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ name: 'ws-observed' }),
+    });
+    const workspaceId = ws.body.data.workspace_id as string;
+    const workspaceKey = ws.body.data.api_key as string;
+    const token = await enrollNode(workspaceKey, 'observed-node');
+    const observer = await api('/v1/observer-tokens', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', authorization: `Bearer ${workspaceKey}` },
+      body: JSON.stringify({ name: 'stream', scopes: ['stream:read'] }),
+    });
+    expect(observer.status).toBe(201);
+    observations.length = 0;
+
+    const origin = { 'x-relaycast-origin-client': 'observed-client', 'x-relaycast-origin-version': '1.2.3' };
+    expect(await tryUpgrade({ ...origin, authorization: `Bearer ${token}` })).toBe(101);
+    expect(await tryUpgrade(origin, `?token=${observer.body.data.token}`, '/v1/ws')).toBe(101);
+
+    const authenticated = observations.filter((event) => event.kind === 'request.authenticated');
+    expect(authenticated.map((event) => [event.workspaceId, event.facts])).toEqual([
+      [workspaceId, { credential_family: 'legacy', credential_kind: 'node' }],
+      [workspaceId, { credential_family: 'legacy', credential_kind: 'observer' }],
+    ]);
+    for (const event of authenticated) {
+      expect(event.origin).toMatchObject({ client: 'observed-client', version: '1.2.3' });
+    }
   });
 });

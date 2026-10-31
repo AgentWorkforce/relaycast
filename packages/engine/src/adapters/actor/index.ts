@@ -20,6 +20,10 @@ import {
 import { A2A_EGRESS_RETRY_WINDOW_MS, sweepPendingA2aEgress } from '../../engine/a2aEgress.js';
 import { reapExpiredWorkspaces } from '../../engine/workspace.js';
 import { createActorEngineDb, type ActorDatabase, type ActorSql } from './database.js';
+import { ActorCredentialTag } from './credential-tag.js';
+import { fixedCredentialTagger } from '../../auth/credentialTags.js';
+import { restrictToArCredentials } from '../../auth/credentials.js';
+import { isArWorkspaceId } from '@relaycast/types';
 import { applyActorMigrations } from './migrations.js';
 import { ActorKeyValueStore, ensureActorKvTable } from './kv.js';
 import { ActorEventQueue } from './event-queue.js';
@@ -66,10 +70,11 @@ export interface ActorRuntimeOptions {
   blobDeleteBudgetMs?: number;
   /**
    * Engine config. The runtime sets `workspaceId` (the actor id),
-   * `credentialFormat: 'self_routing'` (a gateway routes by credential) and
-   * the outbound transports.
+   * `credentialFormat: 'ar'` with the tag the gateway handed {@link
+   * ActorRuntime.create} (a gateway routes by credential), and the outbound
+   * transports.
    */
-  config?: Omit<EngineConfig, 'workspaceId' | 'credentialFormat' | 'outboundWebhookFetch' | 'ephemeralEventFetch'>;
+  config?: Omit<EngineConfig, 'workspaceId' | 'credentialFormat' | 'credentialTagger' | 'outboundWebhookFetch' | 'ephemeralEventFetch'>;
   auth?: AuthProvider;
   telemetry?: TelemetrySink;
 }
@@ -84,6 +89,13 @@ export interface ActorRuntime {
    * request goes on, as on the Node adapter.
    */
   handle(request: ActorHttpRequest): Promise<ActorHttpResponse>;
+  /**
+   * Create this actor's workspace (`POST /v1/workspaces`) inside an actor
+   * call. `credentialTag` is the routing tag the gateway signed for the
+   * workspace id (`createCredentialTagSigner(keyring).tag(id)`); the actor
+   * keeps it and every `ar_` credential it mints carries it.
+   */
+  create(request: ActorHttpRequest, credentialTag: string): Promise<ActorHttpResponse>;
   /**
    * Run maintenance from the actor alarm: deliver the webhook outbox and
    * queued ephemeral events, redrive node deliveries and A2A egress, delete
@@ -107,9 +119,9 @@ export function createActorRuntime(options: ActorRuntimeOptions): ActorRuntime {
   if (!isActorSql(options.sql)) throw new Error('the relaycast actor adapter requires durable-actors >= 0.14.5');
   const sql = options.sql;
   const blobDeleteBudgetMs = positiveDuration('blobDeleteBudgetMs', options.blobDeleteBudgetMs, DEFAULT_BLOB_DELETE_BUDGET_MS, 1);
-  // Self-routing credentials embed the workspace id between `_` separators.
-  if (!/^[A-Za-z0-9]+$/.test(options.workspaceId)) {
-    throw new Error(`Workspace actor id ${JSON.stringify(options.workspaceId)} must be alphanumeric`);
+  // `ar_` credentials carry the workspace as a 64-bit snowflake.
+  if (!isArWorkspaceId(options.workspaceId)) {
+    throw new Error(`Workspace actor id ${JSON.stringify(options.workspaceId)} must be a 64-bit snowflake`);
   }
   let maintaining = false;
   // Write groups of the running maintenance step: how many opened, and the failures.
@@ -119,6 +131,7 @@ export function createActorRuntime(options: ActorRuntimeOptions): ActorRuntime {
   applyActorMigrations(sql);
   ensureActorKvTable(sql);
   ensureActorOutboundTable(sql);
+  const credentialTag = new ActorCredentialTag(sql);
 
   const db = createActorEngineDb(sql, {
     onGroupStart: () => { stepGroups += 1; },
@@ -196,7 +209,8 @@ export function createActorRuntime(options: ActorRuntimeOptions): ActorRuntime {
   const config: EngineConfig = {
     ...options.config,
     workspaceId: options.workspaceId,
-    credentialFormat: 'self_routing',
+    credentialFormat: 'ar',
+    credentialTagger: fixedCredentialTagger(options.workspaceId, () => credentialTag.get()),
     outboundWebhookFetch: outboundFetch,
     ephemeralEventFetch,
     retention: { messageTtlDays },
@@ -217,6 +231,8 @@ export function createActorRuntime(options: ActorRuntimeOptions): ActorRuntime {
     config,
   };
   realtime.setNodeCompletionDeps(deps);
+  // A workspace actor's deployment never issued legacy credentials.
+  restrictToArCredentials(db);
   const app = createEngine(deps);
   const runDeliveryMaintenance = createDeliveryMaintenanceRunner(deps);
 
@@ -249,6 +265,15 @@ export function createActorRuntime(options: ActorRuntimeOptions): ActorRuntime {
 
   return {
     deps,
+
+    async create(request, tag) {
+      const { pathname } = new URL(request.url);
+      if (request.method !== 'POST' || pathname !== '/v1/workspaces') {
+        throw new Error('create serves POST /v1/workspaces only');
+      }
+      credentialTag.set(tag);
+      return this.handle(request);
+    },
 
     async handle(request) {
       applyActorMigrations(sql);

@@ -13,7 +13,9 @@ export type AuthTokenKind = keyof typeof tokenKindLabel;
 export interface ParsedAuthToken {
   kind: AuthTokenKind;
   token: string;
-  /** The workspace a self-routing credential names. */
+  /** The credential's family. */
+  family: 'legacy' | 'ar';
+  /** The workspace an `ar_` credential names. */
   workspaceId?: string;
 }
 
@@ -21,9 +23,9 @@ export interface ParsedAuthToken {
 export function parseAuthToken(token: string): ParsedAuthToken | undefined {
   const parsed = parseCredential(token);
   if (!parsed || parsed.kind === 'webhook') return undefined;
-  return parsed.family === 'self_routing'
-    ? { kind: parsed.kind, token, workspaceId: parsed.workspaceId }
-    : { kind: parsed.kind, token };
+  return parsed.family === 'ar'
+    ? { kind: parsed.kind, token, family: 'ar', workspaceId: parsed.workspaceId }
+    : { kind: parsed.kind, token, family: 'legacy' };
 }
 
 export function getAuthTokenKind(token: string): AuthTokenKind | undefined {

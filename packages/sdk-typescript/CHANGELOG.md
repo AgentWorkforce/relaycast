@@ -7,7 +7,11 @@ See the [root changelog](../../CHANGELOG.md) for cross-package release highlight
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [Unreleased - Minor]
+
+### Added
+
+- `relay.credentials.upgrade(credential?)`: exchange a legacy credential (this client's key, or the one given) for the `ar_` credential of the same principal through `POST /v1/credentials/upgrade`; returns `{ credential, kind, legacyExpiresAt }`.
 
 ## [12.2.0] - 2026-10-29
 

@@ -2,6 +2,10 @@ import Database from 'better-sqlite3';
 import { createActorRuntime, type ActorRuntime, type ActorRuntimeOptions } from '../index.js';
 import { SQLITE_CONSTRAINT_CODES, type ActorSql, type SqliteValue } from '../database.js';
 import type { ActorHttpRequest, ActorHttpResponse } from '../http.js';
+import { createCredentialTagSigner } from '../../../auth/credentialTags.js';
+
+/** The keyring the fake gateway signs workspace tags with. */
+export const TEST_CREDENTIAL_TAGS = createCredentialTagSigner({ current: 'a', keys: { a: 'actor-test-tag-secret' } });
 
 const RUNTIME_OWNED = /^\s*(BEGIN|COMMIT|END|ROLLBACK|SAVEPOINT|RELEASE|ATTACH|DETACH|VACUUM)\b/i;
 const ALLOWED_PRAGMA = /^\s*PRAGMA\s+(table_info|table_xinfo|index_info|index_xinfo|index_list|foreign_key_list|foreign_key_check|integrity_check|quick_check|user_version)\b/i;
@@ -121,8 +125,16 @@ export class FakeWorkspaceActor {
     });
   }
 
-  handle(request: ActorHttpRequest): Promise<ActorHttpResponse> {
+  /**
+   * One actor call, routed as the example gateway does: `POST /v1/workspaces`
+   * goes to `create` with the tag the gateway's keyring signs for this id.
+   */
+  async handle(request: ActorHttpRequest): Promise<ActorHttpResponse> {
     this.calls += 1;
+    if (request.method === 'POST' && new URL(request.url).pathname === '/v1/workspaces') {
+      const tag = await TEST_CREDENTIAL_TAGS.tag(this.id);
+      return this.sql.atomic(() => this.runtime.create(request, tag));
+    }
     return this.sql.atomic(() => this.runtime.handle(request));
   }
 

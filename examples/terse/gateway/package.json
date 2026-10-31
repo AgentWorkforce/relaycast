@@ -16,6 +16,7 @@
     "terse-sdk": "0.14.8"
   },
   "devDependencies": {
+    "@relaycast/types": "link:../../../packages/types",
     "@types/bun": "^1.4.4",
     "typescript": "~5.9.3"
   }

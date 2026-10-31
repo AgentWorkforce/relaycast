@@ -1,3 +1,5 @@
+import { isArWorkspaceId, parseCredential } from '@relaycast/types';
+import { AR_WORKSPACE_ID_REQUIRED, acceptsOnlyAr, credentialFormat } from '../auth/credentials.js';
 import { Hono } from 'hono';
 import { createMiddleware } from 'hono/factory';
 import { z } from 'zod';
@@ -106,9 +108,10 @@ const pushKeySchema = z.object({
   // the cloud control plane mints base64url(32 bytes), so `-`/`_` are allowed.
   // Not trimmed: the stored hash must match the exact bearer callers send,
   // so surrounding whitespace is refused by the pattern instead.
-  api_key: z.string().regex(
-    WORKSPACE_KEY_PATTERN,
-    'api_key must be an rk_live_ workspace key (rk_live_ followed by 32-256 characters of [A-Za-z0-9_-])',
+  // Or an `ar_ws_` workspace key naming this workspace (checked below).
+  api_key: z.string().refine(
+    (key) => WORKSPACE_KEY_PATTERN.test(key) || parseCredential(key)?.kind === 'workspace' && parseCredential(key)?.family === 'ar',
+    'api_key must be an rk_live_ workspace key (rk_live_ followed by 32-256 characters of [A-Za-z0-9_-]) or an ar_ws_ workspace key',
   ).optional(),
   // Accepted for wire compatibility with the hosted gateway; the self-host
   // engine has no plan entitlements, so the value is validated and ignored.
@@ -133,10 +136,25 @@ internalRoutes.post('/workspaces/:id/api-key', async (c) => {
     if (!WORKSPACE_ID_PATTERN.test(workspaceId)) {
       return jsonError(c, 'invalid_request', 'Invalid workspace id', 400);
     }
+    // A deployment that mints ar_ credentials carries the workspace in each
+    // one as a 64-bit snowflake, so it registers no other ids.
+    if (credentialFormat(c.get('db')) === 'ar' && !isArWorkspaceId(workspaceId)) {
+      return jsonError(c, 'invalid_request', AR_WORKSPACE_ID_REQUIRED, 400);
+    }
     const parsed = await parseOptionalJsonBody(c, pushKeySchema, (result) =>
       result.error.issues[0]?.message ?? 'Invalid key push body');
     if (!parsed.ok) return parsed.response;
     const body = parsed.data;
+    if (body.api_key !== undefined) {
+      const key = parseCredential(body.api_key);
+      if (key?.family === 'ar' && key.workspaceId !== workspaceId) {
+        return jsonError(c, 'invalid_request', 'api_key names another workspace', 400);
+      }
+      // A deployment that accepts only ar_ credentials never holds a legacy key.
+      if (key?.family !== 'ar' && acceptsOnlyAr(c.get('db'))) {
+        return jsonError(c, 'invalid_request', 'api_key must be an ar_ws_ workspace key on this deployment', 400);
+      }
+    }
     const result = await pushWorkspaceKey(c.get('db'), workspaceId, {
       ...(body.api_key === undefined ? {} : { apiKey: body.api_key }),
       ...(body.key_generation === undefined ? {} : { keyGeneration: body.key_generation }),

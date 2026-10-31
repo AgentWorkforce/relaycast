@@ -2,8 +2,8 @@ import { and, eq, exists, gt, lt, ne, notExists, or, sql, type SQL } from 'drizz
 import { alias } from 'drizzle-orm/sqlite-core';
 import type { getDb } from '../db/index.js';
 import { channels, workspaces } from '../db/schema.js';
-import { randomHex, sha256Hex } from '../lib/crypto.js';
-import { credentialFormat, issueCredential, selfRoutingWorkspaceIdOk } from '../auth/credentials.js';
+import { sha256Hex } from '../lib/crypto.js';
+import { issueCredential } from '../auth/credentials.js';
 import { codedError } from '../lib/httpError.js';
 import { runAtomicWrites } from '../ports/database.js';
 import { generateId } from './snowflake.js';
@@ -160,14 +160,11 @@ function isUniqueConstraintError(err: unknown): boolean {
 }
 
 /**
- * A server-minted key in the deployment's credential format. The admin API
- * accepts workspace ids (`[A-Za-z0-9_-]`) that a self-routing credential
- * cannot embed; those keep a live-format key, which every deployment accepts.
+ * A server-minted key in the deployment's credential family. A deployment
+ * that mints `ar_` credentials admits only snowflake workspace ids (the route
+ * checks before writing; `issueCredential` refuses as the backstop).
  */
-function mintWorkspaceKey(db: Db, workspaceId: string): string {
-  if (credentialFormat(db) === 'self_routing' && !selfRoutingWorkspaceIdOk(workspaceId)) {
-    return `rk_live_${randomHex(16)}`;
-  }
+function mintWorkspaceKey(db: Db, workspaceId: string): Promise<string> {
   return issueCredential(db, 'workspace', workspaceId);
 }
 
@@ -258,7 +255,7 @@ export async function pushWorkspaceKey(
 ): Promise<PushWorkspaceKeyResult> {
   assertInternalWorkspaceWritable(db, workspaceId);
   const minted = input.apiKey === undefined;
-  const apiKey = input.apiKey ?? mintWorkspaceKey(db, workspaceId);
+  const apiKey = input.apiKey ?? await mintWorkspaceKey(db, workspaceId);
   const apiKeyHash = await sha256Hex(apiKey);
   const { graceMs } = input;
   let keyGeneration = input.keyGeneration;

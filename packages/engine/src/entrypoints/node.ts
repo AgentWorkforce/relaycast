@@ -11,7 +11,9 @@ import type { AppEnv } from '../env.js';
 import type { EngineConfig } from '../ports/index.js';
 import type { AuthProvider } from '../ports/auth.js';
 import type { AdmissionHooks } from '../ports/admission.js';
-import type { TelemetrySink } from '../ports/telemetry.js';
+import { safeTelemetrySink, type TelemetrySink } from '../ports/telemetry.js';
+import { NoopTelemetrySink } from '../providers/noop-telemetry.js';
+import { observeAuthenticatedCredential } from '../lib/credentialNotice.js';
 import {
   createNodeRuntime,
   FILE_ROUTE_PREFIX,
@@ -26,6 +28,9 @@ import {
   missingWsToken,
   queryOrBearerToken,
 } from '../engine/wsAuth.js';
+
+export { credentialConfigFromEnv, type CredentialEnvConfig } from '../config/credentialEnv.js';
+export { ConfigError } from '../bin/secretEnv.js';
 
 export interface StartServerOptions {
   dbPath: string;
@@ -55,6 +60,16 @@ function toEngineSocket(ws: WsSocket): EngineSocket {
     send: (data) => ws.send(data),
     close: (code, reason) => ws.close(code, reason),
   };
+}
+
+/** A Fetch `Headers` view of a Node request's headers. */
+function requestHeaders(req: IncomingMessage): Headers {
+  const headers = new Headers();
+  for (const [name, value] of Object.entries(req.headers)) {
+    if (value === undefined) continue;
+    for (const item of Array.isArray(value) ? value : [value]) headers.append(name, item);
+  }
+  return headers;
 }
 
 function rejectUpgrade(socket: { write: (s: string) => void; destroy: () => void }, status: number, message: string): void {
@@ -114,6 +129,7 @@ export function startServer(options: StartServerOptions): RunningServer {
   const wss = new WebSocketServer({ noServer: true });
   const { auth, db } = runtime.deps;
   const wsAuthDeps = { auth, db };
+  const telemetry = safeTelemetrySink(runtime.deps.telemetry ?? new NoopTelemetrySink());
 
   (server as unknown as Server).on(
     'upgrade',
@@ -135,6 +151,7 @@ export function startServer(options: StartServerOptions): RunningServer {
         return;
       }
 
+      const observed = () => new Request(url, { headers: requestHeaders(req) });
       void (async () => {
         if (url.pathname === '/v1/node/ws') {
           const authResult = await authenticateNodeWs(wsAuthDeps, token);
@@ -142,6 +159,7 @@ export function startServer(options: StartServerOptions): RunningServer {
             rejectUpgrade(socket, authResult.status, authResult.upgradeMessage);
             return;
           }
+          observeAuthenticatedCredential(telemetry, observed(), token, authResult.node.workspaceId);
           wss.handleUpgrade(req, socket, head, (ws) => {
             const handle = runtime.realtime.attachNodeSocket(
               authResult.node.workspaceId,
@@ -159,6 +177,7 @@ export function startServer(options: StartServerOptions): RunningServer {
           rejectUpgrade(socket, authResult.status, authResult.upgradeMessage);
           return;
         }
+        observeAuthenticatedCredential(telemetry, observed(), token, authResult.workspace.id);
 
         wss.handleUpgrade(req, socket, head, (ws) => {
           const handle = runtime.realtime.attachWorkspaceSocket(

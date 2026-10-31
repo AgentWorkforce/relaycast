@@ -270,7 +270,7 @@ export async function registerAgent(
   }
   const agentId = generateId();
   const directMachineId = data.directMachinePrefix ? `${data.directMachinePrefix}-${agentId}` : null;
-  const token = issueCredential(db, 'agent', workspaceId);
+  const token = await issueCredential(db, 'agent', workspaceId);
   const tokenHash = await sha256Hex(token);
   const directNodeId = directNodeIdForAgent(agentId);
   const directNodeTokenHash = await sha256Hex(`implicit_direct:${workspaceId}:${agentId}:${randomHex(16)}`);

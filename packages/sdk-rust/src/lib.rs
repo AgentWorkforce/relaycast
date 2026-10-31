@@ -270,6 +270,7 @@ pub use types::{
     ThreadReplyRequest,
     ThreadResponse,
     TokenRotateResponse,
+    CredentialUpgradeResponse,
     RecoverAgentRequest,
     TakeOverAgentRequest,
     RevokeAgentTokenRequest,
