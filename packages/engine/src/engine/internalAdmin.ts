@@ -2,8 +2,8 @@ import { and, eq, exists, gt, lt, ne, notExists, or, sql, type SQL } from 'drizz
 import { alias } from 'drizzle-orm/sqlite-core';
 import type { getDb } from '../db/index.js';
 import { channels, workspaces } from '../db/schema.js';
-import { sha256Hex } from '../lib/crypto.js';
-import { issueCredential } from '../auth/credentials.js';
+import { randomHex, sha256Hex } from '../lib/crypto.js';
+import { credentialFormat, issueCredential, selfRoutingWorkspaceIdOk } from '../auth/credentials.js';
 import { codedError } from '../lib/httpError.js';
 import { runAtomicWrites } from '../ports/database.js';
 import { generateId } from './snowflake.js';
@@ -159,6 +159,18 @@ function isUniqueConstraintError(err: unknown): boolean {
   return false;
 }
 
+/**
+ * A server-minted key in the deployment's credential format. The admin API
+ * accepts workspace ids (`[A-Za-z0-9_-]`) that a self-routing credential
+ * cannot embed; those keep a live-format key, which every deployment accepts.
+ */
+function mintWorkspaceKey(db: Db, workspaceId: string): string {
+  if (credentialFormat(db) === 'self_routing' && !selfRoutingWorkspaceIdOk(workspaceId)) {
+    return `rk_live_${randomHex(16)}`;
+  }
+  return issueCredential(db, 'workspace', workspaceId);
+}
+
 /** The create batch's ownership guard tripped (see pushWorkspaceKey). */
 function isKeyGuardViolation(err: unknown): boolean {
   const seen = new Set<unknown>();
@@ -246,8 +258,7 @@ export async function pushWorkspaceKey(
 ): Promise<PushWorkspaceKeyResult> {
   assertInternalWorkspaceWritable(db, workspaceId);
   const minted = input.apiKey === undefined;
-  // Minted keys follow the deployment's credential format (live or self-routing).
-  const apiKey = input.apiKey ?? issueCredential(db, 'workspace', workspaceId);
+  const apiKey = input.apiKey ?? mintWorkspaceKey(db, workspaceId);
   const apiKeyHash = await sha256Hex(apiKey);
   const { graceMs } = input;
   let keyGeneration = input.keyGeneration;

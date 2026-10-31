@@ -240,6 +240,17 @@ describe('internal admin API', () => {
       expect(rotated.api_key.startsWith(`relaycast_ws_${ws.workspace_id}_`)).toBe(true);
       expect((await readWorkspace(rotated.api_key)).status).toBe(200);
       expect((await readWorkspace(ws.api_key)).status).toBe(401);
+
+      // An admin-accepted id a self-routing credential cannot embed keeps a
+      // live-format key instead of failing the rotation.
+      const pushed = `rk_${'live'}_cloudminted_b64url-00000000000000aa`;
+      expect((await internal('/workspaces/cloud-ws-sr/api-key', { method: 'POST', body: { api_key: pushed, key_generation: 1 } })).status).toBe(201);
+      const fallback = await internal('/workspaces/cloud-ws-sr/api-key', { method: 'POST', body: {} });
+      expect(fallback.status).toBe(200);
+      const fallbackKey = (await data<{ api_key: string }>(fallback)).api_key;
+      expect(fallbackKey.startsWith('rk_live_')).toBe(true);
+      expect((await readWorkspace(fallbackKey)).status).toBe(200);
+      expect((await internal('/workspaces/missing-sr/api-key', { method: 'POST', body: {} })).status).toBe(404);
     });
 
     it('server-minted rotation of an unknown workspace is 404', async () => {

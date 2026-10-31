@@ -57,6 +57,11 @@ export function credentialShape(kind: CredentialKind, format: CredentialFormat):
     : `${LIVE_CREDENTIAL_PREFIXES[kind]}...`;
 }
 
+/** Whether `workspaceId` can be embedded in a self-routing credential. */
+export function selfRoutingWorkspaceIdOk(workspaceId: string): boolean {
+  return WORKSPACE_ID_PATTERN.test(workspaceId);
+}
+
 function assertWorkspaceId(workspaceId: string): void {
   if (!WORKSPACE_ID_PATTERN.test(workspaceId)) {
     throw new Error(`Workspace id ${JSON.stringify(workspaceId)} cannot be embedded in a self-routing credential`);
