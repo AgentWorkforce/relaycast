@@ -320,6 +320,8 @@ export async function triggerWebhook(
   return {
     _deliveries: outcomes.deliveries,
     _delivery_rejections: outcomes.rejections,
+    /** Whether the bearer token authenticated the call (the webhook requires one). */
+    _token_verified: webhook.tokenHash !== null,
     message_id: message.id,
     agent_id: message.agentId,
     webhook_id: webhook.id,

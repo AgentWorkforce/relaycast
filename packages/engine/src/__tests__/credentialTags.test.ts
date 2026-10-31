@@ -52,5 +52,9 @@ describe('credential tags', () => {
     expect(() => parseCredentialKeyring(JSON.stringify({ current: 'c', keys: { a: SECRET.a } }))).toThrow(/not in the keyring/);
     expect(() => parseCredentialKeyring(JSON.stringify({ current: 'A', keys: { A: SECRET.a } }))).toThrow(/one letter/);
     expect(() => parseCredentialKeyring(JSON.stringify({ current: 'a', keys: { a: 'short' } }))).toThrow(/16 characters/);
+    // The signer holds the same line for a keyring built in code.
+    expect(() => createCredentialTagSigner({ current: 'a', keys: { a: 'short' } })).toThrow(/16 characters/);
+    expect(() => createCredentialTagSigner({ current: 'b', keys: { a: SECRET.a } })).toThrow(/not in the keyring/);
+    expect(() => createCredentialTagSigner({ current: 'A', keys: { A: SECRET.a } })).toThrow(/one letter/);
   });
 });

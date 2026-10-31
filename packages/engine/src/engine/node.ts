@@ -451,7 +451,8 @@ export async function createNodeToken(
     expectedTokenHash?: string;
     directAgentId?: string;
     rotationRecovery?: {
-      replacementToken: string;
+      /** The deterministic replacement, under each tag the deployment knows (current first). */
+      replacementTokens: readonly string[];
       idempotencyKeyHash: string;
       requestDigest: string;
     };
@@ -459,7 +460,7 @@ export async function createNodeToken(
     admitRegistration?: RegistrationAdmission;
   } = {},
 ) {
-  const token = authorization.rotationRecovery?.replacementToken ?? await issueCredential(db, 'node', workspaceId);
+  const token = authorization.rotationRecovery?.replacementTokens[0] ?? await issueCredential(db, 'node', workspaceId);
   const tokenHash = await sha256Hex(token);
   const name = data.name.startsWith('#') ? data.name.slice(1) : data.name;
   // Reject names that are empty or still #-prefixed after normalization: an
@@ -530,16 +531,26 @@ export async function createNodeToken(
       && existing.id === directNodeIdForAgent(authorization.directAgentId)
       && existing.role === 'direct';
     const recovery = authorization.rotationRecovery;
+    // A replay returns the replacement the first attempt committed, whichever
+    // tag it carries; a new rotation mints under the current one.
+    const replacements = recovery
+      ? await Promise.all(recovery.replacementTokens.map(async (replacement) => ({ token: replacement, hash: await sha256Hex(replacement) })))
+      : [];
+    /** The replacement token a row committed by this keyed rotation holds, if it is one. */
+    const replayedToken = (candidate: NodeRow): string | undefined => {
+      const committed = replacements.find((replacement) => replacement.hash === candidate.tokenHash);
+      return committed && isIdempotentRotationReplay(candidate) ? committed.token : undefined;
+    };
     const isIdempotentRotationReplay = (candidate: NodeRow) => hasPresentedTokenProof
       && recovery !== undefined
-      && candidate.tokenHash === tokenHash
       && candidate.previousTokenHash === authorization.expectedTokenHash
       && candidate.rotationIdempotencyKeyHash === recovery.idempotencyKeyHash
       && candidate.rotationRequestDigest === recovery.requestDigest
       && candidate.previousTokenExpiresAt !== null
       && candidate.previousTokenExpiresAt.getTime() > now.getTime();
-    if (isIdempotentRotationReplay(existing)) {
-      return { ...publicNode(existing), token };
+    const replayed = replayedToken(existing);
+    if (replayed) {
+      return { ...publicNode(existing), token: replayed };
     }
     if (!hasPresentedTokenProof && !authorizedDirectNode) {
       throw codedError(
@@ -602,8 +613,9 @@ export async function createNodeToken(
       // either update runs. If the other request committed this exact keyed
       // rotation, recover its result instead of returning a spurious conflict.
       const winner = recovery ? await getNodeById(db, workspaceId, existing.id) : null;
-      if (winner && isIdempotentRotationReplay(winner)) {
-        return { ...publicNode(winner), token };
+      const replayedByWinner = winner ? replayedToken(winner) : undefined;
+      if (winner && replayedByWinner) {
+        return { ...publicNode(winner), token: replayedByWinner };
       }
       throw codedError(
         'Node token changed before enrollment completed; retry with the current node token',

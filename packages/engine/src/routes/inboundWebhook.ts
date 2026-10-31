@@ -160,8 +160,9 @@ inboundWebhookRoutes.post('/hooks/:webhookId', async (c) => {
     if (!result) {
       return jsonNotFound(c, 'webhook_not_found', 'Webhook not found or inactive');
     }
-    if (token) noteAuthenticatedCredential(c, token, result.workspace_id);
-    const { workspace_id, channel_id, agent_id, _deliveries, _delivery_rejections, ...responseData } = result;
+    // Only a token the webhook required and verified authenticated this call.
+    if (token && result._token_verified) noteAuthenticatedCredential(c, token, result.workspace_id);
+    const { workspace_id, channel_id, agent_id, _deliveries, _delivery_rejections, _token_verified, ...responseData } = result;
 
     const eventData = { ...responseData, id: responseData.message_id, channel_id, agent_id };
     const messageEventData = buildMessageCreatedEventData(eventData, { channelName: result.channel, fromName: result.author });

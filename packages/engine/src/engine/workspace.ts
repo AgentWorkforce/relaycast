@@ -1,4 +1,4 @@
-import { WorkspaceMetadataSchema } from '@relaycast/types';
+import { WorkspaceMetadataSchema, isArWorkspaceId } from '@relaycast/types';
 import { and, asc, eq, gt, inArray, isNull, like, lte, or, sql } from 'drizzle-orm';
 import type { getDb } from '../db/index.js';
 import { workspaces, channels, fileCleanupQueue, workspaceEvents, workspaceCreateIdempotency } from '../db/schema.js';
@@ -198,7 +198,8 @@ export function deriveBootstrapWorkspaceApiKey(
  * the deployment's tagger knows for the workspace.
  */
 async function workspaceKeyFamilies(db: object, format: CredentialFormat, workspaceId: string): Promise<WorkspaceKeyFamily[]> {
-  const tagger = credentialTagger(db);
+  // A workspace id that is not a snowflake cannot carry an ar_ key.
+  const tagger = isArWorkspaceId(workspaceId) ? credentialTagger(db) : undefined;
   const ar: WorkspaceKeyFamily[] = tagger ? (await tagger.tags(workspaceId)).map((tag) => ({ format: 'ar', tag })) : [];
   return format === 'ar' ? [...ar, { format: 'legacy' }] : [{ format: 'legacy' }, ...ar];
 }

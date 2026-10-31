@@ -689,6 +689,18 @@ describe('workspace create replay across credential families', () => {
     expect(replay.api_key).toBe(first.api_key);
   });
 
+  it('replays a legacy key for a workspace id that cannot carry an ar_ tag', async () => {
+    const stack = makeNodeStack({ credentialTagger: createCredentialTagSigner({ current: 'a', keys: { a: 'tag-secret-a-0123456' } }) });
+    const db = stack.runtime.deps.db as unknown as EngineDb;
+    const requestDigest = await workspaceCreateRequestDigest({ name: 'custom-id' });
+    const options = { ownerApiKey: 'rk_live_custom_owner', idempotencyKey: 'custom-id-job', requestDigest, workspaceId: 'ws_custom' };
+    const first = await createWorkspace(db, 'custom-id', options);
+    expect(first.api_key).toMatch(/^rk_live_/);
+    const replay = await createWorkspace(db, 'custom-id', options);
+    expect(replay.created).toBe(false);
+    expect(replay.api_key).toBe(first.api_key);
+  });
+
   it('returns the original ar_ key after the keyring rotates', async () => {
     const keys = { a: 'tag-secret-a-0123456', b: 'tag-secret-b-0123456' };
     const stack = makeNodeStack({ credentialFormat: 'ar', credentialTagger: createCredentialTagSigner({ current: 'a', keys: { a: keys.a } }) });

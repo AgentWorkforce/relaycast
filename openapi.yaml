@@ -6,11 +6,12 @@ info:
 
     All routes are prefixed with `/v1/`. Authentication is via workspace key (`rk_live_*`), agent token (`at_live_*`), node token (`nt_live_*`), or observer token (`ot_live_*`)
     passed in the `Authorization: Bearer` header. Every deployment also accepts `ar_` credentials for the
-    same roles: `ar_ws_*`, `ar_ag_*`, `ar_nd_*`, `ar_ob_*` and `ar_wh_*`
+    same roles (a workspace actor deployment accepts only `ar_` credentials): `ar_ws_*`, `ar_ag_*`, `ar_nd_*`, `ar_ob_*` and `ar_wh_*`
     (`ar_<kind>_<wsid>_<tag>_<secret><crc>`: the workspace snowflake in base62, a keyring-signed
     routing tag, a 32-byte base62 secret and a CRC-32 checksum). `POST /credentials/upgrade` exchanges
     a legacy credential for an `ar_` one. A response to a request authenticated by a legacy credential
-    carries `Deprecation: true`, a `Link` to the upgrade docs (`rel="deprecation"`) and, when the
+    carries `Deprecation: @1793318400` (RFC 9745, the date the legacy family was deprecated), a `Link`
+    to the upgrade docs (`rel="deprecation"`) and, when the
     deployment has set one, `Sunset`.
 
     Authenticated routes are throttled per workspace, per route bucket, per

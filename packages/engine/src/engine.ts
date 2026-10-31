@@ -1,4 +1,5 @@
 import { configureNodeLiveness } from './engine/nodeLiveness.js';
+import { isArWorkspaceId } from '@relaycast/types';
 import { acceptsOnlyAr, configureCredentials } from './auth/credentials.js';
 import { legacyCredentialHeaders, noteAuthenticatedCredential } from './lib/credentialNotice.js';
 import { safeTelemetrySink } from './ports/telemetry.js';
@@ -71,6 +72,9 @@ import { routingRoutes } from './routes/routing.js';
  */
 export function createEngine(deps: EngineDeps): Hono<AppEnv> {
   if (deps.nodeLiveness) configureNodeLiveness(deps.db, deps.nodeLiveness);
+  if (deps.config?.credentialFormat === 'ar' && deps.config.workspaceId !== undefined && !isArWorkspaceId(deps.config.workspaceId)) {
+    throw new Error('EngineConfig.workspaceId must be a 64-bit snowflake to mint ar_ credentials');
+  }
   configureCredentials(deps.db, {
     format: deps.config?.credentialFormat ?? 'legacy',
     tagger: deps.config?.credentialTagger,

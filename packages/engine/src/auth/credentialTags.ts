@@ -1,5 +1,8 @@
 import { base62Encode, encodeArWorkspaceId, parseCredential } from '@relaycast/types';
 
+/** Shortest key secret a keyring accepts. */
+const MIN_SECRET_LENGTH = 16;
+
 /**
  * The keys `ar_` credential tags are signed with: one secret per version letter
  * (`a`-`z`) and the version that signs new tags. Credentials outlive key
@@ -27,7 +30,9 @@ export function parseCredentialKeyring(json: string): CredentialKeyring {
   const entries = Object.entries(keys as Record<string, unknown>);
   for (const [version, secret] of entries) {
     if (!/^[a-z]$/.test(version)) throw new Error(`Credential key version ${JSON.stringify(version)} is not one letter a-z`);
-    if (typeof secret !== 'string' || secret.length < 16) throw new Error(`Credential key ${version} needs a secret of at least 16 characters`);
+    if (typeof secret !== 'string' || secret.length < MIN_SECRET_LENGTH) {
+      throw new Error(`Credential key ${version} needs a secret of at least ${MIN_SECRET_LENGTH} characters`);
+    }
   }
   if (!Object.hasOwn(keys, current)) throw new Error(`The current credential key version ${JSON.stringify(current)} is not in the keyring`);
   return { current, keys: Object.fromEntries(entries) as Record<string, string> };
@@ -67,8 +72,14 @@ const encoder = new TextEncoder();
  */
 export function createCredentialTagSigner(keyring: CredentialKeyring): CredentialTagSigner {
   const keys = new Map<string, Promise<CryptoKey>>();
+  if (!keyring || typeof keyring.keys !== 'object' || keyring.keys === null || Array.isArray(keyring.keys)) {
+    throw new Error('The credential keyring is {"current": "<version>", "keys": {"<version>": "<secret>"}}');
+  }
   for (const [version, secret] of Object.entries(keyring.keys)) {
     if (!/^[a-z]$/.test(version)) throw new Error('A credential key version is one letter a-z');
+    if (typeof secret !== 'string' || secret.length < MIN_SECRET_LENGTH) {
+      throw new Error(`Credential key ${version} needs a secret of at least ${MIN_SECRET_LENGTH} characters`);
+    }
     keys.set(version, crypto.subtle.importKey('raw', encoder.encode(secret), { name: 'HMAC', hash: 'SHA-256' }, false, ['sign']));
   }
   if (!keys.has(keyring.current)) throw new Error('The current credential key version is not in the keyring');

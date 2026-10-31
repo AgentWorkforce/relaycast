@@ -7,6 +7,12 @@ import { acceptsOnlyAr } from '../auth/credentials.js';
 /** Where the legacy-credential deprecation is documented (the `Link` header on legacy responses). */
 export const LEGACY_CREDENTIAL_DOCS_URL = 'https://github.com/AgentWorkforce/relaycast#credential-upgrade';
 
+/** When the legacy credential family was deprecated: 2026-10-30T00:00:00Z. */
+export const LEGACY_CREDENTIALS_DEPRECATED_AT = new Date(Date.UTC(2026, 9, 30));
+
+/** The RFC 9745 `Deprecation` value: a structured-field Date (`@<unix seconds>`). */
+export const LEGACY_CREDENTIAL_DEPRECATION = `@${Math.floor(LEGACY_CREDENTIALS_DEPRECATED_AT.getTime() / 1000)}`;
+
 /**
  * Note the credential that authenticated this request, at authentication time
  * and whatever the request then does. It reports `request.authenticated` with
@@ -26,16 +32,17 @@ export function noteAuthenticatedCredential(c: Context<AppEnv>, token: string, w
 
 /**
  * Deprecate the final response of a request a legacy credential authenticated,
- * whatever its status: `Deprecation: true`, `Sunset` when
- * `EngineConfig.legacyCredentialSunset` is set, and a `Link` to the upgrade
- * docs. A deployment that accepts only `ar_` credentials sends none.
+ * whatever its status: `Deprecation` (RFC 9745, the date the legacy family
+ * was deprecated), `Sunset` (RFC 8594, an HTTP-date) when
+ * `EngineConfig.legacyCredentialSunset` is set, and
+ * `Link: <docs>; rel="deprecation"`. A deployment that accepts only `ar_` credentials sends none.
  */
 export const legacyCredentialHeaders: MiddlewareHandler<AppEnv> = async (c, next) => {
   await next();
   if (c.get('authenticatedCredentialFamily') !== 'legacy' || acceptsOnlyAr(c.get('db'))) return;
   const sunset = c.get('engine').config.legacyCredentialSunset;
   try {
-    c.res.headers.set('Deprecation', 'true');
+    c.res.headers.set('Deprecation', LEGACY_CREDENTIAL_DEPRECATION);
     if (sunset) c.res.headers.set('Sunset', sunset.toUTCString());
     c.res.headers.append('Link', `<${LEGACY_CREDENTIAL_DOCS_URL}>; rel="deprecation"`);
   } catch {

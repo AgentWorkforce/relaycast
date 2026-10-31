@@ -1,13 +1,14 @@
 import { describe, expect, it, vi } from 'vitest';
 import { eq } from 'drizzle-orm';
 import { encodeArCredential, parseCredential } from '@relaycast/types';
-import { agents, credentialUpgrades, workspaces } from '../../db/schema.js';
+import { agents, credentialUpgrades, nodes, webhooks, workspaces } from '../../db/schema.js';
 import { upgradeLegacyCredential } from '../../engine/credentialUpgrade.js';
 import { hmacSha256Hex, sha256Hex } from '../../lib/crypto.js';
 import { SqliteApiKeyAuthProvider } from '../../auth/index.js';
 import { createCredentialTagSigner } from '../../auth/credentialTags.js';
 import type { EngineObservation } from '../../ports/telemetry.js';
 import { createWorkspace, makeNodeStack, registerAgent, type TestStack } from './harness.js';
+import type { CredentialTagger } from '../../auth/credentialTags.js';
 
 const tagger = createCredentialTagSigner({ current: 'a', keys: { a: 'credential-tag-secret-a' } });
 const SECRET = Uint8Array.from({ length: 32 }, (_, i) => i + 3);
@@ -349,7 +350,7 @@ describe('legacy credential deprecation', () => {
     const workspace = await createWorkspace(stack.app, 'deprecation');
     const legacy = await get(stack, '/v1/agents', workspace.workspaceKey);
     expect(legacy.status).toBe(200);
-    expect(legacy.headers.get('Deprecation')).toBe('true');
+    expect(legacy.headers.get('Deprecation')).toBe('@1793318400');
     expect(legacy.headers.get('Sunset')).toBe(sunset.toUTCString());
     expect(legacy.headers.get('Link')).toContain('rel="deprecation"');
 
@@ -363,7 +364,7 @@ describe('legacy credential deprecation', () => {
 });
 
 describe('legacy deprecation on every authenticated response', () => {
-  const deprecated = (res: Response) => res.headers.get('Deprecation') === 'true' && (res.headers.get('Link') ?? '').includes('deprecation');
+  const deprecated = (res: Response) => res.headers.get('Deprecation') === '@1793318400' && (res.headers.get('Link') ?? '').includes('deprecation');
 
   it('marks a 403 for a legacy observer token missing a scope', async () => {
     const stack = makeNodeStack();
@@ -413,7 +414,7 @@ describe('owner-authenticated workspace create', () => {
       body: JSON.stringify({ name: 'child' }),
     });
     expect(res.status).toBe(201);
-    expect(res.headers.get('Deprecation')).toBe('true');
+    expect(res.headers.get('Deprecation')).toBe('@1793318400');
     expect(events.filter((event) => event.kind === 'request.authenticated')
       .map((event) => [event.facts.credential_family, event.workspaceId])).toEqual([['legacy', owner.workspaceId]]);
   });
@@ -449,5 +450,66 @@ describe('credential telemetry', () => {
     expect(authenticated[0].origin).toMatchObject({ client: '@relaycast/sdk', version: '12.3.0' });
     // The event names the authenticated agent and the credential it presented.
     expect(authenticated[0].authenticatedActor).toMatchObject({ agentId: agent.agentId, credentialHash: await sha256Hex(legacy) });
+  });
+});
+
+describe('ar_ node token rotation replay across a keyring rotation', () => {
+  it('recovers the token the first attempt committed under the earlier tag', async () => {
+    const keys = { a: 'credential-tag-secret-a', b: 'credential-tag-secret-b' };
+    let signer = createCredentialTagSigner({ current: 'a', keys: { a: keys.a } });
+    const rotating: CredentialTagger = { tag: (id) => signer.tag(id), tags: (id) => signer.tags(id) };
+    const stack = makeNodeStack({ credentialFormat: 'ar', credentialTagger: rotating });
+    const workspace = await createWorkspace(stack.app, 'node-replay');
+    const enroll = async (body: Record<string, unknown>, nodeToken?: string, idempotencyKey?: string) => {
+      const res = await stack.app.request('/v1/nodes', {
+        method: 'POST',
+        headers: {
+          'content-type': 'application/json',
+          authorization: `Bearer ${workspace.workspaceKey}`,
+          ...(nodeToken ? { 'x-relaycast-node-token': nodeToken } : {}),
+          ...(idempotencyKey ? { 'idempotency-key': idempotencyKey } : {}),
+        },
+        body: JSON.stringify(body),
+      });
+      return { status: res.status, token: ((await res.json()) as { data?: { token: string } }).data?.token };
+    };
+    const first = await enroll({ node_id: 'node_a', name: 'host' });
+    const request = { node_id: 'node_a', name: 'host', version: 'v2' };
+    const key = 'node-rotation-00000000-0000-4000-8000-00000000000a';
+    const rotated = await enroll(request, first.token, key);
+    expect(rotated.status).toBe(201);
+    expect(rotated.token).toMatch(/^ar_nd_[0-9A-Za-z]{11}_a/);
+
+    // The keyring rotates to `b` before the caller, who lost the response, retries.
+    signer = createCredentialTagSigner({ current: 'b', keys });
+    const recovered = await enroll(request, first.token, key);
+    expect(recovered).toEqual({ status: 201, token: rotated.token });
+    const rows = await stack.runtime.deps.db.select({ tokenHash: nodes.tokenHash }).from(nodes).where(eq(nodes.id, 'node_a'));
+    expect(rows).toEqual([{ tokenHash: await sha256Hex(rotated.token!) }]);
+  });
+});
+
+describe('inbound webhook credential notices', () => {
+  it('note only a bearer token the webhook verified', async () => {
+    const events: EngineObservation[] = [];
+    const stack = makeNodeStack({ telemetry: { capture: (event) => { events.push(event); }, captureException() {} } });
+    const workspace = await createWorkspace(stack.app, 'tokenless-hook');
+    const post = async (path: string, body: unknown) => ((await (await stack.app.request(path, {
+      method: 'POST',
+      headers: { authorization: `Bearer ${workspace.workspaceKey}`, 'content-type': 'application/json' },
+      body: JSON.stringify(body),
+    })).json()) as { data: Record<string, string> }).data;
+    await post('/v1/channels', { name: 'hooks' });
+    const hook = await post('/v1/webhooks', { name: 'hook', channel: 'hooks' });
+    await stack.runtime.deps.db.update(webhooks).set({ tokenHash: null }).where(eq(webhooks.id, hook.webhook_id));
+    events.length = 0;
+    const res = await stack.app.request(`/v1/hooks/${hook.webhook_id}`, {
+      method: 'POST',
+      headers: { authorization: `Bearer ${workspace.workspaceKey}`, 'content-type': 'application/json' },
+      body: JSON.stringify({ text: 'unauthenticated' }),
+    });
+    expect(res.status).toBeLessThan(300);
+    expect(res.headers.get('Deprecation')).toBeNull();
+    expect(events.filter((event) => event.kind === 'request.authenticated')).toEqual([]);
   });
 });

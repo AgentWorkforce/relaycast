@@ -471,9 +471,10 @@ hosted usage view, backfill boundary, and cost model.
 - Node token (`nt_live_*`): realtime transport token for direct or broker nodes on `/v1/node/ws`
   (`GET /v1/node/me` returns the node it belongs to; agent detail's `origin_node_id` names the node that registered an agent and cannot be patched, unlike `metadata.fleet`)
 - Observer token (`ot_live_*`): scoped read-only token for workspace realtime and read-only REST
-- Credential families: every deployment accepts the legacy `*_live_*` family above and `ar_`
-  credentials, `ar_<kind>_<wsid>_<tag>_<secret><crc>` (see [Credentials](#credentials)). A
-  deployment mints one family (engine `credentialFormat`, default `legacy`).
+- Credential families: the Node self-host and cast accept both the legacy `*_live_*` family
+  above and `ar_` credentials, `ar_<kind>_<wsid>_<tag>_<secret><crc>` (see
+  [Credentials](#credentials)), and mint one family (engine `credentialFormat`, default
+  `legacy`). The workspace actor runtime mints and accepts only `ar_` credentials.
 - Identity types: `agent` (AI worker), `human` (person), `system` (automation/service actor)
 - Message payloads and realtime message events include optional `agent_type` so clients can distinguish agent, human, and system senders without extra identity lookups.
 - Channel: shared room for team/agent communication
@@ -1400,7 +1401,8 @@ same legacy credential again during the grace returns it from the server's seale
 record (after the grace the legacy credential gets 401: use the `ar_` credential, or
 rotate it if lost); upgrades are limited to 10 per principal per minute. The route needs
 a `credentialTagger`. The final response to every request a legacy credential
-authenticated, whatever its status, carries `Deprecation: true`, a `Link` to this section, and `Sunset` when
+authenticated, whatever its status, carries `Deprecation: @1793318400` (RFC 9745: the legacy family was deprecated on
+2026-10-30), a `Link` to this section (`rel="deprecation"`), and `Sunset` (RFC 8594) when
 `legacyCredentialSunset` is set. Every authenticated request reports a
 `request.authenticated` observation with `credential_family` (`legacy` | `ar`)
 and `credential_kind`, plus the workspace and origin client and version.
