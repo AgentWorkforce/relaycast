@@ -2222,7 +2222,10 @@ paths:
                         format: date-time
                         description: When the legacy credential stops working
         '401':
-          description: Missing, malformed or invalid credential
+          description: >-
+            Missing, malformed or invalid credential. Once its grace ends, an
+            upgraded legacy credential no longer authenticates, so a retry gets
+            401: use the returned `ar_` credential, or rotate it if it was lost.
           content:
             application/json:
               schema:

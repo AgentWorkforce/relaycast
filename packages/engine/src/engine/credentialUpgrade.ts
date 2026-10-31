@@ -1,4 +1,4 @@
-import { and, eq, gt, lte, notExists, sql } from 'drizzle-orm';
+import { and, eq, gt, notExists, sql } from 'drizzle-orm';
 import type { SQLiteColumn, SQLiteTable } from 'drizzle-orm/sqlite-core';
 import { isArWorkspaceId, type CredentialKind } from '@relaycast/types';
 import { agents, credentialUpgrades, nodes, observerTokens, webhooks, workspaces } from '../db/schema.js';
@@ -184,20 +184,33 @@ export async function upgradeLegacyCredential(
   const legacyHash = await sha256Hex(legacyToken);
   const principal = PRINCIPALS[kind];
 
-  /** The live upgrade of this legacy credential, while the principal still holds its `ar_` credential. */
-  const replay = async (): Promise<CredentialUpgradeResult | undefined> => {
-    const [record] = await db.select().from(credentialUpgrades).where(and(
-      eq(credentialUpgrades.legacyHash, legacyHash),
-      gt(credentialUpgrades.expiresAt, new Date()),
-    ));
+  /**
+   * The upgrade that claimed this legacy credential, while the principal still
+   * holds its `ar_` credential. The claim, not the grace, decides: a race
+   * loser gets the winner's credential even with a zero grace.
+   */
+  const claimed = async () => {
+    const [record] = await db.select().from(credentialUpgrades).where(eq(credentialUpgrades.legacyHash, legacyHash));
     if (!record) return undefined;
     const [current] = await db.select({ hash: principal.hash }).from(principal.table).where(eq(principal.id, principalId));
     if (current?.hash !== record.arHash) throw superseded();
-    return { credential: await unseal(record.sealedCredential, legacyToken, legacyHash), kind, legacyExpiresAt: record.expiresAt };
+    return record;
   };
 
-  const replayed = await replay();
-  if (replayed) return replayed;
+  const existing = await claimed();
+  if (existing) {
+    // Once the grace ends the legacy credential no longer authenticates (the
+    // route answers 401 first); its holder uses the ar_ credential, or rotates
+    // it through a workspace key if it was lost.
+    if (existing.expiresAt.getTime() <= Date.now()) {
+      throw codedError(
+        'The legacy credential\'s grace has ended; use its ar_ credential, or rotate it if lost',
+        'credential_grace_expired',
+        401,
+      );
+    }
+    return { credential: await unseal(existing.sealedCredential, legacyToken, legacyHash), kind, legacyExpiresAt: existing.expiresAt };
+  }
   if (args.currentHash !== legacyHash) throw superseded();
 
   const credential = await mintCredential(db, 'ar', kind, workspaceId);
@@ -205,22 +218,24 @@ export async function upgradeLegacyCredential(
   const sealedCredential = await seal(credential, legacyToken, legacyHash);
   const now = new Date();
   const legacyExpiresAt = new Date(Math.floor(now.getTime() / 1000) * 1000 + args.graceSeconds * 1000);
-  // One atomic group: the grace record exists only if the hash swap matched.
-  // A rotation, or a concurrent upgrade of the same credential, that lands
-  // first leaves the principal off `arHash`, so the insert selects nothing
-  // and an existing record is never overwritten.
+  // One atomic group: the grace record (the claim) exists only if the hash
+  // swap matched. A rotation, or a concurrent upgrade of the same credential,
+  // that lands first leaves the principal off `arHash`, so the insert selects
+  // nothing and an existing claim is never overwritten.
   await runAtomicWrites(db, (w) => [
-    w.delete(credentialUpgrades)
-      .where(and(eq(credentialUpgrades.legacyHash, legacyHash), lte(credentialUpgrades.expiresAt, now))),
     swapPrincipalHash(w, kind, principalId, legacyHash, arHash),
     graceRecordAfterSwap(w, principal.table, principal.id, principal.hash, {
       legacyHash, kind, principalId, workspaceId, arHash, sealedCredential, expiresAt: legacyExpiresAt,
     }),
   ], { requireAtomic: true });
 
-  // Ours, or the concurrent upgrade that won (it sealed its credential under
-  // the same legacy credential); a rotation that won leaves no record.
-  return await replay() ?? Promise.reject(superseded());
+  const [current] = await db.select({ hash: principal.hash }).from(principal.table).where(eq(principal.id, principalId));
+  if (current?.hash === arHash) return { credential, kind, legacyExpiresAt };
+  // A concurrent upgrade of the same credential won: return its credential,
+  // sealed under the same legacy credential. A rotation that won left no claim.
+  const winner = await claimed();
+  if (!winner) throw superseded();
+  return { credential: await unseal(winner.sealedCredential, legacyToken, legacyHash), kind, legacyExpiresAt: winner.expiresAt };
 }
 
 /** The inbound webhook whose current or upgraded legacy token is `token`. */

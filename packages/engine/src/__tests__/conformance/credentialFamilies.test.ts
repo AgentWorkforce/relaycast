@@ -303,6 +303,36 @@ describe('POST /v1/credentials/upgrade', () => {
     expect((await upgrade(stack, agent.token)).status).toBe(401);
   });
 
+  it('returns the credential of a successful swap even with a zero grace', async () => {
+    const stack = makeNodeStack({ credentialTagger: tagger, legacyCredentialGraceSeconds: 0 });
+    const workspace = await createWorkspace(stack.app, 'zero-grace');
+    const agent = await registerAgent(stack.app, workspace.workspaceKey, 'alice');
+    const { credential } = await upgraded(stack, agent.token);
+    expect((await get(stack, '/v1/inbox', credential)).status).toBe(200);
+    expect((await get(stack, '/v1/inbox', agent.token)).status).toBe(401);
+    // A retry after the grace: the legacy credential no longer authenticates.
+    expect((await upgrade(stack, agent.token)).status).toBe(401);
+    expect(await stack.runtime.deps.db.select().from(credentialUpgrades)).toHaveLength(1);
+  });
+
+  it('tells a retry after the grace to use or rotate the ar_ credential', async () => {
+    const stack = makeNodeStack({ credentialTagger: tagger });
+    const workspace = await createWorkspace(stack.app, 'after-grace');
+    const agent = await registerAgent(stack.app, workspace.workspaceKey, 'alice');
+    const { credential } = await upgraded(stack, agent.token);
+    const { db } = stack.runtime.deps;
+    await db.update(credentialUpgrades).set({ expiresAt: new Date(Date.now() - 1000) });
+    expect((await upgrade(stack, agent.token)).status).toBe(401);
+    await expect(upgradeLegacyCredential(db, {
+      legacyToken: agent.token,
+      kind: 'agent',
+      principalId: agent.agentId,
+      workspaceId: workspace.workspaceId,
+      currentHash: await sha256Hex(credential),
+      graceSeconds: 60,
+    })).rejects.toMatchObject({ code: 'credential_grace_expired', status: 401 });
+  });
+
   it('is unavailable without a tagger', async () => {
     const stack = makeNodeStack();
     const workspace = await createWorkspace(stack.app, 'no-tagger');
@@ -417,5 +447,7 @@ describe('credential telemetry', () => {
         ['ar', 'workspace', workspace.workspaceId],
       ]);
     expect(authenticated[0].origin).toMatchObject({ client: '@relaycast/sdk', version: '12.3.0' });
+    // The event names the authenticated agent and the credential it presented.
+    expect(authenticated[0].authenticatedActor).toMatchObject({ agentId: agent.agentId, credentialHash: await sha256Hex(legacy) });
   });
 });
