@@ -189,9 +189,9 @@ describe('createRelayMcpServer', () => {
       .not.toContain('message.file.download');
   });
 
-  it('lists all 48 tools', async () => {
+  it('lists all 53 tools', async () => {
     const tools = await client.listTools();
-    expect(tools.tools.length).toBe(48);
+    expect(tools.tools.length).toBe(53);
     const toolNames = tools.tools.map((t) => t.name).sort();
     expect(toolNames).toEqual([
       'agent.add',
@@ -205,6 +205,11 @@ describe('createRelayMcpServer', () => {
       'channel.leave',
       'channel.list',
       'channel.set_topic',
+      'cloud.agent.kill',
+      'cloud.agent.list',
+      'cloud.agent.spawn',
+      'cloud.slack.bridge',
+      'cloud.status',
       'integration.action.complete',
       'integration.action.delete',
       'integration.action.get',
