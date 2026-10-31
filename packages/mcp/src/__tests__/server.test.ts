@@ -189,9 +189,9 @@ describe('createRelayMcpServer', () => {
       .not.toContain('message.file.download');
   });
 
-  it('lists all 48 tools', async () => {
+  it('lists all 51 tools', async () => {
     const tools = await client.listTools();
-    expect(tools.tools.length).toBe(48);
+    expect(tools.tools.length).toBe(51);
     const toolNames = tools.tools.map((t) => t.name).sort();
     expect(toolNames).toEqual([
       'agent.add',
@@ -205,6 +205,9 @@ describe('createRelayMcpServer', () => {
       'channel.leave',
       'channel.list',
       'channel.set_topic',
+      'cloud.local-mount.ensure',
+      'cloud.local-mount.status',
+      'cloud.local-mount.stop',
       'integration.action.complete',
       'integration.action.delete',
       'integration.action.get',
