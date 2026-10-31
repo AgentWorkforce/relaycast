@@ -1,4 +1,4 @@
-import type { Context } from 'hono';
+import type { Context, MiddlewareHandler } from 'hono';
 import { parseCredential } from '@relaycast/types';
 import type { AppEnv } from '../env.js';
 import { emitServerEvent } from './serverTelemetry.js';
@@ -8,25 +8,38 @@ import { acceptsOnlyAr } from '../auth/credentials.js';
 export const LEGACY_CREDENTIAL_DOCS_URL = 'https://github.com/AgentWorkforce/relaycast#credential-upgrade';
 
 /**
- * Note the credential that authenticated this request. Every authenticated
- * request reports `request.authenticated` with the credential's family and
- * kind (the observation carries the workspace and the origin client and
- * version). A response to a legacy credential is marked deprecated: `Deprecation:
- * true`, `Sunset` when `EngineConfig.legacyCredentialSunset` is set, and a
- * `Link` to the upgrade docs. Call it after `next()`, so the headers land on
- * the response the route produced.
+ * Note the credential that authenticated this request, at authentication time
+ * and whatever the request then does. It reports `request.authenticated` with
+ * the credential's family and kind (the observation carries the workspace and
+ * the origin client and version), once per request. A legacy credential marks
+ * the request so {@link legacyCredentialHeaders} deprecates its final response.
  */
 export function noteAuthenticatedCredential(c: Context<AppEnv>, token: string, workspaceId: string): void {
   const parsed = parseCredential(token);
-  if (!parsed) return;
-  if (parsed.family === 'legacy' && !acceptsOnlyAr(c.get('db'))) {
-    c.header('Deprecation', 'true');
-    const sunset = c.get('engine').config.legacyCredentialSunset;
-    if (sunset) c.header('Sunset', sunset.toUTCString());
-    c.header('Link', `<${LEGACY_CREDENTIAL_DOCS_URL}>; rel="deprecation"`, { append: true });
-  }
+  if (!parsed || c.get('authenticatedCredentialFamily')) return;
+  c.set('authenticatedCredentialFamily', parsed.family);
   emitServerEvent(c, workspaceId, 'request.authenticated', {
     credential_family: parsed.family,
     credential_kind: parsed.kind,
   });
 }
+
+/**
+ * Deprecate the final response of a request a legacy credential authenticated,
+ * whatever its status: `Deprecation: true`, `Sunset` when
+ * `EngineConfig.legacyCredentialSunset` is set, and a `Link` to the upgrade
+ * docs. A deployment that accepts only `ar_` credentials sends none.
+ */
+export const legacyCredentialHeaders: MiddlewareHandler<AppEnv> = async (c, next) => {
+  await next();
+  if (c.get('authenticatedCredentialFamily') !== 'legacy' || acceptsOnlyAr(c.get('db'))) return;
+  const sunset = c.get('engine').config.legacyCredentialSunset;
+  try {
+    c.res.headers.set('Deprecation', 'true');
+    if (sunset) c.res.headers.set('Sunset', sunset.toUTCString());
+    c.res.headers.append('Link', `<${LEGACY_CREDENTIAL_DOCS_URL}>; rel="deprecation"`);
+  } catch {
+    // A runtime's WebSocket upgrade response can have immutable headers; the
+    // connect is still reported through `request.authenticated`.
+  }
+};

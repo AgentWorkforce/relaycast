@@ -1,9 +1,9 @@
 import { describe, expect, it, vi } from 'vitest';
 import { eq } from 'drizzle-orm';
-import { encodeArCredential } from '@relaycast/types';
+import { encodeArCredential, parseCredential } from '@relaycast/types';
 import { agents, credentialUpgrades, workspaces } from '../../db/schema.js';
 import { upgradeLegacyCredential } from '../../engine/credentialUpgrade.js';
-import { sha256Hex } from '../../lib/crypto.js';
+import { hmacSha256Hex, sha256Hex } from '../../lib/crypto.js';
 import { SqliteApiKeyAuthProvider } from '../../auth/index.js';
 import { createCredentialTagSigner } from '../../auth/credentialTags.js';
 import type { EngineObservation } from '../../ports/telemetry.js';
@@ -268,6 +268,41 @@ describe('POST /v1/credentials/upgrade', () => {
     expect(await stack.runtime.deps.db.select().from(credentialUpgrades)).toEqual([]);
   });
 
+  it('issues a random ar_ credential that the legacy credential and public inputs cannot rebuild', async () => {
+    const stack = makeNodeStack({ credentialTagger: tagger });
+    const workspace = await createWorkspace(stack.app, 'not-derivable');
+    const agent = await registerAgent(stack.app, workspace.workspaceKey, 'alice');
+    const { credential } = await upgraded(stack, agent.token);
+    const { tag } = parseCredential(credential) as { tag: string };
+    // Everything an outsider holding the legacy credential knows: the token,
+    // kind, principal and workspace ids, and the tag of any ar_ credential.
+    for (const context of [
+      `relaycast:credential-upgrade:v1:agent:${agent.agentId}`,
+      `relaycast:credential-upgrade:v1:agent:${agent.agentId}:${tag}`,
+      `${agent.agentId}:${workspace.workspaceId}:${tag}`,
+    ]) {
+      const digest = await hmacSha256Hex(context, agent.token);
+      const rebuilt = encodeArCredential({
+        kind: 'agent', workspaceId: workspace.workspaceId, tag,
+        secret: Uint8Array.from(digest.match(/../g)!.map((byte) => Number.parseInt(byte, 16))),
+      });
+      expect(rebuilt).not.toBe(credential);
+      expect((await get(stack, '/v1/inbox', rebuilt)).status).toBe(401);
+    }
+    // Upgrading again still returns the issued credential, from the server's record.
+    expect((await upgraded(stack, agent.token)).credential).toBe(credential);
+  });
+
+  it('refuses to hand back an ar_ credential the principal has rotated away from', async () => {
+    const stack = makeNodeStack({ credentialTagger: tagger });
+    const workspace = await createWorkspace(stack.app, 'rotated-ar');
+    const agent = await registerAgent(stack.app, workspace.workspaceKey, 'alice');
+    const { credential } = await upgraded(stack, agent.token);
+    await setAgentToken(stack, agent.agentId, AR('agent', workspace.workspaceId));
+    expect((await get(stack, '/v1/inbox', credential)).status).toBe(401);
+    expect((await upgrade(stack, agent.token)).status).toBe(401);
+  });
+
   it('is unavailable without a tagger', async () => {
     const stack = makeNodeStack();
     const workspace = await createWorkspace(stack.app, 'no-tagger');
@@ -294,6 +329,38 @@ describe('legacy credential deprecation', () => {
     expect(ar.headers.get('Deprecation')).toBeNull();
     expect(ar.headers.get('Sunset')).toBeNull();
     expect(ar.headers.get('Link')).toBeNull();
+  });
+});
+
+describe('legacy deprecation on every authenticated response', () => {
+  const deprecated = (res: Response) => res.headers.get('Deprecation') === 'true' && (res.headers.get('Link') ?? '').includes('deprecation');
+
+  it('marks a 403 for a legacy observer token missing a scope', async () => {
+    const stack = makeNodeStack();
+    const workspace = await createWorkspace(stack.app, 'forbidden');
+    const created = await stack.app.request('/v1/observer-tokens', {
+      method: 'POST',
+      headers: { authorization: `Bearer ${workspace.workspaceKey}`, 'content-type': 'application/json' },
+      body: JSON.stringify({ name: 'stream-only', scopes: ['stream:read'] }),
+    });
+    const { data } = await created.json() as { data: { token: string } };
+    const res = await get(stack, '/v1/files', data.token);
+    expect(res.status).toBe(403);
+    expect(deprecated(res)).toBe(true);
+  });
+
+  it('marks a 429 and an unavailable upgrade for a legacy credential', async () => {
+    const stack = makeNodeStack();
+    const workspace = await createWorkspace(stack.app, 'throttled');
+    const statuses: number[] = [];
+    let last: Response | undefined;
+    for (let i = 0; i < 11; i += 1) {
+      last = await upgrade(stack, workspace.workspaceKey);
+      statuses.push(last.status);
+      expect(deprecated(last)).toBe(true);
+    }
+    expect(statuses.slice(0, 10).every((status) => status === 409)).toBe(true);
+    expect(last!.status).toBe(429);
   });
 });
 

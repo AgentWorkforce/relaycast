@@ -1395,10 +1395,10 @@ curl -XPOST https://cast.agentrelay.com/v1/credentials/upgrade -H "authorization
 
 The legacy credential keeps working until `legacy_expires_at`
 (`legacyCredentialGraceSeconds`, default 30 days), and only while the
-principal holds the returned credential. Upgrading again returns the same
-credential; upgrades are limited to 10 per principal per minute. The route needs
-a `credentialTagger`. Every response to a legacy credential carries
-`Deprecation: true`, a `Link` to this section, and `Sunset` when
+principal holds the returned credential. Its secret is random; upgrading the
+same legacy credential again returns it from the server's sealed record; upgrades are limited to 10 per principal per minute. The route needs
+a `credentialTagger`. The final response to every request a legacy credential
+authenticated, whatever its status, carries `Deprecation: true`, a `Link` to this section, and `Sunset` when
 `legacyCredentialSunset` is set. Every authenticated request reports a
 `request.authenticated` observation with `credential_family` (`legacy` | `ar`)
 and `credential_kind`, plus the workspace and origin client and version.

@@ -4,8 +4,8 @@ import { isArWorkspaceId, type CredentialKind } from '@relaycast/types';
 import { agents, credentialUpgrades, nodes, observerTokens, webhooks, workspaces } from '../db/schema.js';
 import type { EngineDb } from '../ports/database.js';
 import { runAtomicWrites } from '../ports/database.js';
-import { credentialFromHex, credentialTagger } from '../auth/credentials.js';
-import { hmacSha256Hex, sha256Hex } from '../lib/crypto.js';
+import { credentialTagger, mintCredential } from '../auth/credentials.js';
+import { sha256Hex } from '../lib/crypto.js';
 import { codedError } from '../lib/httpError.js';
 
 /** How long an upgraded legacy credential keeps working, unless configured: 30 days. */
@@ -30,7 +30,15 @@ function graceRecordAfterSwap(
   table: SQLiteTable,
   idColumn: SQLiteColumn,
   hashColumn: SQLiteColumn,
-  row: { legacyHash: string; kind: CredentialKind; principalId: string; workspaceId: string; arHash: string; expiresAt: Date },
+  row: {
+    legacyHash: string;
+    kind: CredentialKind;
+    principalId: string;
+    workspaceId: string;
+    arHash: string;
+    sealedCredential: string;
+    expiresAt: Date;
+  },
 ) {
   return w.insert(credentialUpgrades).select(
     w.select({
@@ -39,6 +47,7 @@ function graceRecordAfterSwap(
       principalId: sql<string>`${row.principalId}`.as('principal_id'),
       workspaceId: sql<string>`${row.workspaceId}`.as('workspace_id'),
       arHash: sql<string>`${row.arHash}`.as('ar_hash'),
+      sealedCredential: sql<string>`${row.sealedCredential}`.as('sealed_credential'),
       createdAt: sql<Date>`unixepoch()`.as('created_at'),
       expiresAt: sql<Date>`${Math.floor(row.expiresAt.getTime() / 1000)}`.as('expires_at'),
     })
@@ -98,17 +107,41 @@ export async function upgradedLegacyCredential(
   return { kind, principalId: row.principalId, workspaceId: row.workspaceId, arHash: row.arHash };
 }
 
-/** The `ar_` credential `legacyToken` upgrades to under `tag`: deterministic, so a retry returns the same one. */
-async function upgradedCredential(
-  db: EngineDb,
-  legacyToken: string,
-  kind: CredentialKind,
-  principalId: string,
-  workspaceId: string,
-  tag: string,
-): Promise<string> {
-  const digest = await hmacSha256Hex(`relaycast:credential-upgrade:v1:${kind}:${principalId}`, legacyToken);
-  return credentialFromHex(db, 'ar', kind, workspaceId, digest, tag);
+const encoder = new TextEncoder();
+
+/**
+ * The AES-GCM key that seals an upgrade's `ar_` credential, derived from the
+ * legacy credential (HKDF-SHA256). Only a holder of the legacy credential can
+ * open the sealed copy, and the route hands it out only during the grace.
+ */
+async function sealingKey(legacyToken: string, legacyHash: string): Promise<CryptoKey> {
+  const material = await crypto.subtle.importKey('raw', encoder.encode(legacyToken), 'HKDF', false, ['deriveKey']);
+  return crypto.subtle.deriveKey(
+    { name: 'HKDF', hash: 'SHA-256', salt: encoder.encode(legacyHash), info: encoder.encode('relaycast:credential-upgrade:v1') },
+    material,
+    { name: 'AES-GCM', length: 256 },
+    false,
+    ['encrypt', 'decrypt'],
+  );
+}
+
+const toBase64 = (bytes: Uint8Array): string => btoa(String.fromCharCode(...bytes));
+const fromBase64 = (text: string): Uint8Array<ArrayBuffer> => Uint8Array.from(atob(text), (char) => char.charCodeAt(0));
+
+async function seal(credential: string, legacyToken: string, legacyHash: string): Promise<string> {
+  const iv = crypto.getRandomValues(new Uint8Array(12));
+  const box = new Uint8Array(await crypto.subtle.encrypt(
+    { name: 'AES-GCM', iv }, await sealingKey(legacyToken, legacyHash), encoder.encode(credential),
+  ));
+  return `${toBase64(iv)}.${toBase64(box)}`;
+}
+
+async function unseal(sealed: string, legacyToken: string, legacyHash: string): Promise<string> {
+  const [iv, box] = sealed.split('.');
+  const plain = await crypto.subtle.decrypt(
+    { name: 'AES-GCM', iv: fromBase64(iv) }, await sealingKey(legacyToken, legacyHash), fromBase64(box),
+  );
+  return new TextDecoder().decode(plain);
 }
 
 export interface CredentialUpgradeResult {
@@ -118,12 +151,14 @@ export interface CredentialUpgradeResult {
 }
 
 /**
- * Replace a principal's legacy credential with an `ar_` one. The principal's
- * hash column takes the `ar_` credential; the legacy one keeps authenticating
- * for `graceSeconds`. Upgrading the same legacy credential again returns the
- * same `ar_` credential. `currentHash` is the principal's stored hash, so a
- * credential that only authenticates through a rotation grace slot (already
- * superseded) is refused.
+ * Replace a principal's legacy credential with a fresh random `ar_` one. The
+ * principal's hash column takes the `ar_` credential; the legacy one keeps
+ * authenticating for `graceSeconds`. The grace record keeps the `ar_`
+ * credential sealed with a key derived from the legacy credential, so
+ * upgrading the same legacy credential again (or concurrently) returns the
+ * same `ar_` credential, and nothing in the record or in public data rebuilds
+ * it. `currentHash` is the principal's stored hash, so a credential that only
+ * authenticates through a rotation grace slot (already superseded) is refused.
  */
 export async function upgradeLegacyCredential(
   db: EngineDb,
@@ -147,49 +182,45 @@ export async function upgradeLegacyCredential(
     409,
   );
   const legacyHash = await sha256Hex(legacyToken);
-  const now = new Date();
+  const principal = PRINCIPALS[kind];
 
-  const [existing] = await db.select().from(credentialUpgrades).where(and(
-    eq(credentialUpgrades.legacyHash, legacyHash),
-    gt(credentialUpgrades.expiresAt, now),
-  ));
-  if (existing) {
-    if (args.currentHash !== existing.arHash) throw superseded();
-    for (const tag of await tagger.tags(workspaceId)) {
-      const credential = await upgradedCredential(db, legacyToken, kind, principalId, workspaceId, tag);
-      if (await sha256Hex(credential) === existing.arHash) {
-        return { credential, kind, legacyExpiresAt: existing.expiresAt };
-      }
-    }
-    throw superseded();
-  }
+  /** The live upgrade of this legacy credential, while the principal still holds its `ar_` credential. */
+  const replay = async (): Promise<CredentialUpgradeResult | undefined> => {
+    const [record] = await db.select().from(credentialUpgrades).where(and(
+      eq(credentialUpgrades.legacyHash, legacyHash),
+      gt(credentialUpgrades.expiresAt, new Date()),
+    ));
+    if (!record) return undefined;
+    const [current] = await db.select({ hash: principal.hash }).from(principal.table).where(eq(principal.id, principalId));
+    if (current?.hash !== record.arHash) throw superseded();
+    return { credential: await unseal(record.sealedCredential, legacyToken, legacyHash), kind, legacyExpiresAt: record.expiresAt };
+  };
+
+  const replayed = await replay();
+  if (replayed) return replayed;
   if (args.currentHash !== legacyHash) throw superseded();
 
-  const credential = await upgradedCredential(db, legacyToken, kind, principalId, workspaceId, await tagger.tag(workspaceId));
+  const credential = await mintCredential(db, 'ar', kind, workspaceId);
   const arHash = await sha256Hex(credential);
+  const sealedCredential = await seal(credential, legacyToken, legacyHash);
+  const now = new Date();
   const legacyExpiresAt = new Date(Math.floor(now.getTime() / 1000) * 1000 + args.graceSeconds * 1000);
-  const principal = PRINCIPALS[kind];
   // One atomic group: the grace record exists only if the hash swap matched.
-  // A rotation that lands first leaves the principal off `arHash`, so the
-  // insert selects nothing; a concurrent upgrade of the same credential has
-  // already written the record, so the insert skips it.
+  // A rotation, or a concurrent upgrade of the same credential, that lands
+  // first leaves the principal off `arHash`, so the insert selects nothing
+  // and an existing record is never overwritten.
   await runAtomicWrites(db, (w) => [
     w.delete(credentialUpgrades)
       .where(and(eq(credentialUpgrades.legacyHash, legacyHash), lte(credentialUpgrades.expiresAt, now))),
     swapPrincipalHash(w, kind, principalId, legacyHash, arHash),
     graceRecordAfterSwap(w, principal.table, principal.id, principal.hash, {
-      legacyHash, kind, principalId, workspaceId, arHash, expiresAt: legacyExpiresAt,
+      legacyHash, kind, principalId, workspaceId, arHash, sealedCredential, expiresAt: legacyExpiresAt,
     }),
   ], { requireAtomic: true });
 
-  // The compare-and-set loses to a rotation that landed in between; the group
-  // then wrote nothing. A concurrent upgrade of the same credential that won
-  // swapped to the same `arHash` and wrote the record.
-  const [current] = await db.select({ hash: principal.hash }).from(principal.table).where(eq(principal.id, principalId));
-  if (current?.hash !== arHash) throw superseded();
-  const [record] = await db.select({ expiresAt: credentialUpgrades.expiresAt }).from(credentialUpgrades)
-    .where(eq(credentialUpgrades.legacyHash, legacyHash));
-  return { credential, kind, legacyExpiresAt: record?.expiresAt ?? legacyExpiresAt };
+  // Ours, or the concurrent upgrade that won (it sealed its credential under
+  // the same legacy credential); a rotation that won leaves no record.
+  return await replay() ?? Promise.reject(superseded());
 }
 
 /** The inbound webhook whose current or upgraded legacy token is `token`. */

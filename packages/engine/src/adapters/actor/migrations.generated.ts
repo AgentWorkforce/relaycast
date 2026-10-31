@@ -830,7 +830,7 @@ export const ACTOR_MIGRATIONS: readonly (readonly [string, readonly string[]])[]
   [
     "0079_credential_upgrades.sql",
     [
-      "CREATE TABLE credential_upgrades (\n  legacy_hash TEXT PRIMARY KEY NOT NULL,\n  kind TEXT NOT NULL,\n  principal_id TEXT NOT NULL,\n  workspace_id TEXT NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,\n  ar_hash TEXT NOT NULL,\n  created_at INTEGER NOT NULL DEFAULT (unixepoch()),\n  expires_at INTEGER NOT NULL\n)",
+      "CREATE TABLE credential_upgrades (\n  legacy_hash TEXT PRIMARY KEY NOT NULL,\n  kind TEXT NOT NULL,\n  principal_id TEXT NOT NULL,\n  workspace_id TEXT NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,\n  ar_hash TEXT NOT NULL,\n  sealed_credential TEXT NOT NULL,\n  created_at INTEGER NOT NULL DEFAULT (unixepoch()),\n  expires_at INTEGER NOT NULL\n)",
       "CREATE INDEX idx_credential_upgrades_workspace ON credential_upgrades(workspace_id)"
     ]
   ]

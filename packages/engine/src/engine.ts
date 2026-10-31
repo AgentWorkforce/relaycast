@@ -1,5 +1,6 @@
 import { configureNodeLiveness } from './engine/nodeLiveness.js';
 import { acceptsOnlyAr, configureCredentials } from './auth/credentials.js';
+import { legacyCredentialHeaders, noteAuthenticatedCredential } from './lib/credentialNotice.js';
 import { safeTelemetrySink } from './ports/telemetry.js';
 import { NoopTelemetrySink } from './providers/noop-telemetry.js';
 import { Hono, type Context } from 'hono';
@@ -112,6 +113,7 @@ export function createEngine(deps: EngineDeps): Hono<AppEnv> {
   app.use('*', cors({ exposeHeaders: ['X-Request-Id'] }));
 
   app.use('*', secureHeaders());
+  app.use('*', legacyCredentialHeaders);
 
   // A2A public and gateway routes before other route groups
   app.route('/', a2aRoutes);
@@ -144,6 +146,7 @@ export function createEngine(deps: EngineDeps): Hono<AppEnv> {
     if (!authResult.ok) {
       return jsonError(c, authResult.code, authResult.message, authResult.status);
     }
+    noteAuthenticatedCredential(c, token, authResult.workspace.id);
 
     const response = await connections.upgrade({
       request: c.req.raw,
@@ -182,6 +185,7 @@ export function createEngine(deps: EngineDeps): Hono<AppEnv> {
     if (!authResult.ok) {
       return jsonError(c, authResult.code, authResult.message, authResult.status);
     }
+    noteAuthenticatedCredential(c, token, authResult.node.workspaceId);
 
     const originInfo = requiredOriginInfo(c.req.raw);
     const origin = {

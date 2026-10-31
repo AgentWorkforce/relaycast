@@ -77,6 +77,8 @@ credentialRoutes.post('/credentials/upgrade', async (c) => {
       principal = { id: row.id, workspaceId: result.workspace.id, currentHash: 'tokenHash' in row ? row.tokenHash : null };
     }
 
+    noteAuthenticatedCredential(c, token, principal.workspaceId);
+
     const now = Date.now();
     const bucketKey = `credential-upgrade:${parsed.kind}:${principal.id}:${rateLimitWindow(now)}`;
     const limit = await c.get('engine').rateLimiter
@@ -95,7 +97,6 @@ credentialRoutes.post('/credentials/upgrade', async (c) => {
       currentHash: principal.currentHash,
       graceSeconds: c.get('engine').config.legacyCredentialGraceSeconds ?? DEFAULT_LEGACY_CREDENTIAL_GRACE_SECONDS,
     });
-    noteAuthenticatedCredential(c, token, principal.workspaceId);
     return jsonOk(c, {
       credential: upgraded.credential,
       kind: upgraded.kind,

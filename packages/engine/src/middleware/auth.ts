@@ -59,6 +59,7 @@ function makeAuthMiddleware(require: AuthRequire) {
     if (!result.ok) {
       return jsonError(c, result.code, result.message, result.status as ContentfulStatusCode);
     }
+    noteAuthenticatedCredential(c, token, result.workspace.id);
     const missing = missingPrincipal(require, result);
     if (missing) {
       return jsonError(c, 'unauthorized', requiredTokenMessage(missing, credentialFormat(db)), 401);
@@ -81,7 +82,6 @@ function makeAuthMiddleware(require: AuthRequire) {
     }
 
     await next();
-    noteAuthenticatedCredential(c, token, result.workspace.id);
   });
 }
 
@@ -118,6 +118,7 @@ export function requireWorkspaceRead(
     if (!result.ok) {
       return jsonError(c, result.code, result.message, result.status as ContentfulStatusCode);
     }
+    noteAuthenticatedCredential(c, token, result.workspace.id);
     // An observer token answered without its observer identity would otherwise
     // fall through below and read with the workspace's full access, unscoped.
     const missing = missingPrincipal(require, result);
@@ -135,7 +136,6 @@ export function requireWorkspaceRead(
       c.set('node', undefined);
       c.set('observerToken', result.observerToken);
       await next();
-      noteAuthenticatedCredential(c, token, result.workspace.id);
       return;
     }
 
@@ -159,7 +159,6 @@ export function requireWorkspaceRead(
     }
 
     await next();
-    noteAuthenticatedCredential(c, token, result.workspace.id);
   });
 }
 
