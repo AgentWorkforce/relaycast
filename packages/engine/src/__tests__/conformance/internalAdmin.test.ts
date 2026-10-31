@@ -219,6 +219,18 @@ describe('internal admin API', () => {
       expect((await readWorkspace(result.mintedApiKey!)).status).toBe(200);
     });
 
+    it('server-minted rotation refuses to derive a generation past MAX_SAFE_INTEGER', async () => {
+      stack = makeNodeStack({ internalSecret: SECRET });
+      const path = '/workspaces/cloud-ws-max/api-key';
+      const key = `rk_${'live'}_cloudminted_b64url-00000000000000ff`;
+      expect((await internal(path, { method: 'POST', body: { api_key: key, key_generation: Number.MAX_SAFE_INTEGER } })).status).toBe(201);
+      const res = await internal(path, { method: 'POST', body: {} });
+      expect(res.status).toBe(409);
+      expect(await res.json()).toMatchObject({ error: { code: 'key_generation_exhausted' } });
+      // Nothing was written: the pushed key still authenticates.
+      expect((await readWorkspace(key)).status).toBe(200);
+    });
+
     it('server-minted rotation of an unknown workspace is 404', async () => {
       stack = makeNodeStack({ internalSecret: SECRET });
       const res = await internal('/workspaces/nope/api-key', { method: 'POST' });
@@ -320,6 +332,10 @@ describe('internal admin API', () => {
         { api_key: `rk_live_${'a'.repeat(257)}` },
         { api_key: `rk_live_${'a'.repeat(16)} ${'a'.repeat(16)}` },
         { api_key: `rk_live_${'a'.repeat(32)}`, key_generation: Number.MAX_SAFE_INTEGER + 1 },
+        // Surrounding whitespace is refused, not trimmed: the stored hash must
+        // match the exact bearer callers present.
+        { api_key: ` rk_live_${'a'.repeat(32)}` },
+        { api_key: `rk_live_${'a'.repeat(32)}\n` },
       );
       for (const body of cases) {
         const res = await internal(path, { method: 'POST', body });

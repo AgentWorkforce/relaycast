@@ -6995,6 +6995,7 @@ paths:
                     `api_key`, requires `key_generation`.
                 plan:
                   type: string
+                  minLength: 1
                   description: Accepted for wire compatibility and ignored.
       responses:
         '200':

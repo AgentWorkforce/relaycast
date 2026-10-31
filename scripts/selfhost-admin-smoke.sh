@@ -72,14 +72,16 @@ fi
 umask 077
 openssl rand -hex 32 > "$SECRET_DIR/internal-secret"
 INTERNAL_SECRET="$(cat "$SECRET_DIR/internal-secret")"
-# The container runs as uid 1000 (node); keep the mount owner-only when that is us.
-[[ "$(id -u)" == "1000" ]] || chmod 0444 "$SECRET_DIR/internal-secret"
-chmod 0755 "$SECRET_DIR"
+# Run the container as the invoking user so the secret file and its directory
+# stay owner-only (0600 / 0700); nothing is made readable to other accounts.
+RUN_UID="$(id -u)"
+RUN_GID="$(id -g)"
 
 docker rm -f "$NAME" >/dev/null 2>&1 || true
 docker run -d --name "$NAME" \
   -p "127.0.0.1:${PORT}:8787" \
-  --read-only --tmpfs /tmp:size=64m --tmpfs /data:uid=1000,gid=1000 \
+  --user "${RUN_UID}:${RUN_GID}" \
+  --read-only --tmpfs /tmp:size=64m --tmpfs "/data:uid=${RUN_UID},gid=${RUN_GID}" \
   --cap-drop ALL --security-opt no-new-privileges:true \
   -e RELAYCAST_ALLOW_INSECURE_BASE_URL=true \
   -e RELAYCAST_PUBLIC_WORKSPACE_CREATE=false \

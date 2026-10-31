@@ -104,7 +104,9 @@ internalRoutes.delete('/workspaces/:id', async (c) => {
 const pushKeySchema = z.object({
   // `rk_live_` + 32..256 URL-safe characters: the engine mints 32 hex chars and
   // the cloud control plane mints base64url(32 bytes), so `-`/`_` are allowed.
-  api_key: z.string().trim().regex(
+  // Not trimmed: the stored hash must match the exact bearer callers send,
+  // so surrounding whitespace is refused by the pattern instead.
+  api_key: z.string().regex(
     WORKSPACE_KEY_PATTERN,
     'api_key must be an rk_live_ workspace key (rk_live_ followed by 32-256 characters of [A-Za-z0-9_-])',
   ).optional(),

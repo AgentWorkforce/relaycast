@@ -1,4 +1,4 @@
-import { and, eq, gt, lt, ne, notExists, or, type SQL } from 'drizzle-orm';
+import { and, eq, exists, gt, lt, ne, notExists, or, sql, type SQL } from 'drizzle-orm';
 import { alias } from 'drizzle-orm/sqlite-core';
 import type { getDb } from '../db/index.js';
 import { channels, workspaces } from '../db/schema.js';
@@ -154,6 +154,19 @@ function isUniqueConstraintError(err: unknown): boolean {
   return false;
 }
 
+/** The create batch's ownership guard tripped (see pushWorkspaceKey). */
+function isKeyGuardViolation(err: unknown): boolean {
+  const seen = new Set<unknown>();
+  let cause = err;
+  while (cause && typeof cause === 'object' && !seen.has(cause)) {
+    seen.add(cause);
+    const e = cause as { message?: string; cause?: unknown };
+    if (typeof e.message === 'string' && /NOT NULL constraint failed: channels\.workspace_id/i.test(e.message)) return true;
+    cause = e.cause;
+  }
+  return false;
+}
+
 async function readKeyRow(db: Db, workspaceId: string): Promise<KeyRow | undefined> {
   const [row] = await db
     .select({ id: workspaces.id, apiKeyHash: workspaces.apiKeyHash, apiKeyGeneration: workspaces.apiKeyGeneration })
@@ -244,6 +257,8 @@ export async function pushWorkspaceKey(
       if (minted) throw codedError('Workspace not found', 'workspace_not_found', 404);
       if (await keyOwnedElsewhere(db, apiKeyHash, workspaceId)) throw keyConflict();
       const generation = keyGeneration ?? 0;
+      // Re-check after the awaits above: a delete may have claimed the id.
+      assertInternalWorkspaceWritable(db, workspaceId);
       try {
         await runAtomicWrites(
           db,
@@ -254,9 +269,13 @@ export async function pushWorkspaceKey(
               apiKeyHash,
               apiKeyGeneration: generation,
             }),
+            // Ownership guard inside the batch: if another workspace took this
+            // key (current slot, or a previous slot still in grace) after the
+            // pre-check, the NULL workspace_id fails NOT NULL and the whole
+            // batch, including the workspace insert, rolls back.
             writeDb.insert(channels).values({
               id: generateId(),
-              workspaceId,
+              workspaceId: sql`(CASE WHEN ${exists(liveElsewhereQuery(writeDb, apiKeyHash, workspaceId))} THEN NULL ELSE ${workspaceId} END)`,
               name: 'general',
               topic: 'General discussion',
             }),
@@ -265,6 +284,7 @@ export async function pushWorkspaceKey(
         );
         return { created: true, workspaceId, apiKeyGeneration: generation };
       } catch (error) {
+        if (isKeyGuardViolation(error)) throw keyConflict();
         if (!isUniqueConstraintError(error)) throw error;
         // A concurrent push created the row — re-decide against it. Otherwise
         // the key hash collided with another workspace.
@@ -280,6 +300,7 @@ export async function pushWorkspaceKey(
     if (row.apiKeyHash === apiKeyHash) {
       // Idempotent re-push of the live key; a higher generation bumps the fence.
       if (keyGeneration !== undefined && keyGeneration > stored) {
+        assertInternalWorkspaceWritable(db, workspaceId);
         const bumped = await db
           .update(workspaces)
           .set({ apiKeyGeneration: keyGeneration })
@@ -300,7 +321,16 @@ export async function pushWorkspaceKey(
 
     if (await keyOwnedElsewhere(db, apiKeyHash, workspaceId)) throw keyConflict();
 
-    if (derivedGeneration) keyGeneration = stored + 1;
+    if (derivedGeneration) {
+      if (stored >= Number.MAX_SAFE_INTEGER) {
+        throw codedError(
+          `workspace ${workspaceId} is at the maximum api_key_generation; it cannot be rotated further`,
+          'key_generation_exhausted',
+          409,
+        );
+      }
+      keyGeneration = stored + 1;
+    }
 
     if (keyGeneration === undefined) {
       if (stored > 0) {
@@ -311,6 +341,7 @@ export async function pushWorkspaceKey(
           409,
         );
       }
+      assertInternalWorkspaceWritable(db, workspaceId);
       const applied = await db
         .update(workspaces)
         .set({ apiKeyHash })
@@ -334,6 +365,7 @@ export async function pushWorkspaceKey(
     // Zero grace (compromise) leaves no authenticatable previous slot: the
     // auth lookup requires a strictly-future expiry, and null never matches.
     const previousExpiresAt = grace === 0 ? null : new Date(Date.now() + grace);
+    assertInternalWorkspaceWritable(db, workspaceId);
     const applied = await db
       .update(workspaces)
       .set({
