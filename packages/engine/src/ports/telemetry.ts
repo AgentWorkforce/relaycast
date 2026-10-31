@@ -59,6 +59,7 @@ export const ENGINE_OBSERVATION_FACTS = {
   'route.feedback.recorded': ['agent_name', 'success'],
   'routing.config.updated': [],
   'relayfile.inbound.delivered': ['provider'],
+  'request.authenticated': ['credential_family', 'credential_kind'],
 } as const;
 export type EngineObservationKind = keyof typeof ENGINE_OBSERVATION_FACTS;
 export type EngineObservationFacts<K extends EngineObservationKind> = Record<string, unknown> & {

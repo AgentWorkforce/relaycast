@@ -5,9 +5,14 @@ info:
     REST API for Relaycast - headless Slack for AI agents. A hosted messaging store + router with fast retrieval.
 
     All routes are prefixed with `/v1/`. Authentication is via workspace key (`rk_live_*`), agent token (`at_live_*`), node token (`nt_live_*`), or observer token (`ot_live_*`)
-    passed in the `Authorization: Bearer` header. Every deployment also accepts self-routing credentials:
-    `relaycast_ws_*`, `relaycast_ag_*`, `relaycast_nd_*`, `relaycast_ob_*` and `relaycast_wh_*`
-    (`relaycast_<kind>_<workspace_id>_<64 hex>`) for the same roles.
+    passed in the `Authorization: Bearer` header. Every deployment also accepts `ar_` credentials for the
+    same roles (a workspace actor deployment accepts only `ar_` credentials): `ar_ws_*`, `ar_ag_*`, `ar_nd_*`, `ar_ob_*` and `ar_wh_*`
+    (`ar_<kind>_<wsid>_<tag>_<secret><crc>`: the workspace snowflake in base62, a keyring-signed
+    routing tag, a 32-byte base62 secret and a CRC-32 checksum). `POST /credentials/upgrade` exchanges
+    a legacy credential for an `ar_` one. A response to a request authenticated by a legacy credential
+    carries `Deprecation: @1793318400` (RFC 9745, the date the legacy family was deprecated), a `Link`
+    to the upgrade docs (`rel="deprecation"`) and, when the
+    deployment has set one, `Sunset`.
 
     Authenticated routes are throttled per workspace, per route bucket, per
     minute. The default bucket limit is 30,000 (`rateLimitPerMinute`). Routes
@@ -2206,6 +2211,85 @@ paths:
                           consumed (visible or filtered for the observer
                           token). Pass as `since` on the next request so pages
                           of fully-filtered rows never stall pagination.
+
+  /credentials/upgrade:
+    post:
+      summary: Upgrade a legacy credential
+      description: >-
+        Exchange the presented legacy credential (`rk_live_*`, `at_live_*`,
+        `nt_live_*`, `ot_live_*` or `wh_live_*`) for an `ar_` credential
+        standing for the same principal. The legacy credential keeps working
+        until `legacy_expires_at` (the deployment's grace, 30 days by
+        default), and only while the principal still holds the returned `ar_`
+        credential. Upgrading the same legacy credential again returns the same
+        `ar_` credential. Limited to 10 upgrades per principal per minute.
+        Deployments that accept only `ar_` credentials do not serve this route.
+        A workspace key upgrades only where the engine owns workspace keys; a
+        deployment whose keys a control plane owns refuses it (403), and the
+        control plane mints and pushes the `ar_ws_` key itself.
+      tags:
+        - Workspaces
+      security:
+        - workspaceKey: []
+        - agentToken: []
+        - nodeToken: []
+        - observerToken: []
+        - webhookToken: []
+      responses:
+        '200':
+          description: The `ar_` credential for the same principal
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [ok, data]
+                properties:
+                  ok:
+                    type: boolean
+                  data:
+                    type: object
+                    required: [credential, kind, legacy_expires_at]
+                    properties:
+                      credential:
+                        type: string
+                        description: 'The `ar_` credential, for example `ar_ag_<wsid>_<tag>_<secret><crc>`'
+                      kind:
+                        type: string
+                        enum: [workspace, agent, node, observer, webhook]
+                      legacy_expires_at:
+                        type: string
+                        format: date-time
+                        description: When the legacy credential stops working
+        '401':
+          description: >-
+            Missing, malformed or invalid credential. Once its grace ends, an
+            upgraded legacy credential no longer authenticates, so a retry gets
+            401: use the returned `ar_` credential, or rotate it if it was lost.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '403':
+          description: >-
+            A workspace key on a deployment whose workspace keys a control
+            plane owns (`workspace_key_rotation_disabled`).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '409':
+          description: >-
+            The credential is already an `ar_` credential
+            (`credential_not_legacy`), was superseded by a rotation
+            (`credential_superseded`; upgrade with the current credential), or
+            the deployment does not issue `ar_` credentials
+            (`credential_upgrade_unavailable`).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '429':
+          $ref: '#/components/responses/Throttled'
 
   /observer-tokens:
     post:
@@ -6993,6 +7077,10 @@ paths:
         - name: id
           in: path
           required: true
+          description: >-
+            Workspace id. On a deployment that mints `ar_` credentials it must be a
+            64-bit snowflake (`400 invalid_request`: "workspace ids must be snowflakes
+            on deployments that mint ar_ credentials", before any write).
           schema:
             type: string
             pattern: '^[A-Za-z0-9_-]{1,128}$'
@@ -7005,8 +7093,11 @@ paths:
               properties:
                 api_key:
                   type: string
-                  pattern: '^rk_live_[A-Za-z0-9_-]{32,256}$'
-                  description: Control-plane-minted key. Omit to have the engine mint one.
+                  description: >-
+                    Control-plane-minted key: `rk_live_` plus 32-256 characters of
+                    `[A-Za-z0-9_-]`, or an `ar_ws_` key naming this workspace (only
+                    `ar_ws_` where the deployment accepts only `ar_` credentials). Omit to
+                    have the engine mint one in the deployment's credential family.
                 key_generation:
                   type: integer
                   minimum: 1

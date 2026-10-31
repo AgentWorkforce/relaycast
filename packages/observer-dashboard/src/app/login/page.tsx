@@ -16,7 +16,7 @@ export default function LoginPage() {
     setError('');
 
     if (!isWorkspaceKey(apiKey) && !isObserverToken(apiKey)) {
-      setError('Enter a workspace key (rk_live_ or relaycast_ws_) or an observer token (ot_live_ or relaycast_ob_)');
+      setError('Enter a workspace key (rk_live_ or ar_ws_) or an observer token (ot_live_ or ar_ob_)');
       return;
     }
 
@@ -63,7 +63,7 @@ export default function LoginPage() {
                   placeholder="rk_live_..."
                   autoFocus
                 />
-                <p className="text-xs text-[var(--text-faint)]">Starts with <code className="rounded-md bg-[color-mix(in_srgb,var(--brand-primary-faint)_78%,transparent)] px-1.5 py-0.5 text-[var(--brand-primary-strong)]">rk_live_…</code>, <code className="rounded-md bg-[color-mix(in_srgb,var(--brand-primary-faint)_78%,transparent)] px-1.5 py-0.5 text-[var(--brand-primary-strong)]">relaycast_ws_…</code>, <code className="rounded-md bg-[color-mix(in_srgb,var(--brand-primary-faint)_78%,transparent)] px-1.5 py-0.5 text-[var(--brand-primary-strong)]">ot_live_…</code> or <code className="rounded-md bg-[color-mix(in_srgb,var(--brand-primary-faint)_78%,transparent)] px-1.5 py-0.5 text-[var(--brand-primary-strong)]">relaycast_ob_…</code></p>
+                <p className="text-xs text-[var(--text-faint)]">Starts with <code className="rounded-md bg-[color-mix(in_srgb,var(--brand-primary-faint)_78%,transparent)] px-1.5 py-0.5 text-[var(--brand-primary-strong)]">rk_live_…</code>, <code className="rounded-md bg-[color-mix(in_srgb,var(--brand-primary-faint)_78%,transparent)] px-1.5 py-0.5 text-[var(--brand-primary-strong)]">ar_ws_…</code>, <code className="rounded-md bg-[color-mix(in_srgb,var(--brand-primary-faint)_78%,transparent)] px-1.5 py-0.5 text-[var(--brand-primary-strong)]">ot_live_…</code> or <code className="rounded-md bg-[color-mix(in_srgb,var(--brand-primary-faint)_78%,transparent)] px-1.5 py-0.5 text-[var(--brand-primary-strong)]">ar_ob_…</code></p>
               </div>
 
               {error && (

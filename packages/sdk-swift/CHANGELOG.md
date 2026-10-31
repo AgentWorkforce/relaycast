@@ -4,7 +4,11 @@ All notable changes to `relaycast-swift` will be documented in this file.
 
 See the [root changelog](../../CHANGELOG.md) for cross-package release highlights.
 
-## [Unreleased]
+## [Unreleased - Minor]
+
+### Added
+
+- `relay.credentials.upgrade(_:)`: exchange a legacy credential (this client's key, or the one given) for the `ar_` credential of the same principal through `POST /v1/credentials/upgrade`; returns `CredentialUpgradeResponse`.
 
 ## [12.0.0] - 2026-10-27
 

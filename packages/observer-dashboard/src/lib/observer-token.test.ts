@@ -1,8 +1,12 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { encodeArCredential, type CredentialKind } from '@relaycast/types';
 import {
   mintObserverStreamToken,
   revokeObserverStreamToken,
 } from './observer-token';
+
+const arCredential = (kind: CredentialKind, fill: number) =>
+  encodeArCredential({ kind, workspaceId: '241764880589606912', tag: 'aX7pQ2mN4bc', secret: new Uint8Array(32).fill(fill) });
 
 function jsonResponse(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), {
@@ -66,13 +70,13 @@ describe('mintObserverStreamToken', () => {
     expect(nameA).not.toBe(nameB);
   });
 
-  it('accepts a self-routing observer token from a deployment that mints them', async () => {
+  it('accepts a ar_ observer token from a deployment that mints them', async () => {
     mockFetch(
-      jsonResponse({ ok: true, data: { id: 'ot_1', token: 'relaycast_ob_241764880589606912_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa' } }, 201)
+      jsonResponse({ ok: true, data: { id: 'ot_1', token: arCredential('observer', 1) } }, 201)
     );
     await expect(
-      mintObserverStreamToken('http://relay.test', 'relaycast_ws_241764880589606912_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa')
-    ).resolves.toEqual({ token: 'relaycast_ob_241764880589606912_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa', id: 'ot_1' });
+      mintObserverStreamToken('http://relay.test', arCredential('workspace', 1))
+    ).resolves.toEqual({ token: arCredential('observer', 1), id: 'ot_1' });
   });
 
   it('returns null when creation fails', async () => {

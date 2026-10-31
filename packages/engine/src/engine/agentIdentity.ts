@@ -141,7 +141,7 @@ export async function rotateAgentIdentity(
   action: 'recover' | 'takeover' = 'recover',
   options: { requireAtomic?: boolean; alreadyAtomic?: boolean } = {},
 ): Promise<{ agent_id: string; name: string; token: string; audit_id: string }> {
-  const token = issueCredential(db, 'agent', target.workspaceId);
+  const token = await issueCredential(db, 'agent', target.workspaceId);
   const tokenHash = await sha256Hex(token);
   const auditId = `aid_${generateId()}`;
   const graceExpiresAtSeconds = Math.floor((Date.now() + AGENT_TOKEN_GRACE_MS) / 1000);

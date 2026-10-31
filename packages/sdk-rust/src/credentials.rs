@@ -415,10 +415,10 @@ pub async fn bootstrap_session(
     }
 }
 
-/// Whether a cached key is a workspace key: `rk_...` or a self-routing
-/// `relaycast_ws_<workspace_id>_<secret>`. Every deployment accepts both.
+/// Whether a cached key is a workspace key: `rk_...` or
+/// `ar_ws_<wsid>_<tag>_<secret><crc>`. Every deployment accepts both.
 fn is_workspace_key(key: &str) -> bool {
-    key.starts_with("rk_") || key.starts_with("relaycast_ws_")
+    key.starts_with("rk_") || key.starts_with("ar_ws_")
 }
 
 async fn create_fresh_workspace(base_url: Option<&str>) -> Result<(String, Option<String>)> {
@@ -487,12 +487,12 @@ mod tests {
     fn workspace_keys_of_both_families_are_reused() {
         assert!(is_workspace_key("rk_live_abc"));
         assert!(is_workspace_key(&format!(
-            "relaycast_ws_241764880589606912_{}",
-            "a".repeat(64)
+            "ar_ws_0kjXyHTqxRe_aKa5vcb1XTi_{}",
+            "a".repeat(49)
         )));
         assert!(!is_workspace_key(&format!(
-            "relaycast_ag_241764880589606912_{}",
-            "a".repeat(64)
+            "ar_ag_0kjXyHTqxRe_aKa5vcb1XTi_{}",
+            "a".repeat(49)
         )));
         assert!(!is_workspace_key("at_live_abc"));
     }

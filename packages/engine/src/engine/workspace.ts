@@ -4,7 +4,7 @@ import type { getDb } from '../db/index.js';
 import { workspaces, channels, fileCleanupQueue, workspaceEvents, workspaceCreateIdempotency } from '../db/schema.js';
 import { constantTimeEqual, hmacSha256Hex, sha256Hex } from '../lib/crypto.js';
 import { generateId } from './snowflake.js';
-import { credentialFormat, credentialFromHex, issueCredential, type CredentialFormat } from '../auth/credentials.js';
+import { derivationFamilies, credentialFormat, credentialFromHex, credentialTagger, issueCredential, type DerivationFamily } from '../auth/credentials.js';
 import { codedError } from '../lib/httpError.js';
 import { D1WriteRetryExhaustedError, retryD1Write } from '../lib/d1Retry.js';
 import { runAtomicWrites } from '../ports/database.js';
@@ -139,41 +139,51 @@ export function workspaceCreateRequestDigest(input: {
   }));
 }
 
-/**
- * HMAC material for a deterministic workspace key. A self-routing key names
- * its workspace, so its material binds the workspace id too.
- */
+
 function workspaceKeyMaterial(
-  format: CredentialFormat,
+  family: DerivationFamily,
   workspaceId: string,
   idempotencyKey: string,
   requestDigest: string,
 ): string {
-  return format === 'self_routing'
-    ? `relaycast:workspace-create:v2:${workspaceId}:${idempotencyKey}:${requestDigest}`
+  return family.format === 'ar'
+    ? `relaycast:workspace-create:v3:${workspaceId}:${family.tag}:${idempotencyKey}:${requestDigest}`
     : `relaycast:workspace-create:v1:${idempotencyKey}:${requestDigest}`;
 }
 
-export async function deriveIdempotentWorkspaceApiKey(
-  format: CredentialFormat,
+async function deriveWorkspaceApiKey(
+  db: object,
+  family: DerivationFamily,
+  workspaceId: string,
+  secret: string,
+  idempotencyKey: string,
+  requestDigest: string,
+): Promise<string> {
+  const material = workspaceKeyMaterial(family, workspaceId, idempotencyKey, requestDigest);
+  const digest = await hmacSha256Hex(material, secret);
+  return credentialFromHex(db, family.format, 'workspace', workspaceId, digest, family.format === 'ar' ? family.tag : undefined);
+}
+
+export function deriveIdempotentWorkspaceApiKey(
+  db: object,
+  family: DerivationFamily,
   workspaceId: string,
   ownerApiKey: string,
   idempotencyKey: string,
   requestDigest: string,
 ): Promise<string> {
-  const material = workspaceKeyMaterial(format, workspaceId, idempotencyKey, requestDigest);
-  return credentialFromHex(format, 'workspace', workspaceId, await hmacSha256Hex(material, ownerApiKey));
+  return deriveWorkspaceApiKey(db, family, workspaceId, ownerApiKey, idempotencyKey, requestDigest);
 }
 
-export async function deriveBootstrapWorkspaceApiKey(
-  format: CredentialFormat,
+export function deriveBootstrapWorkspaceApiKey(
+  db: object,
+  family: DerivationFamily,
   workspaceId: string,
   bootstrapSecret: string,
   idempotencyKey: string,
   requestDigest: string,
 ): Promise<string> {
-  const material = workspaceKeyMaterial(format, workspaceId, idempotencyKey, requestDigest);
-  return credentialFromHex(format, 'workspace', workspaceId, await hmacSha256Hex(material, bootstrapSecret));
+  return deriveWorkspaceApiKey(db, family, workspaceId, bootstrapSecret, idempotencyKey, requestDigest);
 }
 
 function idempotencyConflict(message: string, code = 'workspace_create_idempotency_conflict') {
@@ -361,20 +371,21 @@ export async function createWorkspace(
   const format = credentialFormat(db);
   const deriveDeterministicApiKey = async (
     forWorkspaceId: string,
-    family: CredentialFormat = format,
+    family: DerivationFamily,
   ): Promise<string | undefined> => {
     if (!idempotencyKey || !requestDigest) return undefined;
     return providedOwnerApiKey
-      ? deriveIdempotentWorkspaceApiKey(family, forWorkspaceId, providedOwnerApiKey, idempotencyKey, requestDigest)
-      : deriveBootstrapWorkspaceApiKey(family, forWorkspaceId, bootstrapSecret!, idempotencyKey, requestDigest);
+      ? deriveIdempotentWorkspaceApiKey(db, family, forWorkspaceId, providedOwnerApiKey, idempotencyKey, requestDigest)
+      : deriveBootstrapWorkspaceApiKey(db, family, forWorkspaceId, bootstrapSecret!, idempotencyKey, requestDigest);
   };
-  // A replay recovers the key the workspace was created with. The family is
-  // whichever derivation matches the stored hash, so a deployment that changed
-  // the family it mints still replays creates made before the change.
+  // A replay recovers the key the workspace was created with. The family and
+  // tag are whichever derivation matches the stored hash, so a deployment that
+  // changed the family it mints, or rotated its keyring, still replays creates
+  // made before the change.
   const recoverDeterministicApiKey = async (
     workspace: { id: string; apiKeyHash: string },
   ): Promise<string | undefined> => {
-    for (const family of [format, format === 'live' ? 'self_routing' : 'live'] as const) {
+    for (const family of await derivationFamilies(db, workspace.id)) {
       const key = await deriveDeterministicApiKey(workspace.id, family);
       if (key && await hashApiKey(key) === workspace.apiKeyHash) return key;
     }
@@ -434,7 +445,10 @@ export async function createWorkspace(
 
   const assignedWorkspaceId = createOptions?.workspaceId;
   const workspaceId = assignedWorkspaceId ?? generateId();
-  const apiKey = await deriveDeterministicApiKey(workspaceId) ?? issueCredential(db, 'workspace', workspaceId);
+  const createFamily: DerivationFamily = format === 'ar'
+    ? { format: 'ar', tag: await credentialTagger(db)!.tag(workspaceId) }
+    : { format: 'legacy' };
+  const apiKey = await deriveDeterministicApiKey(workspaceId, createFamily) ?? await issueCredential(db, 'workspace', workspaceId);
   const apiKeyHash = await hashApiKey(apiKey);
 
   const channelId = generateId();

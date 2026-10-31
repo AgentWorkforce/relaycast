@@ -90,6 +90,7 @@ export const SERVER_TELEMETRY_EVENTS = [
   'relaycast_server_route_feedback_recorded',
   'relaycast_server_routing_config_updated',
   'relaycast_server_relayfile_inbound_delivered',
+  'relaycast_server_request_authenticated',
 ] as const;
 
 export const TELEMETRY_EVENTS = [
@@ -239,6 +240,7 @@ const REQUIRED_SERVER_EVENT_PROPS = {
   relaycast_server_route_feedback_recorded: ['workspace_id', 'agent_name', 'success'],
   relaycast_server_routing_config_updated: ['workspace_id'],
   relaycast_server_relayfile_inbound_delivered: ['workspace_id', 'provider'],
+  relaycast_server_request_authenticated: ['workspace_id', 'credential_family', 'credential_kind'],
 } as const satisfies Record<ServerTelemetryEventName, readonly string[]>;
 
 /** Properties `parseInternalTelemetryEvent` requires for a server event. */

@@ -1,7 +1,11 @@
 import type { AuthProvider, Workspace, ObserverToken } from '../ports/auth.js';
 import type { EngineDb } from '../ports/database.js';
 import { getAuthTokenKind } from '../auth/tokenKind.js';
-import { getNodeByTokenHash } from './node.js';
+import { getNodeByTokenHash, getNodeById } from './node.js';
+import { sha256Hex } from '../lib/crypto.js';
+import { upgradedLegacyCredential } from './credentialUpgrade.js';
+import { acceptsOnlyAr } from '../auth/credentials.js';
+import { parseCredential } from '@relaycast/types';
 import { hasObserverScope } from './observerToken.js';
 import { getWorkspaceExpiry } from './workspace.js';
 import {
@@ -113,12 +117,18 @@ export async function authenticateRealtimeWs(deps: WsAuthDeps, token: string): P
 }
 
 export async function authenticateNodeWs(deps: WsAuthDeps, token: string): Promise<NodeWsAuthResult> {
-  if (getAuthTokenKind(token) !== 'node') {
+  const family = parseCredential(token)?.family;
+  if (getAuthTokenKind(token) !== 'node' || (family !== 'ar' && acceptsOnlyAr(deps.db))) {
     return invalidWsToken('Invalid node token format');
   }
 
   const hash = await deps.auth.hashToken(token);
-  const node = await getNodeByTokenHash(deps.db, hash);
+  let node = await getNodeByTokenHash(deps.db, hash);
+  if (!node && family === 'legacy') {
+    // An upgraded legacy node token works during its grace (`POST /v1/credentials/upgrade`).
+    const upgraded = await upgradedLegacyCredential(deps.db, 'node', await sha256Hex(token));
+    if (upgraded) node = await getNodeById(deps.db, upgraded.workspaceId, upgraded.principalId);
+  }
   if (!node) {
     return invalidWsToken('Invalid node token');
   }

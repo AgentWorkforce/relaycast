@@ -306,6 +306,29 @@ impl RelayCast {
         self.client.get("/v1/workspace", None, None).await
     }
 
+    /// Exchange this client's legacy credential (`rk_live_` / `at_live_` /
+    /// `nt_live_` / `ot_live_` / `wh_live_`) for the `ar_` credential of the
+    /// same principal. The legacy credential keeps working until
+    /// `legacy_expires_at`; upgrading it again returns the same `ar_`
+    /// credential. Mirrors the TypeScript SDK's `credentials.upgrade()`.
+    pub async fn upgrade_credential(&self) -> Result<CredentialUpgradeResponse> {
+        self.client
+            .post("/v1/credentials/upgrade", Some(serde_json::json!({})), None)
+            .await
+    }
+
+    /// [`Self::upgrade_credential`] for another legacy credential, such as an
+    /// agent token. Mirrors `credentials.upgrade(credential)`.
+    pub async fn upgrade_credential_with(
+        &self,
+        credential: impl Into<String>,
+    ) -> Result<CredentialUpgradeResponse> {
+        self.client
+            .with_api_key(credential)?
+            .post("/v1/credentials/upgrade", Some(serde_json::json!({})), None)
+            .await
+    }
+
     /// Update workspace settings.
     pub async fn update_workspace(&self, request: UpdateWorkspaceRequest) -> Result<Workspace> {
         self.client
@@ -1719,6 +1742,37 @@ mod tests {
             persona: None,
             metadata: None,
         }
+    }
+
+    #[tokio::test]
+    async fn upgrade_credential_posts_the_presented_credential() {
+        use wiremock::matchers::header;
+        let server = MockServer::start().await;
+        let relay =
+            RelayCast::new(RelayCastOptions::new("rk_live_test").with_base_url(server.uri()))
+                .expect("relay init");
+        for (credential, kind) in [("rk_live_test", "workspace"), ("at_live_agent", "agent")] {
+            Mock::given(method("POST"))
+                .and(path("/v1/credentials/upgrade"))
+                .and(header("authorization", format!("Bearer {credential}").as_str()))
+                .respond_with(ok(json!({
+                    "credential": format!("ar_{kind}"),
+                    "kind": kind,
+                    "legacy_expires_at": "2026-12-01T00:00:00.000Z"
+                })))
+                .expect(1)
+                .mount(&server)
+                .await;
+        }
+
+        let workspace = relay.upgrade_credential().await.expect("upgrade");
+        assert_eq!(workspace.credential, "ar_workspace");
+        assert_eq!(workspace.legacy_expires_at, "2026-12-01T00:00:00.000Z");
+        let agent = relay
+            .upgrade_credential_with("at_live_agent")
+            .await
+            .expect("upgrade agent");
+        assert_eq!(agent.kind, "agent");
     }
 
     #[tokio::test]

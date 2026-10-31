@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 import { startServer } from '../entrypoints/node.js';
+import { credentialConfigFromEnv } from '../config/credentialEnv.js';
 import { ConfigError, secretFromEnv } from './secretEnv.js';
 import { engineVersion } from './version.js';
 import { MIN_INTERNAL_SECRET_LENGTH } from '../engine/internalAdmin.js';
@@ -25,6 +26,14 @@ Environment:
                                     Stable secret for anonymous keyed workspace retries
   RELAYCAST_PUBLIC_WORKSPACE_CREATE Set false to 404 the public POST /v1/workspaces
                                     (workspaces then come from /internal/workspaces)
+  RELAYCAST_CREDENTIAL_KEYRING(_FILE)
+                                    {"current":"a","keys":{"a":"<secret>"}}: signs ar_ credential
+                                    tags, enabling POST /v1/credentials/upgrade
+  RELAYCAST_CREDENTIAL_FORMAT       legacy (default) or ar (needs RELAYCAST_CREDENTIAL_KEYRING)
+  RELAYCAST_LEGACY_CREDENTIAL_GRACE_SECONDS
+                                    How long an upgraded legacy credential keeps working (default 30 days, at most 10 years)
+  RELAYCAST_LEGACY_CREDENTIAL_SUNSET
+                                    ISO-8601 date sent as Sunset on legacy-authenticated responses
   A directly set variable wins over its _FILE variant.
 
 After start, create a workspace:
@@ -119,12 +128,15 @@ async function main(): Promise<void> {
     throw new ConfigError('RELAYCAST_PUBLIC_WORKSPACE_CREATE must be "true" or "false"');
   }
 
+  const credentials = credentialConfigFromEnv(process.env);
+
   const running = startServer({
     dbPath: opts.db,
     port: opts.port,
     baseUrl,
     config: {
       environment: opts.environment,
+      ...credentials,
       ...(workspaceBootstrapSecret ? { workspaceBootstrapSecret } : {}),
       ...(process.env.RELAYCAST_WORKSPACE_BOOTSTRAP_PROOF_REQUIRED === 'true'
         ? { workspaceBootstrapProofRequired: true }

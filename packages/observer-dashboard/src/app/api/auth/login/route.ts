@@ -22,8 +22,8 @@ const COOKIE_MAX_AGE = 60 * 60 * 24 * 30; // 30 days
  * Validates the API key against the candidate engines (gateway first, api
  * fallback), remembers the resolved engine, and sets httpOnly cookies.
  *
- * Accepts either a full workspace key (`rk_live_...` / `relaycast_ws_...`) or a
- * scoped, read-only observer token (`ot_live_...` / `relaycast_ob_...`). The credential is used for read-only REST
+ * Accepts either a full workspace key (`rk_live_...` / `ar_ws_...`) or a
+ * scoped, read-only observer token (`ot_live_...` / `ar_ob_...`). The credential is used for read-only REST
  * (the engine enforces observer scope restrictions on every request), but the
  * realtime endpoint (`GET /v1/ws`) accepts *only* an observer token with
  * `stream:read`. So when the login credential is a workspace key we mint a

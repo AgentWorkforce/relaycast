@@ -1,13 +1,14 @@
 // A minimal gateway in front of the `Workspace` actors. It holds no workspace
-// state: a `relaycast_<kind>_<workspace_id>_<secret>` credential names its
-// workspace, and that workspace's actor authenticates it.
+// state: an `ar_<kind>_<wsid>_<tag>_<secret><crc>` credential names its
+// workspace, the keyring verifies its tag, and that workspace's actor
+// authenticates it.
 //
 //   TERSE_ACTOR_URL   actors endpoint (default: local `durable-actors dev`)
 //   TERSE_API_KEY     required for a hosted Terse project
 //   RELAYCAST_FILE_SIGNING_SECRET   shared with the actors
-//   RELAYCAST_WORKSPACE_ID_KEYRING  {"current":"a","keys":{"a":"<secret>"}}: signs
-//                        workspace ids. Rotate by adding a version and making it
-//                        current; removing a version locks out its workspaces.
+//   RELAYCAST_CREDENTIAL_KEYRING  {"current":"a","keys":{"a":"<secret>"}}: signs
+//                        credential tags. Rotate by adding a version and making it
+//                        current; removing a version locks out its credentials.
 //   RELAYCAST_FILE_DIR   where file bytes live (default ./files). Run one
 //                        gateway instance on persistent storage, or replace
 //                        serveFile with a shared object store.
@@ -17,9 +18,10 @@ import { dirname, resolve, sep } from "node:path"
 import {
     ACTOR_FILE_ROUTE,
     OBJECT_SIZE_HEADER,
-    createWorkspaceIdSigner,
-    parseSelfRoutingCredential,
-    parseWorkspaceIdKeyring,
+    createCredentialTagSigner,
+    generateWorkspaceId,
+    parseArCredential,
+    parseCredentialKeyring,
     verifyFileToken,
     type ActorHttpRequest,
     type ActorHttpResponse,
@@ -30,7 +32,7 @@ import { createActorStub } from "terse-sdk/actors"
 type ActorHttpCall = (request: ActorHttpRequest) => Promise<ActorHttpResponse>
 
 interface WorkspaceStub {
-    create: ActorHttpCall
+    create(request: ActorHttpRequest, credentialTag: string): Promise<ActorHttpResponse>
     handle: ActorHttpCall
 }
 
@@ -42,11 +44,11 @@ const workspace = (id: string) => createActorStub<WorkspaceStub>("Workspace", id
 
 const fileSecret = process.env.RELAYCAST_FILE_SIGNING_SECRET
 if (!fileSecret) throw new Error("RELAYCAST_FILE_SIGNING_SECRET is not set")
-const workspaceIdKeyring = process.env.RELAYCAST_WORKSPACE_ID_KEYRING
-if (!workspaceIdKeyring) throw new Error("RELAYCAST_WORKSPACE_ID_KEYRING is not set")
-// Workspace ids carry a tag only this gateway can mint, so a credential naming
-// a made-up workspace is refused here and never creates an actor.
-const workspaceIds = createWorkspaceIdSigner(parseWorkspaceIdKeyring(workspaceIdKeyring))
+const credentialKeyring = process.env.RELAYCAST_CREDENTIAL_KEYRING
+if (!credentialKeyring) throw new Error("RELAYCAST_CREDENTIAL_KEYRING is not set")
+// Credentials carry a tag only this gateway's keyring signs, so a credential
+// naming a made-up workspace is refused here and never creates an actor.
+const credentialTags = createCredentialTagSigner(parseCredentialKeyring(credentialKeyring))
 const fileRoot = resolve(process.env.RELAYCAST_FILE_DIR ?? resolve(import.meta.dir, "files"))
 /**
  * Largest request body the gateway reads. Uploads are the largest bodies, and
@@ -152,13 +154,15 @@ export async function handleRequest(request: Request): Promise<Response> {
     const url = new URL(request.url)
     if (url.pathname === ACTOR_FILE_ROUTE) return serveFile(request)
     if (request.method === "POST" && url.pathname === "/v1/workspaces") {
-        const id = await workspaceIds.mint()
-        return forward((req) => workspace(id).create(req), request)
+        const id = generateWorkspaceId()
+        const tag = await credentialTags.tag(id)
+        return forward((req) => workspace(id).create(req, tag), request)
     }
     const header = request.headers.get("authorization")
-    const credential = header?.startsWith("Bearer ") ? parseSelfRoutingCredential(header.slice(7)) : undefined
-    if (!credential || !(await workspaceIds.verify(credential.workspaceId))) {
-        return error(401, "unauthorized", "A relaycast_ credential minted by this deployment is required")
+    const token = header?.startsWith("Bearer ") ? header.slice(7) : undefined
+    const credential = token ? parseArCredential(token) : undefined
+    if (!credential || !(await credentialTags.verify(token!))) {
+        return error(401, "unauthorized", "An ar_ credential issued by this deployment is required")
     }
     return forward((req) => workspace(credential.workspaceId).handle(req), request)
 }

@@ -14,6 +14,11 @@ import {
   shouldInitializeConnectObserver,
 } from './connect-observer';
 import type { DmMessage, WorkspaceDmConversation } from '@relaycast/sdk';
+import { encodeArCredential, type CredentialKind } from '@relaycast/types';
+
+const arCredential = (kind: CredentialKind, fill: number) =>
+  encodeArCredential({ kind, workspaceId: '241764880589606912', tag: 'aX7pQ2mN4bc', secret: new Uint8Array(32).fill(fill) });
+
 
 describe('Relay Connect observer presentation', () => {
   it('renders message timestamps explicitly in UTC', () => {
@@ -31,16 +36,10 @@ describe('Relay Connect observer presentation', () => {
     );
   });
 
-  it('redacts self-routing credentials too', () => {
-    expect(sanitizeConnectObserverText('Use relaycast_ob_241764880589606912_0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdefnow.')).toBe(
-      'Use [credential redacted]now.',
-    );
+  it('redacts ar_ credentials too', () => {
+    expect(sanitizeConnectObserverText(`Use ${arCredential('observer', 1)}now.`)).toBe('Use [credential redacted]now.');
     expect(sanitizeConnectObserverText('token=ot_live_secret,next')).toBe('token=[credential redacted],next');
-    expect(
-      sanitizeConnectObserverText(
-        'key relaycast_ws_241764880589606912aQ3vK9mZx2LpR7tB4nW8cY6dF1hJ5sE0gU_fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210x',
-      ),
-    ).toBe('key [credential redacted]x');
+    expect(sanitizeConnectObserverText(`key ${arCredential('workspace', 2)}x`)).toBe('key [credential redacted]x');
   });
 
   it('removes query and fragment capabilities without removing the room binding', () => {

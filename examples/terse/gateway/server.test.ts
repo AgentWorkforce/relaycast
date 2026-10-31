@@ -2,7 +2,8 @@ import { afterAll, beforeAll, describe, expect, it } from "bun:test"
 import { mkdtemp, rm } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
-import { createWorkspaceIdSigner, signFileToken } from "@relaycast/engine/gateway"
+import { createCredentialTagSigner, signFileToken } from "@relaycast/engine/gateway"
+import { encodeArCredential } from "@relaycast/types"
 
 const SECRET = "test-secret"
 let dir: string
@@ -13,7 +14,7 @@ beforeAll(async () => {
     dir = await mkdtemp(join(tmpdir(), "relaycast-gateway-"))
     process.env.RELAYCAST_FILE_SIGNING_SECRET = SECRET
     process.env.RELAYCAST_FILE_DIR = dir
-    process.env.RELAYCAST_WORKSPACE_ID_KEYRING = JSON.stringify({ current: "a", keys: { a: "test-workspace-id-secret" } })
+    process.env.RELAYCAST_CREDENTIAL_KEYRING = JSON.stringify({ current: "a", keys: { a: "test-credential-tag-secret" } })
     ;({ serveFile, handleRequest } = await import("./server.js"))
 })
 afterAll(() => rm(dir, { recursive: true, force: true }))
@@ -85,9 +86,13 @@ describe("workspace routing", () => {
             return realFetch(...args)
         }) as typeof fetch
         try {
-            const forged = `relaycast_ag_241764880589606912_${"c".repeat(64)}`
-            const otherKey = await createWorkspaceIdSigner({ current: "a", keys: { a: "some-other-secret-value" } }).mint()
-            for (const token of [forged, `relaycast_ag_${otherKey}_${"c".repeat(64)}`]) {
+            const workspaceId = "241764880589606912"
+            const credential = (tag: string) =>
+                encodeArCredential({ kind: "agent", workspaceId, tag, secret: new Uint8Array(32).fill(9) })
+            const forged = credential("aAAAAAAAAAA")
+            const otherKeyring = credential(await createCredentialTagSigner({ current: "a", keys: { a: "some-other-secret-value" } }).tag(workspaceId))
+            const legacy = `at_live_${"c".repeat(32)}`
+            for (const token of [forged, otherKeyring, legacy]) {
                 const response = await handleRequest(new Request("http://gateway/v1/inbox", { headers: { authorization: `Bearer ${token}` } }))
                 expect(response.status).toBe(401)
             }
