@@ -21,7 +21,7 @@ on:
         required: true
         type: string
       latest:
-        description: "Also tag as :latest (released versions only: an unsuffixed tag from main or its v<version> tag)"
+        description: "Also tag as :latest (released versions only: the unsuffixed tag, dispatched from its v<version> release tag)"
         required: false
         type: boolean
         default: false
@@ -89,23 +89,23 @@ jobs:
               ;;
           esac
           # The plain version tag and :latest are what customers pin and pull, so
-          # they may only name a released build: main or the release tag itself.
-          # A suffixed tag from any other ref stays possible for unreleased source.
+          # they may only name the released build. The image compiles the engine
+          # from this checkout, and main keeps the pinned version after a release
+          # while its source moves on, so only the release tag itself proves the
+          # checkout is the release. A suffixed tag from any ref stays possible.
           released_ref=false
-          case "$REF" in
-            refs/heads/main|"refs/tags/v$pinned") released_ref=true ;;
-          esac
+          if [ "$REF" = "refs/tags/v$pinned" ]; then released_ref=true; fi
           if [ "$TAG" != "$pinned" ] && [ "$LATEST" = "true" ]; then
             echo "refusing :latest for suffixed tag '$TAG': :latest names a released version only" >&2
             exit 1
           fi
           if [ "$released_ref" != "true" ]; then
             if [ "$TAG" = "$pinned" ]; then
-              echo "refusing release tag '$TAG' from $REF: publish it from main or refs/tags/v$pinned, or add a suffix" >&2
+              echo "refusing release tag '$TAG' from $REF: dispatch from refs/tags/v$pinned, or add a suffix" >&2
               exit 1
             fi
             if [ "$LATEST" = "true" ]; then
-              echo "refusing :latest from $REF: publish it from main or refs/tags/v$pinned" >&2
+              echo "refusing :latest from $REF: dispatch from refs/tags/v$pinned" >&2
               exit 1
             fi
           fi
