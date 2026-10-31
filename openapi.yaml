@@ -7066,6 +7066,10 @@ paths:
         - name: id
           in: path
           required: true
+          description: >-
+            Workspace id. On a deployment that mints `ar_` credentials it must be a
+            64-bit snowflake (`400 invalid_request`: "workspace ids must be snowflakes
+            on deployments that mint ar_ credentials", before any write).
           schema:
             type: string
             pattern: '^[A-Za-z0-9_-]{1,128}$'

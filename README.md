@@ -1338,6 +1338,13 @@ accepted; a wrong secret is `401`).
 | `DELETE /internal/workspaces/:id` | Idempotently delete by ID with the internal secret (`204`, including when already gone) |
 | `POST /internal/workspaces/:id/api-key` | Push a control-plane-minted key (`{ api_key, key_generation?, grace_ms? }`, upserts a missing workspace with `201`) or omit `api_key` to have the engine mint and return one. Generation-fenced: stale pushes are `409 stale_key_generation`, generationless key changes on a fenced workspace are `409 key_generation_required`, and a key that is live in another workspace (current, or previous within its grace window) is `409 api_key_conflict`. After an internal delete claims this ID, same-process pushes are `410 workspace_deleted`; deleted IDs are not reusable without restarting the engine. |
 
+Workspace IDs match `^[A-Za-z0-9_-]{1,128}$`. A deployment that mints `ar_` credentials
+(`RELAYCAST_CREDENTIAL_FORMAT=ar`) carries the workspace in every credential as a 64-bit snowflake,
+so its key pushes take only snowflake IDs (`400 invalid_request`, "workspace ids must be snowflakes
+on deployments that mint ar_ credentials", before any write); workspaces the engine creates are
+always snowflakes. `DELETE /internal/workspaces/:id` takes any ID, so existing custom-ID
+workspaces stay removable.
+
 Set `RELAYCAST_PUBLIC_WORKSPACE_CREATE=false` so the anonymous `POST /v1/workspaces` answers the
 generic `404` and workspaces come only from the control plane (the Helm chart does this when the
 internal secret is configured). Schemas are in [`openapi.yaml`](./openapi.yaml); details in

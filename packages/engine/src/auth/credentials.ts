@@ -32,6 +32,25 @@ export type CredentialFormat = CredentialFamily;
 export type { CredentialKind, ParsedCredential };
 export { parseCredential };
 
+/** Why a deployment that mints `ar_` credentials refuses a workspace id. */
+export const AR_WORKSPACE_ID_REQUIRED = 'workspace ids must be snowflakes on deployments that mint ar_ credentials';
+
+/**
+ * Minting an `ar_` credential for a workspace id that is not a 64-bit
+ * snowflake. Routes check ids before writing; this is the backstop, and it
+ * answers `400 invalid_request`.
+ */
+export class WorkspaceIdNotSnowflakeError extends Error {
+  readonly code = 'invalid_request';
+  readonly status = 400;
+  readonly clientSafe = true;
+
+  constructor(readonly workspaceId: string) {
+    super(AR_WORKSPACE_ID_REQUIRED);
+    this.name = 'WorkspaceIdNotSnowflakeError';
+  }
+}
+
 /** Random secret bytes per `legacy` kind (the established lengths). */
 const LEGACY_SECRET_BYTES: Record<CredentialKind, number> = {
   workspace: 16,
@@ -143,6 +162,7 @@ export async function credentialFromHex(
 ): Promise<string> {
   if (!/^[0-9a-f]+$/.test(hex)) throw new Error('Credential secret material must be lowercase hex');
   if (format === 'ar') {
+    if (!isArWorkspaceId(workspaceId)) throw new WorkspaceIdNotSnowflakeError(workspaceId);
     if (hex.length < AR_SECRET_BYTES * 2) throw new Error('Credential secret material is too short');
     const tagger = credentialTagger(db);
     if (!tag && !tagger) throw new Error('Minting an ar_ credential needs EngineConfig.credentialTagger');

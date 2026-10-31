@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import { startServer } from '../entrypoints/node.js';
-import { createCredentialTagSigner, parseCredentialKeyring } from '../auth/credentialTags.js';
+import { credentialConfigFromEnv } from '../config/credentialEnv.js';
 import { ConfigError, secretFromEnv } from './secretEnv.js';
 import { engineVersion } from './version.js';
 import { MIN_INTERNAL_SECRET_LENGTH } from '../engine/internalAdmin.js';
@@ -30,6 +30,10 @@ Environment:
                                     {"current":"a","keys":{"a":"<secret>"}}: signs ar_ credential
                                     tags, enabling POST /v1/credentials/upgrade
   RELAYCAST_CREDENTIAL_FORMAT       legacy (default) or ar (needs RELAYCAST_CREDENTIAL_KEYRING)
+  RELAYCAST_LEGACY_CREDENTIAL_GRACE_SECONDS
+                                    How long an upgraded legacy credential keeps working (default 30 days)
+  RELAYCAST_LEGACY_CREDENTIAL_SUNSET
+                                    ISO-8601 date sent as Sunset on legacy-authenticated responses
   A directly set variable wins over its _FILE variant.
 
 After start, create a workspace:
@@ -124,15 +128,7 @@ async function main(): Promise<void> {
     throw new ConfigError('RELAYCAST_PUBLIC_WORKSPACE_CREATE must be "true" or "false"');
   }
 
-  const keyring = secretFromEnv(process.env, 'RELAYCAST_CREDENTIAL_KEYRING');
-  const credentialFormat = process.env.RELAYCAST_CREDENTIAL_FORMAT?.trim() || 'legacy';
-  if (credentialFormat !== 'legacy' && credentialFormat !== 'ar') {
-    throw new ConfigError('RELAYCAST_CREDENTIAL_FORMAT must be "legacy" or "ar"');
-  }
-  const credentials = {
-    credentialFormat,
-    ...(keyring ? { credentialTagger: createCredentialTagSigner(parseCredentialKeyring(keyring)) } : {}),
-  } as const;
+  const credentials = credentialConfigFromEnv(process.env);
 
   const running = startServer({
     dbPath: opts.db,

@@ -27,6 +27,9 @@ import {
   queryOrBearerToken,
 } from '../engine/wsAuth.js';
 
+export { credentialConfigFromEnv, type CredentialEnvConfig } from '../config/credentialEnv.js';
+export { ConfigError } from '../bin/secretEnv.js';
+
 export interface StartServerOptions {
   dbPath: string;
   port: number;

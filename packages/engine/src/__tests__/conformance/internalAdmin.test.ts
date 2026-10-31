@@ -5,6 +5,10 @@ import { join } from 'node:path';
 import { startServer } from '../../entrypoints/node.js';
 import { beginInternalWorkspaceDeletion, pushWorkspaceKey } from '../../engine/internalAdmin.js';
 import { makeNodeStack, registerAgent, type TestStack } from './harness.js';
+import { encodeArCredential, parseCredential } from '@relaycast/types';
+import { createCredentialTagSigner } from '../../auth/credentialTags.js';
+
+const TAGGER = createCredentialTagSigner({ current: 'a', keys: { a: 'internal-admin-tag-secret' } });
 
 /**
  * Internal admin API (`/internal/*`) for a trusted control plane.
@@ -231,26 +235,55 @@ describe('internal admin API', () => {
       expect((await readWorkspace(key)).status).toBe(200);
     });
 
-    it("server-minted rotation follows the deployment's self-routing credential format", async () => {
-      stack = makeNodeStack({ internalSecret: SECRET, credentialFormat: 'self_routing' });
+    it("server-minted rotation follows the deployment's ar_ credential format", async () => {
+      stack = makeNodeStack({ internalSecret: SECRET, credentialFormat: 'ar', credentialTagger: TAGGER });
       const ws = await createViaAdmin();
       const res = await internal(`/workspaces/${ws.workspace_id}/api-key`, { method: 'POST', body: {} });
       expect(res.status).toBe(200);
       const rotated = await data<{ api_key: string }>(res);
-      expect(rotated.api_key.startsWith(`relaycast_ws_${ws.workspace_id}_`)).toBe(true);
+      expect(parseCredential(rotated.api_key)).toMatchObject({ family: 'ar', kind: 'workspace', workspaceId: ws.workspace_id });
+      expect(await TAGGER.verify(rotated.api_key)).toBe(true);
       expect((await readWorkspace(rotated.api_key)).status).toBe(200);
       expect((await readWorkspace(ws.api_key)).status).toBe(401);
 
-      // An admin-accepted id a self-routing credential cannot embed keeps a
-      // live-format key instead of failing the rotation.
+      expect((await internal('/workspaces/424242424242424242/api-key', { method: 'POST', body: {} })).status).toBe(404);
+    });
+
+    it('requires snowflake workspace ids on a deployment that mints ar_ credentials', async () => {
+      stack = makeNodeStack({ internalSecret: SECRET, credentialFormat: 'ar', credentialTagger: TAGGER });
       const pushed = `rk_${'live'}_cloudminted_b64url-00000000000000aa`;
-      expect((await internal('/workspaces/cloud-ws-sr/api-key', { method: 'POST', body: { api_key: pushed, key_generation: 1 } })).status).toBe(201);
-      const fallback = await internal('/workspaces/cloud-ws-sr/api-key', { method: 'POST', body: {} });
-      expect(fallback.status).toBe(200);
-      const fallbackKey = (await data<{ api_key: string }>(fallback)).api_key;
-      expect(fallbackKey.startsWith('rk_live_')).toBe(true);
-      expect((await readWorkspace(fallbackKey)).status).toBe(200);
-      expect((await internal('/workspaces/missing-sr/api-key', { method: 'POST', body: {} })).status).toBe(404);
+      for (const body of [{ api_key: pushed, key_generation: 1 }, {}]) {
+        const res = await internal('/workspaces/tenant123/api-key', { method: 'POST', body });
+        expect(res.status).toBe(400);
+        expect(await res.json()).toMatchObject({
+          error: { code: 'invalid_request', message: 'workspace ids must be snowflakes on deployments that mint ar_ credentials' },
+        });
+      }
+      expect(stack.runtime.handle.sqlite.prepare("SELECT COUNT(*) AS n FROM workspaces WHERE id = 'tenant123'").get()).toEqual({ n: 0 });
+      // Workspaces the engine creates itself are snowflakes.
+      const ws = await createViaAdmin();
+      expect(ws.workspace_id).toMatch(/^[1-9][0-9]{0,19}$/);
+      expect(parseCredential(ws.api_key)).toMatchObject({ family: 'ar', workspaceId: ws.workspace_id });
+      // Deleting by id still takes the broad pattern, so a custom-id workspace can go.
+      expect((await internal('/workspaces/tenant123', { method: 'DELETE' })).status).toBe(204);
+    });
+
+    it('keeps custom workspace ids on a legacy-minting deployment', async () => {
+      stack = makeNodeStack({ internalSecret: SECRET });
+      const pushed = `rk_${'live'}_cloudminted_b64url-00000000000000ab`;
+      expect((await internal('/workspaces/tenant123/api-key', { method: 'POST', body: { api_key: pushed, key_generation: 1 } })).status).toBe(201);
+      expect((await readWorkspace(pushed)).status).toBe(200);
+    });
+
+    it('accepts a pushed ar_ws_ key only for the workspace it names', async () => {
+      stack = makeNodeStack({ internalSecret: SECRET, credentialFormat: 'ar', credentialTagger: TAGGER });
+      const ws = await createViaAdmin();
+      const key = (id: string) => encodeArCredential({ kind: 'workspace', workspaceId: id, tag: 'aAAAAAAAAAA', secret: new Uint8Array(32).fill(5) });
+      const other = await internal(`/workspaces/${ws.workspace_id}/api-key`, { method: 'POST', body: { api_key: key('42'), key_generation: 1 } });
+      expect(other.status).toBe(400);
+      const own = await internal(`/workspaces/${ws.workspace_id}/api-key`, { method: 'POST', body: { api_key: key(ws.workspace_id), key_generation: 1 } });
+      expect(own.status).toBe(200);
+      expect((await readWorkspace(key(ws.workspace_id))).status).toBe(200);
     });
 
     it('server-minted rotation of an unknown workspace is 404', async () => {

@@ -40,7 +40,7 @@ describe('credential families', () => {
       expect(parseArCredential(token)).toEqual({ kind, workspaceId: WS, tag, keyVersion: 'a' });
       expect(await tagger.verify(token)).toBe(true);
     }
-    await expect(mintCredential(db, 'ar', 'agent', 'ws_1')).rejects.toThrow(/64-bit snowflake/);
+    await expect(mintCredential(db, 'ar', 'agent', 'ws_1')).rejects.toThrow(/must be snowflakes/);
   });
 
   it('classifies both families', async () => {

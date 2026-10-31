@@ -22,6 +22,11 @@ Environment:
   RELAYCAST_INTERNAL_SECRET(_FILE)      Enable the /internal admin API for a trusted control plane
                                         (at least 32 characters)
   RELAYCAST_PUBLIC_WORKSPACE_CREATE     Set false to 404 the public POST /v1/workspaces
+  RELAYCAST_CREDENTIAL_KEYRING(_FILE)   {"current":"a","keys":{"a":"<secret>"}}: signs ar_ credential
+                                        tags, enabling POST /v1/credentials/upgrade
+  RELAYCAST_CREDENTIAL_FORMAT           legacy (default) or ar (needs RELAYCAST_CREDENTIAL_KEYRING)
+  RELAYCAST_LEGACY_CREDENTIAL_GRACE_SECONDS  Grace of an upgraded legacy credential (default 30 days)
+  RELAYCAST_LEGACY_CREDENTIAL_SUNSET    ISO-8601 date sent as Sunset on legacy-authenticated responses
   RELAYCAST_ALLOW_INSECURE_BASE_URL     Set true to accept http:// (or IP-literal / single-label)
                                         base URLs whose host is loopback or private (RFC 1918,
                                         ULA, link-local, *.local, *.internal, *.lan, *.home.arpa,
@@ -610,6 +615,23 @@ export function buildEngineConfig(env, mailbox = {}) {
 }
 
 /**
+ * The full engine configuration: {@link buildEngineConfig} plus the credential
+ * settings, which the engine itself reads from the environment
+ * (`credentialConfigFromEnv`, shared with the `relaycast-engine` binary). A
+ * credential setting the engine refuses is a configuration refusal (exit 64).
+ */
+export function containerEngineConfig(env, mailbox, engine) {
+  let credentials;
+  try {
+    credentials = engine.credentialConfigFromEnv(env);
+  } catch (error) {
+    if (error instanceof engine.ConfigError) refusal('invalid_credential_config', `${error.message}.`);
+    throw error;
+  }
+  return { ...buildEngineConfig(env, mailbox), ...credentials };
+}
+
+/**
  * The pinned Node adapter derives c.req.url from the local socket and ignores
  * X-Forwarded-Proto. A Cloudflare named tunnel terminates TLS before forwarding
  * HTTP over loopback, so without this marker the public A2A card advertises an
@@ -644,7 +666,7 @@ async function launchPinnedEngine(args) {
     throw new Error('Invalid --port');
   }
 
-  const { startServer } = await import('@relaycast/engine/node');
+  const engine = await import('@relaycast/engine/node');
 
   const mailboxTtlMs = optionalNumber(process.env.RELAYCAST_MAILBOX_TTL_MS);
   const mailboxDepthCap = optionalNumber(
@@ -667,14 +689,14 @@ async function launchPinnedEngine(args) {
         }
       : undefined;
 
-  const running = startServer({
+  const running = engine.startServer({
     dbPath: options.db,
     port: options.port,
     baseUrl: options.baseUrl,
-    config: buildEngineConfig({
+    config: containerEngineConfig({
       ...process.env,
       RELAYCAST_ENV: options.environment,
-    }, mailbox),
+    }, mailbox, engine),
     ...(eventQueue ? { eventQueue } : {}),
   });
 

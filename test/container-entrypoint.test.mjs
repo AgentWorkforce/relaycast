@@ -8,8 +8,10 @@ import { fileURLToPath } from 'node:url';
 import test from 'node:test';
 
 import {
+  BaseUrlError,
   baseUrlPolicy,
   buildEngineConfig,
+  containerEngineConfig,
   installPublicAuthorityMarker,
   isHelpRequest,
   isPrivateHostname,
@@ -276,6 +278,38 @@ test('never writes the bootstrap secret to stdout or stderr on the real entrypoi
   // Control: the failure path actually ran and produced output to inspect --
   // an empty capture would make the assertion above vacuous.
   assert.match(output, /failed to start/);
+});
+
+test('the container config path reads the credential keyring and format through the engine', async () => {
+  const engine = await import('@relaycast/engine/node');
+  const keyring = JSON.stringify({ current: 'a', keys: { a: 'container-credential-tag-secret' } });
+  const config = containerEngineConfig({
+    RELAYCAST_ENV: 'production',
+    RELAYCAST_CREDENTIAL_KEYRING: keyring,
+    RELAYCAST_CREDENTIAL_FORMAT: 'ar',
+    RELAYCAST_LEGACY_CREDENTIAL_GRACE_SECONDS: '86400',
+    RELAYCAST_LEGACY_CREDENTIAL_SUNSET: '2027-01-31T00:00:00Z',
+  }, {}, engine);
+  assert.equal(config.environment, 'production');
+  assert.equal(config.credentialFormat, 'ar');
+  assert.match(await config.credentialTagger.tag('241764880589606912'), /^a[0-9A-Za-z]{10}$/);
+  assert.equal(config.legacyCredentialGraceSeconds, 86400);
+  assert.equal(config.legacyCredentialSunset.toISOString(), '2027-01-31T00:00:00.000Z');
+
+  // Unset, the container mints legacy credentials and has no tagger.
+  const plain = containerEngineConfig({ RELAYCAST_ENV: 'production' }, {}, engine);
+  assert.equal(plain.credentialFormat, 'legacy');
+  assert.equal(plain.credentialTagger, undefined);
+
+  // A setting the engine refuses is a configuration refusal, without echoing the keyring.
+  for (const env of [
+    { RELAYCAST_CREDENTIAL_FORMAT: 'ar' },
+    { RELAYCAST_CREDENTIAL_FORMAT: 'self_routing' },
+    { RELAYCAST_CREDENTIAL_KEYRING: '{"current":"a","keys":{"a":"short"}}' },
+  ]) {
+    assert.throws(() => containerEngineConfig(env, {}, engine), (error) =>
+      error instanceof BaseUrlError && error.code === 'invalid_credential_config' && !/short"/.test(error.message));
+  }
 });
 
 test('omits an unset bootstrap secret so the engine can fail closed', () => {

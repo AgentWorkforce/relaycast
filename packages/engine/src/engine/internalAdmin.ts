@@ -2,8 +2,8 @@ import { and, eq, exists, gt, lt, ne, notExists, or, sql, type SQL } from 'drizz
 import { alias } from 'drizzle-orm/sqlite-core';
 import type { getDb } from '../db/index.js';
 import { channels, workspaces } from '../db/schema.js';
-import { randomHex, sha256Hex } from '../lib/crypto.js';
-import { acceptsOnlyAr, canMintAr, credentialFormat, issueCredential } from '../auth/credentials.js';
+import { sha256Hex } from '../lib/crypto.js';
+import { issueCredential } from '../auth/credentials.js';
 import { codedError } from '../lib/httpError.js';
 import { runAtomicWrites } from '../ports/database.js';
 import { generateId } from './snowflake.js';
@@ -160,19 +160,11 @@ function isUniqueConstraintError(err: unknown): boolean {
 }
 
 /**
- * A server-minted key in the deployment's credential format. The admin API
- * accepts workspace ids (`[A-Za-z0-9_-]`) that an `ar_` credential cannot
- * carry (it needs a 64-bit snowflake); those keep a legacy key, which a
- * deployment that accepts legacy credentials still authenticates. A
- * deployment that accepts only `ar_` credentials refuses such ids.
+ * A server-minted key in the deployment's credential family. A deployment
+ * that mints `ar_` credentials admits only snowflake workspace ids (the route
+ * checks before writing; `issueCredential` refuses as the backstop).
  */
-async function mintWorkspaceKey(db: Db, workspaceId: string): Promise<string> {
-  if (credentialFormat(db) === 'ar' && !canMintAr(db, workspaceId)) {
-    if (acceptsOnlyAr(db)) {
-      throw codedError('This deployment needs a 64-bit snowflake workspace id', 'invalid_request', 400);
-    }
-    return `rk_live_${randomHex(16)}`;
-  }
+function mintWorkspaceKey(db: Db, workspaceId: string): Promise<string> {
   return issueCredential(db, 'workspace', workspaceId);
 }
 

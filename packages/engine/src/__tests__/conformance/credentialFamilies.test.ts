@@ -5,6 +5,7 @@ import { agents, credentialUpgrades, nodes, webhooks, workspaces } from '../../d
 import { upgradeLegacyCredential } from '../../engine/credentialUpgrade.js';
 import { hmacSha256Hex, sha256Hex } from '../../lib/crypto.js';
 import { SqliteApiKeyAuthProvider } from '../../auth/index.js';
+import { WorkspaceIdNotSnowflakeError, configureCredentials, issueCredential } from '../../auth/credentials.js';
 import { createCredentialTagSigner } from '../../auth/credentialTags.js';
 import type { EngineObservation } from '../../ports/telemetry.js';
 import { createWorkspace, makeNodeStack, registerAgent, type TestStack } from './harness.js';
@@ -63,6 +64,36 @@ describe('credential families', () => {
     const legacy = `at_live_${'cd'.repeat(16)}`;
     await setAgentToken(stack, agent.agentId, legacy);
     expect((await get(stack, '/v1/inbox', legacy)).status).toBe(200);
+  });
+
+  it('mints ar_ credentials of every kind for a snowflake workspace', async () => {
+    const stack = makeNodeStack({ credentialFormat: 'ar', credentialTagger: tagger });
+    const workspace = await createWorkspace(stack.app, 'every-kind');
+    expect(workspace.workspaceId).toMatch(/^[1-9][0-9]{0,19}$/);
+    const post = async (path: string, body: unknown) => ((await (await stack.app.request(path, {
+      method: 'POST',
+      headers: { authorization: `Bearer ${workspace.workspaceKey}`, 'content-type': 'application/json' },
+      body: JSON.stringify(body),
+    })).json()) as { data: Record<string, string> }).data;
+    const agent = await registerAgent(stack.app, workspace.workspaceKey, 'alice');
+    const node = await post('/v1/nodes', { node_id: 'node_a', name: 'host' });
+    const observer = await post('/v1/observer-tokens', { name: 'obs', scopes: ['files:read'] });
+    await post('/v1/channels', { name: 'hooks' });
+    const hook = await post('/v1/webhooks', { name: 'hook', channel: 'hooks' });
+    for (const [token, kind] of [
+      [workspace.workspaceKey, 'workspace'], [agent.token, 'agent'], [node.token, 'node'],
+      [observer.token, 'observer'], [hook.token, 'webhook'],
+    ] as const) {
+      expect(parseCredential(token)).toMatchObject({ family: 'ar', kind, workspaceId: workspace.workspaceId });
+      expect(await tagger.verify(token)).toBe(true);
+    }
+  });
+
+  it('refuses to mint an ar_ credential for a non-snowflake workspace with a typed error', async () => {
+    const db = {};
+    configureCredentials(db, { format: 'ar', tagger });
+    await expect(issueCredential(db, 'agent', 'tenant123')).rejects.toBeInstanceOf(WorkspaceIdNotSnowflakeError);
+    await expect(issueCredential(db, 'agent', 'tenant123')).rejects.toMatchObject({ code: 'invalid_request', status: 400 });
   });
 
   it('refuses an ar-minting deployment without a tagger', () => {

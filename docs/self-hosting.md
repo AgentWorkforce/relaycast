@@ -93,6 +93,10 @@ Flags take precedence over environment variables.
 | — | `RELAYCAST_MESSAGE_TTL_DAYS` | unset (keep forever) | Opt in to pruning message history after this many days. Unset, `0`, or negative keeps messages forever. Per-workspace `retention` settings override this; operational tables (deliveries, message logs) prune at 90 days regardless. |
 | — | `RELAYCAST_WORKSPACE_BOOTSTRAP_SECRET` / `RELAYCAST_WORKSPACE_BOOTSTRAP_SECRET_FILE` | unset (fail closed) | Stable server-only derivation secret for anonymous keyed workspace retries. Generate once with `openssl rand -hex 32` and persist it across restarts. |
 | — | `RELAYCAST_WORKSPACE_BOOTSTRAP_PROOF_REQUIRED` | `false` | Optional self-host policy requiring callers to prove the derivation secret. Leave unset for hosted-safe anonymous retries. |
+| — | `RELAYCAST_CREDENTIAL_KEYRING` / `RELAYCAST_CREDENTIAL_KEYRING_FILE` | unset | `{"current":"a","keys":{"a":"<secret>"}}`: signs `ar_` credential tags and enables `POST /v1/credentials/upgrade`. |
+| — | `RELAYCAST_CREDENTIAL_FORMAT` | `legacy` | `ar` mints `ar_` credentials (needs the keyring; workspace ids must then be snowflakes). |
+| — | `RELAYCAST_LEGACY_CREDENTIAL_GRACE_SECONDS` | 30 days | How long an upgraded legacy credential keeps working. |
+| — | `RELAYCAST_LEGACY_CREDENTIAL_SUNSET` | unset | ISO-8601 date sent as `Sunset` on legacy-authenticated responses. |
 | — | `RELAYCAST_INTERNAL_SECRET` / `RELAYCAST_INTERNAL_SECRET_FILE` | unset (disabled) | Enables the [internal admin API](#internal-admin-api) for a trusted control plane. Must be at least 32 characters (startup refuses a shorter one). |
 | — | `RELAYCAST_PUBLIC_WORKSPACE_CREATE` | `true` | `false` makes the anonymous `POST /v1/workspaces` answer the generic `404 not_found`; workspaces then come only from `POST /internal/workspaces`. The Helm chart sets `false` when the internal secret is configured. |
 | — | `RELAYCAST_ALLOW_INSECURE_BASE_URL` | `false` | Container image only: accept an `http://` (or IP-literal / single-label) `--base-url` whose host is loopback or private (including `*.svc` and `*.svc.cluster.local`). Public hosts stay HTTPS-only. |
@@ -189,7 +193,10 @@ both.
   matching `^rk_live_[A-Za-z0-9_-]{32,256}$`, which covers both the engine's
   32-hex keys and the cloud's base64url keys, or an `ar_ws_…` key naming this
   workspace; `key_generation` must be a safe integer): upserts. A server-minted
-  key follows the deployment's credential family.
+  key follows the deployment's credential family. A deployment that mints `ar_` credentials
+  (`RELAYCAST_CREDENTIAL_FORMAT=ar`) takes only snowflake workspace ids here
+  (`400 invalid_request` before any write); legacy-minting deployments keep the
+  `^[A-Za-z0-9_-]{1,128}$` ids. Delete accepts any id on every deployment.
   A missing workspace is created with `id = name = :id` and a `#general`
   channel. Re-pushing the live key is idempotent; a higher `key_generation`
   bumps the stored fence. A key change with `key_generation` commits only if

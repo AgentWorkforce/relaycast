@@ -1,5 +1,5 @@
-import { parseCredential } from '@relaycast/types';
-import { acceptsOnlyAr } from '../auth/credentials.js';
+import { isArWorkspaceId, parseCredential } from '@relaycast/types';
+import { AR_WORKSPACE_ID_REQUIRED, acceptsOnlyAr, credentialFormat } from '../auth/credentials.js';
 import { Hono } from 'hono';
 import { createMiddleware } from 'hono/factory';
 import { z } from 'zod';
@@ -135,6 +135,11 @@ internalRoutes.post('/workspaces/:id/api-key', async (c) => {
     const workspaceId = c.req.param('id');
     if (!WORKSPACE_ID_PATTERN.test(workspaceId)) {
       return jsonError(c, 'invalid_request', 'Invalid workspace id', 400);
+    }
+    // A deployment that mints ar_ credentials carries the workspace in each
+    // one as a 64-bit snowflake, so it registers no other ids.
+    if (credentialFormat(c.get('db')) === 'ar' && !isArWorkspaceId(workspaceId)) {
+      return jsonError(c, 'invalid_request', AR_WORKSPACE_ID_REQUIRED, 400);
     }
     const parsed = await parseOptionalJsonBody(c, pushKeySchema, (result) =>
       result.error.issues[0]?.message ?? 'Invalid key push body');
