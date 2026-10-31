@@ -3,7 +3,14 @@ import type { ContentfulStatusCode } from 'hono/utils/http-status';
 import { parseCredential, type CredentialKind } from '@relaycast/types';
 import type { AppEnv } from '../env.js';
 import type { AuthRequire } from '../ports/auth.js';
-import { authenticateUnexpired } from '../auth/workspaceExpiry.js';
+import { eq } from 'drizzle-orm';
+import {
+  WORKSPACE_EXPIRED_CODE,
+  WORKSPACE_EXPIRED_MESSAGE,
+  authenticateUnexpired,
+  isWorkspaceExpired,
+} from '../auth/workspaceExpiry.js';
+import { workspaces } from '../db/schema.js';
 import {
   DEFAULT_LEGACY_CREDENTIAL_GRACE_SECONDS,
   upgradeLegacyCredential,
@@ -52,6 +59,12 @@ credentialRoutes.post('/credentials/upgrade', async (c) => {
     if (parsed.kind === 'webhook') {
       const webhook = await webhookForToken(db, token);
       if (!webhook) return jsonError(c, 'webhook_token_invalid', 'Invalid webhook token', 401);
+      // The same expiry gate every other kind passes through authenticateUnexpired.
+      const [workspace] = await db.select({ expiresAt: workspaces.expiresAt }).from(workspaces)
+        .where(eq(workspaces.id, webhook.workspaceId));
+      if (!workspace || isWorkspaceExpired(workspace)) {
+        return jsonError(c, WORKSPACE_EXPIRED_CODE, WORKSPACE_EXPIRED_MESSAGE, 401);
+      }
       principal = { id: webhook.id, workspaceId: webhook.workspaceId, currentHash: webhook.tokenHash };
     } else {
       const result = await authenticateUnexpired(c.get('engine').auth, { token, require: REQUIRE[parsed.kind], db });

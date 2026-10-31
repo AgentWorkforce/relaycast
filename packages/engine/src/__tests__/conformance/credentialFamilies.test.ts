@@ -1,7 +1,8 @@
 import { describe, expect, it, vi } from 'vitest';
 import { eq } from 'drizzle-orm';
 import { encodeArCredential } from '@relaycast/types';
-import { agents, credentialUpgrades } from '../../db/schema.js';
+import { agents, credentialUpgrades, workspaces } from '../../db/schema.js';
+import { upgradeLegacyCredential } from '../../engine/credentialUpgrade.js';
 import { sha256Hex } from '../../lib/crypto.js';
 import { SqliteApiKeyAuthProvider } from '../../auth/index.js';
 import { createCredentialTagSigner } from '../../auth/credentialTags.js';
@@ -208,6 +209,65 @@ describe('POST /v1/credentials/upgrade', () => {
     }
   });
 
+  it('writes no grace record when a rotation lands between authentication and the swap', async () => {
+    const stack = makeNodeStack({ credentialTagger: tagger });
+    const workspace = await createWorkspace(stack.app, 'race-rotation');
+    const agent = await registerAgent(stack.app, workspace.workspaceKey, 'alice');
+    const { db } = stack.runtime.deps;
+    const legacyHash = await sha256Hex(agent.token);
+    // Authenticated with the legacy token (currentHash), then a rotation commits.
+    const rotated = AR('agent', workspace.workspaceId);
+    await setAgentToken(stack, agent.agentId, rotated);
+
+    await expect(upgradeLegacyCredential(db, {
+      legacyToken: agent.token,
+      kind: 'agent',
+      principalId: agent.agentId,
+      workspaceId: workspace.workspaceId,
+      currentHash: legacyHash,
+      graceSeconds: 60,
+    })).rejects.toMatchObject({ code: 'credential_superseded', status: 409 });
+    expect(await db.select().from(credentialUpgrades)).toEqual([]);
+    const [row] = await db.select({ tokenHash: agents.tokenHash }).from(agents).where(eq(agents.id, agent.agentId));
+    expect(row.tokenHash).toBe(await sha256Hex(rotated));
+    expect((await get(stack, '/v1/inbox', agent.token)).status).toBe(401);
+    expect((await get(stack, '/v1/inbox', rotated)).status).toBe(200);
+  });
+
+  it('settles concurrent upgrades of one credential on one ar_ credential and one grace record', async () => {
+    const stack = makeNodeStack({ credentialTagger: tagger });
+    const workspace = await createWorkspace(stack.app, 'race-upgrade');
+    const agent = await registerAgent(stack.app, workspace.workspaceKey, 'alice');
+    const results = await Promise.all([upgrade(stack, agent.token), upgrade(stack, agent.token), upgrade(stack, agent.token)]);
+    const credentials = new Set<string>();
+    for (const res of results) {
+      expect(res.status).toBe(200);
+      credentials.add(((await res.json()) as { data: { credential: string } }).data.credential);
+    }
+    expect(credentials.size).toBe(1);
+    expect(await stack.runtime.deps.db.select().from(credentialUpgrades)).toHaveLength(1);
+    expect((await get(stack, '/v1/inbox', [...credentials][0])).status).toBe(200);
+    expect((await get(stack, '/v1/inbox', agent.token)).status).toBe(200);
+  });
+
+  it('refuses to upgrade a webhook token of an expired workspace', async () => {
+    const stack = makeNodeStack({ credentialTagger: tagger });
+    const workspace = await createWorkspace(stack.app, 'expired-hook');
+    const post = async (path: string, body: unknown) => ((await (await stack.app.request(path, {
+      method: 'POST',
+      headers: { authorization: `Bearer ${workspace.workspaceKey}`, 'content-type': 'application/json' },
+      body: JSON.stringify(body),
+    })).json()) as { data: Record<string, string> }).data;
+    await post('/v1/channels', { name: 'hooks' });
+    const hook = await post('/v1/webhooks', { name: 'hook', channel: 'hooks' });
+    await stack.runtime.deps.db.update(workspaces).set({ expiresAt: new Date(Date.now() - 1000) })
+      .where(eq(workspaces.id, workspace.workspaceId));
+    const res = await upgrade(stack, hook.token);
+    expect(res.status).toBe(401);
+    expect(((await res.json()) as { error: { code: string } }).error.code).toBe('workspace_expired');
+    expect(await stack.runtime.deps.db.select().from(credentialUpgrades)).toEqual([]);
+  });
+
   it('is unavailable without a tagger', async () => {
     const stack = makeNodeStack();
     const workspace = await createWorkspace(stack.app, 'no-tagger');
@@ -234,6 +294,31 @@ describe('legacy credential deprecation', () => {
     expect(ar.headers.get('Deprecation')).toBeNull();
     expect(ar.headers.get('Sunset')).toBeNull();
     expect(ar.headers.get('Link')).toBeNull();
+  });
+});
+
+describe('owner-authenticated workspace create', () => {
+  it('marks a legacy owner key deprecated and reports it', async () => {
+    const events: EngineObservation[] = [];
+    const stack = makeNodeStack({
+      credentialTagger: tagger,
+      telemetry: { capture: (event) => { events.push(event); }, captureException() {} },
+    });
+    const owner = await createWorkspace(stack.app, 'owner');
+    events.length = 0;
+    const res = await stack.app.request('/v1/workspaces', {
+      method: 'POST',
+      headers: {
+        authorization: `Bearer ${owner.workspaceKey}`,
+        'content-type': 'application/json',
+        'idempotency-key': 'owner-create-0123456789abcdef',
+      },
+      body: JSON.stringify({ name: 'child' }),
+    });
+    expect(res.status).toBe(201);
+    expect(res.headers.get('Deprecation')).toBe('true');
+    expect(events.filter((event) => event.kind === 'request.authenticated')
+      .map((event) => [event.facts.credential_family, event.workspaceId])).toEqual([['legacy', owner.workspaceId]]);
   });
 });
 

@@ -1,4 +1,5 @@
-import { and, eq, gt } from 'drizzle-orm';
+import { and, eq, gt, lte, notExists, sql } from 'drizzle-orm';
+import type { SQLiteColumn, SQLiteTable } from 'drizzle-orm/sqlite-core';
 import { isArWorkspaceId, type CredentialKind } from '@relaycast/types';
 import { agents, credentialUpgrades, nodes, observerTokens, webhooks, workspaces } from '../db/schema.js';
 import type { EngineDb } from '../ports/database.js';
@@ -18,6 +19,37 @@ const PRINCIPALS = {
   observer: { table: observerTokens, id: observerTokens.id, hash: observerTokens.tokenHash },
   webhook: { table: webhooks, id: webhooks.id, hash: webhooks.tokenHash },
 } as const;
+
+/**
+ * The grace record, inserted only when the principal now holds `arHash` (the
+ * swap earlier in the same group matched) and no record for the legacy hash
+ * exists yet.
+ */
+function graceRecordAfterSwap(
+  w: EngineDb,
+  table: SQLiteTable,
+  idColumn: SQLiteColumn,
+  hashColumn: SQLiteColumn,
+  row: { legacyHash: string; kind: CredentialKind; principalId: string; workspaceId: string; arHash: string; expiresAt: Date },
+) {
+  return w.insert(credentialUpgrades).select(
+    w.select({
+      legacyHash: sql<string>`${row.legacyHash}`.as('legacy_hash'),
+      kind: sql<string>`${row.kind}`.as('kind'),
+      principalId: sql<string>`${row.principalId}`.as('principal_id'),
+      workspaceId: sql<string>`${row.workspaceId}`.as('workspace_id'),
+      arHash: sql<string>`${row.arHash}`.as('ar_hash'),
+      createdAt: sql<Date>`unixepoch()`.as('created_at'),
+      expiresAt: sql<Date>`${Math.floor(row.expiresAt.getTime() / 1000)}`.as('expires_at'),
+    })
+      .from(table)
+      .where(and(
+        eq(idColumn, row.principalId),
+        eq(hashColumn, row.arHash),
+        notExists(w.select({ one: sql`1` }).from(credentialUpgrades).where(eq(credentialUpgrades.legacyHash, row.legacyHash))),
+      )),
+  );
+}
 
 /** Swap a principal's credential hash from `from` to `to` (compare-and-set). */
 function swapPrincipalHash(w: EngineDb, kind: CredentialKind, id: string, from: string, to: string) {
@@ -137,17 +169,27 @@ export async function upgradeLegacyCredential(
   const arHash = await sha256Hex(credential);
   const legacyExpiresAt = new Date(Math.floor(now.getTime() / 1000) * 1000 + args.graceSeconds * 1000);
   const principal = PRINCIPALS[kind];
+  // One atomic group: the grace record exists only if the hash swap matched.
+  // A rotation that lands first leaves the principal off `arHash`, so the
+  // insert selects nothing; a concurrent upgrade of the same credential has
+  // already written the record, so the insert skips it.
   await runAtomicWrites(db, (w) => [
-    w.insert(credentialUpgrades)
-      .values({ legacyHash, kind, principalId, workspaceId, arHash, expiresAt: legacyExpiresAt })
-      .onConflictDoUpdate({ target: credentialUpgrades.legacyHash, set: { kind, principalId, workspaceId, arHash, expiresAt: legacyExpiresAt, createdAt: now } }),
+    w.delete(credentialUpgrades)
+      .where(and(eq(credentialUpgrades.legacyHash, legacyHash), lte(credentialUpgrades.expiresAt, now))),
     swapPrincipalHash(w, kind, principalId, legacyHash, arHash),
+    graceRecordAfterSwap(w, principal.table, principal.id, principal.hash, {
+      legacyHash, kind, principalId, workspaceId, arHash, expiresAt: legacyExpiresAt,
+    }),
   ], { requireAtomic: true });
 
-  // The compare-and-set loses to a rotation that landed in between.
+  // The compare-and-set loses to a rotation that landed in between; the group
+  // then wrote nothing. A concurrent upgrade of the same credential that won
+  // swapped to the same `arHash` and wrote the record.
   const [current] = await db.select({ hash: principal.hash }).from(principal.table).where(eq(principal.id, principalId));
   if (current?.hash !== arHash) throw superseded();
-  return { credential, kind, legacyExpiresAt };
+  const [record] = await db.select({ expiresAt: credentialUpgrades.expiresAt }).from(credentialUpgrades)
+    .where(eq(credentialUpgrades.legacyHash, legacyHash));
+  return { credential, kind, legacyExpiresAt: record?.expiresAt ?? legacyExpiresAt };
 }
 
 /** The inbound webhook whose current or upgraded legacy token is `token`. */

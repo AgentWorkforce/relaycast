@@ -13,6 +13,7 @@ import {
 import type { AppEnv } from '../env.js';
 import { requireAgentToken, requireWorkspaceKey, requireWorkspaceRead } from '../middleware/auth.js';
 import { authenticateUnexpired } from '../auth/workspaceExpiry.js';
+import { noteAuthenticatedCredential } from '../lib/credentialNotice.js';
 import { parseIdempotencyKey } from '../middleware/idempotency.js';
 import { rateLimit } from '../middleware/rateLimit.js';
 import { RATE_LIMIT_WINDOW_MS, rateLimitWindow, rateLimitWindowResetAt, setRetryContract } from '../lib/throttle.js';
@@ -247,6 +248,7 @@ workspaceRoutes.post('/workspaces', async (c) => {
       if (!ownerAuth.ok) {
         return jsonError(c, ownerAuth.code, ownerAuth.message, ownerAuth.status as ContentfulStatusCode);
       }
+      noteAuthenticatedCredential(c, ownerApiKey, ownerAuth.workspace.id);
     }
     const requestDigest = idempotencyKey
       ? await workspaceEngine.workspaceCreateRequestDigest({
