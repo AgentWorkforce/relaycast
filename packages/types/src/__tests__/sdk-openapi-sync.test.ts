@@ -55,6 +55,12 @@ const NON_SDK_OPENAPI_PATHS = new Set([
   // Node-token self lookup: a service handed a node token (Cloud's node claim)
   // proves which node it is for. Agents never call it.
   '/v1/node/me',
+  // Self-host control-plane admin API (root /internal/*, internal-secret
+  // bearer), called by a control plane, never by the agent SDKs.
+  '/v1/internal/capabilities',
+  '/v1/internal/workspaces',
+  '/v1/internal/workspaces/{param}',
+  '/v1/internal/workspaces/{param}/api-key',
 ]);
 
 const CORE_SDK_PATHS = new Set([

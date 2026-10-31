@@ -1,8 +1,11 @@
-# Ratify Protocol Relaycast runbook
+# Relaycast self-host runbook (Docker Compose)
 
-This runbook is for the team operating `https://relay.ratifyprotocol.com` on
-infrastructure controlled by Ratify Protocol. AgentWorkforce does not need host
-access and does not operate this deployment.
+This runbook is for a team operating its own Relaycast deployment at a public
+origin such as `https://relay.example.com` with Docker Compose on one host.
+Substitute your own hostname, workspace name, and tunnel name throughout. For
+Kubernetes, use the Helm chart in
+[AgentWorkforce/helm-charts](https://github.com/AgentWorkforce/helm-charts/tree/main/charts/relaycast)
+instead.
 
 ## Operating boundary
 
@@ -23,7 +26,7 @@ claim.
 - A Linux host with `linux/amd64` or `linux/arm64`.
 - Docker Engine with Docker Compose v2 (`docker compose version`).
 - Outbound access to Docker Hub and npm while building the image.
-- The `relay.ratifyprotocol.com` zone managed in Cloudflare and permission to
+- Your zone (here `relay.example.com`) managed in Cloudflare and permission to
   create a named Cloudflare Tunnel and its DNS route.
 - `cloudflared` installed on the host. Follow Cloudflare's
   [locally-managed tunnel guide](https://developers.cloudflare.com/cloudflare-one/networks/connectors/cloudflare-tunnel/do-more-with-tunnels/local-management/create-local-tunnel/).
@@ -41,7 +44,7 @@ From a clean checkout of this repository:
 ```bash
 umask 077
 test ! -e .env || { echo '.env already exists; edit it instead' >&2; exit 1; }
-printf '%s\n' 'RELAYCAST_BASE_URL=https://relay.ratifyprotocol.com' > .env
+printf '%s\n' 'RELAYCAST_BASE_URL=https://relay.example.com' > .env
 printf '%s\n' 'RELAYCAST_PORT=8787' >> .env
 printf '%s\n' "RELAYCAST_WORKSPACE_BOOTSTRAP_SECRET=$(openssl rand -hex 32)" >> .env
 chmod 600 .env
@@ -71,7 +74,7 @@ The version command must print `12.2.1`, and Compose should eventually report
 the gateway/application version, not reliable evidence of the installed engine
 package version.
 
-Bootstrap the one Ratify workspace while the engine is reachable only over the
+Bootstrap the one workspace while the engine is reachable only over the
 host loopback interface:
 
 ```bash
@@ -79,12 +82,12 @@ umask 077
 curl --fail --silent --show-error \
   --request POST http://127.0.0.1:8787/v1/workspaces \
   --header 'content-type: application/json' \
-  --data '{"name":"ratify-protocol"}' \
-  --output ratify-workspace-bootstrap.json
+  --data '{"name":"my-team"}' \
+  --output workspace-bootstrap.json
 ```
 
 The response contains the only copy of the `rk_live_...` workspace admin key.
-Move it into Ratify's secret manager, then securely remove the bootstrap file.
+Move it into your secret manager, then securely remove the bootstrap file.
 Do not repeat this command: workspace names are not unique, so a repeat creates
 another workspace and key.
 
@@ -94,15 +97,15 @@ answers the bare well-known URL directly, so a counterparty needs no
 Relaycast-specific query parameter:
 
 ```text
-https://relay.ratifyprotocol.com/.well-known/agent-card.json
+https://relay.example.com/.well-known/agent-card.json
 ```
 
 The explicit forms also resolve, and an explicit selector now takes precedence
 over host-label inference:
 
 ```text
-https://relay.ratifyprotocol.com/ratify-protocol/.well-known/agent-card.json
-https://relay.ratifyprotocol.com/.well-known/agent-card.json?workspace=ratify-protocol
+https://relay.example.com/my-team/.well-known/agent-card.json
+https://relay.example.com/.well-known/agent-card.json?workspace=my-team
 ```
 
 Two behaviours worth knowing, because both are deliberate. A deployment holding
@@ -113,7 +116,7 @@ rather than resolving to some other workspace — a typo fails loudly instead of
 crossing a tenant boundary.
 
 Earlier engines interpreted the leftmost hostname label as the workspace name,
-so `relay.ratifyprotocol.com` looked for a workspace called `relay` and the bare
+so `relay.example.com` looked for a workspace called `relay` and the bare
 path returned `workspace_not_found`. If you see that on the bare path, check the
 image is on 12.2.1 or later before looking anywhere else.
 
@@ -136,8 +139,8 @@ Authenticate once, create the named tunnel, and add the DNS route:
 
 ```bash
 cloudflared tunnel login
-cloudflared tunnel create ratify-relaycast
-cloudflared tunnel route dns ratify-relaycast relay.ratifyprotocol.com
+cloudflared tunnel create my-relaycast
+cloudflared tunnel route dns my-relaycast relay.example.com
 ```
 
 The create command prints a tunnel UUID and writes a `<UUID>.json` credential.
@@ -149,10 +152,10 @@ tunnel: <UUID>
 credentials-file: /home/<operator>/.cloudflared/<UUID>.json
 ingress:
   # Bootstrap is complete. Never expose unauthenticated workspace creation.
-  - hostname: relay.ratifyprotocol.com
+  - hostname: relay.example.com
     path: ^/v1/workspaces/?$
     service: http_status:403
-  - hostname: relay.ratifyprotocol.com
+  - hostname: relay.example.com
     service: http://127.0.0.1:8787
   - service: http_status:404
 ```
@@ -161,23 +164,23 @@ Validate the rules, then run the tunnel in the foreground for the first check:
 
 ```bash
 cloudflared tunnel ingress validate
-cloudflared tunnel ingress rule https://relay.ratifyprotocol.com/v1/workspaces
-cloudflared tunnel ingress rule https://relay.ratifyprotocol.com/health
-cloudflared tunnel --config "$HOME/.cloudflared/config.yml" run ratify-relaycast
+cloudflared tunnel ingress rule https://relay.example.com/v1/workspaces
+cloudflared tunnel ingress rule https://relay.example.com/health
+cloudflared tunnel --config "$HOME/.cloudflared/config.yml" run my-relaycast
 ```
 
 From another terminal or machine:
 
 ```bash
-curl --fail --silent --show-error https://relay.ratifyprotocol.com/health
+curl --fail --silent --show-error https://relay.example.com/health
 curl --fail --silent --show-error \
-  'https://relay.ratifyprotocol.com/.well-known/agent-card.json?workspace=ratify-protocol'
+  'https://relay.example.com/.well-known/agent-card.json?workspace=my-team'
 curl --fail --silent --show-error \
-  'https://relay.ratifyprotocol.com/.well-known/agent-card.json?workspace=ratify-protocol' \
+  'https://relay.example.com/.well-known/agent-card.json?workspace=my-team' \
   | grep --fixed-strings \
-      '"url":"https://relay.ratifyprotocol.com/a2a/rpc"'
+      '"url":"https://relay.example.com/a2a/rpc"'
 workspace_create_status="$(curl --silent --output /dev/null --write-out '%{http_code}' \
-  --request POST https://relay.ratifyprotocol.com/v1/workspaces \
+  --request POST https://relay.example.com/v1/workspaces \
   --header 'content-type: application/json' \
   --data '{"name":"must-not-be-created"}')"
 test "$workspace_create_status" = 403
@@ -225,11 +228,11 @@ test -f "$backup_dir/relaycast.db"
 ```
 
 If the copy fails, run `docker compose start relaycast` before troubleshooting.
-Encrypt and move the backup directory off-host according to Ratify's retention
+Encrypt and move the backup directory off-host according to your retention
 policy. A database-only copy is incomplete when users have uploaded files.
 
-Before any image upgrade, repeat the backup and confirm that the hosted
-`cast.agentrelay.com` deployment and this deployment will run the same engine
+Before any image upgrade, repeat the backup. If this deployment federates
+with another Relaycast deployment, confirm both will run the same engine
 version. Version skew is a federation release blocker. Do not infer the hosted
 engine dependency from its `/health` application-version field.
 

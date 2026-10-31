@@ -91,8 +91,20 @@ Flags take precedence over environment variables.
 | `--base-url <url>` | — | `http://localhost:<port>` | Public origin. **Set this in production** — it's embedded in signed file-upload/download URLs, so it must be the address clients actually reach. |
 | `--env <name>` | `RELAYCAST_ENV` | `production` | Environment label used in logs. |
 | — | `RELAYCAST_MESSAGE_TTL_DAYS` | unset (keep forever) | Opt in to pruning message history after this many days. Unset, `0`, or negative keeps messages forever. Per-workspace `retention` settings override this; operational tables (deliveries, message logs) prune at 90 days regardless. |
-| — | `RELAYCAST_WORKSPACE_BOOTSTRAP_SECRET` | unset (fail closed) | Stable server-only derivation secret for anonymous keyed workspace retries. Generate once with `openssl rand -hex 32` and persist it across restarts. |
+| — | `RELAYCAST_WORKSPACE_BOOTSTRAP_SECRET` / `RELAYCAST_WORKSPACE_BOOTSTRAP_SECRET_FILE` | unset (fail closed) | Stable server-only derivation secret for anonymous keyed workspace retries. Generate once with `openssl rand -hex 32` and persist it across restarts. |
 | — | `RELAYCAST_WORKSPACE_BOOTSTRAP_PROOF_REQUIRED` | `false` | Optional self-host policy requiring callers to prove the derivation secret. Leave unset for hosted-safe anonymous retries. |
+| — | `RELAYCAST_INTERNAL_SECRET` / `RELAYCAST_INTERNAL_SECRET_FILE` | unset (disabled) | Enables the [internal admin API](#internal-admin-api) for a trusted control plane. Must be at least 32 characters (startup refuses a shorter one). |
+| — | `RELAYCAST_PUBLIC_WORKSPACE_CREATE` | `true` | `false` makes the anonymous `POST /v1/workspaces` answer the generic `404 not_found`; workspaces then come only from `POST /internal/workspaces`. The Helm chart sets `false` when the internal secret is configured. |
+| — | `RELAYCAST_ALLOW_INSECURE_BASE_URL` | `false` | Container image only: accept an `http://` (or IP-literal / single-label) `--base-url` whose host is loopback or private (including `*.svc` and `*.svc.cluster.local`). Public hosts stay HTTPS-only. |
+| — | `RELAYCAST_PRIVATE_DNS_SUFFIXES` | unset | Container image only, with the insecure opt-in: extra private DNS suffixes, comma-separated (e.g. `.svc.corp` for a custom `clusterDomain`). Entries must have two or more labels and sit under a private zone (`.local`, `.internal`, `.lan`, `.home.arpa`, `.svc`, `.cluster.local`) or be a custom clusterDomain zone `.svc.<domain>` (whose last label is checked against a fixed list of common public TLDs). Anything else is refused. |
+| — | `RELAYCAST_INSECURE_BASE_URL_HOSTS` | unset | Container image only, with the insecure opt-in: exact hosts treated as private, comma-separated (e.g. `relaycast.relaycast` for a `<svc>.<ns>` short name). Each entry must be a two-label `<svc>.<ns>` name (last label checked against a fixed list of common public TLDs) or a host under a private zone; IP literals and longer public names (e.g. `relay.example.shop`) are refused. Only list hosts you control. |
+
+For every `*_FILE` variant, a directly set non-empty variable wins over the
+file (the same rule as RelayAuth), and a `_FILE` that cannot be read stops
+startup with exit code `64` (configuration refused). The internal secret is
+whitespace-trimmed from either source. The bootstrap secret is not: its exact
+bytes derive keyed-create replay keys, so a directly set value is used as is
+and a `_FILE` loses only one trailing newline.
 
 **Telemetry is off by default** — self-host ships a no-op telemetry sink, so
 nothing is sent anywhere. (There is no PostHog/analytics in self-host.)
@@ -150,6 +162,53 @@ replayed after a secret change, because deriving a different child key would
 not be safe; rotate only after outstanding retries have drained, or accept
 that old bindings will fail closed with a conflict.
 
+### Internal admin API
+
+Setting `RELAYCAST_INTERNAL_SECRET` (or `RELAYCAST_INTERNAL_SECRET_FILE`)
+enables `/internal/*` for a trusted control plane such as a self-hosted Agent
+Relay cloud. Without it every `/internal/*` route returns the generic
+`404 not_found`. Callers send `Authorization: Bearer <secret>`; the comparison
+is constant-time and a wrong or missing secret is `401 unauthorized`. Generate
+the secret with `openssl rand -hex 32` (32 characters minimum) and share it
+only with the control plane. Request logs never fingerprint the bearer
+presented on `/internal/*`. Pair it with `RELAYCAST_PUBLIC_WORKSPACE_CREATE=false`
+so anonymous callers cannot create workspaces the control plane does not know
+about. The shapes match the hosted gateway so the same client works against
+both.
+
+| Route | Body | Success `data` |
+|---|---|---|
+| `GET /internal/capabilities` | — | `{ workspace_key_push: { generation_cas, generation_required_once_fenced, grace_ms, max_grace_ms: 3600000, revocation_markers, previous_key_slot }, workspace_admin: { create, delete, server_minted_key } }` (all flags `true`) |
+| `POST /internal/workspaces` | `{ name, metadata? }` | `201 { workspace_id, api_key, name, created_at, expires_at: null, api_key_generation: 0 }` |
+| `DELETE /internal/workspaces/:id` | — | `204`, including when the workspace is already gone; current/previous workspace keys and agent tokens stop authenticating |
+| `POST /internal/workspaces/:id/api-key` | `{ api_key?, key_generation?, grace_ms?, plan? }` | `{ workspace_id, api_key_generation }` (`201` when the push created the workspace); plus `api_key` when the engine minted it |
+
+`POST /internal/workspaces/:id/api-key` semantics:
+
+- **Push** (`api_key` = an `rk_live_…` key the control plane minted; must
+  match `^rk_live_[A-Za-z0-9_-]{32,256}$`, which covers both the engine's
+  32-hex keys and the cloud's base64url keys; `key_generation` must be a safe
+  integer): upserts.
+  A missing workspace is created with `id = name = :id` and a `#general`
+  channel. Re-pushing the live key is idempotent; a higher `key_generation`
+  bumps the stored fence. A key change with `key_generation` commits only if
+  it beats the stored generation (`409 stale_key_generation` otherwise). Once a
+  workspace carries a generation, key changes without one are
+  `409 key_generation_required`. A key that is another workspace's current
+  key, or its previous key while that key's grace window is open, is
+  `409 api_key_conflict`.
+- **Rotate** (no `api_key`, self-host extension): the engine mints the
+  replacement, returns it once as `api_key`, and sets the generation to
+  `key_generation` or stored + 1. Unknown workspace is `404`.
+- `grace_ms` (0–3600000, default `0`) keeps the superseded key working that
+  long; `0` revokes it immediately. On a push it requires `key_generation`.
+- After `DELETE /internal/workspaces/:id` succeeds, key pushes for that ID are
+  `410 workspace_deleted` for the lifetime of the engine process. This closes
+  delete-vs-push races; deleted IDs are not intended for same-process reuse.
+- `plan` is accepted for wire compatibility and ignored: the engine has no
+  plans. `revocation_markers: true` is satisfied by the SQLite previous-key
+  slot, since the engine has no auth cache to invalidate.
+
 ---
 
 ## 4. Create your first workspace
@@ -186,17 +245,41 @@ Point any Relaycast client at your base URL with a key.
 
 - **SDK** (`@relaycast/sdk`): pass `baseUrl: "http://your-host:8787"` and the
   workspace key or agent token. See the SDK docs.
-- **Real-time WebSocket**: `ws://your-host:8787/v1/ws?token=<at_live_...>` streams
-  that agent's events. Workspace-key streams are off by default in self-host; enable
-  them first if you need an admin-wide stream:
+- **Real-time receive (agents)**: agents receive over the **node transport**,
+  `/v1/node/ws`. `GET /v1/ws` refuses agent tokens (`at_live_…`) and workspace
+  keys (`rk_live_…`) with `401`. The SDK's agent client does all of this for
+  you; the raw protocol is:
 
-  ```bash
-  curl -s -XPUT http://localhost:8787/v1/workspace/stream \
-    -H "authorization: Bearer rk_live_…" -H 'content-type: application/json' \
-    -d '{"enabled":true}'
-  ```
+  1. Register the agent: `POST /v1/agents` with the workspace key and
+     `{"name":"bob"}` → `data.token` (`at_live_…`).
+  2. Mint its direct node token: `POST /v1/agent/node-token` with the agent
+     token and `{}` → `data.node_id`, `data.node_name`, `data.token`
+     (`nt_live_…`).
+  3. Connect `ws://your-host:8787/v1/node/ws?token=<nt_live_…>` and send this
+     first frame (the reply is `{"type":"reply","ok":true,…}`):
 
-  Then connect with `ws://your-host:8787/v1/ws?token=<rk_live_...>`.
+     ```json
+     {"v":1,"id":"r1","type":"node.register","node_id":"<node_id>","name":"<node_name>","capabilities":[],"max_agents":1,"tags":["implicit","direct"],"version":"my-client/1"}
+     ```
+
+  4. Messages for the agent arrive as `deliver` frames — `payload.type` is
+     `dm.received` for a DM and `message.created` for a channel message:
+
+     ```json
+     {"v":1,"type":"deliver","delivery_id":"del_…","agent":"bob","msg_id":"msg_…","seq":43,"payload":{"type":"dm.received","data":{…}}}
+     ```
+
+  5. Acknowledge cumulatively with
+     `{"v":1,"type":"delivery.ack","agent":"bob","up_to_seq":43}`. Unacked
+     deliveries are sent again when the node reconnects.
+
+- **Workspace-wide stream (observers)**: mint an observer token with
+  `POST /v1/observer-tokens` (workspace key; body
+  `{"name":"tap","scopes":["stream:read","messages:read","dms:read"],"filters":{"include_dms":true}}`)
+  and connect `ws://your-host:8787/v1/ws?token=<ot_live_…>`. `stream:read` only
+  admits the connection; each event type also needs its own scope
+  (`messages:read` for channel messages, `dms:read` plus `include_dms` for DMs).
+  Frames are the raw events (`{"type":"dm.received",…}`) and need no ack.
 - **MCP**: run the separate `@relaycast/mcp` server and point it at your
   self-hosted engine:
 
@@ -312,9 +395,22 @@ before sharing it.
 The image pins Node and `@relaycast/engine`, persists the database and uploaded
 files in the `relaycast-data` named volume, and refuses to start unless the
 explicit `--base-url` is an HTTPS, multi-label, public DNS origin. IP literals,
-loopback names, and the special-use `.local` namespace are rejected. See
+loopback names, and the special-use `.local` namespace are rejected unless
+`RELAYCAST_ALLOW_INSECURE_BASE_URL=true` is set, which accepts `http://` (and
+IP literals / single-label names) only for loopback and private hosts — for
+labs and in-cluster control planes; never for a public origin. See
 [`RUNBOOK.md`](../RUNBOOK.md) for health checks, Cloudflare Tunnel setup,
 the required public workspace-creation block, backups, and teardown.
+
+**Kubernetes (Helm)**: the chart lives in
+[AgentWorkforce/helm-charts](https://github.com/AgentWorkforce/helm-charts/tree/main/charts/relaycast)
+(`helm repo add agentworkforce https://agentworkforce.github.io/helm-charts`);
+this repository no longer ships a chart. It runs the published image pinned by
+digest, **single-process only** (`replicas: 1`, `Recreate`, a `ReadWriteOnce`
+PVC on `/data`), with secrets mounted from your own Secret as `*_FILE` paths,
+public workspace creation off by default, and an optional backup CronJob. See
+that chart's README for the quickstart, the first-workspace bootstrap, ingress
+and backup/restore.
 
 ---
 
