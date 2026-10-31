@@ -29,6 +29,7 @@ import {
 // Route imports
 import { healthRoutes } from './routes/health.js';
 import { workspaceRoutes } from './routes/workspace.js';
+import { assertInternalSecretStrength } from './engine/internalAdmin.js';
 import { observerTokenRoutes } from './routes/observerToken.js';
 import { agentRoutes } from './routes/agent.js';
 import { channelRoutes } from './routes/channel.js';
@@ -56,6 +57,7 @@ import { certifyRoutes } from './routes/certify.js';
 import { consoleRoutes } from './routes/console.js';
 import { directoryRoutes } from './routes/directory.js';
 import { routingRoutes } from './routes/routing.js';
+import { internalRoutes } from './routes/internal.js';
 
 /**
  * Build the platform-agnostic Relaycast engine as a Hono app.
@@ -71,6 +73,7 @@ import { routingRoutes } from './routes/routing.js';
  * no Durable Objects — those concerns belong to the adapter/entrypoint.
  */
 export function createEngine(deps: EngineDeps): Hono<AppEnv> {
+  assertInternalSecretStrength(deps.config?.internalSecret);
   if (deps.nodeLiveness) configureNodeLiveness(deps.db, deps.nodeLiveness);
   if (deps.config?.credentialFormat === 'ar' && deps.config.workspaceId !== undefined && !isArWorkspaceId(deps.config.workspaceId)) {
     throw new Error('EngineConfig.workspaceId must be a 64-bit snowflake to mint ar_ credentials');
@@ -124,6 +127,10 @@ export function createEngine(deps: EngineDeps): Hono<AppEnv> {
 
   // Health check
   app.route('/health', healthRoutes);
+
+  // Internal admin API for a trusted control plane; 404 unless
+  // config.internalSecret is set.
+  app.route('/internal', internalRoutes);
 
   // WebSocket upgrade route — delegates to the ConnectionRegistry port
   app.get('/v1/ws', async (c) => {

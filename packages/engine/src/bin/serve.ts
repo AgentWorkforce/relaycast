@@ -1,7 +1,9 @@
 #!/usr/bin/env node
 import { startServer } from '../entrypoints/node.js';
 import { createCredentialTagSigner, parseCredentialKeyring } from '../auth/credentialTags.js';
+import { ConfigError, secretFromEnv } from './secretEnv.js';
 import { engineVersion } from './version.js';
+import { MIN_INTERNAL_SECRET_LENGTH } from '../engine/internalAdmin.js';
 
 const HELP = `relaycast-engine — run a self-hosted Relaycast server (Node + SQLite)
 
@@ -17,9 +19,18 @@ Options:
   -h, --help         Show this help
 
 Environment:
-  RELAYCAST_CREDENTIAL_KEYRING  {"current":"a","keys":{"a":"<secret>"}}: signs ar_ credential tags,
-                                enabling POST /v1/credentials/upgrade
-  RELAYCAST_CREDENTIAL_FORMAT   legacy (default) or ar (needs RELAYCAST_CREDENTIAL_KEYRING)
+  RELAYCAST_INTERNAL_SECRET(_FILE)  Enable the /internal admin API for a trusted
+                                    control plane (Authorization: Bearer <secret>;
+                                    at least 32 characters)
+  RELAYCAST_WORKSPACE_BOOTSTRAP_SECRET(_FILE)
+                                    Stable secret for anonymous keyed workspace retries
+  RELAYCAST_PUBLIC_WORKSPACE_CREATE Set false to 404 the public POST /v1/workspaces
+                                    (workspaces then come from /internal/workspaces)
+  RELAYCAST_CREDENTIAL_KEYRING(_FILE)
+                                    {"current":"a","keys":{"a":"<secret>"}}: signs ar_ credential
+                                    tags, enabling POST /v1/credentials/upgrade
+  RELAYCAST_CREDENTIAL_FORMAT       legacy (default) or ar (needs RELAYCAST_CREDENTIAL_KEYRING)
+  A directly set variable wins over its _FILE variant.
 
 After start, create a workspace:
   curl -XPOST http://localhost:<port>/v1/workspaces -H 'content-type: application/json' -d '{"name":"my-team"}'
@@ -54,6 +65,9 @@ function parseArgs(argv: string[], env: NodeJS.ProcessEnv): ServeArgs {
   }
   return out;
 }
+
+/** Exit code for a configuration the server refuses to run with (EX_USAGE). */
+const CONFIG_EXIT_CODE = 64;
 
 async function main(): Promise<void> {
   const opts = parseArgs(process.argv.slice(2), process.env);
@@ -94,12 +108,31 @@ async function main(): Promise<void> {
       ? { retention: { defaults: { messageTtlDays: messageTtlDays > 0 ? messageTtlDays : null } } }
       : undefined;
 
-  const keyring = process.env.RELAYCAST_CREDENTIAL_KEYRING;
-  const credentialFormat = process.env.RELAYCAST_CREDENTIAL_FORMAT === 'ar' ? 'ar' as const : 'legacy' as const;
+  const internalSecret = secretFromEnv(process.env, 'RELAYCAST_INTERNAL_SECRET');
+  if (internalSecret !== undefined && internalSecret.length < MIN_INTERNAL_SECRET_LENGTH) {
+    throw new ConfigError(
+      `RELAYCAST_INTERNAL_SECRET must be at least ${MIN_INTERNAL_SECRET_LENGTH} characters`,
+    );
+  }
+  // Verbatim: the bootstrap secret's exact bytes derive keyed-create replay
+  // keys, so trimming would break retries of workspaces created before.
+  const workspaceBootstrapSecret = secretFromEnv(process.env, 'RELAYCAST_WORKSPACE_BOOTSTRAP_SECRET', {
+    exact: true,
+  });
+  const publicWorkspaceCreate = process.env.RELAYCAST_PUBLIC_WORKSPACE_CREATE?.trim();
+  if (publicWorkspaceCreate && publicWorkspaceCreate !== 'true' && publicWorkspaceCreate !== 'false') {
+    throw new ConfigError('RELAYCAST_PUBLIC_WORKSPACE_CREATE must be "true" or "false"');
+  }
+
+  const keyring = secretFromEnv(process.env, 'RELAYCAST_CREDENTIAL_KEYRING');
+  const credentialFormat = process.env.RELAYCAST_CREDENTIAL_FORMAT?.trim() || 'legacy';
+  if (credentialFormat !== 'legacy' && credentialFormat !== 'ar') {
+    throw new ConfigError('RELAYCAST_CREDENTIAL_FORMAT must be "legacy" or "ar"');
+  }
   const credentials = {
     credentialFormat,
     ...(keyring ? { credentialTagger: createCredentialTagSigner(parseCredentialKeyring(keyring)) } : {}),
-  };
+  } as const;
 
   const running = startServer({
     dbPath: opts.db,
@@ -108,12 +141,12 @@ async function main(): Promise<void> {
     config: {
       environment: opts.environment,
       ...credentials,
-      ...(process.env.RELAYCAST_WORKSPACE_BOOTSTRAP_SECRET
-        ? { workspaceBootstrapSecret: process.env.RELAYCAST_WORKSPACE_BOOTSTRAP_SECRET }
-        : {}),
+      ...(workspaceBootstrapSecret ? { workspaceBootstrapSecret } : {}),
       ...(process.env.RELAYCAST_WORKSPACE_BOOTSTRAP_PROOF_REQUIRED === 'true'
         ? { workspaceBootstrapProofRequired: true }
         : {}),
+      ...(internalSecret ? { internalSecret } : {}),
+      ...(publicWorkspaceCreate === 'false' ? { publicWorkspaceCreate: false } : {}),
       ...(Object.keys(mailbox).length > 0 ? { mailbox } : {}),
     },
     ...(eventQueue ? { eventQueue } : {}),
@@ -136,5 +169,5 @@ async function main(): Promise<void> {
 
 main().catch((err) => {
   process.stderr.write(`relaycast-engine failed to start: ${err instanceof Error ? err.message : String(err)}\n`);
-  process.exit(1);
+  process.exit(err instanceof ConfigError ? CONFIG_EXIT_CODE : 1);
 });

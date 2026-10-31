@@ -220,6 +220,12 @@ const publicWorkspaceLookupRateLimit = createMiddleware<AppEnv>(async (c, next) 
 // its recovery capability. Self-hosts may additionally opt into requiring
 // X-Workspace-Bootstrap-Secret before any binding lookup or recovery runs.
 workspaceRoutes.post('/workspaces', async (c) => {
+  // A control-plane-managed deployment can turn the public create off
+  // (RELAYCAST_PUBLIC_WORKSPACE_CREATE=false); it then looks like any other
+  // absent route.
+  if (c.get('engine').config.publicWorkspaceCreate === false) {
+    return jsonNotFound(c, 'not_found', 'Route not found');
+  }
   try {
     const parsed = await parseJsonBody(c, createWorkspaceSchema, 'name is required');
     if (!parsed.ok) {
