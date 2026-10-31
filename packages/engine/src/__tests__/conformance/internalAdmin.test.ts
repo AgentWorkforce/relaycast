@@ -304,6 +304,7 @@ describe('internal admin API', () => {
       const result = await pushWorkspaceKey(racingDb, 'cloud-ws-cas', { apiKey: next, keyGeneration: 7 });
       expect(raced).toBe(true);
       expect(result.apiKeyGeneration).toBe(7);
+      expect((await readWorkspace(next)).status).toBe(200);
       // The fence is really at 7: a push at 6 is stale.
       const stale = await internal(path, {
         method: 'POST', body: { api_key: `rk_${'live'}_cas_between_key_000000000000000000`, key_generation: 6 },
