@@ -306,6 +306,7 @@ test('the container config path reads the credential keyring and format through 
     { RELAYCAST_CREDENTIAL_FORMAT: 'ar' },
     { RELAYCAST_CREDENTIAL_FORMAT: 'self_routing' },
     { RELAYCAST_CREDENTIAL_KEYRING: '{"current":"a","keys":{"a":"short"}}' },
+    { RELAYCAST_LEGACY_CREDENTIAL_GRACE_SECONDS: '315360001' },
   ]) {
     assert.throws(() => containerEngineConfig(env, {}, engine), (error) =>
       error instanceof BaseUrlError && error.code === 'invalid_credential_config' && !/short"/.test(error.message));

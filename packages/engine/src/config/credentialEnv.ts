@@ -1,6 +1,7 @@
 import { ConfigError, secretFromEnv } from '../bin/secretEnv.js';
 import { createCredentialTagSigner, parseCredentialKeyring } from '../auth/credentialTags.js';
 import type { EngineConfig } from '../ports/index.js';
+import { MAX_LEGACY_CREDENTIAL_GRACE_SECONDS } from '../engine/credentialUpgrade.js';
 
 export type CredentialEnvConfig = Pick<
   EngineConfig,
@@ -40,8 +41,8 @@ export function credentialConfigFromEnv(env: NodeJS.ProcessEnv): CredentialEnvCo
     }
   }
   const grace = env.RELAYCAST_LEGACY_CREDENTIAL_GRACE_SECONDS?.trim();
-  if (grace && !/^\d+$/.test(grace)) {
-    throw new ConfigError('RELAYCAST_LEGACY_CREDENTIAL_GRACE_SECONDS must be a non-negative integer');
+  if (grace && !(/^\d+$/.test(grace) && Number(grace) <= MAX_LEGACY_CREDENTIAL_GRACE_SECONDS)) {
+    throw new ConfigError(`RELAYCAST_LEGACY_CREDENTIAL_GRACE_SECONDS must be an integer from 0 to ${MAX_LEGACY_CREDENTIAL_GRACE_SECONDS}`);
   }
   const sunsetText = env.RELAYCAST_LEGACY_CREDENTIAL_SUNSET?.trim();
   const sunset = sunsetText ? new Date(sunsetText) : undefined;

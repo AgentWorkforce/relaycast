@@ -31,7 +31,7 @@ Environment:
                                     tags, enabling POST /v1/credentials/upgrade
   RELAYCAST_CREDENTIAL_FORMAT       legacy (default) or ar (needs RELAYCAST_CREDENTIAL_KEYRING)
   RELAYCAST_LEGACY_CREDENTIAL_GRACE_SECONDS
-                                    How long an upgraded legacy credential keeps working (default 30 days)
+                                    How long an upgraded legacy credential keeps working (default 30 days, at most 10 years)
   RELAYCAST_LEGACY_CREDENTIAL_SUNSET
                                     ISO-8601 date sent as Sunset on legacy-authenticated responses
   A directly set variable wins over its _FILE variant.
