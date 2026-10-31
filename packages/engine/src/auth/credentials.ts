@@ -141,9 +141,25 @@ export function credentialTagger(db: object): CredentialTagger | undefined {
   return settings.get(db)?.tagger;
 }
 
-/** Whether the deployment can mint an `ar_` credential for `workspaceId`. */
-export function canMintAr(db: object, workspaceId: string): boolean {
-  return credentialTagger(db) !== undefined && isArWorkspaceId(workspaceId);
+/**
+ * A family a derived credential may carry: `legacy`, or `ar` under the tag
+ * it names. An `ar_` credential names its workspace and tag, so derived
+ * secret material binds both.
+ */
+export type DerivationFamily = { format: 'legacy' } | { format: 'ar'; tag: string };
+
+/**
+ * Every family a credential derived for `workspaceId` may have been committed
+ * in, the deployment's current one first: `legacy`, and `ar` under each tag
+ * the deployment's tagger knows for the workspace. A replay derives each, so
+ * one retried after a family switch or a keyring rotation still recovers what
+ * the first attempt committed.
+ */
+export async function derivationFamilies(db: object, workspaceId: string): Promise<DerivationFamily[]> {
+  // A workspace id that is not a snowflake cannot carry an ar_ credential.
+  const tagger = isArWorkspaceId(workspaceId) ? credentialTagger(db) : undefined;
+  const ar: DerivationFamily[] = tagger ? (await tagger.tags(workspaceId)).map((tag) => ({ format: 'ar', tag })) : [];
+  return credentialFormat(db) === 'ar' ? [...ar, { format: 'legacy' }] : [{ format: 'legacy' }, ...ar];
 }
 
 /**

@@ -3,6 +3,8 @@ import { parseCredential } from '@relaycast/types';
 import type { AppEnv } from '../env.js';
 import { emitServerEvent } from './serverTelemetry.js';
 import { acceptsOnlyAr } from '../auth/credentials.js';
+import type { TelemetrySink } from '../ports/telemetry.js';
+import { extractOriginActor, requiredOriginInfo } from './origin.js';
 
 /** Where the legacy-credential deprecation is documented (the `Link` header on legacy responses). */
 export const LEGACY_CREDENTIAL_DOCS_URL = 'https://github.com/AgentWorkforce/relaycast#credential-upgrade';
@@ -28,6 +30,29 @@ export function noteAuthenticatedCredential(c: Context<AppEnv>, token: string, w
     credential_family: parsed.family,
     credential_kind: parsed.kind,
   });
+}
+
+/**
+ * Report `request.authenticated` for a connect authenticated outside a Hono
+ * context (the Node server's native WebSocket upgrade), with the same facts
+ * and origin {@link noteAuthenticatedCredential} reports.
+ */
+export function observeAuthenticatedCredential(telemetry: TelemetrySink, request: Request, token: string, workspaceId: string): void {
+  const parsed = parseCredential(token);
+  if (!parsed) return;
+  const origin = requiredOriginInfo(request);
+  try {
+    const pending = telemetry.capture({
+      kind: 'request.authenticated',
+      occurredAt: new Date().toISOString(),
+      workspaceId,
+      origin: { actor: extractOriginActor(request), client: origin.origin_client, version: origin.origin_version },
+      facts: { credential_family: parsed.family, credential_kind: parsed.kind },
+    });
+    if (pending) void Promise.resolve(pending).catch(() => {});
+  } catch {
+    // Host observation is best effort.
+  }
 }
 
 /**

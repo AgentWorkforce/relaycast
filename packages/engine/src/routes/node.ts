@@ -33,7 +33,7 @@ import {
   normalizeObserverFilters,
   observerAllowsAgent,
 } from '../engine/observerToken.js';
-import { credentialFormat, credentialFromHex, credentialTagger } from '../auth/credentials.js';
+import { derivationFamilies, credentialFromHex } from '../auth/credentials.js';
 import { ephemeralEventFetch } from '../ports/index.js';
 
 export const nodeRoutes = new Hono<AppEnv>();
@@ -227,17 +227,15 @@ async function enrollNode(c: Context<AppEnv>, data: z.infer<typeof createNodeSch
             idempotencyKey,
             requestDigest,
           ]));
-          // An ar_ replacement is derived under each tag the deployment
-          // knows (current first), so a retry after a keyring rotation still
-          // recovers the token the first attempt committed.
+          // The replacement is derived in every family the first attempt may
+          // have committed it in, so a retry after a family switch or a
+          // keyring rotation still recovers it.
           const db = c.get('db');
           const workspaceId = c.get('workspace').id;
-          const format = credentialFormat(db);
-          const tagger = credentialTagger(db);
-          const tags = format === 'ar' && tagger ? await tagger.tags(workspaceId) : [undefined];
+          const families = await derivationFamilies(db, workspaceId);
           return {
-            replacementTokens: await Promise.all(tags.map((tag) =>
-              credentialFromHex(db, format, 'node', workspaceId, replacementDigest, tag))),
+            replacementTokens: await Promise.all(families.map((family) =>
+              credentialFromHex(db, family.format, 'node', workspaceId, replacementDigest, family.format === 'ar' ? family.tag : undefined))),
             idempotencyKeyHash: await sha256Hex(idempotencyKey),
             requestDigest,
           };

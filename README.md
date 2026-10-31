@@ -1417,12 +1417,17 @@ from `RELAYCAST_CREDENTIAL_KEYRING` and the family from
 kind, returns the `ar_` credential for the same principal:
 
 ```bash
-curl -XPOST https://cast.agentrelay.com/v1/credentials/upgrade -H "authorization: Bearer $RELAY_API_KEY"
-# {"ok":true,"data":{"credential":"ar_ws_…","kind":"workspace","legacy_expires_at":"…"}}
+curl -XPOST https://cast.agentrelay.com/v1/credentials/upgrade -H "authorization: Bearer $RELAY_AGENT_TOKEN"
+# {"ok":true,"data":{"credential":"ar_ag_…","kind":"agent","legacy_expires_at":"…"}}
 ```
 
+A workspace key upgrades here only where the engine owns workspace keys
+(`allowWorkspaceKeyRotation`). Where a control plane owns them, as on
+`cast.agentrelay.com`, the route answers `403 workspace_key_rotation_disabled`
+and the control plane issues the `ar_ws_` key.
+
 The legacy credential keeps working until `legacy_expires_at`
-(`legacyCredentialGraceSeconds`, default 30 days), and only while the
+(`legacyCredentialGraceSeconds`, default 30 days, at most 10 years), and only while the
 principal holds the returned credential. Its secret is random; upgrading the
 same legacy credential again during the grace returns it from the server's sealed
 record (after the grace the legacy credential gets 401: use the `ar_` credential, or
@@ -1430,7 +1435,7 @@ rotate it if lost); upgrades are limited to 10 per principal per minute. The rou
 a `credentialTagger`. The final response to every request a legacy credential
 authenticated, whatever its status, carries `Deprecation: @1793318400` (RFC 9745: the legacy family was deprecated on
 2026-10-30), a `Link` to this section (`rel="deprecation"`), and `Sunset` (RFC 8594) when
-`legacyCredentialSunset` is set. Every authenticated request reports a
+`legacyCredentialSunset` is set. Every authenticated request and WebSocket connect reports a
 `request.authenticated` observation with `credential_family` (`legacy` | `ar`)
 and `credential_kind`, plus the workspace and origin client and version.
 

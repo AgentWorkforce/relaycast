@@ -11,6 +11,9 @@ import { codedError } from '../lib/httpError.js';
 /** How long an upgraded legacy credential keeps working, unless configured: 30 days. */
 export const DEFAULT_LEGACY_CREDENTIAL_GRACE_SECONDS = 30 * 24 * 60 * 60;
 
+/** The longest grace period a deployment may configure: 10 years. */
+export const MAX_LEGACY_CREDENTIAL_GRACE_SECONDS = 10 * 365 * 24 * 60 * 60;
+
 /** The column each kind of principal keeps its credential hash in. */
 const PRINCIPALS = {
   workspace: { table: workspaces, id: workspaces.id, hash: workspaces.apiKeyHash },

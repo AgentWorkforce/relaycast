@@ -162,7 +162,7 @@ describe('credential families', () => {
 
 describe('POST /v1/credentials/upgrade', () => {
   it('exchanges a legacy credential for an ar_ one for the same principal, idempotently', async () => {
-    const stack = makeNodeStack({ credentialTagger: tagger });
+    const stack = makeNodeStack({ credentialTagger: tagger, allowWorkspaceKeyRotation: true });
     const workspace = await createWorkspace(stack.app, 'upgrade');
     const agent = await registerAgent(stack.app, workspace.workspaceKey, 'alice');
 
@@ -365,8 +365,23 @@ describe('POST /v1/credentials/upgrade', () => {
     })).rejects.toMatchObject({ code: 'credential_grace_expired', status: 401 });
   });
 
+  it('refuses a workspace key whose control plane owns it, and still upgrades the agents under it', async () => {
+    const stack = makeNodeStack({ credentialTagger: tagger });
+    const workspace = await createWorkspace(stack.app, 'control-plane-owned');
+    const agent = await registerAgent(stack.app, workspace.workspaceKey, 'alice');
+    const refused = await upgrade(stack, workspace.workspaceKey);
+    expect(refused.status).toBe(403);
+    expect(((await refused.json()) as { error: { code: string } }).error.code).toBe('workspace_key_rotation_disabled');
+    expect((await get(stack, '/v1/agents', workspace.workspaceKey)).status).toBe(200);
+    expect((await upgraded(stack, agent.token)).credential).toMatch(/^ar_ag_/);
+  });
+
+  it('refuses a grace period past 10 years', () => {
+    expect(() => makeNodeStack({ legacyCredentialGraceSeconds: 10 * 365 * 24 * 60 * 60 + 1 })).toThrow(/legacyCredentialGraceSeconds/);
+  });
+
   it('is unavailable without a tagger', async () => {
-    const stack = makeNodeStack();
+    const stack = makeNodeStack({ allowWorkspaceKeyRotation: true });
     const workspace = await createWorkspace(stack.app, 'no-tagger');
     const res = await upgrade(stack, workspace.workspaceKey);
     expect(res.status).toBe(409);
@@ -377,7 +392,7 @@ describe('POST /v1/credentials/upgrade', () => {
 describe('legacy credential deprecation', () => {
   it('marks only legacy-authenticated responses deprecated, with the configured sunset', async () => {
     const sunset = new Date('2026-12-31T00:00:00Z');
-    const stack = makeNodeStack({ credentialTagger: tagger, legacyCredentialSunset: sunset });
+    const stack = makeNodeStack({ credentialTagger: tagger, legacyCredentialSunset: sunset, allowWorkspaceKeyRotation: true });
     const workspace = await createWorkspace(stack.app, 'deprecation');
     const legacy = await get(stack, '/v1/agents', workspace.workspaceKey);
     expect(legacy.status).toBe(200);
@@ -412,7 +427,7 @@ describe('legacy deprecation on every authenticated response', () => {
   });
 
   it('marks a 429 and an unavailable upgrade for a legacy credential', async () => {
-    const stack = makeNodeStack();
+    const stack = makeNodeStack({ allowWorkspaceKeyRotation: true });
     const workspace = await createWorkspace(stack.app, 'throttled');
     const statuses: number[] = [];
     let last: Response | undefined;

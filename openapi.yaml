@@ -2224,6 +2224,9 @@ paths:
         credential. Upgrading the same legacy credential again returns the same
         `ar_` credential. Limited to 10 upgrades per principal per minute.
         Deployments that accept only `ar_` credentials do not serve this route.
+        A workspace key upgrades only where the engine owns workspace keys; a
+        deployment whose keys a control plane owns refuses it (403), and the
+        control plane mints and pushes the `ar_ws_` key itself.
       tags:
         - Workspaces
       security:
@@ -2262,6 +2265,14 @@ paths:
             Missing, malformed or invalid credential. Once its grace ends, an
             upgraded legacy credential no longer authenticates, so a retry gets
             401: use the returned `ar_` credential, or rotate it if it was lost.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '403':
+          description: >-
+            A workspace key on a deployment whose workspace keys a control
+            plane owns (`workspace_key_rotation_disabled`).
           content:
             application/json:
               schema:

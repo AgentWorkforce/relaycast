@@ -4,6 +4,7 @@ import {
   credentialFormat,
   credentialFromHex,
   credentialShape,
+  derivationFamilies,
   issueCredential,
   mintCredential,
   parseArCredential,
@@ -81,5 +82,28 @@ describe('credential families', () => {
     configureCredentials(db, { format: 'ar', tagger });
     expect(() => configureCredentials(db, { format: 'legacy' })).toThrow(/one credential configuration/);
     expect(() => configureCredentials({}, { format: 'ar' })).toThrow(/credentialTagger/);
+  });
+});
+
+describe('derivationFamilies', () => {
+  const rotated = createCredentialTagSigner({ current: 'b', keys: { a: 'credential-tag-secret-a', b: 'credential-tag-secret-b' } });
+
+  it('lists the current family first and every family a replay may have committed in', async () => {
+    const [current, previous] = await rotated.tags(WS);
+    expect(current).toMatch(/^b/);
+    expect(previous).toMatch(/^a/);
+    const ar = {};
+    configureCredentials(ar, { format: 'ar', tagger: rotated });
+    expect(await derivationFamilies(ar, WS)).toEqual([{ format: 'ar', tag: current }, { format: 'ar', tag: previous }, { format: 'legacy' }]);
+
+    const legacy = {};
+    configureCredentials(legacy, { format: 'legacy', tagger: rotated });
+    expect(await derivationFamilies(legacy, WS)).toEqual([{ format: 'legacy' }, { format: 'ar', tag: current }, { format: 'ar', tag: previous }]);
+  });
+
+  it('lists only legacy for a workspace id that cannot carry an ar_ credential', async () => {
+    const legacy = {};
+    configureCredentials(legacy, { format: 'legacy', tagger: rotated });
+    expect(await derivationFamilies(legacy, 'custom-workspace')).toEqual([{ format: 'legacy' }]);
   });
 });

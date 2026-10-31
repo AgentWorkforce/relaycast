@@ -3,6 +3,7 @@ import { isArWorkspaceId } from '@relaycast/types';
 import { acceptsOnlyAr, configureCredentials } from './auth/credentials.js';
 import { legacyCredentialHeaders, noteAuthenticatedCredential } from './lib/credentialNotice.js';
 import { safeTelemetrySink } from './ports/telemetry.js';
+import { MAX_LEGACY_CREDENTIAL_GRACE_SECONDS } from './engine/credentialUpgrade.js';
 import { NoopTelemetrySink } from './providers/noop-telemetry.js';
 import { Hono, type Context } from 'hono';
 import type { ContentfulStatusCode } from 'hono/utils/http-status';
@@ -83,8 +84,8 @@ export function createEngine(deps: EngineDeps): Hono<AppEnv> {
     tagger: deps.config?.credentialTagger,
   });
   const graceSeconds = deps.config?.legacyCredentialGraceSeconds;
-  if (graceSeconds !== undefined && !(Number.isSafeInteger(graceSeconds) && graceSeconds >= 0)) {
-    throw new Error('EngineConfig.legacyCredentialGraceSeconds must be a non-negative safe integer');
+  if (graceSeconds !== undefined && !(Number.isSafeInteger(graceSeconds) && graceSeconds >= 0 && graceSeconds <= MAX_LEGACY_CREDENTIAL_GRACE_SECONDS)) {
+    throw new Error(`EngineConfig.legacyCredentialGraceSeconds must be an integer from 0 to ${MAX_LEGACY_CREDENTIAL_GRACE_SECONDS}`);
   }
   const maxUploadBytes = deps.config?.maxUploadBytes;
   if (maxUploadBytes !== undefined && !(Number.isSafeInteger(maxUploadBytes) && maxUploadBytes > 0)) {

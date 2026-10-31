@@ -1,10 +1,10 @@
-import { WorkspaceMetadataSchema, isArWorkspaceId } from '@relaycast/types';
+import { WorkspaceMetadataSchema } from '@relaycast/types';
 import { and, asc, eq, gt, inArray, isNull, like, lte, or, sql } from 'drizzle-orm';
 import type { getDb } from '../db/index.js';
 import { workspaces, channels, fileCleanupQueue, workspaceEvents, workspaceCreateIdempotency } from '../db/schema.js';
 import { constantTimeEqual, hmacSha256Hex, sha256Hex } from '../lib/crypto.js';
 import { generateId } from './snowflake.js';
-import { credentialFormat, credentialFromHex, credentialTagger, issueCredential, type CredentialFormat } from '../auth/credentials.js';
+import { derivationFamilies, credentialFormat, credentialFromHex, credentialTagger, issueCredential, type DerivationFamily } from '../auth/credentials.js';
 import { codedError } from '../lib/httpError.js';
 import { D1WriteRetryExhaustedError, retryD1Write } from '../lib/d1Retry.js';
 import { runAtomicWrites } from '../ports/database.js';
@@ -139,15 +139,9 @@ export function workspaceCreateRequestDigest(input: {
   }));
 }
 
-/**
- * A deterministic workspace key's family, and for an `ar_` key the tag it
- * carries. An `ar_` key names its workspace and tag, so its HMAC material
- * binds both.
- */
-export type WorkspaceKeyFamily = { format: 'legacy' } | { format: 'ar'; tag: string };
 
 function workspaceKeyMaterial(
-  family: WorkspaceKeyFamily,
+  family: DerivationFamily,
   workspaceId: string,
   idempotencyKey: string,
   requestDigest: string,
@@ -159,7 +153,7 @@ function workspaceKeyMaterial(
 
 async function deriveWorkspaceApiKey(
   db: object,
-  family: WorkspaceKeyFamily,
+  family: DerivationFamily,
   workspaceId: string,
   secret: string,
   idempotencyKey: string,
@@ -172,7 +166,7 @@ async function deriveWorkspaceApiKey(
 
 export function deriveIdempotentWorkspaceApiKey(
   db: object,
-  family: WorkspaceKeyFamily,
+  family: DerivationFamily,
   workspaceId: string,
   ownerApiKey: string,
   idempotencyKey: string,
@@ -183,25 +177,13 @@ export function deriveIdempotentWorkspaceApiKey(
 
 export function deriveBootstrapWorkspaceApiKey(
   db: object,
-  family: WorkspaceKeyFamily,
+  family: DerivationFamily,
   workspaceId: string,
   bootstrapSecret: string,
   idempotencyKey: string,
   requestDigest: string,
 ): Promise<string> {
   return deriveWorkspaceApiKey(db, family, workspaceId, bootstrapSecret, idempotencyKey, requestDigest);
-}
-
-/**
- * Every family a deterministic key for `workspaceId` may have been derived
- * in, the deployment's current one first: `legacy`, and `ar` under each tag
- * the deployment's tagger knows for the workspace.
- */
-async function workspaceKeyFamilies(db: object, format: CredentialFormat, workspaceId: string): Promise<WorkspaceKeyFamily[]> {
-  // A workspace id that is not a snowflake cannot carry an ar_ key.
-  const tagger = isArWorkspaceId(workspaceId) ? credentialTagger(db) : undefined;
-  const ar: WorkspaceKeyFamily[] = tagger ? (await tagger.tags(workspaceId)).map((tag) => ({ format: 'ar', tag })) : [];
-  return format === 'ar' ? [...ar, { format: 'legacy' }] : [{ format: 'legacy' }, ...ar];
 }
 
 function idempotencyConflict(message: string, code = 'workspace_create_idempotency_conflict') {
@@ -389,7 +371,7 @@ export async function createWorkspace(
   const format = credentialFormat(db);
   const deriveDeterministicApiKey = async (
     forWorkspaceId: string,
-    family: WorkspaceKeyFamily,
+    family: DerivationFamily,
   ): Promise<string | undefined> => {
     if (!idempotencyKey || !requestDigest) return undefined;
     return providedOwnerApiKey
@@ -403,7 +385,7 @@ export async function createWorkspace(
   const recoverDeterministicApiKey = async (
     workspace: { id: string; apiKeyHash: string },
   ): Promise<string | undefined> => {
-    for (const family of await workspaceKeyFamilies(db, format, workspace.id)) {
+    for (const family of await derivationFamilies(db, workspace.id)) {
       const key = await deriveDeterministicApiKey(workspace.id, family);
       if (key && await hashApiKey(key) === workspace.apiKeyHash) return key;
     }
@@ -463,7 +445,7 @@ export async function createWorkspace(
 
   const assignedWorkspaceId = createOptions?.workspaceId;
   const workspaceId = assignedWorkspaceId ?? generateId();
-  const createFamily: WorkspaceKeyFamily = format === 'ar'
+  const createFamily: DerivationFamily = format === 'ar'
     ? { format: 'ar', tag: await credentialTagger(db)!.tag(workspaceId) }
     : { format: 'legacy' };
   const apiKey = await deriveDeterministicApiKey(workspaceId, createFamily) ?? await issueCredential(db, 'workspace', workspaceId);

@@ -42,7 +42,8 @@ interface Principal {
 
 // POST /v1/credentials/upgrade - exchange a legacy credential for an ar_ one
 // standing for the same principal. The legacy credential keeps working for
-// EngineConfig.legacyCredentialGraceSeconds (default 30 days).
+// EngineConfig.legacyCredentialGraceSeconds (default 30 days). Workspace keys
+// upgrade only where the engine owns them (EngineConfig.allowWorkspaceKeyRotation).
 credentialRoutes.post('/credentials/upgrade', async (c) => {
   try {
     const header = c.req.header('Authorization');
@@ -78,6 +79,18 @@ credentialRoutes.post('/credentials/upgrade', async (c) => {
     }
 
     noteAuthenticatedCredential(c, token, principal.workspaceId);
+
+    // A workspace key owned by an external control plane is replaced there and
+    // pushed here; one minted here would be unknown to that plane, and its next
+    // push would invalidate it.
+    if (parsed.kind === 'workspace' && !c.get('engine').config.allowWorkspaceKeyRotation) {
+      return jsonError(
+        c,
+        'workspace_key_rotation_disabled',
+        'Workspace key upgrade is disabled on this deployment; upgrade through the managing control plane',
+        403,
+      );
+    }
 
     const now = Date.now();
     const bucketKey = `credential-upgrade:${parsed.kind}:${principal.id}:${rateLimitWindow(now)}`;

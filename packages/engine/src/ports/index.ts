@@ -135,7 +135,8 @@ export interface EngineConfig {
   credentialTagger?: CredentialTagger;
   /**
    * How long a legacy credential keeps working after
-   * `POST /v1/credentials/upgrade` replaced it. Default 30 days.
+   * `POST /v1/credentials/upgrade` replaced it. Default 30 days, at most 10
+   * years.
    */
   legacyCredentialGraceSeconds?: number;
   /**
@@ -225,7 +226,9 @@ export interface EngineConfig {
    * canonical store, and that store's repair path would clobber or resurrect
    * credentials. Such deployments rotate through the control plane's own
    * authorized flow, which pushes the result over the internal key-update
-   * channel.
+   * channel. The same setting governs `POST /v1/credentials/upgrade` for
+   * workspace keys: a control plane that owns the key mints and pushes the
+   * `ar_ws_` replacement itself.
    */
   allowWorkspaceKeyRotation?: boolean;
   /**
