@@ -16,7 +16,8 @@ type NodeContextDeps = {
   environment?: string;
   /** Egress proxy for http_push nodes that opt in with `delivery.use_proxy`. */
   httpPushProxy?: HttpPushProxyConfig;
-  outboundWebhookFetch?: typeof globalThis.fetch;
+  /** Transport for best-effort ephemeral http_push events (`ephemeralEventFetch(config)`). */
+  ephemeralEventFetch?: typeof globalThis.fetch;
 };
 
 type ScopedNodeRow = {
@@ -185,7 +186,7 @@ async function sendContextToRows(
           deliveryConfig: group.deliveryConfig,
           strict: strictHttpPushDispatch(deps.environment),
           proxy: deps.httpPushProxy,
-          fetch: deps.outboundWebhookFetch,
+          fetch: deps.ephemeralEventFetch,
           event: {
             workspaceId: deps.workspaceId,
             eventType: message.event,

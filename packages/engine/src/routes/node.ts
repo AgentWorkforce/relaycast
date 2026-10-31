@@ -33,6 +33,8 @@ import {
   normalizeObserverFilters,
   observerAllowsAgent,
 } from '../engine/observerToken.js';
+import { credentialFormat, credentialFromHex } from '../auth/credentials.js';
+import { ephemeralEventFetch } from '../ports/index.js';
 
 export const nodeRoutes = new Hono<AppEnv>();
 
@@ -226,7 +228,12 @@ async function enrollNode(c: Context<AppEnv>, data: z.infer<typeof createNodeSch
             requestDigest,
           ]));
           return {
-            replacementToken: `nt_live_${replacementDigest.slice(0, 48)}`,
+            replacementToken: credentialFromHex(
+              credentialFormat(c.get('db')),
+              'node',
+              c.get('workspace').id,
+              replacementDigest,
+            ),
             idempotencyKeyHash: await sha256Hex(idempotencyKey),
             requestDigest,
           };
@@ -430,7 +437,7 @@ nodeRoutes.post('/nodes/:node/actions/:name/invoke', requireAuth, rateLimit, asy
             nodeConnections: c.get('engine').nodeConnections,
             environment: c.get('engine').config?.environment,
             httpPushProxy: c.get('engine').config?.httpPushProxy,
-            outboundWebhookFetch: c.get('engine').config?.outboundWebhookFetch,
+            ephemeralEventFetch: ephemeralEventFetch(c.get('engine').config),
             workspaceId: workspace.id,
           },
           {

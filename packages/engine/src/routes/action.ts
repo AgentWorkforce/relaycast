@@ -23,6 +23,7 @@ import {
   parseJsonBody,
   parseOptionalJsonBody,
 } from '../lib/httpResponse.js';
+import { ephemeralEventFetch } from '../ports/index.js';
 
 export const actionRoutes = new Hono<AppEnv>();
 
@@ -241,7 +242,7 @@ actionRoutes.post('/actions/:name/invoke', requireAuth, rateLimit, async (c) => 
             nodeConnections: c.get('engine').nodeConnections,
             environment: c.get('engine').config?.environment,
             httpPushProxy: c.get('engine').config?.httpPushProxy,
-            outboundWebhookFetch: c.get('engine').config?.outboundWebhookFetch,
+            ephemeralEventFetch: ephemeralEventFetch(c.get('engine').config),
             workspaceId: workspace.id,
           },
           {

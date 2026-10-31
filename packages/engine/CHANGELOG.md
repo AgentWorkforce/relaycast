@@ -7,7 +7,23 @@ See the [root changelog](../../CHANGELOG.md) for cross-package release highlight
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased - Patch]
+## [Unreleased - Minor]
+
+### Added
+
+- Every deployment accepts both credential families: `rk_live_` / `at_live_` / `nt_live_` / `ot_live_` / `wh_live_` through the existing lookups, and `relaycast_<ws|ag|nd|ob|wh>_<workspace_id>_<64 hex>` through one indexed query on the kind's table, scoped to the named workspace. `EngineConfig.credentialFormat` picks the family a deployment mints: `'live'` (default) or `'self_routing'`. Deterministic workspace keys (idempotent and bootstrap creates) follow it; self-routing derivation binds the workspace id.
+- `EngineConfig.workspaceId`: the id `POST /v1/workspaces` assigns, for single-workspace hosts. A second create returns `409 workspace_exists`.
+- `@relaycast/engine/adapters/actor`: `createActorRuntime` runs the engine on a durable actor's SQLite and requires durable-actors >= 0.14.5: statements run through `db.query`, and each engine write group is a nested `db.transaction`, so a failed group rolls back alone and the request goes on. An actor database without `query` and `transaction` throws `the relaycast actor adapter requires durable-actors >= 0.14.5`. Migrations ship bundled; KV lives in the actor database; webhooks, http_push, ephemeral events, A2A egress and blob deletes run from the actor alarm, which stays armed for the nearest outstanding deadline; file URLs (upload URLs bind size and content type) are signed for a gateway that holds the blobs. The actor runtime always issues self-routing credentials. Each maintenance step runs in its own nested transaction: a failing step or write group rolls back alone and reports `alert: 'maintenance_rolled_back'` to telemetry with the workspace, step, write group and error code, and the rest of the pass commits.
+- `EngineConfig.ephemeralEventFetch`: transport for best-effort ephemeral http_push events (defaults to `outboundWebhookFetch`). `sweepPendingA2aEgress` and `dispatchA2aEgress` take an optional fetch for A2A egress.
+- `@relaycast/engine/gateway`: `parseSelfRoutingCredential`, `createWorkspaceIdSigner` / `parseWorkspaceIdKeyring` (workspace ids carrying an HMAC tag the gateway verifies before any actor call; a keyring of versioned keys, where rotation adds a version and an id verifies with the version it names), `signFileToken`, `verifyFileToken`, `ACTOR_FILE_ROUTE` and `OBJECT_SIZE_HEADER` without the engine.
+
+### Changed
+
+- File storage keys are `<workspace_id>/<file_id>/<file_id>[.<ext>]`; the client filename stays in file metadata only. Existing files keep their stored keys.
+- `POST /v1/files/upload` requires `size_bytes` to be a positive safe integer (`400 size_bytes must be a positive integer`), and `EngineConfig.maxUploadBytes` caps it (`413 file_too_large`).
+- Binding a second credential format to a database handle that already mints another one throws.
+- Completing an upload refuses stored bytes whose size differs from the declared `size_bytes` (`409 upload_size_mismatch`) instead of recording the stored size. The Node adapter's file route refuses a PUT body of another size or content type (`400 size_mismatch` / `content_type_mismatch`).
+- `FileStorage.deleteObjects` may resolve with `{ deletedKeys }` to report a partial delete; the engine settles those keys and keeps the rest queued.
 
 ### Fixed
 

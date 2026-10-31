@@ -129,7 +129,7 @@ export function createNodeRuntime(options: NodeRuntimeOptions): NodeRuntime {
           workspaceId,
           environment: options.config?.environment,
           httpPushProxy: options.config?.httpPushProxy,
-          outboundWebhookFetch,
+          ephemeralEventFetch: options.config?.ephemeralEventFetch ?? outboundWebhookFetch,
         },
         {
           subjectAgentId,

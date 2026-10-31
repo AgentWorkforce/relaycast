@@ -471,6 +471,11 @@ hosted usage view, backfill boundary, and cost model.
 - Node token (`nt_live_*`): realtime transport token for direct or broker nodes on `/v1/node/ws`
   (`GET /v1/node/me` returns the node it belongs to; agent detail's `origin_node_id` names the node that registered an agent and cannot be patched, unlike `metadata.fleet`)
 - Observer token (`ot_live_*`): scoped read-only token for workspace realtime and read-only REST
+- Credential families: every deployment accepts the `*_live_*` family above and self-routing
+  credentials, `relaycast_<kind>_<workspace_id>_<secret>` with kind `ws` | `ag` | `nd` | `ob` | `wh`
+  and a 64-hex secret. A deployment mints one family (engine `credentialFormat`, default `live`).
+  A self-routing credential names its workspace, so a stateless gateway routes it without a lookup;
+  the engine verifies it with one lookup in that workspace.
 - Identity types: `agent` (AI worker), `human` (person), `system` (automation/service actor)
 - Message payloads and realtime message events include optional `agent_type` so clients can distinguish agent, human, and system senders without extra identity lookups.
 - Channel: shared room for team/agent communication
@@ -673,6 +678,15 @@ Realtime transport:
   Broker heartbeats do not certify the presence of their hosted agents.
 - Agent SDKs use `at_live_*` for REST, mint a direct `nt_live_*` token, and receive message deliveries as node `deliver` frames plus targeted status/context events as node `context.update` frames.
 - Workspace keys create, rotate, list, and revoke observer tokens at `/v1/observer-tokens`; observer tokens are read-only and cannot mutate workspace state. Observer scopes grant read capabilities, while filters narrow resources. DM content requires both `dms:read` and `filters.include_dms: true`. Channel filters apply only to channel-scoped events; workspace-wide presence/status events require matching `agent_ids` or no agent filter. Observer token `expires_at` and `filters.created_after` accept RFC 3339 timestamps with numeric offsets; an expiry is stored and returned as the equivalent UTC instant.
+- File uploads: `POST /v1/files/upload` takes `filename`, `content_type` and `size_bytes` (the exact
+  byte length, a positive safe integer) and returns a URL for exactly those bytes. Completion refuses
+  stored bytes of another size (`409 upload_size_mismatch`) when the storage adapter reports stored
+  sizes (`FileStorage.statObject`; the Node and actor adapters do); whether the PUT itself refuses a wrong
+  size or content type (`400 size_mismatch` / `content_type_mismatch`) depends on the storage adapter
+  (the Node self-host adapter and the Terse example gateway do). A missing
+  size answers `400 size_bytes is required`, an invalid one `400 size_bytes must be a positive integer`.
+  A deployment may cap uploads with the engine's `maxUploadBytes` (no cap unless set; the Terse
+  example sets 64 MiB to match its gateway's body limit); larger uploads answer `413 file_too_large`.
 - `file.uploaded` stream events are emitted when the upload completes, before any message attachment exists, so observer filtering for that event is limited to `files:read`, `agent_ids`, `event_types`, and `created_after`. Channel and DM visibility are enforced when files are read through REST or as message attachments.
 
 Hosts may configure `EngineDeps.nodeLiveness` with an authoritative connection
@@ -1342,6 +1356,25 @@ The hosted dashboard runs as a Cloudflare Worker built with the [OpenNext adapte
 ```bash
 npm run -w @relaycast/observer-dashboard preview
 ```
+
+## Run relaycast on Terse
+
+The engine also runs on [Terse](https://docs.useterse.ai) durable actors: one
+actor per workspace, each holding that workspace on its own SQLite, behind a
+stateless gateway that routes by the workspace id inside each
+`relaycast_<kind>_<workspace_id>_<secret>` credential.
+
+- `@relaycast/engine/adapters/actor`: `createActorRuntime` runs the engine on an
+  actor's database and alarm. It requires durable-actors >= 0.14.5 (`db.query`
+  and nested `db.transaction`) and throws on an older runtime. Each engine
+  write group is a nested transaction, so a failed group rolls back alone and
+  the request goes on, as on the Node adapter. It is written against a minimal
+  database/alarm interface; the engine does not depend on Terse.
+- `@relaycast/engine/gateway`: credential parsing, signed workspace ids, and
+  signed file URLs.
+
+[`examples/terse`](examples/terse) is a complete deployment: the `Workspace`
+actor, a small Bun gateway, local and hosted steps, and an end-to-end check.
 
 ## Engine Hooks
 

@@ -21,27 +21,27 @@ describe('auth token kind parsing', () => {
 
 describe('auth token requirement validation', () => {
   it('allows workspace and agent tokens for generic auth', () => {
-    expect(validateTokenRequirement('workspace', 'any')).toEqual({ ok: true });
-    expect(validateTokenRequirement('agent', 'any')).toEqual({ ok: true });
+    expect(validateTokenRequirement('workspace', 'any', 'live')).toEqual({ ok: true });
+    expect(validateTokenRequirement('agent', 'any', 'live')).toEqual({ ok: true });
   });
 
   it('returns required-token messages for user credential mismatches', () => {
-    expect(validateTokenRequirement('workspace', 'agent')).toEqual({
+    expect(validateTokenRequirement('workspace', 'agent', 'live')).toEqual({
       ok: false,
       code: 'unauthorized',
       message: 'Agent token required (at_live_...)',
     });
-    expect(validateTokenRequirement('agent', 'workspace')).toEqual({
+    expect(validateTokenRequirement('agent', 'workspace', 'live')).toEqual({
       ok: false,
       code: 'unauthorized',
       message: 'Workspace key required (rk_live_...)',
     });
-    expect(validateTokenRequirement('workspace', 'node')).toEqual({
+    expect(validateTokenRequirement('workspace', 'node', 'live')).toEqual({
       ok: false,
       code: 'unauthorized',
       message: 'Node token required (nt_live_...)',
     });
-    expect(validateTokenRequirement('agent', 'observer')).toEqual({
+    expect(validateTokenRequirement('agent', 'observer', 'live')).toEqual({
       ok: false,
       code: 'unauthorized',
       message: 'Observer token required (ot_live_...)',
@@ -49,12 +49,12 @@ describe('auth token requirement validation', () => {
   });
 
   it('keeps transport-only tokens forbidden outside their own auth paths', () => {
-    expect(validateTokenRequirement('node', 'any')).toEqual({
+    expect(validateTokenRequirement('node', 'any', 'live')).toEqual({
       ok: false,
       code: 'node_token_forbidden',
       message: 'Node token cannot perform this operation',
     });
-    expect(validateTokenRequirement('observer', 'node')).toEqual({
+    expect(validateTokenRequirement('observer', 'node', 'live')).toEqual({
       ok: false,
       code: 'observer_token_forbidden',
       message: 'Observer token cannot perform this operation',

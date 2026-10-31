@@ -13,6 +13,7 @@ import { addressNodeSelection, formatAgentAddress } from './address.js';
 import { runAtomicWrites, type AtomicWrite } from '../ports/database.js';
 import { AGENT_RECOVERY_PROOF_HASH_PATTERN } from '@relaycast/types';
 import { WEBHOOK_AGENT_NAME } from './messageMetadata.js';
+import { issueCredential } from '../auth/credentials.js';
 
 export { AGENT_RECOVERY_PROOF_HASH_PATTERN } from '@relaycast/types';
 
@@ -269,7 +270,7 @@ export async function registerAgent(
   }
   const agentId = generateId();
   const directMachineId = data.directMachinePrefix ? `${data.directMachinePrefix}-${agentId}` : null;
-  const token = `at_live_${randomHex(16)}`;
+  const token = issueCredential(db, 'agent', workspaceId);
   const tokenHash = await sha256Hex(token);
   const directNodeId = directNodeIdForAgent(agentId);
   const directNodeTokenHash = await sha256Hex(`implicit_direct:${workspaceId}:${agentId}:${randomHex(16)}`);

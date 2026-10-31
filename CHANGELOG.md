@@ -16,8 +16,11 @@ This project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 Packages without a separate changelog are covered by the cross-package notes below.
 
-## [Unreleased - Patch]
+## [Unreleased - Minor]
 
+- Every deployment accepts self-routing credentials, `relaycast_<kind>_<workspace_id>_<secret>`, alongside `rk_live_` / `at_live_` / `nt_live_` / `ot_live_` / `wh_live_`. Which family a deployment mints is per deployment (`credentialFormat`, default `live`), so existing deployments keep minting `*_live_*`.
+- [`examples/terse`](examples/terse) runs relaycast on Terse durable actors.
+- `@relaycast/engine/adapters/actor` runs the engine inside a durable actor that holds one workspace on its own SQLite, and `@relaycast/engine/gateway` has what a stateless gateway in front of those actors needs.
 - Observer token `expires_at` and `filters.created_after` accept RFC 3339 numeric-offset timestamps (for example `+05:30`); the stored expiry is the same instant as the equivalent UTC timestamp.
 
 ## [12.2.1] - 2026-10-29

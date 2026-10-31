@@ -54,6 +54,8 @@ export function makeNodeStack(options?: {
   allowWorkspaceKeyRotation?: boolean;
   admission?: AdmissionHooks;
   rateLimitPerMinute?: number;
+  credentialFormat?: EngineConfig['credentialFormat'];
+  maxUploadBytes?: number;
 }): TestStack {
   const tasks = new BackgroundTasks();
   observePresence();
@@ -81,6 +83,8 @@ export function makeNodeStack(options?: {
         workspaceBootstrapProofRequired: options?.workspaceBootstrapProofRequired,
         allowWorkspaceKeyRotation: options?.allowWorkspaceKeyRotation,
         rateLimitPerMinute: options?.rateLimitPerMinute,
+        credentialFormat: options?.credentialFormat,
+        maxUploadBytes: options?.maxUploadBytes,
       },
       admission: options?.admission,
       // Disable the auto-sweep timer; tests drive presence.sweep() explicitly.

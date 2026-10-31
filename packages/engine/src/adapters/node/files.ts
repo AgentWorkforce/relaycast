@@ -11,6 +11,9 @@ const tokenPayloadSchema = z.object({
   key: z.string(),
   op: z.enum(['put', 'get']),
   exp: z.number(),
+  /** `put` only: the exact byte length and content type the upload must have. */
+  size: z.number().int().positive().optional(),
+  type: z.string().optional(),
 });
 
 type TokenPayload = z.infer<typeof tokenPayloadSchema>;
@@ -42,7 +45,7 @@ export class LocalFileStorage implements FileStorage {
   async createUploadUrl(args: { storageKey: string; contentType: string; sizeBytes: number }): Promise<{ uploadUrl: string; expiresAt: string }> {
     const exp = Math.floor(Date.now() / 1000) + URL_TTL_SECONDS;
     return {
-      uploadUrl: this.url({ key: args.storageKey, op: 'put', exp }),
+      uploadUrl: this.url({ key: args.storageKey, op: 'put', exp, size: args.sizeBytes, type: args.contentType }),
       expiresAt: new Date(exp * 1000).toISOString(),
     };
   }
@@ -148,6 +151,22 @@ export class LocalFileStorage implements FileStorage {
   }
 }
 
+/** The body when it is exactly `size` bytes; null otherwise. Stops reading once it passes `size`. */
+async function readExactly(request: Request, size: number): Promise<Buffer | null> {
+  const declared = request.headers.get('content-length');
+  if (declared !== null && Number(declared) !== size) return null;
+  const chunks: Uint8Array[] = [];
+  let length = 0;
+  if (request.body) {
+    for await (const chunk of request.body as unknown as AsyncIterable<Uint8Array>) {
+      length += chunk.byteLength;
+      if (length > size) return null;
+      chunks.push(chunk);
+    }
+  }
+  return length === size ? Buffer.concat(chunks, length) : null;
+}
+
 /**
  * Build a `fetch`-style handler for `${ROUTE_PREFIX}` PUT/GET. The Node
  * entrypoint mounts it so signed upload/download URLs resolve.
@@ -162,8 +181,16 @@ export function createFileRouteHandler(storage: LocalFileStorage) {
 
     try {
       if (request.method === 'PUT' && payload.op === 'put') {
-        const bytes = Buffer.from(await request.arrayBuffer());
-        await storage.write(payload.key, bytes, request.headers.get('content-type') ?? 'application/octet-stream');
+        // The token binds the upload's exact size and content type.
+        const contentType = request.headers.get('content-type') ?? 'application/octet-stream';
+        if (payload.type !== undefined && contentType !== payload.type) {
+          return Response.json({ ok: false, error: { code: 'content_type_mismatch', message: 'Content-Type does not match the upload' } }, { status: 400 });
+        }
+        const bytes = payload.size === undefined ? Buffer.from(await request.arrayBuffer()) : await readExactly(request, payload.size);
+        if (!bytes) {
+          return Response.json({ ok: false, error: { code: 'size_mismatch', message: 'Body size does not match the upload' } }, { status: 400 });
+        }
+        await storage.write(payload.key, bytes, contentType);
         return Response.json({ ok: true });
       }
       if (request.method === 'GET' && payload.op === 'get') {
