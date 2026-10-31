@@ -14,6 +14,11 @@ import {
   shouldInitializeConnectObserver,
 } from './connect-observer';
 import type { DmMessage, WorkspaceDmConversation } from '@relaycast/sdk';
+import { encodeArCredential, type CredentialKind } from '@relaycast/types';
+
+const arCredential = (kind: CredentialKind, fill: number) =>
+  encodeArCredential({ kind, workspaceId: '241764880589606912', tag: 'aX7pQ2mN4bc', secret: new Uint8Array(32).fill(fill) });
+
 
 describe('Relay Connect observer presentation', () => {
   it('renders message timestamps explicitly in UTC', () => {
@@ -29,6 +34,12 @@ describe('Relay Connect observer presentation', () => {
     ).toBe(
       'Use [Relay Connect invite redacted] with [credential redacted], [credential redacted], and [credential redacted].',
     );
+  });
+
+  it('redacts ar_ credentials too', () => {
+    expect(sanitizeConnectObserverText(`Use ${arCredential('observer', 1)}now.`)).toBe('Use [credential redacted]now.');
+    expect(sanitizeConnectObserverText('token=ot_live_secret,next')).toBe('token=[credential redacted],next');
+    expect(sanitizeConnectObserverText(`key ${arCredential('workspace', 2)}x`)).toBe('key [credential redacted]x');
   });
 
   it('removes query and fragment capabilities without removing the room binding', () => {

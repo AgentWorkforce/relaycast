@@ -7,6 +7,7 @@ import {
   selectEngineForKey,
 } from '../../../../lib/relay-server';
 import { mintObserverStreamToken, revokeObserverStreamToken } from '../../../../lib/observer-token';
+import { isObserverToken, isWorkspaceKey } from '@relaycast/types';
 
 const COOKIE_NAME = 'relaycast_key';
 const AGENT_COOKIE_NAME = 'relaycast_agent_token';
@@ -21,8 +22,8 @@ const COOKIE_MAX_AGE = 60 * 60 * 24 * 30; // 30 days
  * Validates the API key against the candidate engines (gateway first, api
  * fallback), remembers the resolved engine, and sets httpOnly cookies.
  *
- * Accepts either a full workspace key (`rk_live_...`) or a scoped, read-only
- * observer token (`ot_live_...`). The credential is used for read-only REST
+ * Accepts either a full workspace key (`rk_live_...` / `ar_ws_...`) or a
+ * scoped, read-only observer token (`ot_live_...` / `ar_ob_...`). The credential is used for read-only REST
  * (the engine enforces observer scope restrictions on every request), but the
  * realtime endpoint (`GET /v1/ws`) accepts *only* an observer token with
  * `stream:read`. So when the login credential is a workspace key we mint a
@@ -37,14 +38,14 @@ export async function POST(request: NextRequest) {
   try {
     const { apiKey, connectObserverId } = await request.json();
 
-    if (typeof apiKey !== 'string' || (!apiKey.startsWith('rk_live_') && !apiKey.startsWith('ot_live_'))) {
+    if (typeof apiKey !== 'string' || (!isWorkspaceKey(apiKey) && !isObserverToken(apiKey))) {
       return NextResponse.json({ success: false, error: 'Invalid API key format' }, { status: 400 });
     }
     if (
       connectObserverId !== undefined &&
       (typeof connectObserverId !== 'string' ||
         !/^ot_(?!live_)[A-Za-z0-9_-]+$/.test(connectObserverId) ||
-        !apiKey.startsWith('ot_live_'))
+        !isObserverToken(apiKey))
     ) {
       return NextResponse.json({ success: false, error: 'Invalid Connect observer binding' }, { status: 400 });
     }
@@ -80,7 +81,7 @@ export async function POST(request: NextRequest) {
     // token stays unset (null) and the realtime socket does not connect.
     let wsToken: string | null = null;
     let wsTokenId: string | null = null;
-    if (apiKey.startsWith('ot_live_')) {
+    if (isObserverToken(apiKey)) {
       wsToken = apiKey;
     } else {
       const minted = await mintObserverStreamToken(relayServer, apiKey);
@@ -128,7 +129,7 @@ export async function POST(request: NextRequest) {
     // orphan tokens that stay active until their 30-day expiry. Best effort;
     // only a workspace key can revoke, and a different key just 404s harmlessly.
     const previousWsTokenId = cookieStore.get(WS_TOKEN_ID_COOKIE_NAME)?.value;
-    if (previousWsTokenId && previousWsTokenId !== wsTokenId && apiKey.startsWith('rk_live_')) {
+    if (previousWsTokenId && previousWsTokenId !== wsTokenId && isWorkspaceKey(apiKey)) {
       await revokeObserverStreamToken(relayServer, apiKey, previousWsTokenId);
     }
     // Remember the minted token id so logout can revoke it on the engine.

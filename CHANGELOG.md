@@ -27,6 +27,7 @@ Packages without a separate changelog are covered by the cross-package notes bel
 - Container image: `RELAYCAST_WORKSPACE_BOOTSTRAP_SECRET_FILE` is supported (one trailing newline is stripped; a directly set bootstrap secret is still used byte-for-byte); a directly set variable wins over its `_FILE`, and an unreadable `_FILE` exits `64`.
 - [`examples/terse`](examples/terse) runs relaycast on Terse durable actors.
 - `@relaycast/engine/adapters/actor` runs the engine inside a durable actor that holds one workspace on its own SQLite, and `@relaycast/engine/gateway` has what a stateless gateway in front of those actors needs.
+- The MCP server, the observer dashboard and the Rust SDK accept `ar_` credentials (`ar_ws_…`, `ar_ob_…`) wherever they accepted `rk_live_` / `ot_live_`.
 - Observer token `expires_at` and `filters.created_after` accept RFC 3339 numeric-offset timestamps (for example `+05:30`); the stored expiry is the same instant as the equivalent UTC timestamp.
 
 ## [12.2.1] - 2026-10-29

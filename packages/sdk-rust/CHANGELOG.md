@@ -12,6 +12,10 @@ The format is based on Keep a Changelog, and this project follows Semantic Versi
 
 - `RelayCast::upgrade_credential` and `RelayCast::upgrade_credential_with`: exchange a legacy credential for the `ar_` credential of the same principal through `POST /v1/credentials/upgrade`; return `CredentialUpgradeResponse`.
 
+### Changed
+
+- A cached `ar_ws_…` workspace key is reused like an `rk_…` key instead of triggering a new workspace.
+
 ### Removed
 
 - `Workspace::plan`; servers no longer return it.

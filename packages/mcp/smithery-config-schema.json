@@ -9,7 +9,7 @@
     "relayApiKey": {
       "type": "string",
       "title": "Workspace API Key",
-      "description": "Workspace API key (rk_live_...) used to pre-authenticate the MCP session. Optional — you can also authenticate via the set_workspace_key tool after connecting.",
+      "description": "Workspace API key (rk_live_... or ar_ws_...) used to pre-authenticate the MCP session. Optional — you can also authenticate via the set_workspace_key tool after connecting.",
       "x-from": { "header": "x-relay-api-key" }
     },
     "relayBaseUrl": {
