@@ -199,7 +199,12 @@ both.
   `409 api_key_conflict`.
 - **Rotate** (no `api_key`, self-host extension): the engine mints the
   replacement, returns it once as `api_key`, and sets the generation to
-  `key_generation` or stored + 1. Unknown workspace is `404`.
+  `key_generation` or stored + 1. Unknown workspace is `404`. The minted key
+  follows the engine's `credentialFormat`, except that a self-routing
+  credential cannot embed an id containing `-` or `_`; those workspaces get an
+  `rk_live_` key. The engine accepts it, but a self-routing gateway, which
+  routes by the id inside the key, cannot route it, so behind such a gateway
+  use `[A-Za-z0-9]` workspace ids.
 - `grace_ms` (0–3600000, default `0`) keeps the superseded key working that
   long; `0` revokes it immediately. On a push it requires `key_generation`.
 - After `DELETE /internal/workspaces/:id` succeeds, key pushes for that ID are
