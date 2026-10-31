@@ -18,16 +18,14 @@ Packages without a separate changelog are covered by the cross-package notes bel
 
 ## [Unreleased - Minor]
 
-### Added
-
 - Engine: an opt-in internal admin API (`RELAYCAST_INTERNAL_SECRET`) lets a trusted control plane create or idempotently delete workspaces and register or rotate their keys, with the hosted gateway's request and response shapes.
 - Container image: `RELAYCAST_ALLOW_INSECURE_BASE_URL=true` accepts `http://` base URLs on loopback and private hosts, and `RELAYCAST_INTERNAL_SECRET(_FILE)` is passed through.
 - `RELAYCAST_PUBLIC_WORKSPACE_CREATE=false` turns the anonymous `POST /v1/workspaces` into a `404` for control-plane-managed deployments.
 - Container image: `*.svc` / `*.svc.cluster.local` count as private hosts, and `RELAYCAST_PRIVATE_DNS_SUFFIXES` / `RELAYCAST_INSECURE_BASE_URL_HOSTS` extend that for custom cluster domains and `<svc>.<ns>` names (entries must sit under a private zone, be a `.svc.<domain>` zone, or be a two-label `<svc>.<ns>` name; public names are refused).
 - Container image: `RELAYCAST_WORKSPACE_BOOTSTRAP_SECRET_FILE` is supported (one trailing newline is stripped; a directly set bootstrap secret is still used byte-for-byte); a directly set variable wins over its `_FILE`, and an unreadable `_FILE` exits `64`.
-
-### Fixed
-
+- Every deployment accepts self-routing credentials, `relaycast_<kind>_<workspace_id>_<secret>`, alongside `rk_live_` / `at_live_` / `nt_live_` / `ot_live_` / `wh_live_`. Which family a deployment mints is per deployment (`credentialFormat`, default `live`), so existing deployments keep minting `*_live_*`.
+- [`examples/terse`](examples/terse) runs relaycast on Terse durable actors.
+- `@relaycast/engine/adapters/actor` runs the engine inside a durable actor that holds one workspace on its own SQLite, and `@relaycast/engine/gateway` has what a stateless gateway in front of those actors needs.
 - Observer token `expires_at` and `filters.created_after` accept RFC 3339 numeric-offset timestamps (for example `+05:30`); the stored expiry is the same instant as the equivalent UTC timestamp.
 
 ## [12.2.1] - 2026-10-29

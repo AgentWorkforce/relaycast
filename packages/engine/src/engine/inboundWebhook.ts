@@ -3,7 +3,7 @@ import { eq, and } from 'drizzle-orm';
 import type { getDb } from '../db/index.js';
 import { webhooks, channels, messages, agents, workspaces } from '../db/schema.js';
 import { isWorkspaceExpired } from '../auth/workspaceExpiry.js';
-import { randomHex, sha256Hex } from '../lib/crypto.js';
+import { sha256Hex } from '../lib/crypto.js';
 import { codedError } from '../lib/httpError.js';
 import { generateId } from './snowflake.js';
 import { inboundWebhookMessageMetadata, sanitizeUserMessageMetadata, WEBHOOK_AGENT_NAME } from './messageMetadata.js';
@@ -12,6 +12,7 @@ import { buildChannelDeliveryWrite, fetchChannelDeliveryOutcomes } from './deliv
 import { DEFAULT_MAILBOX_DEPTH_CAP, DEFAULT_MAILBOX_TTL_MS, DEFAULT_OFFLINE_FANOUT_EXCLUDE_MS, type MailboxConfig } from './mailboxConfig.js';
 import type { WorkspaceDeliveryPolicy } from './workspaceDeliveryPolicy.js';
 import { buildMessageSessionWrite, requireSessionRefFromMetadata } from './sessionMessages.js';
+import { issueCredential } from '../auth/credentials.js';
 
 type Db = ReturnType<typeof getDb>;
 
@@ -23,7 +24,7 @@ async function ensureWebhookAgent(db: Db, workspaceId: string): Promise<string> 
 
   if (existing) return existing.id;
 
-  const token = `at_live_${randomHex(16)}`;
+  const token = issueCredential(db, 'agent', workspaceId);
   const tokenHash = await sha256Hex(token);
   const agentId = generateId();
 
@@ -61,7 +62,7 @@ export async function createWebhook(
   createdBy?: string,
 ) {
   const id = `wh_${generateId()}`;
-  const token = `wh_live_${randomHex(24)}`;
+  const token = issueCredential(db, 'webhook', workspaceId);
   const tokenHash = await sha256Hex(token);
   const postingAgentId = createdBy ?? await ensureWebhookAgent(db, workspaceId);
 

@@ -7,6 +7,18 @@ import { codedError } from '../lib/httpError.js';
 
 type Db = ReturnType<typeof getDb>;
 
+/**
+ * The object name of a file in storage: its id plus at most a short
+ * alphanumeric extension from the client filename. Storage keys are
+ * `<workspace_id>/<file_id>/<object_name>`; the client's filename never
+ * appears in them (it lives only in file metadata), so a key cannot traverse,
+ * exceed a filesystem name limit, or depend on the filename's encoding.
+ */
+export function storageObjectName(fileId: string, filename: string): string {
+  const extension = /\.([A-Za-z0-9]{1,10})$/.exec(filename)?.[1]?.toLowerCase();
+  return extension ? `${fileId}.${extension}` : fileId;
+}
+
 export async function createUpload(
   db: Db,
   storage: FileStorage,
@@ -15,7 +27,7 @@ export async function createUpload(
   data: { filename: string; content_type: string; size_bytes: number },
 ) {
   const id = generateId();
-  const storageKey = `${workspaceId}/${id}/${data.filename}`;
+  const storageKey = `${workspaceId}/${id}/${storageObjectName(id, data.filename)}`;
 
   // Sign the upload URL before persisting, so a storage error doesn't leave an
   // orphaned `pending` row behind.
@@ -64,9 +76,9 @@ export async function completeUpload(
     return null;
   }
 
-  // A completed file is attachable, so its bytes must actually be stored.
-  // Recipients see the stored size, whatever the upload request declared.
-  let sizeBytes = file.sizeBytes;
+  // A completed file is attachable, so its bytes must actually be stored, and
+  // exactly as many as the upload declared.
+  const sizeBytes = file.sizeBytes;
   if (storage.statObject) {
     const stored = await storage.statObject({ storageKey: file.storageKey });
     if (!stored || stored.sizeBytes === 0) {
@@ -76,7 +88,13 @@ export async function completeUpload(
         409,
       );
     }
-    sizeBytes = stored.sizeBytes;
+    if (stored.sizeBytes !== sizeBytes) {
+      throw codedError(
+        `Stored ${stored.sizeBytes} bytes, but the upload declared ${sizeBytes}`,
+        'upload_size_mismatch',
+        409,
+      );
+    }
   }
 
   // Generate the URL before flipping status, so a transient storage error keeps

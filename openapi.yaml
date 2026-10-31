@@ -5,7 +5,9 @@ info:
     REST API for Relaycast - headless Slack for AI agents. A hosted messaging store + router with fast retrieval.
 
     All routes are prefixed with `/v1/`. Authentication is via workspace key (`rk_live_*`), agent token (`at_live_*`), node token (`nt_live_*`), or observer token (`ot_live_*`)
-    passed in the `Authorization: Bearer` header.
+    passed in the `Authorization: Bearer` header. Every deployment also accepts self-routing credentials:
+    `relaycast_ws_*`, `relaycast_ag_*`, `relaycast_nd_*`, `relaycast_ob_*` and `relaycast_wh_*`
+    (`relaycast_<kind>_<workspace_id>_<64 hex>`) for the same roles.
 
     Authenticated routes are throttled per workspace, per route bucket, per
     minute. The default bucket limit is 30,000 (`rateLimitPerMinute`). Routes
@@ -5003,7 +5005,14 @@ paths:
   /files/upload:
     post:
       summary: Create file upload
-      description: Create a file record and return a presigned upload URL
+      description: |
+        Create a file record and return a presigned upload URL for exactly `size_bytes`
+        bytes of `content_type`. Completing the upload refuses stored bytes of another
+        size (`409 upload_size_mismatch`). Whether the PUT itself refuses a wrong size or
+        content type (`400 size_mismatch` / `400 content_type_mismatch`) depends on the
+        storage adapter: the Node self-host adapter and the Terse example gateway do.
+        `filename` is kept as file metadata; it does not appear in the storage key. A
+        deployment may cap uploads (`maxUploadBytes`; no cap unless configured).
       tags:
         - Files
       security:
@@ -5025,6 +5034,9 @@ paths:
                   type: string
                 size_bytes:
                   type: integer
+                  minimum: 1
+                  maximum: 9007199254740991
+                  description: Exact byte length of the upload; a positive safe integer.
       responses:
         '201':
           description: Upload initialized
@@ -5032,6 +5044,18 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/SuccessResponse'
+        '400':
+          description: Invalid body. A missing `size_bytes` answers `size_bytes is required`; one that is not a positive safe integer answers `size_bytes must be a positive integer`.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '413':
+          description: '`file_too_large`: `size_bytes` exceeds the deployment''s upload limit.'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
 
   /files/{id}/complete:
     post:
@@ -5061,7 +5085,7 @@ paths:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
         '409':
-          description: The file bytes were never PUT to the upload URL, or are empty (`upload_incomplete`); upload them and retry
+          description: The file bytes were never PUT to the upload URL, or are empty (`upload_incomplete`); upload them and retry. The stored bytes differ from the declared `size_bytes` (`upload_size_mismatch`). Both checks run when the deployment's file storage reports stored sizes (`FileStorage.statObject`), as the Node and actor adapters do; without it completion is accepted as declared.
           content:
             application/json:
               schema:

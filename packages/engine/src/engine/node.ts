@@ -65,6 +65,7 @@ import {
 import { emitInvocationCompletionEffects, emitAgentExitedEffects, emitNodeStatusEffects, fleetInvocationId } from './invocationCompletion.js';
 import type { InvocationCompletionDeps, NodeOfflineReason } from './invocationCompletion.js';
 import { ackDeliveriesUpToSeq, deliverPendingToNode } from './delivery.js';
+import { issueCredential } from '../auth/credentials.js';
 
 type Db = ReturnType<typeof getDb>;
 type NodeRow = typeof nodes.$inferSelect;
@@ -458,7 +459,7 @@ export async function createNodeToken(
     admitRegistration?: RegistrationAdmission;
   } = {},
 ) {
-  const token = authorization.rotationRecovery?.replacementToken ?? `nt_live_${randomHex(24)}`;
+  const token = authorization.rotationRecovery?.replacementToken ?? issueCredential(db, 'node', workspaceId);
   const tokenHash = await sha256Hex(token);
   const name = data.name.startsWith('#') ? data.name.slice(1) : data.name;
   // Reject names that are empty or still #-prefixed after normalization: an
@@ -2475,7 +2476,7 @@ export async function registerAgentViaNode(
     }
     const [generalChannel] = channelRows;
 
-    const token = `at_live_${randomHex(16)}`;
+    const token = issueCredential(db, 'agent', workspaceId);
     const tokenHash = await sha256Hex(token);
     const now = new Date().toISOString();
     const agentId = generateId();

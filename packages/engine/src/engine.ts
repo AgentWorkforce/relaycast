@@ -1,4 +1,5 @@
 import { configureNodeLiveness } from './engine/nodeLiveness.js';
+import { configureCredentialFormat } from './auth/credentials.js';
 import { safeTelemetrySink } from './ports/telemetry.js';
 import { NoopTelemetrySink } from './providers/noop-telemetry.js';
 import { Hono, type Context } from 'hono';
@@ -71,6 +72,11 @@ import { internalRoutes } from './routes/internal.js';
 export function createEngine(deps: EngineDeps): Hono<AppEnv> {
   assertInternalSecretStrength(deps.config?.internalSecret);
   if (deps.nodeLiveness) configureNodeLiveness(deps.db, deps.nodeLiveness);
+  configureCredentialFormat(deps.db, deps.config?.credentialFormat ?? 'live');
+  const maxUploadBytes = deps.config?.maxUploadBytes;
+  if (maxUploadBytes !== undefined && !(Number.isSafeInteger(maxUploadBytes) && maxUploadBytes > 0)) {
+    throw new Error('EngineConfig.maxUploadBytes must be a positive safe integer');
+  }
   const runtime: EngineRuntime = {
     db: deps.db,
     realtime: deps.realtime,

@@ -601,6 +601,7 @@ export async function sendToExternalAgent(
   auth?: { scheme?: 'bearer' | 'api_key' | 'none' | string | null; credential?: string | null },
   beforeAttempt?: () => Promise<{ scheme: string | null; credential: string | null }>,
   idempotencyKey?: string,
+  fetchImpl: typeof globalThis.fetch = globalThis.fetch,
 ): Promise<A2aResponse> {
   const parsedRequest = JsonRpcRequestSchema.safeParse(jsonRpcPayload);
   if (!parsedRequest.success) {
@@ -624,7 +625,7 @@ export async function sendToExternalAgent(
         && (attemptAuth.scheme === 'bearer' || attemptAuth.scheme === 'api_key')) {
         throw codedError('Credentialed A2A targets require HTTPS', 'a2a_agent_url_forbidden', 400);
       }
-      const response = await globalThis.fetch(targetUrl, {
+      const response = await fetchImpl(targetUrl, {
         method: 'POST',
         redirect: 'manual',
         signal: AbortSignal.timeout(15_000),
