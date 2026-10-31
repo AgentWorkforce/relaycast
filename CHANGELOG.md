@@ -16,7 +16,9 @@ This project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 Packages without a separate changelog are covered by the cross-package notes below.
 
-## [Unreleased - Minor]
+## [Unreleased]
+
+## [12.3.0] - 2026-10-31
 
 - Every deployment accepts `ar_` credentials, `ar_<kind>_<wsid>_<tag>_<secret><crc>`, alongside legacy `rk_live_` / `at_live_` / `nt_live_` / `ot_live_` / `wh_live_`. The workspace and a keyring-signed tag let a gateway route and refuse forged workspaces with no lookup; a CRC-32 rejects typos offline. Which family a deployment mints is per deployment (`credentialFormat`, default `legacy`), so existing deployments keep minting `*_live_*`. The workspace actor runtime (`@relaycast/engine/adapters/actor`) accepts only `ar_` credentials.
 - `POST /v1/credentials/upgrade` exchanges a legacy credential for an `ar_` one for the same principal; the legacy one keeps working for a grace period (30 days by default). Workspace keys upgrade there only on deployments that own them (`allowWorkspaceKeyRotation`); a control plane that owns them issues the `ar_ws_` key. Responses to legacy credentials carry `Deprecation`, `Link` and (when configured) `Sunset` headers. The TypeScript, Rust and Swift SDKs expose the upgrade.
@@ -948,7 +950,8 @@ Packages without a separate changelog are covered by the cross-package notes bel
 
 Earlier releases are available on the [GitHub releases page](https://github.com/AgentWorkforce/relaycast/releases).
 
-[Unreleased]: https://github.com/AgentWorkforce/relaycast/compare/v12.2.1...HEAD
+[Unreleased]: https://github.com/AgentWorkforce/relaycast/compare/v12.3.0...HEAD
+[12.3.0]: https://github.com/AgentWorkforce/relaycast/compare/v12.2.1...v12.3.0
 [12.2.1]: https://github.com/AgentWorkforce/relaycast/compare/v12.2.0...v12.2.1
 [12.2.0]: https://github.com/AgentWorkforce/relaycast/compare/v12.1.0...v12.2.0
 [12.1.0]: https://github.com/AgentWorkforce/relaycast/compare/v12.0.0...v12.1.0
