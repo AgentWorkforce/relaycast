@@ -231,6 +231,17 @@ describe('internal admin API', () => {
       expect((await readWorkspace(key)).status).toBe(200);
     });
 
+    it("server-minted rotation follows the deployment's self-routing credential format", async () => {
+      stack = makeNodeStack({ internalSecret: SECRET, credentialFormat: 'self_routing' });
+      const ws = await createViaAdmin();
+      const res = await internal(`/workspaces/${ws.workspace_id}/api-key`, { method: 'POST', body: {} });
+      expect(res.status).toBe(200);
+      const rotated = await data<{ api_key: string }>(res);
+      expect(rotated.api_key.startsWith(`relaycast_ws_${ws.workspace_id}_`)).toBe(true);
+      expect((await readWorkspace(rotated.api_key)).status).toBe(200);
+      expect((await readWorkspace(ws.api_key)).status).toBe(401);
+    });
+
     it('server-minted rotation of an unknown workspace is 404', async () => {
       stack = makeNodeStack({ internalSecret: SECRET });
       const res = await internal('/workspaces/nope/api-key', { method: 'POST' });
@@ -432,6 +443,12 @@ describe('internal admin API', () => {
   describe('secret handling', () => {
     it('refuses an internal secret shorter than 32 characters at engine creation', () => {
       expect(() => makeNodeStack({ internalSecret: 'x'.repeat(31) })).toThrow(/at least 32 characters/);
+    });
+
+    it('refuses an internal secret with surrounding whitespace at engine creation', () => {
+      // The route trims the presented bearer, so a padded secret could never match.
+      expect(() => makeNodeStack({ internalSecret: ` ${SECRET}` })).toThrow(/leading or trailing whitespace/);
+      expect(() => makeNodeStack({ internalSecret: `${SECRET}\n` })).toThrow(/leading or trailing whitespace/);
     });
 
     it('startServer refuses a short internal secret before opening the database', () => {

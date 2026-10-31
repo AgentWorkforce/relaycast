@@ -2,7 +2,8 @@ import { and, eq, exists, gt, lt, ne, notExists, or, sql, type SQL } from 'drizz
 import { alias } from 'drizzle-orm/sqlite-core';
 import type { getDb } from '../db/index.js';
 import { channels, workspaces } from '../db/schema.js';
-import { randomHex, sha256Hex } from '../lib/crypto.js';
+import { sha256Hex } from '../lib/crypto.js';
+import { issueCredential } from '../auth/credentials.js';
 import { codedError } from '../lib/httpError.js';
 import { runAtomicWrites } from '../ports/database.js';
 import { generateId } from './snowflake.js';
@@ -104,6 +105,10 @@ export const MIN_INTERNAL_SECRET_LENGTH = 32;
  */
 export function assertInternalSecretStrength(secret: string | undefined): void {
   if (secret === undefined || secret === '') return;
+  if (secret !== secret.trim()) {
+    // The route trims the presented bearer, so a padded secret could never match.
+    throw new Error('RELAYCAST_INTERNAL_SECRET must not have leading or trailing whitespace');
+  }
   if (secret.length < MIN_INTERNAL_SECRET_LENGTH) {
     throw new Error(
       `RELAYCAST_INTERNAL_SECRET must be at least ${MIN_INTERNAL_SECRET_LENGTH} characters ` +
@@ -241,7 +246,8 @@ export async function pushWorkspaceKey(
 ): Promise<PushWorkspaceKeyResult> {
   assertInternalWorkspaceWritable(db, workspaceId);
   const minted = input.apiKey === undefined;
-  const apiKey = input.apiKey ?? `rk_live_${randomHex(16)}`;
+  // Minted keys follow the deployment's credential format (live or self-routing).
+  const apiKey = input.apiKey ?? issueCredential(db, 'workspace', workspaceId);
   const apiKeyHash = await sha256Hex(apiKey);
   const { graceMs } = input;
   let keyGeneration = input.keyGeneration;
@@ -383,7 +389,10 @@ export async function pushWorkspaceKey(
       .returning({ id: workspaces.id });
     if (applied.length === 0) {
       const fresh = await readKeyRow(db, workspaceId);
-      if (fresh && fresh.apiKeyHash === apiKeyHash) {
+      // A concurrent push of the same key won. Done only if its generation
+      // already covers ours; otherwise loop so the idempotent branch bumps
+      // the fence to the requested generation.
+      if (fresh && fresh.apiKeyHash === apiKeyHash && keyGeneration <= fresh.apiKeyGeneration) {
         return { created: false, workspaceId, apiKeyGeneration: fresh.apiKeyGeneration };
       }
       if (fresh && !derivedGeneration && keyGeneration <= fresh.apiKeyGeneration) {

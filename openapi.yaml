@@ -6871,8 +6871,9 @@ paths:
               properties:
                 name:
                   type: string
-                  minLength: 1
-                  maxLength: 128
+                  description: >-
+                    Trimmed of surrounding whitespace, then required to be 1-128
+                    characters. The trimmed name is stored and returned.
                 metadata:
                   $ref: '#/components/schemas/WorkspaceMetadata'
       responses:
@@ -7072,8 +7073,10 @@ paths:
             `stale_key_generation` (the push does not beat the stored
             generation), `key_generation_required` (fenced workspace, no
             generation), `api_key_conflict` (the key is another workspace's
-            current key, or its previous key inside the grace window), or
-            `key_write_conflict` (contended; retry).
+            current key, or its previous key inside the grace window),
+            `key_generation_exhausted` (a server-minted rotation of a workspace
+            already at the maximum generation), or `key_write_conflict`
+            (contended; retry).
           content:
             application/json:
               schema:
