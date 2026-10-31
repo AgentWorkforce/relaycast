@@ -36,6 +36,11 @@ describe('Relay Connect observer presentation', () => {
       'Use [credential redacted]now.',
     );
     expect(sanitizeConnectObserverText('token=ot_live_secret,next')).toBe('token=[credential redacted],next');
+    expect(
+      sanitizeConnectObserverText(
+        'key relaycast_ws_241764880589606912aQ3vK9mZx2LpR7tB4nW8cY6dF1hJ5sE0gU_fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210x',
+      ),
+    ).toBe('key [credential redacted]x');
   });
 
   it('removes query and fragment capabilities without removing the room binding', () => {
