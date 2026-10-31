@@ -7,6 +7,7 @@ import { getAuthTokenKind, requiredTokenMessage } from '../auth/tokenKind.js';
 import { credentialFormat } from '../auth/credentials.js';
 import { authenticateUnexpired } from '../auth/workspaceExpiry.js';
 import { jsonError } from '../lib/httpResponse.js';
+import { noteAuthenticatedCredential } from '../lib/credentialNotice.js';
 import { sha256Hex } from '../lib/crypto.js';
 import {
   hasAnyObserverScope,
@@ -80,6 +81,7 @@ function makeAuthMiddleware(require: AuthRequire) {
     }
 
     await next();
+    noteAuthenticatedCredential(c, token, result.workspace.id);
   });
 }
 
@@ -133,6 +135,7 @@ export function requireWorkspaceRead(
       c.set('node', undefined);
       c.set('observerToken', result.observerToken);
       await next();
+      noteAuthenticatedCredential(c, token, result.workspace.id);
       return;
     }
 
@@ -156,6 +159,7 @@ export function requireWorkspaceRead(
     }
 
     await next();
+    noteAuthenticatedCredential(c, token, result.workspace.id);
   });
 }
 

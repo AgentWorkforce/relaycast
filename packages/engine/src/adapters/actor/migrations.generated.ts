@@ -826,6 +826,13 @@ export const ACTOR_MIGRATIONS: readonly (readonly [string, readonly string[]])[]
       "ALTER TABLE dm_participants ADD COLUMN last_read_id TEXT",
       "UPDATE dm_participants SET last_read_id = (\n  SELECT CAST(MAX(CAST(m.id AS INTEGER)) AS TEXT)\n  FROM dm_conversations dc\n  JOIN messages m ON m.channel_id = dc.channel_id\n  JOIN read_receipts rr ON rr.message_id = m.id AND rr.agent_id = dm_participants.agent_id\n  WHERE dc.id = dm_participants.conversation_id\n)"
     ]
+  ],
+  [
+    "0079_credential_upgrades.sql",
+    [
+      "CREATE TABLE credential_upgrades (\n  legacy_hash TEXT PRIMARY KEY NOT NULL,\n  kind TEXT NOT NULL,\n  principal_id TEXT NOT NULL,\n  workspace_id TEXT NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,\n  ar_hash TEXT NOT NULL,\n  created_at INTEGER NOT NULL DEFAULT (unixepoch()),\n  expires_at INTEGER NOT NULL\n)",
+      "CREATE INDEX idx_credential_upgrades_workspace ON credential_upgrades(workspace_id)"
+    ]
   ]
 ];
 

@@ -1,14 +1,30 @@
 import { describe, expect, it, vi } from 'vitest';
 import { eq } from 'drizzle-orm';
-import { agents } from '../../db/schema.js';
+import { encodeArCredential } from '@relaycast/types';
+import { agents, credentialUpgrades } from '../../db/schema.js';
 import { sha256Hex } from '../../lib/crypto.js';
 import { SqliteApiKeyAuthProvider } from '../../auth/index.js';
+import { createCredentialTagSigner } from '../../auth/credentialTags.js';
+import type { EngineObservation } from '../../ports/telemetry.js';
 import { createWorkspace, makeNodeStack, registerAgent, type TestStack } from './harness.js';
 
-const SECRET = 'ab'.repeat(32);
+const tagger = createCredentialTagSigner({ current: 'a', keys: { a: 'credential-tag-secret-a' } });
+const SECRET = Uint8Array.from({ length: 32 }, (_, i) => i + 3);
+const AR = (kind: 'agent' | 'workspace', workspaceId: string) =>
+  encodeArCredential({ kind, workspaceId, tag: 'aAAAAAAAAAA', secret: SECRET });
 
-async function get(stack: TestStack, path: string, token: string): Promise<number> {
-  return (await stack.app.request(path, { headers: { authorization: `Bearer ${token}` } })).status;
+function get(stack: TestStack, path: string, token: string): Promise<Response> {
+  return stack.app.request(path, { headers: { authorization: `Bearer ${token}` } });
+}
+
+function upgrade(stack: TestStack, token: string): Promise<Response> {
+  return stack.app.request('/v1/credentials/upgrade', { method: 'POST', headers: { authorization: `Bearer ${token}` } });
+}
+
+async function upgraded(stack: TestStack, token: string): Promise<{ credential: string; kind: string; legacy_expires_at: string }> {
+  const res = await upgrade(stack, token);
+  expect(res.status).toBe(200);
+  return ((await res.json()) as { data: { credential: string; kind: string; legacy_expires_at: string } }).data;
 }
 
 /** Give an existing agent `token` as its credential (no deployment mints the other family). */
@@ -17,57 +33,63 @@ async function setAgentToken(stack: TestStack, agentId: string, token: string): 
 }
 
 describe('credential families', () => {
-  it('a live-minting deployment mints live credentials and verifies both families', async () => {
+  it('a legacy-minting deployment mints legacy credentials and verifies both families', async () => {
     const stack = makeNodeStack();
-    const workspace = await createWorkspace(stack.app, 'live-mint');
+    const workspace = await createWorkspace(stack.app, 'legacy-mint');
     const agent = await registerAgent(stack.app, workspace.workspaceKey, 'alice');
     expect(workspace.workspaceKey).toMatch(/^rk_live_[0-9a-f]{32}$/);
     expect(agent.token).toMatch(/^at_live_[0-9a-f]{32}$/);
-    expect(await get(stack, '/v1/inbox', agent.token)).toBe(200);
+    expect((await get(stack, '/v1/inbox', agent.token)).status).toBe(200);
 
-    const routed = `relaycast_ag_${workspace.workspaceId}_${SECRET}`;
-    await setAgentToken(stack, agent.agentId, routed);
-    expect(await get(stack, '/v1/inbox', routed)).toBe(200);
-    expect(await get(stack, '/v1/inbox', agent.token)).toBe(401);
+    const ar = AR('agent', workspace.workspaceId);
+    await setAgentToken(stack, agent.agentId, ar);
+    expect((await get(stack, '/v1/inbox', ar)).status).toBe(200);
+    expect((await get(stack, '/v1/inbox', agent.token)).status).toBe(401);
   });
 
-  it('a self-routing deployment mints self-routing credentials and verifies both families', async () => {
-    const stack = makeNodeStack({ credentialFormat: 'self_routing' });
-    const workspace = await createWorkspace(stack.app, 'routed-mint');
+  it('an ar-minting deployment mints tagged ar_ credentials and verifies both families', async () => {
+    const stack = makeNodeStack({ credentialFormat: 'ar', credentialTagger: tagger });
+    const workspace = await createWorkspace(stack.app, 'ar-mint');
     const agent = await registerAgent(stack.app, workspace.workspaceKey, 'alice');
-    expect(workspace.workspaceKey).toMatch(new RegExp(`^relaycast_ws_${workspace.workspaceId}_[0-9a-f]{64}$`));
-    expect(agent.token).toMatch(new RegExp(`^relaycast_ag_${workspace.workspaceId}_[0-9a-f]{64}$`));
-    expect(await get(stack, '/v1/agents', workspace.workspaceKey)).toBe(200);
-    expect(await get(stack, '/v1/inbox', agent.token)).toBe(200);
+    expect(workspace.workspaceKey).toMatch(/^ar_ws_[0-9A-Za-z]{11}_a[0-9A-Za-z]{10}_[0-9A-Za-z]{49}$/);
+    expect(agent.token).toMatch(/^ar_ag_/);
+    expect(await tagger.verify(workspace.workspaceKey)).toBe(true);
+    expect(await tagger.verify(agent.token)).toBe(true);
+    expect((await get(stack, '/v1/agents', workspace.workspaceKey)).status).toBe(200);
+    expect((await get(stack, '/v1/inbox', agent.token)).status).toBe(200);
 
     const legacy = `at_live_${'cd'.repeat(16)}`;
     await setAgentToken(stack, agent.agentId, legacy);
-    expect(await get(stack, '/v1/inbox', legacy)).toBe(200);
+    expect((await get(stack, '/v1/inbox', legacy)).status).toBe(200);
   });
 
-  it('rejects a self-routing credential of the wrong kind or naming another workspace', async () => {
+  it('refuses an ar-minting deployment without a tagger', () => {
+    expect(() => makeNodeStack({ credentialFormat: 'ar' })).toThrow(/credentialTagger/);
+  });
+
+  it('rejects an ar_ credential of the wrong kind or naming another workspace', async () => {
     const stack = makeNodeStack();
     const a = await createWorkspace(stack.app, 'scope-a');
     const b = await createWorkspace(stack.app, 'scope-b');
     const agentB = await registerAgent(stack.app, b.workspaceKey, 'bob');
 
     // B's agent holds a credential that names workspace A.
-    const namesA = `relaycast_ag_${a.workspaceId}_${SECRET}`;
+    const namesA = AR('agent', a.workspaceId);
     await setAgentToken(stack, agentB.agentId, namesA);
-    expect(await get(stack, '/v1/inbox', namesA)).toBe(401);
+    expect((await get(stack, '/v1/inbox', namesA)).status).toBe(401);
 
-    // The right workspace, but presented as a workspace key: the workspaces table holds no such hash.
-    const namesB = `relaycast_ag_${b.workspaceId}_${SECRET}`;
+    const namesB = AR('agent', b.workspaceId);
     await setAgentToken(stack, agentB.agentId, namesB);
-    expect(await get(stack, '/v1/inbox', namesB)).toBe(200);
-    const wrongKind = `relaycast_ws_${b.workspaceId}_${SECRET}`;
-    await stack.runtime.deps.db.update(agents).set({ tokenHash: await sha256Hex(wrongKind) }).where(eq(agents.id, agentB.agentId));
-    expect(await get(stack, '/v1/agents', wrongKind)).toBe(401);
-    expect(await get(stack, '/v1/inbox', wrongKind)).toBe(401);
+    expect((await get(stack, '/v1/inbox', namesB)).status).toBe(200);
+    // The right workspace, but presented as a workspace key: the workspaces table holds no such hash.
+    const wrongKind = AR('workspace', b.workspaceId);
+    await setAgentToken(stack, agentB.agentId, wrongKind);
+    expect((await get(stack, '/v1/agents', wrongKind)).status).toBe(401);
+    expect((await get(stack, '/v1/inbox', wrongKind)).status).toBe(401);
   });
 
-  it('verifies a self-routing credential with a single query', async () => {
-    const stack = makeNodeStack({ credentialFormat: 'self_routing' });
+  it('verifies an ar_ credential with a single query', async () => {
+    const stack = makeNodeStack({ credentialFormat: 'ar', credentialTagger: tagger });
     const workspace = await createWorkspace(stack.app, 'one-query');
     const agent = await registerAgent(stack.app, workspace.workspaceKey, 'alice');
     const { db } = stack.runtime.deps;
@@ -82,15 +104,13 @@ describe('credential families', () => {
     }
 
     prepare.mockClear();
-    const unknown = await auth.authenticate({ token: `relaycast_ag_${workspace.workspaceId}_${SECRET}`, require: 'agent', db });
+    const unknown = await auth.authenticate({ token: AR('agent', workspace.workspaceId), require: 'agent', db });
     expect(unknown.ok).toBe(false);
     expect(prepare).toHaveBeenCalledTimes(1);
   });
-});
 
-describe('self-routing observer tokens', () => {
-  it('authenticate as observers and keep their scopes', async () => {
-    const stack = makeNodeStack({ credentialFormat: 'self_routing' });
+  it('authenticates ar_ observer tokens as observers with their scopes', async () => {
+    const stack = makeNodeStack({ credentialFormat: 'ar', credentialTagger: tagger });
     const workspace = await createWorkspace(stack.app, 'observer-scope');
     const created = await stack.app.request('/v1/observer-tokens', {
       method: 'POST',
@@ -99,12 +119,151 @@ describe('self-routing observer tokens', () => {
     });
     expect(created.status).toBe(201);
     const { data } = await created.json() as { data: { token: string } };
-    expect(data.token).toMatch(new RegExp(`^relaycast_ob_${workspace.workspaceId}_[0-9a-f]{64}$`));
-
-    // A read route requiring files:read refuses the stream-only token instead of
-    // treating it as a general workspace credential.
-    const files = await stack.app.request('/v1/files', { headers: { authorization: `Bearer ${data.token}` } });
+    expect(data.token).toMatch(/^ar_ob_/);
+    // A read route requiring files:read refuses the stream-only token.
+    const files = await get(stack, '/v1/files', data.token);
     expect(files.status).toBe(403);
     expect(((await files.json()) as { error: { code: string } }).error.code).toBe('insufficient_scope');
+  });
+});
+
+describe('POST /v1/credentials/upgrade', () => {
+  it('exchanges a legacy credential for an ar_ one for the same principal, idempotently', async () => {
+    const stack = makeNodeStack({ credentialTagger: tagger });
+    const workspace = await createWorkspace(stack.app, 'upgrade');
+    const agent = await registerAgent(stack.app, workspace.workspaceKey, 'alice');
+
+    for (const [legacy, kind, code, probe] of [
+      [agent.token, 'agent', 'ag', '/v1/inbox'],
+      [workspace.workspaceKey, 'workspace', 'ws', '/v1/agents'],
+    ] as const) {
+      const first = await upgraded(stack, legacy);
+      expect(first.kind).toBe(kind);
+      expect(first.credential).toMatch(new RegExp(`^ar_${code}_`));
+      expect(await tagger.verify(first.credential)).toBe(true);
+      // The default grace covers a 30-day sunset.
+      expect(Date.parse(first.legacy_expires_at) - Date.now()).toBeGreaterThan(29 * 24 * 3600 * 1000);
+
+      // Both work during the grace, and upgrading again returns the same ar_ credential.
+      expect((await get(stack, probe, first.credential)).status).toBe(200);
+      expect((await get(stack, probe, legacy)).status).toBe(200);
+      expect((await upgraded(stack, legacy)).credential).toBe(first.credential);
+
+      const already = await upgrade(stack, first.credential);
+      expect(already.status).toBe(409);
+      expect(((await already.json()) as { error: { code: string } }).error.code).toBe('credential_not_legacy');
+    }
+  });
+
+  it('ends the legacy credential when its grace runs out', async () => {
+    const stack = makeNodeStack({ credentialTagger: tagger, legacyCredentialGraceSeconds: 60 });
+    const workspace = await createWorkspace(stack.app, 'grace');
+    const agent = await registerAgent(stack.app, workspace.workspaceKey, 'alice');
+    const { credential, legacy_expires_at } = await upgraded(stack, agent.token);
+    expect(Math.abs(Date.parse(legacy_expires_at) - (Date.now() + 60_000))).toBeLessThan(2_000);
+    expect((await get(stack, '/v1/inbox', agent.token)).status).toBe(200);
+
+    await stack.runtime.deps.db.update(credentialUpgrades).set({ expiresAt: new Date(Date.now() - 1000) })
+      .where(eq(credentialUpgrades.legacyHash, await sha256Hex(agent.token)));
+    expect((await get(stack, '/v1/inbox', agent.token)).status).toBe(401);
+    expect((await get(stack, '/v1/inbox', credential)).status).toBe(200);
+  });
+
+  it('ends the legacy credential when the principal moves off its ar_ credential', async () => {
+    const stack = makeNodeStack({ credentialTagger: tagger });
+    const workspace = await createWorkspace(stack.app, 'rotated');
+    const agent = await registerAgent(stack.app, workspace.workspaceKey, 'alice');
+    await upgraded(stack, agent.token);
+    await setAgentToken(stack, agent.agentId, AR('agent', workspace.workspaceId));
+    expect((await get(stack, '/v1/inbox', agent.token)).status).toBe(401);
+  });
+
+  it('upgrades observer and inbound webhook credentials', async () => {
+    const stack = makeNodeStack({ credentialTagger: tagger });
+    const workspace = await createWorkspace(stack.app, 'kinds');
+    const post = async (path: string, body: unknown) => ((await (await stack.app.request(path, {
+      method: 'POST',
+      headers: { authorization: `Bearer ${workspace.workspaceKey}`, 'content-type': 'application/json' },
+      body: JSON.stringify(body),
+    })).json()) as { data: Record<string, string> }).data;
+
+    const observer = (await post('/v1/observer-tokens', { name: 'obs', scopes: ['files:read'] })).token;
+    const observerAr = (await upgraded(stack, observer)).credential;
+    expect(observerAr).toMatch(/^ar_ob_/);
+    expect((await get(stack, '/v1/files', observerAr)).status).toBe(200);
+    expect((await get(stack, '/v1/files', observer)).status).toBe(200);
+
+    await post('/v1/channels', { name: 'hooks' });
+    const hook = await post('/v1/webhooks', { name: 'hook', channel: 'hooks' });
+    expect(hook.token).toMatch(/^wh_live_/);
+    const hookAr = (await upgraded(stack, hook.token)).credential;
+    expect(hookAr).toMatch(/^ar_wh_/);
+    for (const token of [hookAr, hook.token]) {
+      const sent = await stack.app.request(`/v1/hooks/${hook.webhook_id}`, {
+        method: 'POST',
+        headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
+        body: JSON.stringify({ text: 'hello' }),
+      });
+      expect(sent.status).toBeLessThan(300);
+    }
+  });
+
+  it('is unavailable without a tagger', async () => {
+    const stack = makeNodeStack();
+    const workspace = await createWorkspace(stack.app, 'no-tagger');
+    const res = await upgrade(stack, workspace.workspaceKey);
+    expect(res.status).toBe(409);
+    expect(((await res.json()) as { error: { code: string } }).error.code).toBe('credential_upgrade_unavailable');
+  });
+});
+
+describe('legacy credential deprecation', () => {
+  it('marks only legacy-authenticated responses deprecated, with the configured sunset', async () => {
+    const sunset = new Date('2026-12-31T00:00:00Z');
+    const stack = makeNodeStack({ credentialTagger: tagger, legacyCredentialSunset: sunset });
+    const workspace = await createWorkspace(stack.app, 'deprecation');
+    const legacy = await get(stack, '/v1/agents', workspace.workspaceKey);
+    expect(legacy.status).toBe(200);
+    expect(legacy.headers.get('Deprecation')).toBe('true');
+    expect(legacy.headers.get('Sunset')).toBe(sunset.toUTCString());
+    expect(legacy.headers.get('Link')).toContain('rel="deprecation"');
+
+    const { credential } = await upgraded(stack, workspace.workspaceKey);
+    const ar = await get(stack, '/v1/agents', credential);
+    expect(ar.status).toBe(200);
+    expect(ar.headers.get('Deprecation')).toBeNull();
+    expect(ar.headers.get('Sunset')).toBeNull();
+    expect(ar.headers.get('Link')).toBeNull();
+  });
+});
+
+describe('credential telemetry', () => {
+  it('reports the family, kind, client and workspace of every authenticated request', async () => {
+    const events: EngineObservation[] = [];
+    const stack = makeNodeStack({
+      credentialFormat: 'ar',
+      credentialTagger: tagger,
+      telemetry: { capture: (event) => { events.push(event); }, captureException() {} },
+    });
+    const workspace = await createWorkspace(stack.app, 'telemetry');
+    const agent = await registerAgent(stack.app, workspace.workspaceKey, 'alice');
+    const legacy = `at_live_${'ef'.repeat(16)}`;
+    await setAgentToken(stack, agent.agentId, legacy);
+    events.length = 0;
+    await stack.app.request('/v1/inbox', {
+      headers: {
+        authorization: `Bearer ${legacy}`,
+        'x-relaycast-origin-client': '@relaycast/sdk',
+        'x-relaycast-origin-version': '12.3.0',
+      },
+    });
+    await get(stack, '/v1/agents', workspace.workspaceKey);
+    const authenticated = events.filter((event) => event.kind === 'request.authenticated');
+    expect(authenticated.map((event) => [event.facts.credential_family, event.facts.credential_kind, event.workspaceId]))
+      .toEqual([
+        ['legacy', 'agent', workspace.workspaceId],
+        ['ar', 'workspace', workspace.workspaceId],
+      ]);
+    expect(authenticated[0].origin).toMatchObject({ client: '@relaycast/sdk', version: '12.3.0' });
   });
 });

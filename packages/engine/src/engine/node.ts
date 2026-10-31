@@ -459,7 +459,7 @@ export async function createNodeToken(
     admitRegistration?: RegistrationAdmission;
   } = {},
 ) {
-  const token = authorization.rotationRecovery?.replacementToken ?? issueCredential(db, 'node', workspaceId);
+  const token = authorization.rotationRecovery?.replacementToken ?? await issueCredential(db, 'node', workspaceId);
   const tokenHash = await sha256Hex(token);
   const name = data.name.startsWith('#') ? data.name.slice(1) : data.name;
   // Reject names that are empty or still #-prefixed after normalization: an
@@ -2476,7 +2476,7 @@ export async function registerAgentViaNode(
     }
     const [generalChannel] = channelRows;
 
-    const token = issueCredential(db, 'agent', workspaceId);
+    const token = await issueCredential(db, 'agent', workspaceId);
     const tokenHash = await sha256Hex(token);
     const now = new Date().toISOString();
     const agentId = generateId();

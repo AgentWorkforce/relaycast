@@ -471,11 +471,9 @@ hosted usage view, backfill boundary, and cost model.
 - Node token (`nt_live_*`): realtime transport token for direct or broker nodes on `/v1/node/ws`
   (`GET /v1/node/me` returns the node it belongs to; agent detail's `origin_node_id` names the node that registered an agent and cannot be patched, unlike `metadata.fleet`)
 - Observer token (`ot_live_*`): scoped read-only token for workspace realtime and read-only REST
-- Credential families: every deployment accepts the `*_live_*` family above and self-routing
-  credentials, `relaycast_<kind>_<workspace_id>_<secret>` with kind `ws` | `ag` | `nd` | `ob` | `wh`
-  and a 64-hex secret. A deployment mints one family (engine `credentialFormat`, default `live`).
-  A self-routing credential names its workspace, so a stateless gateway routes it without a lookup;
-  the engine verifies it with one lookup in that workspace.
+- Credential families: every deployment accepts the legacy `*_live_*` family above and `ar_`
+  credentials, `ar_<kind>_<wsid>_<tag>_<secret><crc>` (see [Credentials](#credentials)). A
+  deployment mints one family (engine `credentialFormat`, default `legacy`).
 - Identity types: `agent` (AI worker), `human` (person), `system` (automation/service actor)
 - Message payloads and realtime message events include optional `agent_type` so clients can distinguish agent, human, and system senders without extra identity lookups.
 - Channel: shared room for team/agent communication
@@ -1357,21 +1355,73 @@ The hosted dashboard runs as a Cloudflare Worker built with the [OpenNext adapte
 npm run -w @relaycast/observer-dashboard preview
 ```
 
+## Credentials
+
+An `ar_` credential is `ar_<kind>_<wsid>_<tag>_<secret><crc>`, about 79 characters:
+
+| Segment | Content |
+|---|---|
+| `kind` | `ws` workspace key, `ag` agent, `nd` node, `ob` observer, `wh` inbound webhook |
+| `wsid` | The workspace snowflake in base62, 11 characters |
+| `tag` | A keyring version letter plus 10 base62 characters of HMAC-SHA256(keyring[version], wsid) |
+| `secret` | 32 random bytes in base62, 43 characters |
+| `crc` | CRC-32 of everything before it, base62, 6 characters |
+
+A gateway routes an `ar_` credential to its workspace and verifies its tag with
+the keyring alone (`createCredentialTagSigner(keyring).verify` from
+`@relaycast/engine/gateway`), so a forged workspace is refused with no lookup;
+the checksum rejects a typo offline. `@relaycast/types` classifies, masks and
+redacts both families (`parseCredential`, `maskCredential`,
+`redactCredentials`). The `ar_` prefix is shared across agent relay services:
+RelayAuth will use `ar_au_<kind>_…`, and its current `relay_*_` tokens are not
+relaycast credentials.
+
+A deployment mints `ar_` credentials with `credentialFormat: 'ar'` and a
+`credentialTagger` (`createCredentialTagSigner(parseCredentialKeyring(json))`,
+keyring `{"current":"a","keys":{"a":"<secret>"}}`). Rotation adds a key version
+and makes it current, and never drops one. The Node self-host reads the keyring
+from `RELAYCAST_CREDENTIAL_KEYRING` and the family from
+`RELAYCAST_CREDENTIAL_FORMAT`.
+
+### Credential upgrade
+
+`POST /v1/credentials/upgrade`, authenticated by a legacy credential of any
+kind, returns the `ar_` credential for the same principal:
+
+```bash
+curl -XPOST https://cast.agentrelay.com/v1/credentials/upgrade -H "authorization: Bearer $RELAY_API_KEY"
+# {"ok":true,"data":{"credential":"ar_ws_…","kind":"workspace","legacy_expires_at":"…"}}
+```
+
+The legacy credential keeps working until `legacy_expires_at`
+(`legacyCredentialGraceSeconds`, default 30 days), and only while the
+principal holds the returned credential. Upgrading again returns the same
+credential; upgrades are limited to 10 per principal per minute. The route needs
+a `credentialTagger`. Every response to a legacy credential carries
+`Deprecation: true`, a `Link` to this section, and `Sunset` when
+`legacyCredentialSunset` is set. Every authenticated request reports a
+`request.authenticated` observation with `credential_family` (`legacy` | `ar`)
+and `credential_kind`, plus the workspace and origin client and version.
+
 ## Run relaycast on Terse
 
 The engine also runs on [Terse](https://docs.useterse.ai) durable actors: one
 actor per workspace, each holding that workspace on its own SQLite, behind a
-stateless gateway that routes by the workspace id inside each
-`relaycast_<kind>_<workspace_id>_<secret>` credential.
+stateless gateway that routes by the workspace inside each `ar_` credential
+and verifies its tag with the keyring.
 
 - `@relaycast/engine/adapters/actor`: `createActorRuntime` runs the engine on an
   actor's database and alarm. It requires durable-actors >= 0.14.5 (`db.query`
   and nested `db.transaction`) and throws on an older runtime. Each engine
   write group is a nested transaction, so a failed group rolls back alone and
-  the request goes on, as on the Node adapter. It is written against a minimal
+  the request goes on, as on the Node adapter. The actor runtime mints and
+  accepts only `ar_` credentials: legacy ones get 401, and it serves no
+  credential upgrade or deprecation headers. It is written against a minimal
   database/alarm interface; the engine does not depend on Terse.
-- `@relaycast/engine/gateway`: credential parsing, signed workspace ids, and
-  signed file URLs.
+- `@relaycast/engine/gateway`: `ar_` credential parsing and tag signing and
+  verification (`parseArCredential`, `createCredentialTagSigner`,
+  `parseCredentialKeyring`), workspace ids (`generateWorkspaceId`, plain
+  snowflakes), and signed file URLs.
 
 [`examples/terse`](examples/terse) is a complete deployment: the `Workspace`
 actor, a small Bun gateway, local and hosted steps, and an end-to-end check.

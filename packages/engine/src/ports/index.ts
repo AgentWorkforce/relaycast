@@ -75,6 +75,7 @@ import type { TelemetrySink } from './telemetry.js';
 import type { EngineDiagnostics } from './diagnostics.js';
 import type { EngineLogExport } from './logging.js';
 import type { CredentialFormat } from '../auth/credentials.js';
+import type { CredentialTagger } from '../auth/credentialTags.js';
 
 /** Infrastructure ports the engine reads off the request context. */
 export interface EnginePorts {
@@ -118,13 +119,30 @@ export interface EngineDeps extends EnginePorts, EngineProviders {
 export interface EngineConfig {
   environment?: string;
   /**
-   * The credential family this deployment mints. `live` (the default) mints
-   * `rk_live_` / `at_live_` / `nt_live_` / `ot_live_` / `wh_live_`;
-   * `self_routing` mints `relaycast_<kind>_<workspace_id>_<secret>` so a
-   * stateless gateway can route by credential. Every deployment accepts both
-   * families. See `auth/credentials.ts`.
+   * The credential family this deployment mints. `legacy` (the default) mints
+   * `rk_live_` / `at_live_` / `nt_live_` / `ot_live_` / `wh_live_`; `ar` mints
+   * `ar_<kind>_<wsid>_<tag>_<secret><crc>`, which a stateless gateway routes
+   * and verifies with no lookup, and needs {@link credentialTagger}. Every
+   * deployment accepts both families. See `auth/credentials.ts`.
    */
   credentialFormat?: CredentialFormat;
+  /**
+   * The routing tag for this deployment's workspaces' `ar_` credentials:
+   * `createCredentialTagSigner(keyring)` on a host that holds the keyring.
+   * Required to mint `ar_` credentials, including through
+   * `POST /v1/credentials/upgrade`.
+   */
+  credentialTagger?: CredentialTagger;
+  /**
+   * How long a legacy credential keeps working after
+   * `POST /v1/credentials/upgrade` replaced it. Default 30 days.
+   */
+  legacyCredentialGraceSeconds?: number;
+  /**
+   * When legacy credentials stop being accepted, sent as the `Sunset` header
+   * on every response a legacy credential authenticated.
+   */
+  legacyCredentialSunset?: Date;
   /**
    * Single-workspace hosts (one workspace per durable actor): the id that
    * `POST /v1/workspaces` gives the workspace it creates.

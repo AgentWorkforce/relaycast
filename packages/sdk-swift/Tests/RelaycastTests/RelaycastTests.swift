@@ -29,6 +29,20 @@ final class RelaycastTests: XCTestCase {
         XCTAssertEqual(WorkspaceBootstrapOptions(metadata: metadata).metadata, metadata)
     }
 
+    func testCredentialUpgradeSendsThePresentedCredential() async throws {
+        let relay = try RelayCast(options: RelayCastOptions(apiKey: "rk_live_test", baseURL: "https://relay.test", retryPolicy: RetryPolicy(maxRetries: 0)), session: makeMockSession())
+        MockURLProtocol.handler = { request in
+            XCTAssertEqual(request.url?.path, "/v1/credentials/upgrade")
+            XCTAssertEqual(request.httpMethod, "POST")
+            let kind = request.value(forHTTPHeaderField: "Authorization") == "Bearer at_live_agent" ? "agent" : "workspace"
+            return jsonResponse(["ok": true, "data": ["credential": "ar_\(kind)", "kind": kind, "legacy_expires_at": "2026-12-01T00:00:00.000Z"]])
+        }
+        let workspace = try await relay.credentials.upgrade()
+        XCTAssertEqual(workspace, CredentialUpgradeResponse(credential: "ar_workspace", kind: "workspace", legacyExpiresAt: "2026-12-01T00:00:00.000Z"))
+        let agent = try await relay.credentials.upgrade("at_live_agent")
+        XCTAssertEqual(agent.kind, "agent")
+    }
+
     func testWorkspaceMetadataUpdateAndRead() async throws {
         let relay = try RelayCast(options: RelayCastOptions(apiKey: "rk_test", baseURL: "https://relay.test", retryPolicy: RetryPolicy(maxRetries: 0)), session: makeMockSession())
         MockURLProtocol.handler = { request in

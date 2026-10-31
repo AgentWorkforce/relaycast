@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 import { startServer } from '../entrypoints/node.js';
+import { createCredentialTagSigner, parseCredentialKeyring } from '../auth/credentialTags.js';
 import { engineVersion } from './version.js';
 
 const HELP = `relaycast-engine — run a self-hosted Relaycast server (Node + SQLite)
@@ -14,6 +15,11 @@ Options:
   --env <name>       Environment label (default: production)
   -v, --version      Print the engine version
   -h, --help         Show this help
+
+Environment:
+  RELAYCAST_CREDENTIAL_KEYRING  {"current":"a","keys":{"a":"<secret>"}}: signs ar_ credential tags,
+                                enabling POST /v1/credentials/upgrade
+  RELAYCAST_CREDENTIAL_FORMAT   legacy (default) or ar (needs RELAYCAST_CREDENTIAL_KEYRING)
 
 After start, create a workspace:
   curl -XPOST http://localhost:<port>/v1/workspaces -H 'content-type: application/json' -d '{"name":"my-team"}'
@@ -88,12 +94,20 @@ async function main(): Promise<void> {
       ? { retention: { defaults: { messageTtlDays: messageTtlDays > 0 ? messageTtlDays : null } } }
       : undefined;
 
+  const keyring = process.env.RELAYCAST_CREDENTIAL_KEYRING;
+  const credentialFormat = process.env.RELAYCAST_CREDENTIAL_FORMAT === 'ar' ? 'ar' as const : 'legacy' as const;
+  const credentials = {
+    credentialFormat,
+    ...(keyring ? { credentialTagger: createCredentialTagSigner(parseCredentialKeyring(keyring)) } : {}),
+  };
+
   const running = startServer({
     dbPath: opts.db,
     port: opts.port,
     baseUrl,
     config: {
       environment: opts.environment,
+      ...credentials,
       ...(process.env.RELAYCAST_WORKSPACE_BOOTSTRAP_SECRET
         ? { workspaceBootstrapSecret: process.env.RELAYCAST_WORKSPACE_BOOTSTRAP_SECRET }
         : {}),

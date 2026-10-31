@@ -13,6 +13,7 @@ import { DEFAULT_MAILBOX_DEPTH_CAP, DEFAULT_MAILBOX_TTL_MS, DEFAULT_OFFLINE_FANO
 import type { WorkspaceDeliveryPolicy } from './workspaceDeliveryPolicy.js';
 import { buildMessageSessionWrite, requireSessionRefFromMetadata } from './sessionMessages.js';
 import { issueCredential } from '../auth/credentials.js';
+import { upgradedLegacyCredential } from './credentialUpgrade.js';
 
 type Db = ReturnType<typeof getDb>;
 
@@ -24,7 +25,7 @@ async function ensureWebhookAgent(db: Db, workspaceId: string): Promise<string> 
 
   if (existing) return existing.id;
 
-  const token = issueCredential(db, 'agent', workspaceId);
+  const token = await issueCredential(db, 'agent', workspaceId);
   const tokenHash = await sha256Hex(token);
   const agentId = generateId();
 
@@ -62,7 +63,7 @@ export async function createWebhook(
   createdBy?: string,
 ) {
   const id = `wh_${generateId()}`;
-  const token = issueCredential(db, 'webhook', workspaceId);
+  const token = await issueCredential(db, 'webhook', workspaceId);
   const tokenHash = await sha256Hex(token);
   const postingAgentId = createdBy ?? await ensureWebhookAgent(db, workspaceId);
 
@@ -225,7 +226,9 @@ export async function triggerWebhook(
       throw codedError('Webhook bearer token required', 'webhook_token_required', 401);
     }
     const tokenHash = await sha256Hex(token);
-    if (tokenHash !== webhook.tokenHash) {
+    // An upgraded legacy token works during its grace (`POST /v1/credentials/upgrade`).
+    if (tokenHash !== webhook.tokenHash
+      && (await upgradedLegacyCredential(db, 'webhook', tokenHash))?.principalId !== webhook.id) {
       throw codedError('Invalid webhook bearer token', 'webhook_token_invalid', 401);
     }
   }

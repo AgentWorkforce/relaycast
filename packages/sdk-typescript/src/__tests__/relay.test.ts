@@ -62,6 +62,27 @@ describe('RelayCast', () => {
     vi.useRealTimers();
   });
 
+  it('upgrades a legacy credential to the ar_ credential of the same principal', async () => {
+    const { RelayCast } = await import('../relay.js');
+    const relay = new RelayCast({ apiKey: 'rk_live_test', baseUrl: 'https://api.test' });
+    mockFetch.mockReturnValueOnce(mockResponse({
+      credential: 'ar_ws_upgraded',
+      kind: 'workspace',
+      legacy_expires_at: '2026-12-01T00:00:00.000Z',
+    }));
+    const upgraded = await relay.credentials.upgrade();
+    expect(upgraded).toEqual({ credential: 'ar_ws_upgraded', kind: 'workspace', legacyExpiresAt: '2026-12-01T00:00:00.000Z' });
+    const [url, init] = mockFetch.mock.calls[0] as [string, RequestInit];
+    expect(url).toBe('https://api.test/v1/credentials/upgrade');
+    expect(init.method).toBe('POST');
+    expect(new Headers(init.headers).get('authorization')).toBe('Bearer rk_live_test');
+
+    mockFetch.mockReturnValueOnce(mockResponse({ credential: 'ar_ag_x', kind: 'agent', legacy_expires_at: 'x' }));
+    await relay.credentials.upgrade('at_live_agent');
+    const [, agentInit] = mockFetch.mock.calls[1] as [string, RequestInit];
+    expect(new Headers(agentInit.headers).get('authorization')).toBe('Bearer at_live_agent');
+  });
+
   it('requires apiKey', async () => {
     const { RelayCast } = await import('../relay.js');
     expect(() => new RelayCast({} as any)).toThrow('RelayCast apiKey is required');

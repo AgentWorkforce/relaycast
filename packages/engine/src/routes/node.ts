@@ -228,7 +228,8 @@ async function enrollNode(c: Context<AppEnv>, data: z.infer<typeof createNodeSch
             requestDigest,
           ]));
           return {
-            replacementToken: credentialFromHex(
+            replacementToken: await credentialFromHex(
+              c.get('db'),
               credentialFormat(c.get('db')),
               'node',
               c.get('workspace').id,

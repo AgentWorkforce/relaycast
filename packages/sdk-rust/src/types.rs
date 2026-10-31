@@ -312,6 +312,17 @@ pub struct TokenRotateResponse {
     pub token: String,
 }
 
+/// `POST /v1/credentials/upgrade`: the `ar_` credential that replaces a legacy one.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CredentialUpgradeResponse {
+    /// The `ar_` credential for the same principal.
+    pub credential: String,
+    /// `workspace`, `agent`, `node`, `observer` or `webhook`.
+    pub kind: String,
+    /// When the legacy credential stops working (RFC 3339).
+    pub legacy_expires_at: String,
+}
+
 #[derive(Debug, Clone, Serialize)]
 pub struct RecoverAgentRequest {
     pub expected_agent_id: String,

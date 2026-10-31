@@ -44,12 +44,9 @@ export class Workspace extends Actor {
         })
     }
 
-    async create(request: ActorHttpRequest): Promise<ActorHttpResponse> {
-        const { pathname } = new URL(request.url)
-        if (request.method !== "POST" || pathname !== "/v1/workspaces") {
-            throw new Error("create serves POST /v1/workspaces only")
-        }
-        return this.runtime.handle(request)
+    /** `POST /v1/workspaces`, with the tag the gateway's keyring signed for this id. */
+    async create(request: ActorHttpRequest, credentialTag: string): Promise<ActorHttpResponse> {
+        return this.runtime.create(request, credentialTag)
     }
 
     async handle(request: ActorHttpRequest): Promise<ActorHttpResponse> {

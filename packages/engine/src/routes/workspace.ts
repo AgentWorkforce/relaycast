@@ -53,7 +53,7 @@ import {
 } from '../lib/httpResponse.js';
 import { parsePaginationQuery, positiveIntQueryParam } from '../lib/httpQuery.js';
 import { runInBackground } from './background.js';
-import { parseSelfRoutingCredential } from '../auth/credentials.js';
+import { credentialKind } from '@relaycast/types';
 
 export const workspaceRoutes = new Hono<AppEnv>();
 
@@ -176,7 +176,7 @@ function parseOwnerAuthorization(authHeader: string | undefined): OwnerAuthoriza
   if (authHeader === undefined) return { kind: 'absent' };
   if (!authHeader.startsWith('Bearer ')) return { kind: 'invalid' };
   const token = authHeader.slice(7);
-  const isWorkspaceKey = token.startsWith('rk_') || parseSelfRoutingCredential(token)?.kind === 'workspace';
+  const isWorkspaceKey = token.startsWith('rk_') || credentialKind(token) === 'workspace';
   return isWorkspaceKey
     ? { kind: 'workspace', token }
     : { kind: 'invalid' };

@@ -18,7 +18,8 @@ Packages without a separate changelog are covered by the cross-package notes bel
 
 ## [Unreleased - Minor]
 
-- Every deployment accepts self-routing credentials, `relaycast_<kind>_<workspace_id>_<secret>`, alongside `rk_live_` / `at_live_` / `nt_live_` / `ot_live_` / `wh_live_`. Which family a deployment mints is per deployment (`credentialFormat`, default `live`), so existing deployments keep minting `*_live_*`.
+- Every deployment accepts `ar_` credentials, `ar_<kind>_<wsid>_<tag>_<secret><crc>`, alongside legacy `rk_live_` / `at_live_` / `nt_live_` / `ot_live_` / `wh_live_`. The workspace and a keyring-signed tag let a gateway route and refuse forged workspaces with no lookup; a CRC-32 rejects typos offline. Which family a deployment mints is per deployment (`credentialFormat`, default `legacy`), so existing deployments keep minting `*_live_*`.
+- `POST /v1/credentials/upgrade` exchanges a legacy credential for an `ar_` one for the same principal; the legacy one keeps working for a grace period (30 days by default). Responses to legacy credentials carry `Deprecation`, `Link` and (when configured) `Sunset` headers. The TypeScript, Rust and Swift SDKs expose the upgrade.
 - [`examples/terse`](examples/terse) runs relaycast on Terse durable actors.
 - `@relaycast/engine/adapters/actor` runs the engine inside a durable actor that holds one workspace on its own SQLite, and `@relaycast/engine/gateway` has what a stateless gateway in front of those actors needs.
 - Observer token `expires_at` and `filters.created_after` accept RFC 3339 numeric-offset timestamps (for example `+05:30`); the stored expiry is the same instant as the equivalent UTC timestamp.

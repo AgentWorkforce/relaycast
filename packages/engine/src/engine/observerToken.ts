@@ -186,7 +186,7 @@ export async function createObserverToken(
   workspaceId: string,
   input: CreateObserverTokenInput,
 ): Promise<PublicObserverToken> {
-  const token = issueCredential(db, 'observer', workspaceId);
+  const token = await issueCredential(db, 'observer', workspaceId);
   const tokenHash = await sha256Hex(token);
   const expiresAt = parseExpiresAt(input.expires_at);
   const scopes = normalizeScopes(input.scopes);
@@ -279,7 +279,7 @@ export async function rotateObserverToken(
   workspaceId: string,
   id: string,
 ): Promise<PublicObserverToken | null> {
-  const token = issueCredential(db, 'observer', workspaceId);
+  const token = await issueCredential(db, 'observer', workspaceId);
   const tokenHash = await sha256Hex(token);
   const [row] = await db
     .update(observerTokens)

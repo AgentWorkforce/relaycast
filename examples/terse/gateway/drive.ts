@@ -2,6 +2,8 @@
 //
 //   bun drive.ts [base-url]                 # full flow; prints the workspace key
 //   bun drive.ts [base-url] --verify <key>  # read state back (after restarting the actors)
+import { credentialWorkspaceId, encodeArCredential, parseCredential } from "@relaycast/types"
+
 const args = process.argv.slice(2)
 const verifyAt = args.indexOf("--verify")
 const verifyKey = verifyAt >= 0 ? args[verifyAt + 1] : undefined
@@ -42,13 +44,22 @@ if (verifyKey) {
 const created = await call("POST", "/v1/workspaces", { name: "armadillo-e2e" })
 const key: string = created.json?.data?.api_key
 const workspaceId: string = created.json?.data?.workspace_id
-expect(created.status === 201 && new RegExp(`^relaycast_ws_${workspaceId}_[0-9a-f]{64}$`).test(key), "workspace key is relaycast_ws_<workspace_id>_<64 hex>")
+expect(created.status === 201 && /^[0-9]+$/.test(workspaceId), "workspace id is a plain snowflake")
+expect(/^ar_ws_[0-9A-Za-z]{11}_[a-z][0-9A-Za-z]{10}_[0-9A-Za-z]{49}$/.test(key), "workspace key is ar_ws_<wsid>_<tag>_<secret><crc>")
+expect(parseCredential(key)?.family === "ar" && credentialWorkspaceId(key) === workspaceId, "the key names its workspace")
 
 const alice = await call("POST", "/v1/agents", { name: "alice", type: "agent" }, key)
 const bob = await call("POST", "/v1/agents", { name: "bob", type: "agent" }, key)
 const aliceToken: string = alice.json?.data?.token
 const bobToken: string = bob.json?.data?.token
-expect(/^relaycast_ag_/.test(aliceToken) && /^relaycast_ag_/.test(bobToken), "agent tokens are relaycast_ag_")
+expect(/^ar_ag_/.test(aliceToken) && /^ar_ag_/.test(bobToken), "agent tokens are ar_ag_")
+
+// The gateway refuses, with no actor call, a typo (checksum), a forged tag and a legacy credential.
+const typo = key.slice(0, 30) + (key[30] === "x" ? "y" : "x") + key.slice(31)
+const forged = encodeArCredential({ kind: "workspace", workspaceId, tag: "aAAAAAAAAAA", secret: new Uint8Array(32).fill(1) })
+for (const [token, what] of [[typo, "a one-character typo"], [forged, "a forged tag"], [`rk_live_${"0".repeat(32)}`, "a legacy key"]] as const) {
+    expect((await call("GET", "/v1/agents", undefined, token)).status === 401, `the gateway refuses ${what}`)
+}
 
 const post = await call("POST", "/v1/channels/general/messages", { text: "hello from inside a durable actor" }, aliceToken)
 expect(post.status === 201, "alice posts to #general")
