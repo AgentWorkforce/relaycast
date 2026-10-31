@@ -6,7 +6,9 @@ See the [root changelog](../../CHANGELOG.md) for cross-package release highlight
 
 The format is based on Keep a Changelog, and this project follows Semantic Versioning.
 
-## [Unreleased - Major]
+## [Unreleased]
+
+## [12.0.0] - 2026-10-31
 
 ### Added
 
