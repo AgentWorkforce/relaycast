@@ -102,10 +102,15 @@ runs separately from reads.
 The default roster (including `status=all`) contains unreleased agents seen in
 the last seven days. Use `include_stale=1` for older identities; explicit status
 filters retain their existing scope, and lookup by name remains available.
+To replace one request per identity, repeat `names` to look up as many as 100
+agents in one read, for example `GET /v1/agents?names=alice&names=bob`.
+`names` cannot be combined with `status` or `include_stale`.
 Metadata stays included for desktop compatibility. Set `include_metadata=0` to
 return `metadata: {}` without loading the stored JSON. The response remains an
 array. TypeScript callers use `agents.list({ includeStale: true,
 includeMetadata: false })`; MCP `agent.list` accepts the snake_case options.
+Roster responses also include a weak `ETag`. Send it back in `If-None-Match`
+to receive `304 Not Modified` with no body when the roster is unchanged.
 
 Workspace administrators can preview bounded registry reclamation with
 `POST /v1/agents/retention` (`retention_days: 30` by default). Physical deletion
