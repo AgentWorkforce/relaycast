@@ -21,9 +21,12 @@ export async function invalidateDirectPresence(db: EngineDb, workspaceId: string
   const authority = nodeLivenessAuthority(db);
   if (!authority?.invalidate) return;
   // At most eight owners at a time: an inventory can move a whole roster.
-  await filterAsync([...new Set(agentIds)], agentId =>
+  // Never throws: callers run this in a finally after their writes committed.
+  await filterAsync([...new Set(agentIds)], async agentId => {
     // directNodeIdForAgent, inlined: node.ts imports this module.
-    authority.invalidate!(workspaceId, `node_direct_${agentId}`).then(() => false, () => false));
+    try { await authority.invalidate!(workspaceId, `node_direct_${agentId}`); } catch { /* bounded by the checkpoint */ }
+    return false;
+  });
 }
 export async function nodeLive(db: EngineDb, row: { workspaceId: string; id: string; status: string; lastHeartbeatAt: Date | null }): Promise<boolean> {
   const snapshot = await inspectNodeLiveness(db, row.workspaceId, row.id);
