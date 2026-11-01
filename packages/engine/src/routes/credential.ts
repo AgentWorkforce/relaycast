@@ -78,7 +78,7 @@ credentialRoutes.post('/credentials/upgrade', async (c) => {
       principal = { id: row.id, workspaceId: result.workspace.id, currentHash: 'tokenHash' in row ? row.tokenHash : null };
     }
 
-    noteAuthenticatedCredential(c, token, principal.workspaceId);
+    noteAuthenticatedCredential(c, token);
 
     // A workspace key owned by an external control plane is replaced there and
     // pushed here; one minted here would be unknown to that plane, and its next

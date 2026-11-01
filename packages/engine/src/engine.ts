@@ -158,7 +158,7 @@ export function createEngine(deps: EngineDeps): Hono<AppEnv> {
     if (!authResult.ok) {
       return jsonError(c, authResult.code, authResult.message, authResult.status);
     }
-    noteAuthenticatedCredential(c, token, authResult.workspace.id);
+    noteAuthenticatedCredential(c, token);
 
     const response = await connections.upgrade({
       request: c.req.raw,
@@ -197,7 +197,7 @@ export function createEngine(deps: EngineDeps): Hono<AppEnv> {
     if (!authResult.ok) {
       return jsonError(c, authResult.code, authResult.message, authResult.status);
     }
-    noteAuthenticatedCredential(c, token, authResult.node.workspaceId);
+    noteAuthenticatedCredential(c, token);
 
     const originInfo = requiredOriginInfo(c.req.raw);
     const origin = {

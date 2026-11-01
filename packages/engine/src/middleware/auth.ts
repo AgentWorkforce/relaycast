@@ -79,7 +79,7 @@ function makeAuthMiddleware(require: AuthRequire) {
     }
 
     await rememberPrincipal(c, token, result);
-    noteAuthenticatedCredential(c, token, result.workspace.id);
+    noteAuthenticatedCredential(c, token);
     // Touch lastSeen (debounced, fire-and-forget)
     if (result.agent && Date.now() - result.agent.lastSeen.getTime() > LAST_SEEN_DEBOUNCE_MS) {
       touchLastSeen(db, result.agent.id).catch(() => {});
@@ -131,7 +131,7 @@ export function requireWorkspaceRead(
 
     // An observer token reads as the observer alone.
     await rememberPrincipal(c, token, result.observerToken ? { ...result, agent: undefined, node: undefined } : result);
-    noteAuthenticatedCredential(c, token, result.workspace.id);
+    noteAuthenticatedCredential(c, token);
 
     if (result.observerToken) {
       if (!hasAnyObserverScope(result.observerToken, requiredScopes)) {
