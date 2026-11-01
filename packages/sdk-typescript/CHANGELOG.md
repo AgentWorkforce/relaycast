@@ -11,6 +11,7 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Added
 
+- `RelayCast.listA2aDirectory({ skill?, tag?, q? })` calls `GET /v1/a2a/directory` for unified native and registered A2A agent discovery.
 - `AgentClient.messageDeliveries(messageId)` and `relay.messages.deliveries(messageId)` call `GET /v1/messages/:id/deliveries`; `on.deliveryAcked` (agent and relay) handles the sender-side `delivery.acked` event. New types `DeliveryAckedEvent`, `SentDelivery`, `MessageDeliveryReceipt`, `MessageDeliveriesResponse`; `SendDmResponse.delivery`.
 
 ### Changed
