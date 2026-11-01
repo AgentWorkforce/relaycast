@@ -16,7 +16,9 @@ This project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 Packages without a separate changelog are covered by the cross-package notes below.
 
-## [Unreleased - Minor]
+## [Unreleased]
+
+## [12.4.0] - 2026-11-01
 
 - Hosted roster reads are much cheaper. Under node liveness authority, `GET /v1/agents?status=<s>` now bounds its SQL to rows that can resolve to that status instead of reading and probing the whole workspace, the default roster no longer reads or probes long-dead hosted rows that always resolve to offline, and each distinct node is asked for liveness once per read instead of once per agent. Results are unchanged.
 - `GET /v1/agents?names=a&names=b` looks up up to 100 agents in one read, replacing one `GET /v1/agents/:name` per agent.
@@ -954,7 +956,8 @@ Packages without a separate changelog are covered by the cross-package notes bel
 
 Earlier releases are available on the [GitHub releases page](https://github.com/AgentWorkforce/relaycast/releases).
 
-[Unreleased]: https://github.com/AgentWorkforce/relaycast/compare/v12.3.0...HEAD
+[Unreleased]: https://github.com/AgentWorkforce/relaycast/compare/v12.4.0...HEAD
+[12.4.0]: https://github.com/AgentWorkforce/relaycast/compare/v12.3.0...v12.4.0
 [12.3.0]: https://github.com/AgentWorkforce/relaycast/compare/v12.2.1...v12.3.0
 [12.2.1]: https://github.com/AgentWorkforce/relaycast/compare/v12.2.0...v12.2.1
 [12.2.0]: https://github.com/AgentWorkforce/relaycast/compare/v12.1.0...v12.2.0
