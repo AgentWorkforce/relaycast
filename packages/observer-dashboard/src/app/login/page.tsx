@@ -3,6 +3,7 @@
 import { useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { setAuth } from '../../lib/auth';
+import { isObserverToken, isWorkspaceKey } from '@relaycast/types';
 
 export default function LoginPage() {
   const router = useRouter();
@@ -14,8 +15,8 @@ export default function LoginPage() {
     e.preventDefault();
     setError('');
 
-    if (!apiKey.startsWith('rk_live_') && !apiKey.startsWith('ot_live_')) {
-      setError('API key must start with rk_live_ or ot_live_');
+    if (!isWorkspaceKey(apiKey) && !isObserverToken(apiKey)) {
+      setError('Enter a workspace key (rk_live_ or ar_ws_) or an observer token (ot_live_ or ar_ob_)');
       return;
     }
 
@@ -62,7 +63,7 @@ export default function LoginPage() {
                   placeholder="rk_live_..."
                   autoFocus
                 />
-                <p className="text-xs text-[var(--text-faint)]">Starts with <code className="rounded-md bg-[color-mix(in_srgb,var(--brand-primary-faint)_78%,transparent)] px-1.5 py-0.5 text-[var(--brand-primary-strong)]">rk_live_…</code> or <code className="rounded-md bg-[color-mix(in_srgb,var(--brand-primary-faint)_78%,transparent)] px-1.5 py-0.5 text-[var(--brand-primary-strong)]">ot_live_…</code></p>
+                <p className="text-xs text-[var(--text-faint)]">Starts with <code className="rounded-md bg-[color-mix(in_srgb,var(--brand-primary-faint)_78%,transparent)] px-1.5 py-0.5 text-[var(--brand-primary-strong)]">rk_live_…</code>, <code className="rounded-md bg-[color-mix(in_srgb,var(--brand-primary-faint)_78%,transparent)] px-1.5 py-0.5 text-[var(--brand-primary-strong)]">ar_ws_…</code>, <code className="rounded-md bg-[color-mix(in_srgb,var(--brand-primary-faint)_78%,transparent)] px-1.5 py-0.5 text-[var(--brand-primary-strong)]">ot_live_…</code> or <code className="rounded-md bg-[color-mix(in_srgb,var(--brand-primary-faint)_78%,transparent)] px-1.5 py-0.5 text-[var(--brand-primary-strong)]">ar_ob_…</code></p>
               </div>
 
               {error && (

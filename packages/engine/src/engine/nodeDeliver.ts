@@ -13,7 +13,8 @@ type NodeDeliverDeps = {
   environment?: string;
   /** Egress proxy for http_push nodes that opt in with `delivery.use_proxy`. */
   httpPushProxy?: HttpPushProxyConfig;
-  outboundWebhookFetch?: typeof globalThis.fetch;
+  /** Transport for best-effort ephemeral http_push events (`ephemeralEventFetch(config)`). */
+  ephemeralEventFetch?: typeof globalThis.fetch;
 };
 
 type NodeDeliverRecipient = {
@@ -118,7 +119,7 @@ function deliverEventToRecipient(
       deliveryConfig: recipient.deliveryConfig,
       strict: strictHttpPushDispatch(deps.environment),
       proxy: deps.httpPushProxy,
-      fetch: deps.outboundWebhookFetch,
+      fetch: deps.ephemeralEventFetch,
       event: {
         workspaceId: deps.workspaceId,
         eventType: args.event,

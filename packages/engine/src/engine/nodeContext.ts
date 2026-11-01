@@ -1,4 +1,4 @@
-import { and, eq, inArray, ne, or } from 'drizzle-orm';
+import { and, eq, inArray, or, sql } from 'drizzle-orm';
 import type { EngineDb } from '../ports/database.js';
 import type { NodeConnectionRegistry, RealtimeBus } from '../ports/realtime.js';
 import { agents, agentNodeBindings, channelMembers, nodes } from '../db/schema.js';
@@ -16,7 +16,8 @@ type NodeContextDeps = {
   environment?: string;
   /** Egress proxy for http_push nodes that opt in with `delivery.use_proxy`. */
   httpPushProxy?: HttpPushProxyConfig;
-  outboundWebhookFetch?: typeof globalThis.fetch;
+  /** Transport for best-effort ephemeral http_push events (`ephemeralEventFetch(config)`). */
+  ephemeralEventFetch?: typeof globalThis.fetch;
 };
 
 type ScopedNodeRow = {
@@ -28,10 +29,6 @@ type ScopedNodeRow = {
   deliveryAdapter: string | null;
   deliveryConfig: Record<string, unknown> | null;
 };
-
-// Node kinds eligible for context updates: WebSocket nodes receive a pushed
-// `context.update` frame; http_push nodes receive a best-effort POST.
-const WS_CONTEXT_NODE_KINDS = ['ws', 'fleet_ws', 'direct_ws'] as const;
 
 /**
  * Upper bound on concurrent context pushes from one event.
@@ -58,10 +55,11 @@ export const NODE_CONTEXT_SEND_CONCURRENCY = 4;
  * eligible.
  */
 function contextReachableNode() {
-  return or(
-    eq(nodes.kind, 'http_push'),
-    and(inArray(nodes.kind, WS_CONTEXT_NODE_KINDS), ne(nodes.status, 'offline')),
-  )!;
+  // WebSocket kinds receive a pushed `context.update` frame; http_push nodes a
+  // best-effort POST. Literal, and identical to the predicate of
+  // idx_nodes_context_reachable (migration 0080), so SQLite can prove that
+  // partial index covers a query.
+  return sql`(${nodes.kind} = 'http_push' OR (${nodes.kind} IN ('ws', 'fleet_ws', 'direct_ws') AND ${nodes.status} <> 'offline'))`;
 }
 // workspace/status/kind/liveness predicates add seven bindings, so 80 agent ids
 // leave comfortable room below D1's 100-bound-parameter limit.
@@ -185,7 +183,7 @@ async function sendContextToRows(
           deliveryConfig: group.deliveryConfig,
           strict: strictHttpPushDispatch(deps.environment),
           proxy: deps.httpPushProxy,
-          fetch: deps.outboundWebhookFetch,
+          fetch: deps.ephemeralEventFetch,
           event: {
             workspaceId: deps.workspaceId,
             eventType: message.event,
@@ -282,6 +280,10 @@ export async function sendNodePresenceContext(
     data: Record<string, unknown>;
   },
 ): Promise<void> {
+  // Reachable nodes first (CROSS JOIN fixes SQLite's join order), then their
+  // active bindings: long-lived workspaces hold thousands of active bindings
+  // on offline direct nodes, and starting from bindings read every one of
+  // them on every presence event.
   const rows = await deps.db
     .select({
       nodeId: agentNodeBindings.nodeId,
@@ -292,21 +294,19 @@ export async function sendNodePresenceContext(
       deliveryAdapter: nodes.deliveryAdapter,
       deliveryConfig: nodes.deliveryConfig,
     })
-    .from(agentNodeBindings)
-    .innerJoin(agents, and(
+    .from(nodes)
+    .crossJoin(agentNodeBindings)
+    .crossJoin(agents)
+    .where(and(
+      eq(nodes.workspaceId, deps.workspaceId),
+      contextReachableNode(),
+      eq(agentNodeBindings.workspaceId, deps.workspaceId),
+      eq(agentNodeBindings.nodeId, nodes.id),
+      eq(agentNodeBindings.status, 'active'),
       eq(agents.workspaceId, deps.workspaceId),
       eq(agents.id, agentNodeBindings.agentId),
       eq(agents.locationType, 'via_node'),
       eq(agents.locationNodeId, agentNodeBindings.nodeId),
-    ))
-    .innerJoin(nodes, and(
-      eq(nodes.workspaceId, deps.workspaceId),
-      eq(nodes.id, agentNodeBindings.nodeId),
-    ))
-    .where(and(
-      eq(agentNodeBindings.workspaceId, deps.workspaceId),
-      eq(agentNodeBindings.status, 'active'),
-      contextReachableNode(),
     ));
 
   await sendContextToRows(deps, rows, {

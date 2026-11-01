@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { cookies } from 'next/headers';
 import { pickRememberedEngine, resolveRelayServerCandidatesFromRequest } from '../../../../lib/relay-server';
 import { revokeObserverStreamToken } from '../../../../lib/observer-token';
+import { isWorkspaceKey } from '@relaycast/types';
 
 const COOKIE_NAME = 'relaycast_key';
 const AGENT_COOKIE_NAME = 'relaycast_agent_token';
@@ -21,10 +22,10 @@ export async function POST(request: NextRequest) {
   // Best-effort: revoke the minted observer token so a leaked ws cookie value
   // stops working immediately instead of lingering until its 30-day expiry.
   // Only workspace-key sessions mint a token (and store its id + the admin key
-  // needed to revoke it); `ot_live_` logins have no id cookie and are skipped.
+  // needed to revoke it); observer-token logins have no id cookie and are skipped.
   const wsTokenId = cookieStore.get(WS_TOKEN_ID_COOKIE_NAME)?.value;
   const adminKey = cookieStore.get(COOKIE_NAME)?.value;
-  if (wsTokenId && adminKey?.startsWith('rk_live_')) {
+  if (wsTokenId && adminKey && isWorkspaceKey(adminKey)) {
     const baseUrl = pickRememberedEngine(
       cookieStore.get(ENGINE_COOKIE_NAME)?.value,
       resolveRelayServerCandidatesFromRequest(request),

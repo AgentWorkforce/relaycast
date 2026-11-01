@@ -721,6 +721,7 @@ export type SystemPrompt = Camelize<Raw.SystemPrompt>;
 export type ThreadReplyEvent = Camelize<Raw.ThreadReplyEvent>;
 export type ThreadReplyRequest = Camelize<Raw.ThreadReplyRequest>;
 export type TokenRotateResponse = Camelize<Raw.TokenRotateResponse>;
+export type CredentialUpgradeResponse = Camelize<Raw.CredentialUpgradeResponse>;
 export type UpdateAgentRequest = Camelize<Raw.UpdateAgentRequest>;
 export type UpdateChannelRequest = Camelize<Raw.UpdateChannelRequest>;
 export type UpdateWorkspaceRequest = Camelize<Raw.UpdateWorkspaceRequest>;

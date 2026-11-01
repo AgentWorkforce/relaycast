@@ -132,7 +132,10 @@ export const loggerMiddleware: MiddlewareHandler<AppEnv> = async (c, next) => {
   const authHeader = requestHeaders.get('authorization') ?? undefined;
   const queryToken = c.req.query('token');
   const bearerToken = parseBearerToken(authHeader);
-  const presentedToken = bearerToken ?? queryToken;
+  // Never fingerprint the internal admin secret: a stable hash of it in logs
+  // would be an offline-guessable verifier for the control-plane credential.
+  const isInternalPath = c.req.path === '/internal' || c.req.path.startsWith('/internal/');
+  const presentedToken = isInternalPath ? undefined : bearerToken ?? queryToken;
   const authScheme = classifyAuthScheme(authHeader, queryToken);
   const contentType = requestHeaders.get('content-type');
   const accept = requestHeaders.get('accept');

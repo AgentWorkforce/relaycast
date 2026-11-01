@@ -1,6 +1,6 @@
 {
   "name": "@relaycast/engine",
-  "version": "12.2.1",
+  "version": "12.5.0",
   "type": "module",
   "description": "Portable, platform-agnostic engine for Relaycast — channels, threads, DMs, presence, real-time events. Runs on Node + SQLite (self-host) or behind a Cloudflare Durable Object adapter (hosted).",
   "bin": {
@@ -18,6 +18,14 @@
     "./adapters/node": {
       "types": "./dist/adapters/node/index.d.ts",
       "import": "./dist/adapters/node/index.js"
+    },
+    "./adapters/actor": {
+      "types": "./dist/adapters/actor/index.d.ts",
+      "import": "./dist/adapters/actor/index.js"
+    },
+    "./gateway": {
+      "types": "./dist/gateway.d.ts",
+      "import": "./dist/gateway.js"
     },
     "./auth": {
       "types": "./dist/auth/index.d.ts",
@@ -53,6 +61,7 @@
   ],
   "scripts": {
     "build": "tsc && node -e \"require('fs').cpSync('src/db/migrations','dist/db/migrations',{recursive:true})\"",
+    "generate:actor-migrations": "node scripts/generate-actor-migrations.mjs",
     "build:standalone": "bun standalone/build.ts",
     "test": "vitest run",
     "test:bun": "bun --bun x vitest run",
@@ -62,8 +71,8 @@
   },
   "dependencies": {
     "@hono/node-server": "^1.13.7",
-    "@relaycast/a2a": "12.2.1",
-    "@relaycast/types": "12.2.1",
+    "@relaycast/a2a": "12.5.0",
+    "@relaycast/types": "12.5.0",
     "better-sqlite3": "^11.10.0",
     "drizzle-orm": "^0.45.1",
     "hono": "^4.11.9",

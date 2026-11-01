@@ -33,6 +33,8 @@ import {
   normalizeObserverFilters,
   observerAllowsAgent,
 } from '../engine/observerToken.js';
+import { derivationFamilies, credentialFromHex } from '../auth/credentials.js';
+import { ephemeralEventFetch } from '../ports/index.js';
 
 export const nodeRoutes = new Hono<AppEnv>();
 
@@ -225,8 +227,15 @@ async function enrollNode(c: Context<AppEnv>, data: z.infer<typeof createNodeSch
             idempotencyKey,
             requestDigest,
           ]));
+          // The replacement is derived in every family the first attempt may
+          // have committed it in, so a retry after a family switch or a
+          // keyring rotation still recovers it.
+          const db = c.get('db');
+          const workspaceId = c.get('workspace').id;
+          const families = await derivationFamilies(db, workspaceId);
           return {
-            replacementToken: `nt_live_${replacementDigest.slice(0, 48)}`,
+            replacementTokens: await Promise.all(families.map((family) =>
+              credentialFromHex(db, family.format, 'node', workspaceId, replacementDigest, family.format === 'ar' ? family.tag : undefined))),
             idempotencyKeyHash: await sha256Hex(idempotencyKey),
             requestDigest,
           };
@@ -430,7 +439,7 @@ nodeRoutes.post('/nodes/:node/actions/:name/invoke', requireAuth, rateLimit, asy
             nodeConnections: c.get('engine').nodeConnections,
             environment: c.get('engine').config?.environment,
             httpPushProxy: c.get('engine').config?.httpPushProxy,
-            outboundWebhookFetch: c.get('engine').config?.outboundWebhookFetch,
+            ephemeralEventFetch: ephemeralEventFetch(c.get('engine').config),
             workspaceId: workspace.id,
           },
           {

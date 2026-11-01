@@ -91,6 +91,7 @@ public final class RelayCast: @unchecked Sendable {
     private var workspaceIDHint: String?
 
     public lazy var workspace = RelayWorkspaceService(relay: self)
+    public lazy var credentials = RelayCredentialsService(relay: self)
     public lazy var observerTokens = RelayObserverTokensService(relay: self)
     public lazy var systemPrompt = RelaySystemPromptService(relay: self)
     public lazy var channels = RelayChannelsService(relay: self)
@@ -403,6 +404,24 @@ public final class RelayWorkspaceService: @unchecked Sendable {
 
     public func delete() async throws {
         _ = try await relay.client.delete("/v1/workspace")
+    }
+}
+
+public final class RelayCredentialsService: @unchecked Sendable {
+    private unowned let relay: RelayCast
+
+    init(relay: RelayCast) {
+        self.relay = relay
+    }
+
+    /// Exchange a legacy credential (`rk_live_` / `at_live_` / `nt_live_` /
+    /// `ot_live_` / `wh_live_`) for the `ar_` credential of the same principal:
+    /// this client's key, or `credential` when given. The legacy credential
+    /// keeps working until `legacyExpiresAt`; upgrading it again returns the
+    /// same `ar_` credential. Mirrors the TypeScript SDK's `credentials.upgrade()`.
+    public func upgrade(_ credential: String? = nil) async throws -> CredentialUpgradeResponse {
+        let client = try credential.map { try relay.client.withApiKey($0) } ?? relay.client
+        return try await client.post("/v1/credentials/upgrade", body: EmptyRequest())
     }
 }
 

@@ -17,7 +17,7 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: "Image tag (the engine version it contains, e.g. 8.0.0)"
+        description: "Image tag: the pinned engine version (e.g. 12.2.1), or that version plus a build suffix (e.g. 12.2.1-selfhost.1) for an image built from unreleased source on this ref"
         required: true
         type: string
       latest:
@@ -63,16 +63,31 @@ jobs:
         run: echo "OWNER_LC=${GITHUB_REPOSITORY_OWNER,,}" >> "$GITHUB_ENV"
 
       - name: Verify the tag matches the pinned engine version
+        id: pin
         env:
           TAG: ${{ inputs.tag }}
         run: |
           set -euo pipefail
           pinned="$(node -p "require('./docker/package.json').dependencies['@relaycast/engine']")"
-          if test "$pinned" != "$TAG"; then
-            echo "tag '$TAG' does not match the pinned engine version '$pinned'" >&2
-            exit 1
-          fi
-          echo "tag matches pinned engine version: $pinned"
+          # The image builds the engine from this checkout over the pinned npm
+          # package. A suffixed tag (<pinned>-<suffix>) names an image whose
+          # source is ahead of the last npm release, without claiming a
+          # version that was never released.
+          case "$TAG" in
+            "$pinned") ;;
+            "$pinned"-*)
+              if ! printf '%s' "${TAG#"$pinned"-}" | grep -Eq '^[0-9A-Za-z][0-9A-Za-z.-]*$'; then
+                echo "tag suffix in '$TAG' must be [0-9A-Za-z.-]" >&2
+                exit 1
+              fi
+              ;;
+            *)
+              echo "tag '$TAG' does not match the pinned engine version '$pinned' (or '$pinned-<suffix>')" >&2
+              exit 1
+              ;;
+          esac
+          echo "pinned=$pinned" >> "$GITHUB_OUTPUT"
+          echo "tag $TAG matches pinned engine version: $pinned"
 
       - name: Build and push
         id: push
@@ -81,7 +96,7 @@ jobs:
           context: .
           platforms: linux/amd64,linux/arm64
           push: true
-          build-args: RELAYCAST_ENGINE_VERSION=${{ inputs.tag }}
+          build-args: RELAYCAST_ENGINE_VERSION=${{ steps.pin.outputs.pinned }}
           tags: |
             ghcr.io/${{ env.OWNER_LC }}/relaycast-self-host:${{ inputs.tag }}
             ${{ inputs.latest && format('ghcr.io/{0}/relaycast-self-host:latest', env.OWNER_LC) || '' }}
@@ -103,4 +118,5 @@ jobs:
             echo
             echo "Pin the digest, not the tag — a tag can be moved, a digest cannot."
             echo "Platforms: linux/amd64, linux/arm64"
+            echo "Source commit: ${GITHUB_SHA}"
           } >> "$GITHUB_STEP_SUMMARY"

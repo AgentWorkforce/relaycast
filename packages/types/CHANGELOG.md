@@ -9,6 +9,18 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ## [Unreleased]
 
+## [12.5.0] - 2026-11-01
+
+- Removed the `relaycast_server_request_authenticated` server telemetry event.
+
+## [12.3.0] - 2026-10-31
+
+### Added
+
+- `parseCredential`, `credentialKind`, `credentialFamily`, `credentialWorkspaceId`, `isWorkspaceKey`, `isObserverToken`, `maskCredential` and `redactCredentials` (literal replacement text; finds credentials glued to surrounding text): the one classifier of credential shape for both families (legacy `*_live_*` and `ar_<kind>_<wsid>_<tag>_<secret><crc>`, checksum included), used by the engine and clients.
+- `encodeArCredential`, `encodeArWorkspaceId`, `isArWorkspaceId`, `base62Encode` / `base62Decode`, `crc32`, and the `ar_` registry: `AR_KIND_CODES`, `AR_RESERVED_SERVICE_CODES` (`au`, for RelayAuth's `ar_au_<kind>_…`) and the segment lengths.
+- `relaycast_server_request_authenticated` telemetry event (`workspace_id`, `credential_family`, `credential_kind`).
+
 ## [12.0.0] - 2026-10-27
 
 ### Removed

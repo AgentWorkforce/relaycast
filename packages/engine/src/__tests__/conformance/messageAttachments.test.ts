@@ -7,6 +7,7 @@ import {
   type TestStack,
 } from './harness.js';
 import { files, messageAttachments, messages } from '../../db/schema.js';
+import type { LocalFileStorage } from '../../adapters/node/files.js';
 
 const TEXT_BYTES = new TextEncoder().encode('hello world\n');
 // Arbitrary binary bytes starting with a PNG signature and partial header;
@@ -184,8 +185,13 @@ describe('channel message attachments', () => {
     const fileId = await storeFile(stack, alice.token, 'empty.png', {
       bytes: new Uint8Array(0),
       sizeBytes: 100,
+      put: false,
       complete: false,
     });
+    // The upload route refuses an empty body; a store that doesn't enforce the
+    // upload contract could still hold one.
+    const [row] = await stack.runtime.deps.db.select().from(files).where(eq(files.id, fileId));
+    await (stack.runtime.deps.files as LocalFileStorage).write(row.storageKey, Buffer.alloc(0), 'image/png');
 
     const completeRes = await stack.app.request(`/v1/files/${fileId}/complete`, {
       method: 'POST',
@@ -195,16 +201,47 @@ describe('channel message attachments', () => {
     expect((await completeRes.json() as { error: { code: string } }).error.code).toBe('upload_incomplete');
   });
 
-  it('records the stored size and lets another channel member download the exact bytes', async () => {
+  it('refuses upload bodies whose size or content type differs from the declared upload', async () => {
+    const ws = await createWorkspace(stack.app, 'upload-contract-ws');
+    const alice = await registerAgent(stack.app, ws.workspaceKey, 'alice');
+    const upload = await stack.app.request('/v1/files/upload', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', authorization: `Bearer ${alice.token}` },
+      body: JSON.stringify({ filename: 'a.png', content_type: 'image/png', size_bytes: PNG_BYTES.byteLength }),
+    });
+    const { data } = await upload.json() as { data: { upload_url: string } };
+    const put = async (body: Uint8Array, contentType: string) => {
+      const res = await stack.runtime.fileHandler(new Request(data.upload_url, { method: 'PUT', headers: { 'content-type': contentType }, body }));
+      return { status: res.status, code: res.status === 200 ? null : ((await res.json()) as { error: { code: string } }).error.code };
+    };
+    expect(await put(new Uint8Array([...PNG_BYTES, 0]), 'image/png')).toEqual({ status: 400, code: 'size_mismatch' });
+    expect(await put(PNG_BYTES.slice(1), 'image/png')).toEqual({ status: 400, code: 'size_mismatch' });
+    expect(await put(PNG_BYTES, 'text/plain')).toEqual({ status: 400, code: 'content_type_mismatch' });
+    expect(await put(PNG_BYTES, 'image/png')).toEqual({ status: 200, code: null });
+  });
+
+  it('refuses to complete an upload whose stored size differs from the declared size', async () => {
+    const ws = await createWorkspace(stack.app, 'upload-size-mismatch-ws');
+    const alice = await registerAgent(stack.app, ws.workspaceKey, 'alice');
+    const fileId = await storeFile(stack, alice.token, 'a.png', { bytes: PNG_BYTES, contentType: 'image/png', put: false, complete: false });
+    const [row] = await stack.runtime.deps.db.select().from(files).where(eq(files.id, fileId));
+    // A store that doesn't enforce the upload contract received other bytes.
+    await (stack.runtime.deps.files as LocalFileStorage).write(row.storageKey, Buffer.from('short'), 'image/png');
+    const res = await stack.app.request(`/v1/files/${fileId}/complete`, {
+      method: 'POST',
+      headers: { authorization: `Bearer ${alice.token}` },
+    });
+    expect(res.status).toBe(409);
+    expect(((await res.json()) as { error: { code: string } }).error.code).toBe('upload_size_mismatch');
+  });
+
+  it('records the declared size and lets another channel member download the exact bytes', async () => {
     const ws = await createWorkspace(stack.app, 'channel-attachments-download-ws');
     const alice = await registerAgent(stack.app, ws.workspaceKey, 'alice');
     const bob = await registerAgent(stack.app, ws.workspaceKey, 'bob');
-    // Declare a size that differs from the bytes actually PUT: the completed
-    // file must report what was stored, not what was declared.
     const fileId = await storeFile(stack, alice.token, 'screenshot.png', {
       bytes: PNG_BYTES,
       contentType: 'image/png',
-      sizeBytes: 1000,
     });
 
     const res = await postMessage(alice.token, [fileId]);

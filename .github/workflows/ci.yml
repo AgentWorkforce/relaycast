@@ -85,7 +85,7 @@ jobs:
           }
 
           assert_refused
-          assert_refused --base-url http://relay.ratifyprotocol.com
+          assert_refused --base-url http://relay.example.com
           assert_refused --base-url https://relay
           assert_refused --base-url https://relay.local
           assert_refused --base-url https://relay.localhost
@@ -93,7 +93,7 @@ jobs:
           assert_refused --base-url https://203.0.113.5
           assert_refused --base-url 'https://[2001:db8::1]'
           assert_refused --base-url https://a..example
-          assert_refused --db --base-url https://relay.ratifyprotocol.com
+          assert_refused --db --base-url https://relay.example.com
 
           label_version="$(docker inspect --format '{{ index .Config.Labels "io.relaycast.engine.version" }}' "$IMAGE")"
           package_version="$(docker run --rm --entrypoint node "$IMAGE" -p "require('/opt/relaycast/node_modules/@relaycast/engine/package.json').version")"
@@ -101,7 +101,7 @@ jobs:
 
           container="relaycast-ci-$ARCH"
           docker run --detach --name "$container" "$IMAGE" \
-            --base-url https://relay.ratifyprotocol.com
+            --base-url https://relay.example.com
 
           for attempt in $(seq 1 60); do
             if docker exec "$container" node -e \
@@ -114,15 +114,15 @@ jobs:
 
           docker exec "$container" node --input-type=module -e '
             const origin = "http://127.0.0.1:8787";
-            const expected = "https://relay.ratifyprotocol.com/a2a/rpc";
+            const expected = "https://relay.example.com/a2a/rpc";
             const created = await fetch(origin + "/v1/workspaces", {
               method: "POST",
               headers: { "content-type": "application/json" },
-              body: JSON.stringify({ name: "ratify-protocol" }),
+              body: JSON.stringify({ name: "my-team" }),
             });
             if (!created.ok) process.exit(1);
             const response = await fetch(
-              origin + "/.well-known/agent-card.json?workspace=ratify-protocol",
+              origin + "/.well-known/agent-card.json?workspace=my-team",
             );
             const card = await response.json();
             if (!response.ok || card.url !== expected) process.exit(1);

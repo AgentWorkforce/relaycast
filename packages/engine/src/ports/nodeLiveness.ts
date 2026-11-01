@@ -16,6 +16,13 @@ export interface NodeLivenessSnapshot {
  * owner independently rechecks its generation and receipt lease at final send. */
 export interface NodeLivenessAuthority {
   inspect(workspaceId: string, nodeId: string): Promise<NodeLivenessSnapshot>;
+  /**
+   * Durable state the node's socket owner may assert from memory changed
+   * outside that node's own control frames — today a direct node's agent
+   * binding, location or release. The owner re-reads it before asserting it
+   * again. Called after the change commits; best effort.
+   */
+  invalidate?(workspaceId: string, nodeId: string): Promise<void>;
 }
 
 const authorities = new WeakMap<object, NodeLivenessAuthority>();

@@ -1,5 +1,7 @@
 import type { AuthProvider, AuthRequire, AuthResult, Workspace } from '../ports/auth.js';
 import type { EngineDb } from '../ports/database.js';
+import { parseCredential } from '@relaycast/types';
+import { acceptsOnlyAr } from './credentials.js';
 
 /** Error code every credential path returns for a workspace past `expires_at`. */
 export const WORKSPACE_EXPIRED_CODE = 'workspace_expired';
@@ -36,11 +38,16 @@ export function workspaceExpiredAuthResult(): AuthResult {
  * seam: a cloud provider backed by its own identity store must not be able to
  * admit an expired workspace. Every credential-accepting path in the engine
  * goes through this wrapper so the check holds whatever provider is installed.
+ * The same holds for a deployment that accepts only `ar_` credentials
+ * (`restrictToArCredentials`): a legacy one is refused before the provider runs.
  */
 export async function authenticateUnexpired(
   auth: AuthProvider,
   args: { token: string; require: AuthRequire; db: EngineDb },
 ): Promise<AuthResult> {
+  if (acceptsOnlyAr(args.db) && parseCredential(args.token)?.family !== 'ar') {
+    return { ok: false, status: 401, code: 'unauthorized', message: 'Invalid token format' };
+  }
   const result = await auth.authenticate(args);
   if (!result.ok) return result;
   if (isWorkspaceExpired(result.workspace)) return workspaceExpiredAuthResult();

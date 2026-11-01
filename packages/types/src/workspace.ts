@@ -189,6 +189,15 @@ export const TokenRotateResponseSchema = z.object({
 });
 export type TokenRotateResponse = z.infer<typeof TokenRotateResponseSchema>;
 
+/** `POST /v1/credentials/upgrade`: the `ar_` credential that replaces a legacy one. */
+export const CredentialUpgradeResponseSchema = z.object({
+  credential: z.string(),
+  kind: z.enum(['workspace', 'agent', 'node', 'observer', 'webhook']),
+  /** When the legacy credential stops working. */
+  legacy_expires_at: z.string(),
+});
+export type CredentialUpgradeResponse = z.infer<typeof CredentialUpgradeResponseSchema>;
+
 /** Longest accepted workspace-key grace: one hour, in seconds. */
 export const WORKSPACE_KEY_MAX_GRACE_SECONDS = 3600;
 

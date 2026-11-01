@@ -1,4 +1,5 @@
-import { nodeLivenessAuthority, inspectNodeLiveness, filterAsync } from './nodeLiveness.js';
+import { nodeLivenessAuthority, inspectNodeLiveness, inspectNodesLiveness, invalidateDirectPresence } from './nodeLiveness.js';
+import type { NodeLivenessSnapshot } from '../ports/nodeLiveness.js';
 import { eq, and, exists, gt, lt, ne, sql, inArray, type SQL } from 'drizzle-orm';
 import type { getDb } from '../db/index.js';
 import { agents, agentNodeBindings, agentRecoveryCredentials, channels, channelMembers, dmParticipants, actions, deliveries, nodes } from '../db/schema.js';
@@ -13,6 +14,7 @@ import { addressNodeSelection, formatAgentAddress } from './address.js';
 import { runAtomicWrites, type AtomicWrite } from '../ports/database.js';
 import { AGENT_RECOVERY_PROOF_HASH_PATTERN } from '@relaycast/types';
 import { WEBHOOK_AGENT_NAME } from './messageMetadata.js';
+import { issueCredential } from '../auth/credentials.js';
 
 export { AGENT_RECOVERY_PROOF_HASH_PATTERN } from '@relaycast/types';
 
@@ -269,7 +271,7 @@ export async function registerAgent(
   }
   const agentId = generateId();
   const directMachineId = data.directMachinePrefix ? `${data.directMachinePrefix}-${agentId}` : null;
-  const token = `at_live_${randomHex(16)}`;
+  const token = await issueCredential(db, 'agent', workspaceId);
   const tokenHash = await sha256Hex(token);
   const directNodeId = directNodeIdForAgent(agentId);
   const directNodeTokenHash = await sha256Hex(`implicit_direct:${workspaceId}:${agentId}:${randomHex(16)}`);
@@ -455,15 +457,22 @@ export async function listAgents(
   db: Db,
   workspaceId: string,
   status?: string,
-  options: { includeStale?: boolean; includeMetadata?: boolean } = {},
+  options: { includeStale?: boolean; includeMetadata?: boolean; names?: string[] } = {},
 ) {
   // Filtering and serialization must use the same instant even if the SELECT
   // crosses a TTL boundary. Presence is derived; roster reads never sweep.
   const now = Date.now();
-  const requestedStatus = status === 'online' ? 'active' : status;
+  // A name lookup returns each named roster member whatever its status or age,
+  // like `GET /v1/agents/:name` does for one name.
+  const byName = options.names !== undefined;
+  const requestedStatus = byName ? undefined : status === 'online' ? 'active' : status;
   // Keep the tombstone predicate literal so SQLite can prove this query
   // qualifies for the partial roster index, including prepared D1 statements.
   const conditions = [eq(agents.workspaceId, workspaceId), sql`${agents.status} <> 'released'`];
+  if (byName) {
+    if (options.names!.length === 0) return [];
+    conditions.push(inArray(agents.name, options.names!));
+  }
   // Compare numeric seconds directly: Drizzle's Date encoder truncates to
   // whole seconds, which would keep a boundary row active for up to 999ms
   // after effectiveAgentStatus has marked it offline.
@@ -476,9 +485,23 @@ export async function listAgents(
     ))`);
   } else if (requestedStatus && requestedStatus !== 'all' && !nodeLivenessAuthority(db)) {
     conditions.push(eq(agents.status, requestedStatus));
+  } else if (requestedStatus && requestedStatus !== 'all' && requestedStatus !== 'offline') {
+    // Under node authority a row's public status is its stored status, the
+    // status it held before a liveness loss, or offline. So a request for any
+    // status but offline can only match these rows; without this bound every
+    // per-status read scanned and probed the whole workspace.
+    const stored = requestedStatus === 'active' ? ['active', 'online'] : [requestedStatus];
+    conditions.push(sql`(${agents.status} IN ${stored} OR (${agents.status} = 'offline' AND ${agents.statusBeforeLivenessLoss} IN ${stored}))`);
   }
-  if ((!requestedStatus || requestedStatus === 'all') && !options.includeStale) {
-    conditions.push(nodeLivenessAuthority(db) ? sql`(${agents.locationType} = 'via_node' OR ${agents.lastSeen} >= ${(now - AGENT_ROSTER_RECENCY_MS) / 1_000})` : sql`${agents.lastSeen} >= ${(now - AGENT_ROSTER_RECENCY_MS) / 1_000}`);
+  if ((!requestedStatus || requestedStatus === 'all') && !options.includeStale && !byName) {
+    const recent = sql`${agents.lastSeen} >= ${(now - AGENT_ROSTER_RECENCY_MS) / 1_000}`;
+    // A stale hosted row stays listed while its node says it is live. One that
+    // is offline with no saved pre-loss status resolves to offline whatever the
+    // node says, and stale offline rows are dropped below, so leave it out here
+    // instead of probing its node.
+    conditions.push(nodeLivenessAuthority(db)
+      ? sql`(${recent} OR (${agents.locationType} = 'via_node' AND NOT (${agents.status} = 'offline' AND (${agents.statusBeforeLivenessLoss} IS NULL OR ${agents.statusBeforeLivenessLoss} = 'offline'))))`
+      : recent);
   }
 
   const rows = await db
@@ -511,8 +534,7 @@ export async function listAgents(
     // they are not roster members, so `agent list` must not fill with them.
     .where(and(...conditions));
 
-  const statuses = new Map<string, string>();
-  await filterAsync(rows, async ({ agent }) => { statuses.set(agent.id, await effectiveAgentStatusWithAuthority(db, agent, now)); return true; });
+  const statuses = await effectiveAgentStatusesWithAuthority(db, workspaceId, rows.map(({ agent }) => agent), now);
   return rows.map(({ agent: a, node }) => ({
     id: a.id,
     name: a.name,
@@ -527,7 +549,7 @@ export async function listAgents(
     metadata: a.metadata,
   })).filter(a => (!requestedStatus || requestedStatus === 'all' || a.status === requestedStatus)
     && !(nodeLivenessAuthority(db) && (!requestedStatus || requestedStatus === 'all')
-      && !options.includeStale && a.status === 'offline'
+      && !options.includeStale && !byName && a.status === 'offline'
       && Date.parse(a.last_seen) < now - AGENT_ROSTER_RECENCY_MS));
 }
 
@@ -860,6 +882,7 @@ export async function deleteAgent(db: Db, workspaceId: string, name: string) {
     ));
     return writes;
   }, { requireAtomic: true });
+  await invalidateDirectPresence(db, workspaceId, [agent.id]);
   // Capture memberships at deletion, not a preflight read that can race joins.
   const removed = releaseResults[1] as Array<{ channelId: string }>;
   const joinedChannels = await queryInChunks(removed.map(row => row.channelId), ids => db
@@ -929,10 +952,33 @@ export async function sweepStaleAgents(db: Db, workspaceId?: string): Promise<nu
   return normalized.length + result.length;
 }
 
-async function effectiveAgentStatusWithAuthority(db: Db, agent: AgentPresenceRow & { id: string; workspaceId: string; locationType: string; locationNodeId: string | null; providerName: string; statusBeforeLivenessLoss: string | null }, now = Date.now()): Promise<string> {
-  if (!nodeLivenessAuthority(db) || agent.status === RELEASED_AGENT_STATUS || agent.locationType !== 'via_node' || !agent.locationNodeId) return effectiveAgentStatus(agent, now);
+type AuthorityPresenceRow = AgentPresenceRow & { id: string; workspaceId: string; locationType: string; locationNodeId: string | null; providerName: string; statusBeforeLivenessLoss: string | null };
+
+/** Whether this row's public status depends on its hosting node's authority. */
+function needsNodeAuthority(db: Db, agent: AuthorityPresenceRow): agent is AuthorityPresenceRow & { locationNodeId: string } {
+  return !!nodeLivenessAuthority(db) && agent.status !== RELEASED_AGENT_STATUS
+    && agent.locationType === 'via_node' && !!agent.locationNodeId;
+}
+
+/**
+ * Public status for many rows of one workspace, asking the authority once per
+ * distinct node rather than once per agent.
+ */
+async function effectiveAgentStatusesWithAuthority(db: Db, workspaceId: string, rows: AuthorityPresenceRow[], now = Date.now()): Promise<Map<string, string>> {
+  const snapshots = await inspectNodesLiveness(db, workspaceId,
+    rows.filter(row => needsNodeAuthority(db, row)).map(row => row.locationNodeId!));
+  const statuses = new Map<string, string>();
+  for (const row of rows) {
+    statuses.set(row.id, await effectiveAgentStatusWithAuthority(db, row, now,
+      row.locationNodeId && snapshots.has(row.locationNodeId) ? { snapshot: snapshots.get(row.locationNodeId) } : undefined));
+  }
+  return statuses;
+}
+
+async function effectiveAgentStatusWithAuthority(db: Db, agent: AuthorityPresenceRow, now = Date.now(), inspected?: { snapshot: NodeLivenessSnapshot | undefined }): Promise<string> {
+  if (!needsNodeAuthority(db, agent)) return effectiveAgentStatus(agent, now);
   const direct = agent.locationNodeId === directNodeIdForAgent(agent.id);
-  const snapshot = await inspectNodeLiveness(db, agent.workspaceId, agent.locationNodeId);
+  const snapshot = inspected ? inspected.snapshot : await inspectNodeLiveness(db, agent.workspaceId, agent.locationNodeId);
   if (!snapshot || snapshot.status === 'unknown') return direct ? effectiveAgentStatus(agent, now) : 'offline';
   const receivedAt = Date.now();
   const live = snapshot.status === 'online' && snapshot.providers.some(p => p.name === agent.providerName && p.live && (direct || p.handlers_live) && p.expires_at > receivedAt && p.last_received_at <= receivedAt);

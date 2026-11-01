@@ -74,6 +74,8 @@ import type { AdmissionHooks } from './admission.js';
 import type { TelemetrySink } from './telemetry.js';
 import type { EngineDiagnostics } from './diagnostics.js';
 import type { EngineLogExport } from './logging.js';
+import type { CredentialFormat } from '../auth/credentials.js';
+import type { CredentialTagger } from '../auth/credentialTags.js';
 
 /** Infrastructure ports the engine reads off the request context. */
 export interface EnginePorts {
@@ -116,6 +118,43 @@ export interface EngineDeps extends EnginePorts, EngineProviders {
 
 export interface EngineConfig {
   environment?: string;
+  /**
+   * The credential family this deployment mints. `legacy` (the default) mints
+   * `rk_live_` / `at_live_` / `nt_live_` / `ot_live_` / `wh_live_`; `ar` mints
+   * `ar_<kind>_<wsid>_<tag>_<secret><crc>`, which a stateless gateway routes
+   * and verifies with no lookup, and needs {@link credentialTagger}. Every
+   * deployment accepts both families. See `auth/credentials.ts`.
+   */
+  credentialFormat?: CredentialFormat;
+  /**
+   * The routing tag for this deployment's workspaces' `ar_` credentials:
+   * `createCredentialTagSigner(keyring)` on a host that holds the keyring.
+   * Required to mint `ar_` credentials, including through
+   * `POST /v1/credentials/upgrade`.
+   */
+  credentialTagger?: CredentialTagger;
+  /**
+   * How long a legacy credential keeps working after
+   * `POST /v1/credentials/upgrade` replaced it. Default 30 days, at most 10
+   * years.
+   */
+  legacyCredentialGraceSeconds?: number;
+  /**
+   * When legacy credentials stop being accepted, sent as the `Sunset` header
+   * on every response a legacy credential authenticated.
+   */
+  legacyCredentialSunset?: Date;
+  /**
+   * Single-workspace hosts (one workspace per durable actor): the id that
+   * `POST /v1/workspaces` gives the workspace it creates.
+   */
+  workspaceId?: string;
+  /**
+   * Largest `size_bytes` `POST /v1/files/upload` signs a URL for; larger
+   * uploads answer `413 file_too_large`. Set it to what the blob store's
+   * front end accepts in one request body. Unset: no engine limit.
+   */
+  maxUploadBytes?: number;
   appVersion?: string;
   appSemver?: string;
   sdkSemver?: string;
@@ -125,6 +164,13 @@ export interface EngineConfig {
    * pinning at socket-connect time to prevent DNS rebinding.
    */
   outboundWebhookFetch?: typeof globalThis.fetch;
+  /**
+   * Transport for best-effort ephemeral http_push events (context updates,
+   * reactions, receipts), which have no delivery row to retry from. Defaults
+   * to `outboundWebhookFetch`. A host that cannot do outbound HTTP while it
+   * serves a request queues them here instead.
+   */
+  ephemeralEventFetch?: typeof globalThis.fetch;
   /**
    * Effective deployment-wide retention fallback. Adapters must provide an
    * explicit value (`null` means never prune); omission is reported as unknown
@@ -154,6 +200,19 @@ export interface EngineConfig {
    */
   workspaceBootstrapProofRequired?: boolean;
   /**
+   * Shared secret for the internal admin API (`/internal/*`) a trusted
+   * control plane uses to create workspaces and register/rotate their keys.
+   * Unset disables the surface entirely: every `/internal/*` route is 404.
+   */
+  internalSecret?: string;
+  /**
+   * Anonymous/public `POST /v1/workspaces`. Defaults to enabled (unset or
+   * `true`). Set `false` on a deployment whose workspaces are provisioned by a
+   * control plane through `/internal/workspaces`: the public route then
+   * answers the generic 404, like any other disabled surface.
+   */
+  publicWorkspaceCreate?: boolean;
+  /**
    * Per-workspace requests-per-minute ceiling. Default 30,000.
    * `AdmissionHooks.rateLimitPerMinute` overrides it per workspace.
    */
@@ -167,7 +226,9 @@ export interface EngineConfig {
    * canonical store, and that store's repair path would clobber or resurrect
    * credentials. Such deployments rotate through the control plane's own
    * authorized flow, which pushes the result over the internal key-update
-   * channel.
+   * channel. The same setting governs `POST /v1/credentials/upgrade` for
+   * workspace keys: a control plane that owns the key mints and pushes the
+   * `ar_ws_` replacement itself.
    */
   allowWorkspaceKeyRotation?: boolean;
   /**
@@ -216,3 +277,8 @@ export interface EngineConfig {
 }
 
 export type { WorkspaceDeliveryPolicy, WorkspaceDeliveryPolicyConfig } from './workspaceDelivery.js';
+
+/** The transport for ephemeral http_push events under `config`. */
+export function ephemeralEventFetch(config: EngineConfig | undefined): typeof globalThis.fetch | undefined {
+  return config?.ephemeralEventFetch ?? config?.outboundWebhookFetch;
+}

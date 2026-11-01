@@ -49,6 +49,8 @@ export interface AppVariables {
    * only a fresh send with this denial.
    */
   messageAdmissionDenial?: AdmissionDenial;
+  /** The family of the credential that authenticated this request, once one has. */
+  authenticatedCredentialFamily?: 'legacy' | 'ar';
   /** The injected ports + providers + config for this deployment. */
   engine: EngineRuntime;
 }

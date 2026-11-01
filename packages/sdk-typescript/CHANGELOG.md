@@ -9,6 +9,12 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ## [Unreleased]
 
+## [12.3.0] - 2026-10-31
+
+### Added
+
+- `relay.credentials.upgrade(credential?)`: exchange a legacy credential (this client's key, or the one given) for the `ar_` credential of the same principal through `POST /v1/credentials/upgrade`; returns `{ credential, kind, legacyExpiresAt }`.
+
 ## [12.2.0] - 2026-10-29
 
 - Avoid redundant automatic HTTP heartbeats while the server confirms direct-agent WebSocket presence, with fallback when confirmations stop and jittered WebSocket keepalives.

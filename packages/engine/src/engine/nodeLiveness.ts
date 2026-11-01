@@ -10,6 +10,26 @@ export async function inspectNodeLiveness(db: EngineDb, workspaceId: string, nod
   try { return await authority.inspect(workspaceId, nodeId); }
   catch { return { status: 'unknown', providers: [] }; }
 }
+/**
+ * The agents' binding, location or release state changed: their direct nodes'
+ * socket owners must stop acknowledging presence from memory. Runs after the
+ * write commits, on the outer handle (a transaction handle carries no
+ * authority). A lost call is bounded by the owner's durable checkpoint, which
+ * re-reads the binding.
+ */
+export async function invalidateDirectPresence(db: EngineDb, workspaceId: string, agentIds: Iterable<string>): Promise<void> {
+  const authority = nodeLivenessAuthority(db);
+  if (!authority?.invalidate) return;
+  // At most eight owners at a time: an inventory can move a whole roster.
+  // Never throws: callers run this in a finally after their writes committed.
+  await filterAsync([...new Set(agentIds)], async agentId => {
+    // directNodeIdForAgent, inlined: node.ts imports this module.
+    try { await authority.invalidate!(workspaceId, `node_direct_${agentId}`); }
+    // A lost call is bounded by the owner's checkpoint; leave a trace of it.
+    catch (err) { console.warn('[node.presence] direct presence invalidation failed', { workspaceId, agentId, err }); }
+    return false;
+  });
+}
 export async function nodeLive(db: EngineDb, row: { workspaceId: string; id: string; status: string; lastHeartbeatAt: Date | null }): Promise<boolean> {
   const snapshot = await inspectNodeLiveness(db, row.workspaceId, row.id);
   return snapshot ? snapshotOnline(snapshot) : isNodeLive(row);
@@ -28,6 +48,30 @@ export async function filterAsync<T>(rows: T[], predicate: (row: T) => Promise<b
     batch.forEach((row, index) => { if (decisions[index]) kept.push(row); });
   }
   return kept;
+}
+/**
+ * Inspect each distinct node once, keeping at most eight authority requests in
+ * flight. A roster names the same node for every agent it hosts, so asking per
+ * row repeats the same RPC; a snapshot is still read fresh for this decision
+ * and is never kept past the call.
+ */
+export async function inspectNodesLiveness(
+  db: EngineDb,
+  workspaceId: string,
+  nodeIds: Iterable<string>,
+): Promise<Map<string, NodeLivenessSnapshot | undefined>> {
+  const pending = [...new Set(nodeIds)];
+  const snapshots = new Map<string, NodeLivenessSnapshot | undefined>();
+  if (!nodeLivenessAuthority(db) || pending.length === 0) return snapshots;
+  let next = 0;
+  const worker = async () => {
+    while (next < pending.length) {
+      const nodeId = pending[next++];
+      snapshots.set(nodeId, await inspectNodeLiveness(db, workspaceId, nodeId));
+    }
+  };
+  await Promise.all(Array.from({ length: Math.min(8, pending.length) }, worker));
+  return snapshots;
 }
 export async function nodeReady(db: EngineDb, row: { workspaceId: string; id: string; status: string; handlersLive: boolean; lastHeartbeatAt: Date | null }): Promise<boolean> {
   const snapshot = await inspectNodeLiveness(db, row.workspaceId, row.id);

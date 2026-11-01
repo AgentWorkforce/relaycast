@@ -1,5 +1,9 @@
 import { configureNodeLiveness } from './engine/nodeLiveness.js';
+import { isArWorkspaceId } from '@relaycast/types';
+import { acceptsOnlyAr, configureCredentials } from './auth/credentials.js';
+import { legacyCredentialHeaders, noteAuthenticatedCredential } from './lib/credentialNotice.js';
 import { safeTelemetrySink } from './ports/telemetry.js';
+import { MAX_LEGACY_CREDENTIAL_GRACE_SECONDS } from './engine/credentialUpgrade.js';
 import { NoopTelemetrySink } from './providers/noop-telemetry.js';
 import { Hono, type Context } from 'hono';
 import type { ContentfulStatusCode } from 'hono/utils/http-status';
@@ -26,6 +30,7 @@ import {
 // Route imports
 import { healthRoutes } from './routes/health.js';
 import { workspaceRoutes } from './routes/workspace.js';
+import { assertInternalSecretStrength } from './engine/internalAdmin.js';
 import { observerTokenRoutes } from './routes/observerToken.js';
 import { agentRoutes } from './routes/agent.js';
 import { channelRoutes } from './routes/channel.js';
@@ -42,6 +47,7 @@ import { fileRoutes } from './routes/file.js';
 import { presenceRoutes } from './routes/presence.js';
 import { systemPromptRoutes } from './routes/systemPrompt.js';
 import { inboundWebhookRoutes } from './routes/inboundWebhook.js';
+import { credentialRoutes } from './routes/credential.js';
 import { relayfileInboundRoutes } from './routes/relayfileInbound.js';
 import { eventSubscriptionRoutes } from './routes/eventSubscription.js';
 import { actionRoutes } from './routes/action.js';
@@ -52,6 +58,7 @@ import { certifyRoutes } from './routes/certify.js';
 import { consoleRoutes } from './routes/console.js';
 import { directoryRoutes } from './routes/directory.js';
 import { routingRoutes } from './routes/routing.js';
+import { internalRoutes } from './routes/internal.js';
 
 /**
  * Build the platform-agnostic Relaycast engine as a Hono app.
@@ -67,7 +74,23 @@ import { routingRoutes } from './routes/routing.js';
  * no Durable Objects — those concerns belong to the adapter/entrypoint.
  */
 export function createEngine(deps: EngineDeps): Hono<AppEnv> {
+  assertInternalSecretStrength(deps.config?.internalSecret);
   if (deps.nodeLiveness) configureNodeLiveness(deps.db, deps.nodeLiveness);
+  if (deps.config?.credentialFormat === 'ar' && deps.config.workspaceId !== undefined && !isArWorkspaceId(deps.config.workspaceId)) {
+    throw new Error('EngineConfig.workspaceId must be a 64-bit snowflake to mint ar_ credentials');
+  }
+  configureCredentials(deps.db, {
+    format: deps.config?.credentialFormat ?? 'legacy',
+    tagger: deps.config?.credentialTagger,
+  });
+  const graceSeconds = deps.config?.legacyCredentialGraceSeconds;
+  if (graceSeconds !== undefined && !(Number.isSafeInteger(graceSeconds) && graceSeconds >= 0 && graceSeconds <= MAX_LEGACY_CREDENTIAL_GRACE_SECONDS)) {
+    throw new Error(`EngineConfig.legacyCredentialGraceSeconds must be an integer from 0 to ${MAX_LEGACY_CREDENTIAL_GRACE_SECONDS}`);
+  }
+  const maxUploadBytes = deps.config?.maxUploadBytes;
+  if (maxUploadBytes !== undefined && !(Number.isSafeInteger(maxUploadBytes) && maxUploadBytes > 0)) {
+    throw new Error('EngineConfig.maxUploadBytes must be a positive safe integer');
+  }
   const runtime: EngineRuntime = {
     db: deps.db,
     realtime: deps.realtime,
@@ -98,12 +121,17 @@ export function createEngine(deps: EngineDeps): Hono<AppEnv> {
   app.use('*', cors({ exposeHeaders: ['X-Request-Id'] }));
 
   app.use('*', secureHeaders());
+  app.use('*', legacyCredentialHeaders);
 
   // A2A public and gateway routes before other route groups
   app.route('/', a2aRoutes);
 
   // Health check
   app.route('/health', healthRoutes);
+
+  // Internal admin API for a trusted control plane; 404 unless
+  // config.internalSecret is set.
+  app.route('/internal', internalRoutes);
 
   // WebSocket upgrade route — delegates to the ConnectionRegistry port
   app.get('/v1/ws', async (c) => {
@@ -130,6 +158,7 @@ export function createEngine(deps: EngineDeps): Hono<AppEnv> {
     if (!authResult.ok) {
       return jsonError(c, authResult.code, authResult.message, authResult.status);
     }
+    noteAuthenticatedCredential(c, token);
 
     const response = await connections.upgrade({
       request: c.req.raw,
@@ -168,6 +197,7 @@ export function createEngine(deps: EngineDeps): Hono<AppEnv> {
     if (!authResult.ok) {
       return jsonError(c, authResult.code, authResult.message, authResult.status);
     }
+    noteAuthenticatedCredential(c, token);
 
     const originInfo = requiredOriginInfo(c.req.raw);
     const origin = {
@@ -218,6 +248,7 @@ export function createEngine(deps: EngineDeps): Hono<AppEnv> {
   v1.route('/', deliveryRoutes);
   v1.route('/', fileRoutes);
   v1.route('/', inboundWebhookRoutes);
+  if (!acceptsOnlyAr(deps.db)) v1.route('/', credentialRoutes);
   v1.route('/', relayfileInboundRoutes);
   v1.route('/', eventSubscriptionRoutes);
   v1.route('/', actionRoutes);

@@ -36,6 +36,7 @@ import type {
   DmReceivedEvent,
   WorkspaceDmConversation,
   TokenRotateResponse,
+  CredentialUpgradeResponse,
   RotateWorkspaceKeyRequest,
   RotateWorkspaceKeyResponse,
   MessageListQuery,
@@ -780,6 +781,19 @@ export class RelayCast {
     delete: (workspaceId?: string): Promise<void> => workspaceId === undefined
       ? this.client.delete('/v1/workspace')
       : this.client.delete(`/v1/workspaces/${encodeURIComponent(workspaceId)}`),
+  };
+
+  credentials = {
+    /**
+     * Exchange a legacy credential (`rk_live_` / `at_live_` / `nt_live_` /
+     * `ot_live_` / `wh_live_`) for the `ar_` credential of the same principal.
+     * Upgrades this client's key unless `credential` names another one. The
+     * legacy credential keeps working until `legacyExpiresAt`; upgrading it
+     * again returns the same `ar_` credential. Persist the result (do not
+     * print it).
+     */
+    upgrade: (credential?: string): Promise<CredentialUpgradeResponse> =>
+      (credential ? this.client.withApiKey(credential) : this.client).post('/v1/credentials/upgrade', {}),
   };
 
   observerTokens = {

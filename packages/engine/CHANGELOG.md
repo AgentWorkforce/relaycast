@@ -12,6 +12,57 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 ### Added
 
 - `DELETE /v1/nodes/:name` deletes a node by id (exact id first) or name, returning `{ id, name, deleted, cascaded_actions }`. It refuses an online node (`node_online`) or one hosting actions (`node_has_actions`) unless `force=true`, and returns `node_delete_conflict` when a heartbeat or action registration lands mid-delete.
+- `handleNodeControlMessage` accepts `workspaceDeadline` (a `WorkspaceDeadlineHolder`, exported from `@relaycast/engine/node-control`): heartbeats check the held `workspaces.expires_at` copy, every other gated frame reads the row and refreshes it.
+- `handleNodeControlMessage` accepts `heartbeatCheckpoint: { role }` for a heartbeat the socket owner verified is identical to the last accepted one in the same liveness generation; the engine then skips the transition read and the drain.
+- `NodeLivenessAuthority.invalidate?(workspaceId, nodeId)`. The engine calls it for an agent's direct node after a bind, unbind, recover, deregister, inventory adoption or release commits, so a socket owner stops acknowledging presence from memory.
+- Migration `0080_nodes_context_reachable_index.sql`: partial index `idx_nodes_context_reachable`.
+
+### Changed
+
+- `node.heartbeat` re-materializes a provider's actions when its action-kind capabilities change or its persisted actions no longer match them; capacity changes (the broker's live-agent roster) do not prune and rewrite action rows.
+- `node.heartbeat` updates the node aggregate, name and version in one statement (`refreshNodeAggregate`) and reads the drain state in one statement.
+- `settleNodeOffline` scans only the agents routed through the settling node.
+- `sendNodePresenceContext` starts from reachable nodes (`idx_nodes_context_reachable`) instead of every active binding in the workspace.
+
+## [12.5.0] - 2026-11-01
+
+- Removed the `request.authenticated` observation kind (`ENGINE_OBSERVATION_FACTS`, `EngineObservationKind`) and its per-request emission; `@relaycast/types` drops `relaycast_server_request_authenticated`. Legacy-credential `Deprecation` / `Link` / `Sunset` headers are unchanged.
+
+## [12.4.0] - 2026-11-01
+
+### Added
+
+- `listAgents(db, workspaceId, undefined, { names })` and `GET /v1/agents?names=` (repeated, 1 to 100) look up named agents in one query, with the same projection and presence as the roster.
+- `GET /v1/agents` sends a weak `ETag` and returns `304` for a matching `If-None-Match`.
+
+### Changed
+
+- Under node liveness authority, `listAgents` pushes a sound status bound into SQL for every status but `offline`, leaves offline hosted rows with no saved pre-loss status out of the default roster's SQL once they are older than the recency window, and inspects each node once per call. Measured on the largest production workspace (7,388 roster rows): the default roster selects 679 rows and makes 386 authority calls instead of 7,015 rows and 7,015 calls; `status=waiting` selects 0 rows instead of 7,388.
+
+## [12.3.0] - 2026-10-31
+
+### Added
+
+- Every deployment accepts both credential families: legacy `rk_live_` / `at_live_` / `nt_live_` / `ot_live_` / `wh_live_` through the existing lookups, and `ar_<ws|ag|nd|ob|wh>_<wsid>_<tag>_<secret><crc>` through one indexed query on the kind's table, scoped to the named workspace. `EngineConfig.credentialFormat` picks the family a deployment mints: `'legacy'` (default) or `'ar'`, which needs `EngineConfig.credentialTagger`. Deterministic workspace keys (idempotent and bootstrap creates) follow it; `ar_` derivation binds the workspace id and tag, and create replay recovers a key under every tag the tagger knows, so it survives keyring rotation, and skips `ar_` for a workspace id that is not a snowflake. A keyed node-token rotation replay recovers the committed token under whichever tag it carries.
+- `createCredentialTagSigner(keyring)` / `parseCredentialKeyring(json)` (engine root and `@relaycast/engine/gateway`): the routing tag of a workspace's `ar_` credentials, `<version><10 base62 of HMAC-SHA256(key, wsid)>`, and its verification with the keyring alone. Rotation adds a version; a tag verifies with the version it names.
+- `POST /v1/credentials/upgrade`: authenticated by a legacy credential of any kind, returns the `ar_` credential for the same principal. The legacy credential keeps authenticating (REST, `/v1/node/ws`, inbound webhook triggers) for `EngineConfig.legacyCredentialGraceSeconds` (default 30 days, at most 10 years), and only while the principal holds the `ar_` credential. The `ar_` credential has a random secret; the grace record keeps it sealed (AES-GCM, key derived from the legacy credential), so upgrading the same legacy credential again, or concurrently, returns the same one, and nothing outside the server's record rebuilds it. 10 upgrades per principal per minute. A workspace key upgrades only where `EngineConfig.allowWorkspaceKeyRotation` is set; elsewhere its control plane owns it and the route answers `403 workspace_key_rotation_disabled`. The hash swap and the grace record commit as one write group, the first upgrade claims the legacy hash, and the record exists only if its swap matched, so an upgrade that loses to a rotation leaves nothing behind. A webhook token of an expired workspace is refused (`401 workspace_expired`). Migration `0079_credential_upgrades.sql` adds the `credential_upgrades` table.
+- The final response to every request a legacy credential authenticated, whatever its status (including an owner-authenticated `POST /v1/workspaces`), carries `Deprecation: @1793318400` (RFC 9745: the legacy family's deprecation date, 2026-10-30), `Link: <docs>; rel="deprecation"`, and `Sunset` (RFC 8594) from `EngineConfig.legacyCredentialSunset`. Every authenticated request and WebSocket connect reports a `request.authenticated` observation at authentication time with `credential_family` and `credential_kind`.
+- The Node self-host reads a credential keyring from `RELAYCAST_CREDENTIAL_KEYRING` and the family it mints from `RELAYCAST_CREDENTIAL_FORMAT`.
+- `/internal` admin API, enabled by `EngineConfig.internalSecret` (`RELAYCAST_INTERNAL_SECRET` / `_FILE` in `relaycast-engine`): `GET /internal/capabilities`, `POST` and idempotent `DELETE /internal/workspaces/:id`, and generation-fenced `POST /internal/workspaces/:id/api-key` (push or server-minted rotation, with an optional grace window). Unset, every `/internal` route is `404`.
+- `EngineConfig.publicWorkspaceCreate: false` (`RELAYCAST_PUBLIC_WORKSPACE_CREATE=false`) answers the public `POST /v1/workspaces` with the generic `404`.
+- `internalSecret` must be at least 32 characters (`createEngine` throws otherwise); `/internal` pushes require `api_key` to match `^rk_live_[A-Za-z0-9_-]{32,256}$` or be an `ar_ws_` key naming that workspace (only `ar_ws_` on an `ar_`-only deployment), and a safe-integer `key_generation`; a server-minted key follows the deployment's credential family; a deployment that mints `ar_` credentials registers only snowflake workspace ids (`400 invalid_request`), and minting an `ar_` credential for any other id throws `WorkspaceIdNotSnowflakeError`; request logs no longer fingerprint the bearer on `/internal` paths. `relaycast-engine` reads `RELAYCAST_WORKSPACE_BOOTSTRAP_SECRET_FILE` (one trailing newline stripped; a directly set bootstrap secret is used byte-for-byte so existing keyed-create retries keep deriving the same keys), lets a direct variable win over `_FILE`, and exits `64` on an unreadable `_FILE`. `startServer` refuses a short `internalSecret` before opening SQLite. `/internal` key pushes refuse (`409 api_key_conflict`) a key that is another workspace's current key or its previous key inside the grace window.
+- `EngineConfig.workspaceId`: the id `POST /v1/workspaces` assigns, for single-workspace hosts. A second create returns `409 workspace_exists`.
+- `@relaycast/engine/adapters/actor`: `createActorRuntime` runs the engine on a durable actor's SQLite and requires durable-actors >= 0.14.5: statements run through `db.query`, and each engine write group is a nested `db.transaction`, so a failed group rolls back alone and the request goes on. An actor database without `query` and `transaction` throws `the relaycast actor adapter requires durable-actors >= 0.14.5`. Migrations ship bundled; KV lives in the actor database; webhooks, http_push, ephemeral events, A2A egress and blob deletes run from the actor alarm, which stays armed for the nearest outstanding deadline; file URLs (upload URLs bind size and content type) are signed for a gateway that holds the blobs. The actor runtime mints `ar_` credentials carrying the tag its gateway hands `ActorRuntime.create(request, credentialTag)`, accepts only `ar_` credentials (legacy ones get 401), serves no credential upgrade, and requires the actor id to be a 64-bit snowflake. Each maintenance step runs in its own nested transaction: a failing step or write group rolls back alone and reports `alert: 'maintenance_rolled_back'` to telemetry with the workspace, step, write group and error code, and the rest of the pass commits.
+- `EngineConfig.ephemeralEventFetch`: transport for best-effort ephemeral http_push events (defaults to `outboundWebhookFetch`). `sweepPendingA2aEgress` and `dispatchA2aEgress` take an optional fetch for A2A egress.
+- `@relaycast/engine/gateway`: `parseArCredential`, `createCredentialTagSigner` / `parseCredentialKeyring` (verify a credential's tag before any actor call, so a forged workspace never creates an actor), `generateWorkspaceId` (a plain snowflake), `signFileToken`, `verifyFileToken`, `ACTOR_FILE_ROUTE` and `OBJECT_SIZE_HEADER` without the engine.
+
+### Changed
+
+- File storage keys are `<workspace_id>/<file_id>/<file_id>[.<ext>]`; the client filename stays in file metadata only. Existing files keep their stored keys.
+- `POST /v1/files/upload` requires `size_bytes` to be a positive safe integer (`400 size_bytes must be a positive integer`), and `EngineConfig.maxUploadBytes` caps it (`413 file_too_large`).
+- Binding a second credential configuration (family or tagger) to a database handle that already has another one throws.
+- Completing an upload refuses stored bytes whose size differs from the declared `size_bytes` (`409 upload_size_mismatch`) instead of recording the stored size. The Node adapter's file route refuses a PUT body of another size or content type (`400 size_mismatch` / `content_type_mismatch`).
+- `FileStorage.deleteObjects` may resolve with `{ deletedKeys }` to report a partial delete; the engine settles those keys and keeps the rest queued.
 
 ### Fixed
 

@@ -3,6 +3,7 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
 import { RelayCast } from '@relaycast/sdk';
 import type { RegisteredAgent, SessionState, WorkspaceContext } from '../types.js';
+import { isWorkspaceKey, maskCredential } from '@relaycast/types';
 
 type ApiOk<T> = { ok: true; data: T };
 type ApiErr = { ok: false; error?: { message?: string } };
@@ -223,9 +224,9 @@ export function registerRegistrationTools(
     {
       title: 'Set Workspace Key',
       description:
-        'Authenticate this MCP session by providing an existing workspace API key (rk_live_...). This enables all workspace-level tools including agent registration, channel management, and messaging. If the key belongs to a different workspace than the current session, the previous agent identity is cleared and you must re-register.',
+        'Authenticate this MCP session by providing an existing workspace API key (rk_live_... or ar_ws_...). This enables all workspace-level tools including agent registration, channel management, and messaging. If the key belongs to a different workspace than the current session, the previous agent identity is cleared and you must re-register.',
       inputSchema: {
-        api_key: z.string().describe('Workspace API key starting with "rk_live_", obtained from workspace creation or the Relaycast dashboard'),
+        api_key: z.string().describe('Workspace API key ("rk_live_..." or "ar_ws_..."), obtained from workspace creation or the Relaycast dashboard'),
       },
       outputSchema: {
         message: z.string().describe('Confirmation message indicating whether the workspace key was set successfully'),
@@ -233,8 +234,8 @@ export function registerRegistrationTools(
       annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
     },
     async ({ api_key }) => {
-      if (!api_key.startsWith('rk_live_')) {
-        throw new Error('Workspace key must start with "rk_live_"');
+      if (!isWorkspaceKey(api_key)) {
+        throw new Error('Workspace key must be an "rk_live_..." or "ar_ws_..." key');
       }
 
       const session = getSession();
@@ -540,7 +541,7 @@ export function registerRegistrationTools(
       const session = getSession();
       const all = Array.from(session.workspaces.values()).map((ctx) => ({
         workspace_ref: createWorkspaceRef(ctx.workspaceKey),
-        workspace_key: maskKey(ctx.workspaceKey),
+        workspace_key: maskCredential(ctx.workspaceKey),
         workspace_name: ctx.workspaceName ?? null,
         workspace_label: ctx.workspaceLabel ?? null,
         agent_name: ctx.agentName,
@@ -551,7 +552,7 @@ export function registerRegistrationTools(
         : all;
       const result = {
         workspaces: entries,
-        active_workspace: session.workspaceKey ? maskKey(session.workspaceKey) : null,
+        active_workspace: session.workspaceKey ? maskCredential(session.workspaceKey) : null,
         active_workspace_ref: session.workspaceKey ? createWorkspaceRef(session.workspaceKey) : null,
       };
       return {
@@ -569,7 +570,7 @@ export function registerRegistrationTools(
       description:
         'Join an additional workspace by providing its API key and registering an agent identity. The agent will be registered in the target workspace and the session context will be saved, allowing you to switch between workspaces without re-registering. After joining, the new workspace becomes the active workspace.',
       inputSchema: {
-        api_key: z.string().describe('Workspace API key starting with "rk_live_"'),
+        api_key: z.string().describe('Workspace API key ("rk_live_..." or "ar_ws_...")'),
         name: z.string().describe('Agent name to register in the target workspace'),
         workspace_name: z.string().optional().describe('Optional custom label to save for easier switching. The canonical workspace name is fetched automatically from the API.'),
         type: z.enum(['agent', 'human']).optional().describe('Whether this identity represents an AI agent or a human user'),
@@ -579,8 +580,8 @@ export function registerRegistrationTools(
       annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: true },
     },
     async ({ api_key, name, workspace_name, type, persona }) => {
-      if (!api_key.startsWith('rk_live_')) {
-        throw new Error('Workspace key must start with "rk_live_"');
+      if (!isWorkspaceKey(api_key)) {
+        throw new Error('Workspace key must be an "rk_live_..." or "ar_ws_..." key');
       }
 
       const session = getSession();
@@ -673,8 +674,9 @@ export function registerRegistrationTools(
       if (!api_key && !workspace_ref && !workspace_name) {
         throw new Error('Provide "api_key", "workspace_ref", or "workspace_name".');
       }
-      if (api_key && !api_key.startsWith('rk_live_')) {
-        throw new Error('Workspace key must start with "rk_live_"');
+      // `workspace.list` shows keys masked; a masked key resolves against saved contexts below.
+      if (api_key && !isWorkspaceKey(api_key) && !isMaskedSavedWorkspaceKey(getSession(), api_key)) {
+        throw new Error('Workspace key must be an "rk_live_..." or "ar_ws_..." key');
       }
 
       const session = getSession();
@@ -720,6 +722,10 @@ function createWorkspaceRef(workspaceKey: string): string {
   return `ws_${createHash('sha256').update(workspaceKey).digest('hex').slice(0, 12)}`;
 }
 
+function isMaskedSavedWorkspaceKey(session: SessionState, maskedKey: string): boolean {
+  return Array.from(session.workspaces.keys()).some((workspaceKey) => maskCredential(workspaceKey) === maskedKey);
+}
+
 function resolveSavedWorkspace(
   session: SessionState,
   apiKey?: string,
@@ -733,7 +739,7 @@ function resolveSavedWorkspace(
     }
 
     const maskedMatches = Array.from(session.workspaces.entries()).filter(
-      ([workspaceKey]) => maskKey(workspaceKey) === apiKey,
+      ([workspaceKey]) => maskCredential(workspaceKey) === apiKey,
     );
     if (maskedMatches.length > 1) {
       throw new Error(
@@ -775,7 +781,4 @@ function resolveSavedWorkspace(
 }
 
 /** Mask a workspace key for display, showing only first 12 and last 4 chars. */
-function maskKey(key: string): string {
-  if (key.length <= 16) return key;
-  return `${key.slice(0, 12)}...${key.slice(-4)}`;
-}
+

@@ -13,6 +13,7 @@ import {
 import type { AppEnv } from '../env.js';
 import { requireAgentToken, requireWorkspaceKey, requireWorkspaceRead } from '../middleware/auth.js';
 import { authenticateUnexpired } from '../auth/workspaceExpiry.js';
+import { noteAuthenticatedCredential } from '../lib/credentialNotice.js';
 import { parseIdempotencyKey } from '../middleware/idempotency.js';
 import { rateLimit } from '../middleware/rateLimit.js';
 import { RATE_LIMIT_WINDOW_MS, rateLimitWindow, rateLimitWindowResetAt, setRetryContract } from '../lib/throttle.js';
@@ -53,6 +54,7 @@ import {
 } from '../lib/httpResponse.js';
 import { parsePaginationQuery, positiveIntQueryParam } from '../lib/httpQuery.js';
 import { runInBackground } from './background.js';
+import { credentialKind } from '@relaycast/types';
 
 export const workspaceRoutes = new Hono<AppEnv>();
 
@@ -175,7 +177,8 @@ function parseOwnerAuthorization(authHeader: string | undefined): OwnerAuthoriza
   if (authHeader === undefined) return { kind: 'absent' };
   if (!authHeader.startsWith('Bearer ')) return { kind: 'invalid' };
   const token = authHeader.slice(7);
-  return token.startsWith('rk_')
+  const isWorkspaceKey = token.startsWith('rk_') || credentialKind(token) === 'workspace';
+  return isWorkspaceKey
     ? { kind: 'workspace', token }
     : { kind: 'invalid' };
 }
@@ -217,6 +220,12 @@ const publicWorkspaceLookupRateLimit = createMiddleware<AppEnv>(async (c, next) 
 // its recovery capability. Self-hosts may additionally opt into requiring
 // X-Workspace-Bootstrap-Secret before any binding lookup or recovery runs.
 workspaceRoutes.post('/workspaces', async (c) => {
+  // A control-plane-managed deployment can turn the public create off
+  // (RELAYCAST_PUBLIC_WORKSPACE_CREATE=false); it then looks like any other
+  // absent route.
+  if (c.get('engine').config.publicWorkspaceCreate === false) {
+    return jsonNotFound(c, 'not_found', 'Route not found');
+  }
   try {
     const parsed = await parseJsonBody(c, createWorkspaceSchema, 'name is required');
     if (!parsed.ok) {
@@ -245,6 +254,7 @@ workspaceRoutes.post('/workspaces', async (c) => {
       if (!ownerAuth.ok) {
         return jsonError(c, ownerAuth.code, ownerAuth.message, ownerAuth.status as ContentfulStatusCode);
       }
+      noteAuthenticatedCredential(c, ownerApiKey);
     }
     const requestDigest = idempotencyKey
       ? await workspaceEngine.workspaceCreateRequestDigest({
@@ -260,6 +270,7 @@ workspaceRoutes.post('/workspaces', async (c) => {
       name,
       {
         ...(ownerApiKey ? { ownerApiKey } : {}),
+        ...(c.get('engine').config.workspaceId ? { workspaceId: c.get('engine').config.workspaceId } : {}),
         ...(idempotencyKey && !ownerApiKey
           ? {
             bootstrapSecret: c.get('engine').config.workspaceBootstrapSecret,

@@ -122,4 +122,5 @@ describe('node control WS upgrade auth (self-host)', () => {
     expect(await tryUpgrade({})).toBe(401);
     expect(await tryUpgrade({ authorization: 'Bearer not_a_node_token' })).toBe(401);
   });
+
 });

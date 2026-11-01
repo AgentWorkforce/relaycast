@@ -25,6 +25,36 @@ Packages without a separate changelog are covered by the cross-package notes bel
 ### Fixed
 
 - Observer token `expires_at` and `filters.created_after` accept RFC 3339 numeric-offset timestamps (for example `+05:30`); the stored expiry is the same instant as the equivalent UTC timestamp.
+- A broker's changing live-agent roster no longer rewrites its action rows on every heartbeat.
+- A heartbeat writes the node aggregate in one statement and reads drain state in one statement.
+- A socket owner can hold the workspace deadline, so heartbeats check it without reading the workspace row.
+- A socket owner can mark checkpoint heartbeats, which skip the transition-state read and the drain.
+- Taking a node offline updates that node, its providers, its invocations and only the agents routed through it.
+- Presence fanout reads only reachable nodes' bindings.
+
+## [12.5.0] - 2026-11-01
+
+- Authenticated requests and WebSocket connects no longer report a `request.authenticated` observation. Legacy-credential responses still carry `Deprecation`, `Link` and `Sunset`.
+
+## [12.4.0] - 2026-11-01
+
+- Hosted roster reads are much cheaper. Under node liveness authority, `GET /v1/agents?status=<s>` now bounds its SQL to rows that can resolve to that status instead of reading and probing the whole workspace, the default roster no longer reads or probes long-dead hosted rows that always resolve to offline, and each distinct node is asked for liveness once per read instead of once per agent. Results are unchanged.
+- `GET /v1/agents?names=a&names=b` looks up up to 100 agents in one read, replacing one `GET /v1/agents/:name` per agent.
+- `GET /v1/agents` returns a weak `ETag` and answers a matching `If-None-Match` with `304`.
+
+## [12.3.0] - 2026-10-31
+
+- Every deployment accepts `ar_` credentials, `ar_<kind>_<wsid>_<tag>_<secret><crc>`, alongside legacy `rk_live_` / `at_live_` / `nt_live_` / `ot_live_` / `wh_live_`. The workspace and a keyring-signed tag let a gateway route and refuse forged workspaces with no lookup; a CRC-32 rejects typos offline. Which family a deployment mints is per deployment (`credentialFormat`, default `legacy`), so existing deployments keep minting `*_live_*`. The workspace actor runtime (`@relaycast/engine/adapters/actor`) accepts only `ar_` credentials.
+- `POST /v1/credentials/upgrade` exchanges a legacy credential for an `ar_` one for the same principal; the legacy one keeps working for a grace period (30 days by default). Workspace keys upgrade there only on deployments that own them (`allowWorkspaceKeyRotation`); a control plane that owns them issues the `ar_ws_` key. Responses to legacy credentials carry `Deprecation`, `Link` and (when configured) `Sunset` headers. The TypeScript, Rust and Swift SDKs expose the upgrade.
+- Engine: an opt-in internal admin API (`RELAYCAST_INTERNAL_SECRET`) lets a trusted control plane create or idempotently delete workspaces and register or rotate their keys, with the hosted gateway's request and response shapes.
+- Container image: `RELAYCAST_ALLOW_INSECURE_BASE_URL=true` accepts `http://` base URLs on loopback and private hosts, and `RELAYCAST_INTERNAL_SECRET(_FILE)` is passed through.
+- `RELAYCAST_PUBLIC_WORKSPACE_CREATE=false` turns the anonymous `POST /v1/workspaces` into a `404` for control-plane-managed deployments.
+- Container image: `*.svc` / `*.svc.cluster.local` count as private hosts, and `RELAYCAST_PRIVATE_DNS_SUFFIXES` / `RELAYCAST_INSECURE_BASE_URL_HOSTS` extend that for custom cluster domains and `<svc>.<ns>` names (entries must sit under a private zone, be a `.svc.<domain>` zone, or be a two-label `<svc>.<ns>` name; public names are refused).
+- Container image: `RELAYCAST_WORKSPACE_BOOTSTRAP_SECRET_FILE` is supported (one trailing newline is stripped; a directly set bootstrap secret is still used byte-for-byte); a directly set variable wins over its `_FILE`, and an unreadable `_FILE` exits `64`.
+- [`examples/terse`](examples/terse) runs relaycast on Terse durable actors.
+- `@relaycast/engine/adapters/actor` runs the engine inside a durable actor that holds one workspace on its own SQLite, and `@relaycast/engine/gateway` has what a stateless gateway in front of those actors needs.
+- The MCP server, the observer dashboard and the Rust SDK accept `ar_` credentials (`ar_ws_…`, `ar_ob_…`) wherever they accepted `rk_live_` / `ot_live_`.
+- Observer token `expires_at` and `filters.created_after` accept RFC 3339 numeric-offset timestamps (for example `+05:30`); the stored expiry is the same instant as the equivalent UTC timestamp.
 
 ## [12.2.1] - 2026-10-29
 
@@ -943,7 +973,10 @@ Packages without a separate changelog are covered by the cross-package notes bel
 
 Earlier releases are available on the [GitHub releases page](https://github.com/AgentWorkforce/relaycast/releases).
 
-[Unreleased]: https://github.com/AgentWorkforce/relaycast/compare/v12.2.1...HEAD
+[Unreleased]: https://github.com/AgentWorkforce/relaycast/compare/v12.5.0...HEAD
+[12.5.0]: https://github.com/AgentWorkforce/relaycast/compare/v12.4.0...v12.5.0
+[12.4.0]: https://github.com/AgentWorkforce/relaycast/compare/v12.3.0...v12.4.0
+[12.3.0]: https://github.com/AgentWorkforce/relaycast/compare/v12.2.1...v12.3.0
 [12.2.1]: https://github.com/AgentWorkforce/relaycast/compare/v12.2.0...v12.2.1
 [12.2.0]: https://github.com/AgentWorkforce/relaycast/compare/v12.1.0...v12.2.0
 [12.1.0]: https://github.com/AgentWorkforce/relaycast/compare/v12.0.0...v12.1.0

@@ -4,6 +4,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { makeNodeStack, type TestStack } from '../../__tests__/conformance/harness.js';
 import { channels, workspaceCreateIdempotency, workspaces } from '../../db/schema.js';
 import { sha256Hex } from '../../lib/crypto.js';
+import { configureCredentials } from '../../auth/credentials.js';
+import { createCredentialTagSigner } from '../../auth/credentialTags.js';
 import type {
   AtomicWrite,
   BatchCapability,
@@ -126,6 +128,20 @@ describe('workspace write durability', () => {
       apiKeyHash: `${id}-hash`,
     });
   }
+
+  it('answers workspace_exists only when the assigned id is taken', async () => {
+    attachD1Batch({});
+    await seedDeletionWorkspace('assigned-taken');
+    await expect(createWorkspace(db, 'again', { workspaceId: 'assigned-taken' }))
+      .rejects.toMatchObject({ code: 'workspace_exists', status: 409 });
+
+    // A collision on anything else keeps its own error.
+    await seedDeletionWorkspace('other');
+    await db.insert(channels).values({ id: 'colliding-channel', workspaceId: 'other', name: 'general' });
+    vi.spyOn(snowflake, 'generateId').mockReturnValueOnce('colliding-channel');
+    await expect(createWorkspace(db, 'fresh', { workspaceId: 'assigned-free' }))
+      .rejects.toMatchObject({ code: 'workspace_id_collision', status: 500 });
+  });
 
   it('retries a transient D1 failure and commits workspace plus channel atomically', async () => {
     const batchCalls = attachD1Batch({ failBeforeFirst: true });
@@ -252,7 +268,7 @@ describe('workspace write durability', () => {
 
     expect(batchCalls()).toBe(2);
     expect(created.created).toBe(true);
-    expect(created.api_key).toBe(await deriveBootstrapWorkspaceApiKey(bootstrapSecret, idempotencyKey, requestDigest));
+    expect(created.api_key).toBe(await deriveBootstrapWorkspaceApiKey(db, { format: 'legacy' }, created.workspace_id, bootstrapSecret, idempotencyKey, requestDigest));
     expect(await db.select().from(workspaces)).toHaveLength(1);
     expect(await db.select().from(workspaceCreateIdempotency)).toHaveLength(1);
 
@@ -381,7 +397,7 @@ describe('workspace write durability', () => {
     const ownerApiKey = 'rk_live_collision_owner';
     const idempotencyKey = 'collision-job';
     const requestDigest = await workspaceCreateRequestDigest({ name: 'collision-child' });
-    const deterministicApiKey = await deriveIdempotentWorkspaceApiKey(ownerApiKey, idempotencyKey, requestDigest);
+    const deterministicApiKey = await deriveIdempotentWorkspaceApiKey(db, { format: 'legacy' }, 'unused', ownerApiKey, idempotencyKey, requestDigest);
     const pair = useGeneratedPair();
 
     attachD1Batch({
@@ -636,5 +652,68 @@ describe('workspace write durability', () => {
     )).rejects.toThrow('D1_TYPE_ERROR');
     expect(calls).toBe(1);
     expect(await db.select().from(workspaces)).toHaveLength(1);
+  });
+});
+
+describe('ar_ workspace key derivation', () => {
+  it('names and binds the workspace id and tag', async () => {
+    const db = {};
+    const digest = await workspaceCreateRequestDigest({ name: 'routed' });
+    const derive = (workspaceId: string, tag: string, secret = 'ar_owner_key') =>
+      deriveIdempotentWorkspaceApiKey(db, { format: 'ar', tag }, workspaceId, secret, 'job-1', digest);
+    const first = await derive('111', 'aAAAAAAAAAA');
+    expect(await derive('111', 'aAAAAAAAAAA')).toBe(first);
+    expect(first).toMatch(/^ar_ws_0000000001n_aAAAAAAAAAA_[0-9A-Za-z]{49}$/);
+    const otherWorkspace = await derive('222', 'aAAAAAAAAAA');
+    const otherTag = await derive('111', 'bAAAAAAAAAA');
+    for (const other of [otherWorkspace, otherTag]) expect(other.slice(-49)).not.toBe(first.slice(-49));
+    const bootstrap = await deriveBootstrapWorkspaceApiKey(db, { format: 'ar', tag: 'aAAAAAAAAAA' }, '111', 'bootstrap-secret', 'job-1', digest);
+    expect(bootstrap).not.toBe(first);
+  });
+});
+
+describe('workspace create replay across credential families', () => {
+  it('returns the original key after the deployment changes the family it mints', async () => {
+    const stack = makeNodeStack();
+    const legacyDb = stack.runtime.deps.db as unknown as EngineDb;
+    const requestDigest = await workspaceCreateRequestDigest({ name: 'family-change' });
+    const options = { ownerApiKey: 'rk_live_family_owner', idempotencyKey: 'family-job', requestDigest };
+    const first = await createWorkspace(legacyDb, 'family-change', options);
+    expect(first.api_key).toMatch(/^rk_live_/);
+
+    // The same database behind a deployment that now mints ar_ credentials.
+    const arDb = new Proxy(legacyDb, {});
+    configureCredentials(arDb, { format: 'ar', tagger: createCredentialTagSigner({ current: 'a', keys: { a: 'tag-secret-a-0123456' } }) });
+    const replay = await createWorkspace(arDb, 'family-change', options);
+    expect(replay.created).toBe(false);
+    expect(replay.api_key).toBe(first.api_key);
+  });
+
+  it('replays a legacy key for a workspace id that cannot carry an ar_ tag', async () => {
+    const stack = makeNodeStack({ credentialTagger: createCredentialTagSigner({ current: 'a', keys: { a: 'tag-secret-a-0123456' } }) });
+    const db = stack.runtime.deps.db as unknown as EngineDb;
+    const requestDigest = await workspaceCreateRequestDigest({ name: 'custom-id' });
+    const options = { ownerApiKey: 'rk_live_custom_owner', idempotencyKey: 'custom-id-job', requestDigest, workspaceId: 'ws_custom' };
+    const first = await createWorkspace(db, 'custom-id', options);
+    expect(first.api_key).toMatch(/^rk_live_/);
+    const replay = await createWorkspace(db, 'custom-id', options);
+    expect(replay.created).toBe(false);
+    expect(replay.api_key).toBe(first.api_key);
+  });
+
+  it('returns the original ar_ key after the keyring rotates', async () => {
+    const keys = { a: 'tag-secret-a-0123456', b: 'tag-secret-b-0123456' };
+    const stack = makeNodeStack({ credentialFormat: 'ar', credentialTagger: createCredentialTagSigner({ current: 'a', keys: { a: keys.a } }) });
+    const base = stack.runtime.deps.db as unknown as EngineDb;
+    const requestDigest = await workspaceCreateRequestDigest({ name: 'rotation' });
+    const options = { ownerApiKey: 'rk_live_rotation_owner', idempotencyKey: 'rotation-job', requestDigest };
+    const first = await createWorkspace(base, 'rotation', options);
+    expect(first.api_key).toMatch(/^ar_ws_[0-9A-Za-z]{11}_a/);
+
+    const underB = new Proxy(base, {});
+    configureCredentials(underB, { format: 'ar', tagger: createCredentialTagSigner({ current: 'b', keys }) });
+    const replay = await createWorkspace(underB, 'rotation', options);
+    expect(replay.created).toBe(false);
+    expect(replay.api_key).toBe(first.api_key);
   });
 });

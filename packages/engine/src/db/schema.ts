@@ -113,6 +113,31 @@ export const workspaceCreateIdempotency = sqliteTable(
   ],
 );
 
+/**
+ * Legacy credentials replaced through `POST /v1/credentials/upgrade`. The
+ * principal's hash column holds the `ar_` credential; the legacy one keeps
+ * authenticating until `expiresAt`, and only while the principal still holds
+ * `arHash`. `sealedCredential` lets a retry with the legacy credential get the
+ * same `ar_` credential back.
+ */
+export const credentialUpgrades = sqliteTable(
+  'credential_upgrades',
+  {
+    legacyHash: text('legacy_hash').primaryKey(),
+    kind: text('kind').notNull(),
+    principalId: text('principal_id').notNull(),
+    workspaceId: text('workspace_id')
+      .notNull()
+      .references(() => workspaces.id, { onDelete: 'cascade' }),
+    arHash: text('ar_hash').notNull(),
+    /** The `ar_` credential, AES-GCM sealed under a key derived from the legacy credential. */
+    sealedCredential: text('sealed_credential').notNull(),
+    createdAt: integer('created_at', { mode: 'timestamp' }).notNull().default(sql`(unixepoch())`),
+    expiresAt: integer('expires_at', { mode: 'timestamp' }).notNull(),
+  },
+  (table) => [index('idx_credential_upgrades_workspace').on(table.workspaceId)],
+);
+
 // ============================================
 // Agents
 // ============================================

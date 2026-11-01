@@ -10,6 +10,7 @@ import { createEngine } from '../../engine.js';
 import { createNodeRuntime, type NodeRuntime, type EngineSocket } from '../../adapters/node/index.js';
 import type { AppEnv } from '../../env.js';
 import type { AdmissionHooks, EngineConfig, EngineDb } from '../../ports/index.js';
+import type { TelemetrySink } from '../../ports/telemetry.js';
 import type { AtomicWrite, TransactionCapability } from '../../ports/database.js';
 
 export interface TestStack {
@@ -52,8 +53,16 @@ export function makeNodeStack(options?: {
   workspaceBootstrapSecret?: string;
   workspaceBootstrapProofRequired?: boolean;
   allowWorkspaceKeyRotation?: boolean;
+  internalSecret?: string;
+  publicWorkspaceCreate?: boolean;
   admission?: AdmissionHooks;
   rateLimitPerMinute?: number;
+  credentialFormat?: EngineConfig['credentialFormat'];
+  credentialTagger?: EngineConfig['credentialTagger'];
+  legacyCredentialGraceSeconds?: number;
+  legacyCredentialSunset?: Date;
+  telemetry?: TelemetrySink;
+  maxUploadBytes?: number;
 }): TestStack {
   const tasks = new BackgroundTasks();
   observePresence();
@@ -80,9 +89,17 @@ export function makeNodeStack(options?: {
         workspaceBootstrapSecret: options?.workspaceBootstrapSecret ?? 'test-bootstrap-secret',
         workspaceBootstrapProofRequired: options?.workspaceBootstrapProofRequired,
         allowWorkspaceKeyRotation: options?.allowWorkspaceKeyRotation,
+        internalSecret: options?.internalSecret,
+        publicWorkspaceCreate: options?.publicWorkspaceCreate,
         rateLimitPerMinute: options?.rateLimitPerMinute,
+        credentialFormat: options?.credentialFormat,
+        credentialTagger: options?.credentialTagger,
+        legacyCredentialGraceSeconds: options?.legacyCredentialGraceSeconds,
+        legacyCredentialSunset: options?.legacyCredentialSunset,
+        maxUploadBytes: options?.maxUploadBytes,
       },
       admission: options?.admission,
+      telemetry: options?.telemetry,
       // Disable the auto-sweep timer; tests drive presence.sweep() explicitly.
       eventQueue: { pollIntervalMs: 0 },
       presence: { ttlMs: options?.ttlMs ?? 60_000, sweepIntervalMs: 0 },

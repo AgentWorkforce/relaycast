@@ -66,7 +66,7 @@ describe('bounded workspace deletion', () => {
       'workspaces', 'workspace_create_idempotency', 'agent_recovery_credentials', 'observer_tokens',
       'node_providers', 'agent_node_bindings', 'a2a_agents', 'directory_agents', 'directory_skills',
       'directory_ratings', 'routing_configs', 'certifications', 'dm_conversation_reservations',
-      'webhooks', 'event_subscriptions', 'actions', 'triggers',
+      'webhooks', 'event_subscriptions', 'actions', 'triggers', 'credential_upgrades',
     ]);
     const sqlite = stack.runtime.handle.sqlite;
     // Virtual (FTS) tables are maintained by triggers on the tables they index.

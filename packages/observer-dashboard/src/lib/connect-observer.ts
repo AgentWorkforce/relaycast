@@ -1,16 +1,14 @@
 import type { DmMessage, WorkspaceDmConversation } from '@relaycast/sdk';
+import { redactCredentials } from '@relaycast/types';
 
 const DM_PAGE_SIZE = 100;
 const MAX_BROWSER_TIMEOUT_MS = 2_147_000_000;
 
-const CREDENTIAL_PATTERN = /\b(?:rk_live|at_live|nt_live|ot_live|wh_live)_[A-Za-z0-9_-]+\b/g;
 const CONNECT_INVITE_PATTERN =
   /https?:\/\/(?:www\.)?agentrelay\.com\/connect\/[A-Za-z0-9_-]+(?:\.json|\.md)?(?:\?[^\s]*)?/gi;
 
 export function sanitizeConnectObserverText(text: string): string {
-  return text
-    .replace(CONNECT_INVITE_PATTERN, '[Relay Connect invite redacted]')
-    .replace(CREDENTIAL_PATTERN, '[credential redacted]');
+  return redactCredentials(text.replace(CONNECT_INVITE_PATTERN, '[Relay Connect invite redacted]'), '[credential redacted]');
 }
 
 export function formatUtcTimestamp(timestamp: string): string {

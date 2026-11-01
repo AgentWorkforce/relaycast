@@ -19,6 +19,7 @@ export {
   settleNodeOffline,
   type HandleNodeControlMessageArgs,
   type NodeSocketLike,
+  type WorkspaceDeadlineHolder,
 } from './engine/node.js';
 export type { InvocationCompletionDeps } from './engine/invocationCompletion.js';
 // Provider-attach arbitration policy (spec §3.1), exported so an out-of-process

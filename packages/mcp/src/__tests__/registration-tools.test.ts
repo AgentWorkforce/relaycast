@@ -5,6 +5,11 @@ import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
 import { registerRegistrationTools } from '../tools/registration.js';
 import type { SessionState } from '../types.js';
 import { createInitialSession } from '../types.js';
+import { encodeArCredential, maskCredential, type CredentialKind } from '@relaycast/types';
+
+const arCredential = (kind: CredentialKind, fill: number) =>
+  encodeArCredential({ kind, workspaceId: '241764880589606912', tag: 'aX7pQ2mN4bc', secret: new Uint8Array(32).fill(fill) });
+
 
 // Test using the in-memory transport round-trip approach
 describe('registration tools', () => {
@@ -132,6 +137,47 @@ describe('registration tools', () => {
     expect(saved).toBeDefined();
     expect(saved!.agentToken).toBe('at_live_old');
     expect(saved!.agentName).toBe('old-agent');
+  });
+
+  it('set_workspace_key accepts an ar_ws_ key and rejects other credentials', async () => {
+    const routed = arCredential('workspace', 1);
+    const ok = await client.callTool({ name: 'workspace.set_key', arguments: { api_key: routed } });
+    expect(ok.isError).toBeFalsy();
+    expect(session.workspaceKey).toBe(routed);
+
+    const agentToken = await client.callTool({
+      name: 'workspace.set_key',
+      arguments: { api_key: arCredential('agent', 1) },
+    });
+    expect(agentToken.isError).toBe(true);
+    expect(session.workspaceKey).toBe(routed);
+  });
+
+  it('switches to an ar_ workspace by the masked key workspace.list shows', async () => {
+    const routed = arCredential('workspace', 2);
+    session.workspaceKey = 'rk_live_current';
+    session.agentToken = 'at_live_current';
+    session.agentName = 'bot-current';
+    session.workspaces.set(routed, {
+      workspaceKey: routed,
+      agentToken: arCredential('agent', 2),
+      agentName: 'bot-routed',
+      agents: new Map([['bot-routed', { agentName: 'bot-routed', agentToken: arCredential('agent', 2) }]]),
+      wsBridge: null,
+      subscriptions: null,
+      wsInitAttempted: false,
+    });
+
+    const listed = await client.callTool({ name: 'workspace.list', arguments: {} });
+    const workspaces = (listed.structuredContent as { workspaces: { workspace_key: string }[] }).workspaces;
+    const masked = workspaces.map((w) => w.workspace_key).find((key) => key.startsWith('ar_ws_'))!;
+    expect(masked).toBe(maskCredential(routed));
+    expect(masked).not.toBe(routed);
+
+    const switched = await client.callTool({ name: 'workspace.switch', arguments: { api_key: masked } });
+    expect(switched.isError).toBeFalsy();
+    expect(session.workspaceKey).toBe(routed);
+    expect(session.agentName).toBe('bot-routed');
   });
 
   it('set_workspace_key restores saved context when switching back', async () => {
