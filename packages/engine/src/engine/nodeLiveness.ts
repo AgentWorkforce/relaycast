@@ -24,7 +24,9 @@ export async function invalidateDirectPresence(db: EngineDb, workspaceId: string
   // Never throws: callers run this in a finally after their writes committed.
   await filterAsync([...new Set(agentIds)], async agentId => {
     // directNodeIdForAgent, inlined: node.ts imports this module.
-    try { await authority.invalidate!(workspaceId, `node_direct_${agentId}`); } catch { /* bounded by the checkpoint */ }
+    try { await authority.invalidate!(workspaceId, `node_direct_${agentId}`); }
+    // A lost call is bounded by the owner's checkpoint; leave a trace of it.
+    catch (err) { console.warn('[node.presence] direct presence invalidation failed', { workspaceId, agentId, err }); }
     return false;
   });
 }
