@@ -9,6 +9,10 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ## [Unreleased]
 
+### Changed
+
+- `SqliteApiKeyAuthProvider` resolves a legacy credential and its workspace in one indexed query per kind, matching `ar_` verification: the agent, node and observer lookups join their workspace, and the current and rotation-grace slots match together. The returned principal and workspace rows are unchanged, including `expires_at` and `last_seen`.
+
 ## [12.6.0] - 2026-11-01
 
 ### Added

@@ -3,7 +3,6 @@ import { workspaces, agents, nodes, observerTokens } from '../db/schema.js';
 import { sha256Hex } from '../lib/crypto.js';
 import {
   activeObserverTokenCondition,
-  getActiveObserverTokenByHash,
   noteObserverTokenUse,
 } from '../engine/observerToken.js';
 import type { AuthProvider, AuthResult, AuthRequire } from '../ports/auth.js';
@@ -81,64 +80,55 @@ export class SqliteApiKeyAuthProvider implements AuthProvider {
   }
 }
 
+/**
+ * Verify a legacy credential: one indexed query per kind, returning the
+ * principal and its workspace together, like `authenticateAr`. Rotation grace
+ * slots match in the same query.
+ */
 async function authenticateLegacy(
   db: EngineDb,
   kind: 'workspace' | 'agent' | 'node' | 'observer',
   hash: string,
 ): Promise<AuthResult> {
+  const now = new Date();
   if (kind === 'workspace') {
-    // Current slot first — same shape as the agent-token lookup below.
-    let [workspace] = await db.select().from(workspaces).where(eq(workspaces.apiKeyHash, hash));
-    if (!workspace) {
-      // Superseded key inside its rotation grace window. A rotation with
-      // zero grace writes no usable previous slot, so a compromised key
-      // never lands here.
-      [workspace] = await db
-        .select()
-        .from(workspaces)
-        .where(and(
-          eq(workspaces.previousApiKeyHash, hash),
-          gt(workspaces.previousApiKeyExpiresAt, new Date()),
-        ));
-    }
-    if (!workspace) return unauthorized('Invalid API key');
-    return resolved(workspace);
+    // A rotation with zero grace writes no usable previous slot, so a
+    // compromised key never matches it.
+    const [workspace] = await db.select().from(workspaces).where(or(
+      eq(workspaces.apiKeyHash, hash),
+      and(eq(workspaces.previousApiKeyHash, hash), gt(workspaces.previousApiKeyExpiresAt, now)),
+    ));
+    return workspace ? resolved(workspace) : unauthorized('Invalid API key');
   }
 
   if (kind === 'agent') {
-    // Current slot first — the common case is a token that has not been
-    // rotated out from under this caller.
-    let [agent] = await db.select().from(agents).where(eq(agents.tokenHash, hash));
-    if (!agent) {
-      // Fall back to the previous slot inside its grace window. This is the
-      // credential a caller that lost a concurrent self-rollover race was
-      // handed (relay#1542); it must remain live long enough for that caller
-      // to upgrade to a persistent session.
-      [agent] = await db
-        .select()
-        .from(agents)
-        .where(and(eq(agents.previousTokenHash, hash), gt(agents.previousTokenExpiresAt, new Date())));
-    }
-    if (!agent) return unauthorized('Invalid agent token', 'agent_token_invalid');
-    const [workspace] = await db.select().from(workspaces).where(eq(workspaces.id, agent.workspaceId));
-    if (!workspace) return unauthorized('Workspace not found');
-    return resolved(workspace, { agent });
+    // The previous slot inside its grace window is the credential a caller
+    // that lost a concurrent self-rollover race was handed (relay#1542); it
+    // must remain live long enough for that caller to upgrade to a persistent
+    // session.
+    const [row] = await db.select({ agent: agents, workspace: workspaces }).from(agents)
+      .innerJoin(workspaces, eq(workspaces.id, agents.workspaceId))
+      .where(or(
+        eq(agents.tokenHash, hash),
+        and(eq(agents.previousTokenHash, hash), gt(agents.previousTokenExpiresAt, now)),
+      ));
+    return row ? resolved(row.workspace, { agent: row.agent }) : unauthorized('Invalid agent token', 'agent_token_invalid');
   }
 
   if (kind === 'node') {
-    const [node] = await db.select().from(nodes).where(eq(nodes.tokenHash, hash));
-    if (!node) return unauthorized('Invalid node token', 'node_token_invalid');
-    const [workspace] = await db.select().from(workspaces).where(eq(workspaces.id, node.workspaceId));
-    if (!workspace) return unauthorized('Workspace not found');
-    return resolved(workspace, { node });
+    const [row] = await db.select({ node: nodes, workspace: workspaces }).from(nodes)
+      .innerJoin(workspaces, eq(workspaces.id, nodes.workspaceId))
+      .where(eq(nodes.tokenHash, hash));
+    return row ? resolved(row.workspace, { node: row.node }) : unauthorized('Invalid node token', 'node_token_invalid');
   }
 
   if (kind === 'observer') {
-    const observerToken = await getActiveObserverTokenByHash(db, hash);
-    if (!observerToken) return unauthorized('Invalid observer token', 'observer_token_invalid');
-    const [workspace] = await db.select().from(workspaces).where(eq(workspaces.id, observerToken.workspaceId));
-    if (!workspace) return unauthorized('Workspace not found');
-    return resolved(workspace, { observerToken });
+    const [row] = await db.select({ observerToken: observerTokens, workspace: workspaces }).from(observerTokens)
+      .innerJoin(workspaces, eq(workspaces.id, observerTokens.workspaceId))
+      .where(and(eq(observerTokens.tokenHash, hash), activeObserverTokenCondition(now)));
+    if (!row) return unauthorized('Invalid observer token', 'observer_token_invalid');
+    noteObserverTokenUse(db, row.observerToken, now);
+    return resolved(row.workspace, { observerToken: row.observerToken });
   }
 
   return unauthorized('Invalid token format');
