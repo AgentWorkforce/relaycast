@@ -18,8 +18,12 @@ Packages without a separate changelog are covered by the cross-package notes bel
 
 ## [Unreleased - Minor]
 
-- Node heartbeats cost far fewer database statements. A broker's changing live-agent roster no longer rewrites its action rows, a beat writes the node aggregate in one statement, and a socket owner can hold the workspace deadline and mark checkpoint heartbeats so steady state reads nothing it already knows.
-- Taking a node offline touches only that node's agents, and presence fanout reads only reachable nodes' bindings, instead of walking the workspace.
+- A broker's changing live-agent roster no longer rewrites its action rows on every heartbeat.
+- A heartbeat writes the node aggregate in one statement and reads drain state in one statement.
+- A socket owner can hold the workspace deadline, so heartbeats check it without reading the workspace row.
+- A socket owner can mark checkpoint heartbeats, which skip the transition-state read and the drain.
+- Taking a node offline updates that node, its providers, its invocations and only the agents routed through it.
+- Presence fanout reads only reachable nodes' bindings.
 
 ## [12.5.0] - 2026-11-01
 

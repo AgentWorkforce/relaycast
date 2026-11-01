@@ -41,11 +41,20 @@ describe('node control D1 statements per frame', () => {
   beforeEach(() => { stack = makeNodeStack({ ttlMs: 60_000 }); });
   afterEach(async () => { await stack.close(); });
 
+  /**
+   * Counts at the connection, so statements a frame issues through the
+   * runtime's own handle (drain, completion effects) are counted too.
+   */
   function counting() {
     const statements: string[] = [];
     const raw: Array<{ sql: string; params: unknown[] }> = [];
-    const db = drizzle(stack.runtime.handle.sqlite, { schema, logger: { logQuery: (sql, params) => {
-      statements.push(label(sql));
+    const sqlite = stack.runtime.handle.sqlite;
+    const prepare = sqlite.prepare.bind(sqlite);
+    sqlite.prepare = ((sql: string) => {
+      if (!sql.startsWith('EXPLAIN')) statements.push(label(sql));
+      return prepare(sql);
+    }) as typeof sqlite.prepare;
+    const db = drizzle(sqlite, { schema, logger: { logQuery: (sql, params) => {
       raw.push({ sql, params });
     } } }) as unknown as EngineDb;
     return {
@@ -201,7 +210,14 @@ describe('node control D1 statements per frame', () => {
           "select from "node_providers"",
           "update "nodes"",
           "select from "nodes"",
+          "insert into "workspace_events"",
+          "insert into "pending_events"",
+          "update "pending_events"",
+          "update "pending_events"",
+          "select from "event_subscriptions"",
           "select from "agents"",
+          "select from "pending_events"",
+          "update "pending_events"",
         ],
         "unchangedBeat": [
           "select from "nodes"",
@@ -314,5 +330,43 @@ describe('node control D1 statements per frame', () => {
     expect(invalidated.splice(0)).toEqual([`node_direct_${moved.agentId}`]);
     await deleteAgent(db, ws.workspaceId, 'released');
     expect(invalidated.splice(0)).toEqual([`node_direct_${released.agentId}`]);
+  });
+
+  it('invalidates an agent an inventory moved even when a later member fails', async () => {
+    const ws = await createWorkspace(stack.app, 'invalidate-partial');
+    const created = await stack.app.request('/v1/nodes', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', authorization: `Bearer ${ws.workspaceKey}` },
+      body: JSON.stringify({ node_id: 'tight', name: 'tight', role: 'broker', capabilities: [], max_agents: 1, tags: [], version: 'v0' }),
+    });
+    expect(created.status).toBe(201);
+    const db = stack.runtime.deps.db;
+    const invalidated: string[] = [];
+    configureNodeLiveness(db, {
+      inspect: async () => ({ status: 'unknown', providers: [] }),
+      invalidate: async (_workspaceId, nodeId) => { invalidated.push(nodeId); },
+    });
+    const alice = await registerAgent(stack.app, ws.workspaceKey, 'alice');
+    const bob = await registerAgent(stack.app, ws.workspaceKey, 'bob');
+    const sock = new FakeSocket();
+    const frame = (body: Record<string, unknown>) => handleNodeControlMessage({
+      db, registry: stack.runtime.realtime, completionDeps: stack.runtime.deps,
+      workspaceId: ws.workspaceId, nodeId: 'tight', socket: sock, raw: JSON.stringify(body),
+    });
+    const provider = { name: 'broker', instance_id: 'i1' };
+    await frame({ v: 1, id: 'r', type: 'node.register', name: 'tight', node_id: 'tight', provider, capabilities: [], max_agents: 1, tags: [], version: 'v1', resume_cursor: null });
+    await frame({ v: 1, type: 'node.heartbeat', provider, name: 'tight', node_id: 'tight', capabilities: [], max_agents: 1, version: 'v1', load: 0, active_agents: 0, handlers_live: true });
+    invalidated.length = 0;
+
+    // One free slot: alice's move commits, bob's slot reservation fails.
+    await frame({ v: 1, id: 'inv', type: 'inventory.sync', agents: [
+      { agent_id: alice.agentId, name: 'alice', session_ref: 'pty://a' },
+      { agent_id: bob.agentId, name: 'bob', session_ref: 'pty://b' },
+    ] });
+    expect(sock.ofType('error').at(-1)).toMatchObject({ id: 'inv', code: 'node_capacity_exceeded' });
+    const location = await stack.runtime.handle.sqlite
+      .prepare('SELECT location_node_id FROM agents WHERE id = ?').get(alice.agentId) as { location_node_id: string | null };
+    expect(location.location_node_id).toBe('tight');
+    expect(invalidated).toEqual([`node_direct_${alice.agentId}`]);
   });
 });

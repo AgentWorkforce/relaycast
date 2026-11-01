@@ -3118,232 +3118,237 @@ export async function reconcileInventory(
 
   const reconciledAgentIds: string[] = [];
   const newlyRoutedAgentIds: string[] = [];
-  for (const item of acceptedInventoryAgents) {
-    const existing = existingByName.get(item.name);
-    if (existing) {
-      const activeNodeIds = await activeBindingNodeIdsForAgent(db, workspaceId, existing.id);
-      const targetWasActive = activeNodeIds.includes(nodeId);
-      const wasRoutableThroughProvider = existing.locationType === 'via_node'
-        && existing.locationNodeId === nodeId
-        && existing.providerName === providerName
-        && targetWasActive;
-      let reservedTargetSlot = false;
-      try {
-        if (!targetWasActive) {
-          await reserveNodeAgentSlot(db, workspaceId, node, {
-            invocationId: item.invocation_id,
-            providerName,
-            agentName: item.name,
-          });
-          reservedTargetSlot = true;
-        }
-        const adoptingLegacyDefault = legacyDefaultAdoptions.has(item.name);
-        // The earlier liveness check is for a useful error decision. This
-        // compare-and-set fences broker liveness loss, a default provider
-        // reconnecting, and concurrent ownership changes during the apply pass.
-        const adoptionNow = Date.now();
-        let noLiveDefaultProvider = notExists(db
-          .select({ id: nodeProviders.id })
-          .from(nodeProviders)
-          .where(and(
-            eq(nodeProviders.workspaceId, workspaceId),
-            eq(nodeProviders.nodeId, nodeId),
-            eq(nodeProviders.name, DEFAULT_PROVIDER_NAME),
-            eq(nodeProviders.status, 'online'),
-            eq(nodeProviders.handlersLive, true),
-            gte(nodeProviders.lastHeartbeatAt, new Date(adoptionNow - NODE_LIVENESS_TTL_MS)),
-            lte(nodeProviders.lastHeartbeatAt, new Date(adoptionNow)),
-          )));
-        let liveBrokerProvider = exists(db
-          .select({ id: nodeProviders.id })
-          .from(nodeProviders)
-          .where(and(
-            eq(nodeProviders.workspaceId, workspaceId),
-            eq(nodeProviders.nodeId, nodeId),
-            eq(nodeProviders.name, 'broker'),
-            eq(nodeProviders.status, 'online'),
-            eq(nodeProviders.handlersLive, true),
-            gte(nodeProviders.lastHeartbeatAt, new Date(adoptionNow - NODE_LIVENESS_TTL_MS)),
-            lte(nodeProviders.lastHeartbeatAt, new Date(adoptionNow)),
-          )));
-        if (authorityAdoption) {
-          // Every accepted register/reconnect advances the provider revision
-          // before renewing its owner lease. Fence those generations in the
-          // same SQL update, and reject if the observed broker lease expires.
-          const proof = authorityAdoption;
-          noLiveDefaultProvider = proof.defaultId
-            ? exists(db.select({ id: nodeProviders.id }).from(nodeProviders).where(and(
-              eq(nodeProviders.workspaceId, workspaceId), eq(nodeProviders.nodeId, nodeId),
-              eq(nodeProviders.name, DEFAULT_PROVIDER_NAME), eq(nodeProviders.id, proof.defaultId),
-              eq(nodeProviders.livenessRevision, proof.defaultRevision!),
-            )))
-            : notExists(db.select({ id: nodeProviders.id }).from(nodeProviders).where(and(
-              eq(nodeProviders.workspaceId, workspaceId), eq(nodeProviders.nodeId, nodeId), eq(nodeProviders.name, DEFAULT_PROVIDER_NAME),
+  let rescheduledInvocations = 0;
+  try {
+    for (const item of acceptedInventoryAgents) {
+      const existing = existingByName.get(item.name);
+      if (existing) {
+        const activeNodeIds = await activeBindingNodeIdsForAgent(db, workspaceId, existing.id);
+        const targetWasActive = activeNodeIds.includes(nodeId);
+        const wasRoutableThroughProvider = existing.locationType === 'via_node'
+          && existing.locationNodeId === nodeId
+          && existing.providerName === providerName
+          && targetWasActive;
+        let reservedTargetSlot = false;
+        try {
+          if (!targetWasActive) {
+            await reserveNodeAgentSlot(db, workspaceId, node, {
+              invocationId: item.invocation_id,
+              providerName,
+              agentName: item.name,
+            });
+            reservedTargetSlot = true;
+          }
+          const adoptingLegacyDefault = legacyDefaultAdoptions.has(item.name);
+          // The earlier liveness check is for a useful error decision. This
+          // compare-and-set fences broker liveness loss, a default provider
+          // reconnecting, and concurrent ownership changes during the apply pass.
+          const adoptionNow = Date.now();
+          let noLiveDefaultProvider = notExists(db
+            .select({ id: nodeProviders.id })
+            .from(nodeProviders)
+            .where(and(
+              eq(nodeProviders.workspaceId, workspaceId),
+              eq(nodeProviders.nodeId, nodeId),
+              eq(nodeProviders.name, DEFAULT_PROVIDER_NAME),
+              eq(nodeProviders.status, 'online'),
+              eq(nodeProviders.handlersLive, true),
+              gte(nodeProviders.lastHeartbeatAt, new Date(adoptionNow - NODE_LIVENESS_TTL_MS)),
+              lte(nodeProviders.lastHeartbeatAt, new Date(adoptionNow)),
             )));
-          liveBrokerProvider = exists(db.select({ id: nodeProviders.id }).from(nodeProviders).where(and(
-            eq(nodeProviders.workspaceId, workspaceId), eq(nodeProviders.nodeId, nodeId),
-            eq(nodeProviders.name, 'broker'), eq(nodeProviders.id, proof.brokerId),
-            eq(nodeProviders.livenessRevision, proof.brokerRevision),
-            sql`unixepoch() * 1000 < ${proof.expiresAt}`,
-          )));
+          let liveBrokerProvider = exists(db
+            .select({ id: nodeProviders.id })
+            .from(nodeProviders)
+            .where(and(
+              eq(nodeProviders.workspaceId, workspaceId),
+              eq(nodeProviders.nodeId, nodeId),
+              eq(nodeProviders.name, 'broker'),
+              eq(nodeProviders.status, 'online'),
+              eq(nodeProviders.handlersLive, true),
+              gte(nodeProviders.lastHeartbeatAt, new Date(adoptionNow - NODE_LIVENESS_TTL_MS)),
+              lte(nodeProviders.lastHeartbeatAt, new Date(adoptionNow)),
+            )));
+          if (authorityAdoption) {
+            // Every accepted register/reconnect advances the provider revision
+            // before renewing its owner lease. Fence those generations in the
+            // same SQL update, and reject if the observed broker lease expires.
+            const proof = authorityAdoption;
+            noLiveDefaultProvider = proof.defaultId
+              ? exists(db.select({ id: nodeProviders.id }).from(nodeProviders).where(and(
+                eq(nodeProviders.workspaceId, workspaceId), eq(nodeProviders.nodeId, nodeId),
+                eq(nodeProviders.name, DEFAULT_PROVIDER_NAME), eq(nodeProviders.id, proof.defaultId),
+                eq(nodeProviders.livenessRevision, proof.defaultRevision!),
+              )))
+              : notExists(db.select({ id: nodeProviders.id }).from(nodeProviders).where(and(
+                eq(nodeProviders.workspaceId, workspaceId), eq(nodeProviders.nodeId, nodeId), eq(nodeProviders.name, DEFAULT_PROVIDER_NAME),
+              )));
+            liveBrokerProvider = exists(db.select({ id: nodeProviders.id }).from(nodeProviders).where(and(
+              eq(nodeProviders.workspaceId, workspaceId), eq(nodeProviders.nodeId, nodeId),
+              eq(nodeProviders.name, 'broker'), eq(nodeProviders.id, proof.brokerId),
+              eq(nodeProviders.livenessRevision, proof.brokerRevision),
+              sql`unixepoch() * 1000 < ${proof.expiresAt}`,
+            )));
+          }
+          const [updated] = await db
+            .update(agents)
+            .set({
+              ...(adoptingLegacyDefault ? { providerName } : {}),
+              status: 'active',
+              lastSeen: new Date(),
+              locationType: 'via_node',
+              locationNodeId: nodeId,
+              originNodeId: existing.originNodeId ?? nodeId,
+              sessionRef: item.session_ref ?? existing.sessionRef,
+            })
+            .where(and(
+              eq(agents.workspaceId, workspaceId),
+              eq(agents.id, existing.id),
+              ...(incumbentRevisions.has(item.name) ? [notExists(db.select({ id: nodes.id }).from(nodes).where(and(
+                eq(nodes.workspaceId, workspaceId), eq(nodes.id, incumbentRevisions.get(item.name)!.id),
+                ne(nodes.livenessRevision, incumbentRevisions.get(item.name)!.revision),
+              )))] : []),
+              ...(adoptingLegacyDefault ? [
+                eq(agents.providerName, DEFAULT_PROVIDER_NAME),
+                eq(agents.locationType, 'via_node'),
+                eq(agents.locationNodeId, nodeId),
+                noLiveDefaultProvider,
+                liveBrokerProvider,
+              ] : []),
+            ))
+            .returning({ id: agents.id });
+          if (!updated) {
+            throw codedError(`Agent "${item.name}" changed ownership during inventory reconciliation`, 'agent_provider_conflict', 409);
+          }
+          // Recorded once the location write lands: a later failure must still
+          // invalidate it, and a retry sees it as already routed.
+          if (!wasRoutableThroughProvider) newlyRoutedAgentIds.push(existing.id);
+          await upsertAgentNodeBinding(db, workspaceId, existing, nodeId, {
+            sessionRef: item.session_ref ?? existing.sessionRef,
+            deactivateExisting: true,
+          });
+          await releaseNodeAgentSlots(db, workspaceId, activeNodeIds.filter((activeNodeId) => activeNodeId !== nodeId));
+          reconciledAgentIds.push(existing.id);
+        } catch (err) {
+          if (reservedTargetSlot) {
+            await releaseNodeAgentSlots(db, workspaceId, [nodeId]);
+          }
+          throw err;
         }
-        const [updated] = await db
+      }
+
+      if (!item.invocation_id || !providerInvocationIds.has(item.invocation_id)) continue;
+      const completed = await completeNodeInvocation(db, registry, workspaceId, nodeId, providerName, item.invocation_id, {
+        output: {
+          agent_id: item.agent_id,
+          name: item.name,
+          invocation_id: item.invocation_id ?? null,
+          session_ref: item.session_ref ?? null,
+        },
+      }, completionDeps);
+      if (completed) {
+        completedInvocations++;
+        if (completionDeps) {
+          await emitInvocationCompletionEffects(completionDeps, workspaceId, completed);
+        }
+      }
+    }
+
+    // Pinned to the node FK index for the same reason as the delivery roster:
+    // without stats SQLite picks idx_agents_roster and reads the workspace.
+    const nodeAgents = await db
+      .select({
+        id: sql`${agents.id}`.mapWith(agents.id),
+        name: sql`${agents.name}`.mapWith(agents.name),
+        metadata: sql`${agents.metadata}`.mapWith(agents.metadata),
+      })
+      .from(sql`${agents} INDEXED BY idx_agents_location_node_fk`)
+      .where(and(
+        eq(agents.workspaceId, workspaceId),
+        eq(agents.locationType, 'via_node'),
+        eq(agents.locationNodeId, nodeId),
+        eq(agents.providerName, providerName),
+        ne(agents.status, RELEASED_AGENT_STATUS),
+      ));
+    const unreported = nodeAgents.filter((agent) => !reportedNames.has(agent.name));
+    const releasing = unreported.length > 0
+      ? await releasingAgentIds(db, workspaceId, nodeId, providerName, unreported)
+      : new Set<string>();
+    const missingAgents = unreported.filter((agent) => !releasing.has(agent.id));
+    const missing = missingAgents.map((agent) => agent.id);
+    if (missing.length > 0) {
+      const missingAt = new Date();
+      const invalidationResults = await runAtomicWrites(db, [
+        db
+          .update(agentNodeBindings)
+          .set({ status: 'inactive', updatedAt: missingAt })
+          .where(and(
+            eq(agentNodeBindings.workspaceId, workspaceId),
+            eq(agentNodeBindings.nodeId, nodeId),
+            inArray(agentNodeBindings.agentId, missing),
+            eq(agentNodeBindings.status, 'active'),
+          )),
+        db
           .update(agents)
           .set({
-            ...(adoptingLegacyDefault ? { providerName } : {}),
-            status: 'active',
-            lastSeen: new Date(),
-            locationType: 'via_node',
-            locationNodeId: nodeId,
-            originNodeId: existing.originNodeId ?? nodeId,
-            sessionRef: item.session_ref ?? existing.sessionRef,
+            status: 'offline',
+            lastSeen: missingAt,
+            locationNodeId: null,
+            sessionRef: null,
           })
           .where(and(
             eq(agents.workspaceId, workspaceId),
-            eq(agents.id, existing.id),
-            ...(incumbentRevisions.has(item.name) ? [notExists(db.select({ id: nodes.id }).from(nodes).where(and(
-              eq(nodes.workspaceId, workspaceId), eq(nodes.id, incumbentRevisions.get(item.name)!.id),
-              ne(nodes.livenessRevision, incumbentRevisions.get(item.name)!.revision),
-            )))] : []),
-            ...(adoptingLegacyDefault ? [
-              eq(agents.providerName, DEFAULT_PROVIDER_NAME),
-              eq(agents.locationType, 'via_node'),
-              eq(agents.locationNodeId, nodeId),
-              noLiveDefaultProvider,
-              liveBrokerProvider,
-            ] : []),
+            inArray(agents.id, missing),
+            eq(agents.locationType, 'via_node'),
+            eq(agents.locationNodeId, nodeId),
+            eq(agents.providerName, providerName),
+            ne(agents.status, RELEASED_AGENT_STATUS),
           ))
-          .returning({ id: agents.id });
-        if (!updated) {
-          throw codedError(`Agent "${item.name}" changed ownership during inventory reconciliation`, 'agent_provider_conflict', 409);
-        }
-        await upsertAgentNodeBinding(db, workspaceId, existing, nodeId, {
-          sessionRef: item.session_ref ?? existing.sessionRef,
-          deactivateExisting: true,
-        });
-        await releaseNodeAgentSlots(db, workspaceId, activeNodeIds.filter((activeNodeId) => activeNodeId !== nodeId));
-        reconciledAgentIds.push(existing.id);
-        if (!wasRoutableThroughProvider) newlyRoutedAgentIds.push(existing.id);
-      } catch (err) {
-        if (reservedTargetSlot) {
-          await releaseNodeAgentSlots(db, workspaceId, [nodeId]);
-        }
-        throw err;
-      }
-    }
-
-    if (!item.invocation_id || !providerInvocationIds.has(item.invocation_id)) continue;
-    const completed = await completeNodeInvocation(db, registry, workspaceId, nodeId, providerName, item.invocation_id, {
-      output: {
-        agent_id: item.agent_id,
-        name: item.name,
-        invocation_id: item.invocation_id ?? null,
-        session_ref: item.session_ref ?? null,
-      },
-    }, completionDeps);
-    if (completed) {
-      completedInvocations++;
+          .returning({ id: agents.id }),
+      ]);
+      const invalidatedIds = new Set(
+        ((invalidationResults[1] ?? []) as Array<{ id: string }>).map((row) => row.id),
+      );
       if (completionDeps) {
-        await emitInvocationCompletionEffects(completionDeps, workspaceId, completed);
+        for (const agent of missingAgents.filter((candidate) => invalidatedIds.has(candidate.id))) {
+          await emitAgentExitedEffects(completionDeps, workspaceId, {
+            agentId: agent.id,
+            agentName: agent.name,
+            nodeId,
+            invocationId: fleetInvocationId(agent.metadata),
+            reason: 'missing_from_inventory',
+          });
+        }
       }
     }
-  }
 
-  // Pinned to the node FK index for the same reason as the delivery roster:
-  // without stats SQLite picks idx_agents_roster and reads the workspace.
-  const nodeAgents = await db
-    .select({
-      id: sql`${agents.id}`.mapWith(agents.id),
-      name: sql`${agents.name}`.mapWith(agents.name),
-      metadata: sql`${agents.metadata}`.mapWith(agents.metadata),
-    })
-    .from(sql`${agents} INDEXED BY idx_agents_location_node_fk`)
-    .where(and(
-      eq(agents.workspaceId, workspaceId),
-      eq(agents.locationType, 'via_node'),
-      eq(agents.locationNodeId, nodeId),
-      eq(agents.providerName, providerName),
-      ne(agents.status, RELEASED_AGENT_STATUS),
-    ));
-  const unreported = nodeAgents.filter((agent) => !reportedNames.has(agent.name));
-  const releasing = unreported.length > 0
-    ? await releasingAgentIds(db, workspaceId, nodeId, providerName, unreported)
-    : new Set<string>();
-  const missingAgents = unreported.filter((agent) => !releasing.has(agent.id));
-  const missing = missingAgents.map((agent) => agent.id);
-  if (missing.length > 0) {
-    const missingAt = new Date();
-    const invalidationResults = await runAtomicWrites(db, [
-      db
-        .update(agentNodeBindings)
-        .set({ status: 'inactive', updatedAt: missingAt })
-        .where(and(
-          eq(agentNodeBindings.workspaceId, workspaceId),
-          eq(agentNodeBindings.nodeId, nodeId),
-          inArray(agentNodeBindings.agentId, missing),
-          eq(agentNodeBindings.status, 'active'),
-        )),
-      db
-        .update(agents)
-        .set({
-          status: 'offline',
-          lastSeen: missingAt,
-          locationNodeId: null,
-          sessionRef: null,
-        })
-        .where(and(
-          eq(agents.workspaceId, workspaceId),
-          inArray(agents.id, missing),
-          eq(agents.locationType, 'via_node'),
-          eq(agents.locationNodeId, nodeId),
-          eq(agents.providerName, providerName),
-          ne(agents.status, RELEASED_AGENT_STATUS),
-        ))
-        .returning({ id: agents.id }),
-    ]);
-    const invalidatedIds = new Set(
-      ((invalidationResults[1] ?? []) as Array<{ id: string }>).map((row) => row.id),
-    );
-    if (completionDeps) {
-      for (const agent of missingAgents.filter((candidate) => invalidatedIds.has(candidate.id))) {
-        await emitAgentExitedEffects(completionDeps, workspaceId, {
-          agentId: agent.id,
-          agentName: agent.name,
-          nodeId,
-          invocationId: fleetInvocationId(agent.metadata),
-          reason: 'missing_from_inventory',
-        });
+    for (const invocation of openInvocations) {
+      // A live broker owns the bounded readiness wait and cleanup. A transient
+      // empty inventory during launch/teardown must not redispatch this spawn.
+      // Actual provider disconnect and invocation expiry retain their own recovery.
+      if (liveInvocationIds.has(invocation.id) || requiresSpawnReadiness(invocation.input)) continue;
+      try {
+        if (await rescheduleNodeInvocation(db, registry, invocation)) {
+          rescheduledInvocations++;
+        }
+      } catch {
+        await db
+          .update(actionInvocations)
+          .set({
+            status: 'pending',
+            dispatchedNodeId: null,
+            dispatchedProvider: null,
+            dispatchedAt: null,
+            retryAfterAt: new Date(Date.now() + 5_000),
+          })
+          .where(eq(actionInvocations.id, invocation.id));
       }
     }
+  } finally {
+    // An agent this snapshot newly routed may have been answering presence
+    // from its direct node; that node must stop acknowledging it from memory,
+    // including when a later member fails after this one committed.
+    await invalidateDirectPresence(db, workspaceId, newlyRoutedAgentIds);
   }
-
-  let rescheduledInvocations = 0;
-  for (const invocation of openInvocations) {
-    // A live broker owns the bounded readiness wait and cleanup. A transient
-    // empty inventory during launch/teardown must not redispatch this spawn.
-    // Actual provider disconnect and invocation expiry retain their own recovery.
-    if (liveInvocationIds.has(invocation.id) || requiresSpawnReadiness(invocation.input)) continue;
-    try {
-      if (await rescheduleNodeInvocation(db, registry, invocation)) {
-        rescheduledInvocations++;
-      }
-    } catch {
-      await db
-        .update(actionInvocations)
-        .set({
-          status: 'pending',
-          dispatchedNodeId: null,
-          dispatchedProvider: null,
-          dispatchedAt: null,
-          retryAfterAt: new Date(Date.now() + 5_000),
-        })
-        .where(eq(actionInvocations.id, invocation.id));
-    }
-  }
-
-  // An agent this snapshot newly routed may have been answering presence from
-  // its direct node; that node must stop acknowledging it from memory.
-  await invalidateDirectPresence(db, workspaceId, newlyRoutedAgentIds);
   return {
     reply: {
       rebound_agents: reconciledAgentIds.length,

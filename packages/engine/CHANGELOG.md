@@ -18,9 +18,9 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Changed
 
-- `node.heartbeat` re-materializes a provider's actions only when its action-kind capabilities change; capacity changes (the broker's live-agent roster) no longer prune and rewrite action rows.
+- `node.heartbeat` re-materializes a provider's actions when its action-kind capabilities change or its persisted actions no longer match them; capacity changes (the broker's live-agent roster) do not prune and rewrite action rows.
 - `node.heartbeat` updates the node aggregate, name and version in one statement (`refreshNodeAggregate`) and reads the drain state in one statement.
-- `settleNodeOffline` marks agents offline through `idx_agents_location_node_liveness_revision`; without table statistics it previously walked every live agent in the workspace.
+- `settleNodeOffline` scans only the agents routed through the settling node.
 - `sendNodePresenceContext` starts from reachable nodes (`idx_nodes_context_reachable`) instead of every active binding in the workspace.
 
 ## [12.5.0] - 2026-11-01
