@@ -29,6 +29,30 @@ export async function filterAsync<T>(rows: T[], predicate: (row: T) => Promise<b
   }
   return kept;
 }
+/**
+ * Inspect each distinct node once, keeping at most eight authority requests in
+ * flight. A roster names the same node for every agent it hosts, so asking per
+ * row repeats the same RPC; a snapshot is still read fresh for this decision
+ * and is never kept past the call.
+ */
+export async function inspectNodesLiveness(
+  db: EngineDb,
+  workspaceId: string,
+  nodeIds: Iterable<string>,
+): Promise<Map<string, NodeLivenessSnapshot | undefined>> {
+  const pending = [...new Set(nodeIds)];
+  const snapshots = new Map<string, NodeLivenessSnapshot | undefined>();
+  if (!nodeLivenessAuthority(db) || pending.length === 0) return snapshots;
+  let next = 0;
+  const worker = async () => {
+    while (next < pending.length) {
+      const nodeId = pending[next++];
+      snapshots.set(nodeId, await inspectNodeLiveness(db, workspaceId, nodeId));
+    }
+  };
+  await Promise.all(Array.from({ length: Math.min(8, pending.length) }, worker));
+  return snapshots;
+}
 export async function nodeReady(db: EngineDb, row: { workspaceId: string; id: string; status: string; handlersLive: boolean; lastHeartbeatAt: Date | null }): Promise<boolean> {
   const snapshot = await inspectNodeLiveness(db, row.workspaceId, row.id);
   if (!snapshot) return isNodeLive(row) && row.handlersLive;

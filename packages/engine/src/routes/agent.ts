@@ -1,4 +1,4 @@
-import { Hono } from 'hono';
+import { Hono, type Context } from 'hono';
 import { z } from 'zod';
 import { and, eq } from 'drizzle-orm';
 import { AGENT_TOKEN_HASH_PATTERN, AgentTypeSchema, CliTypeSchema } from '@relaycast/types';
@@ -35,6 +35,7 @@ import { D1WriteRetryExhaustedError } from '../lib/d1Retry.js';
 import {
   jsonCreated,
   jsonError,
+  jsonInvalidRequest,
   jsonNoContent,
   jsonNotFound,
   jsonOk,
@@ -564,6 +565,26 @@ agentRoutes.post(
 );
 
 // GET /v1/agents - list agents
+const AGENT_NAME_LOOKUP_MAX = 100;
+
+/**
+ * Answer with a weak validator so a client polling an unchanged roster gets a
+ * bodiless 304. The roster is still read; only its transfer and decode are
+ * skipped.
+ */
+async function jsonOkWithEtag<T>(c: Context, data: T) {
+  const body = JSON.stringify({ ok: true, data });
+  const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(body));
+  const etag = `W/"${[...new Uint8Array(digest).slice(0, 16)].map(b => b.toString(16).padStart(2, '0')).join('')}"`;
+  c.header('ETag', etag);
+  c.header('Cache-Control', 'private, no-cache');
+  const presented = c.req.header('If-None-Match');
+  if (presented && presented.split(',').some(tag => tag.trim() === etag || tag.trim() === '*')) {
+    return c.body(null, 304);
+  }
+  return c.body(body, 200, { 'Content-Type': 'application/json' });
+}
+
 const agentListQuerySchema = z.object({
   status: z.string().optional(),
   include_stale: z.enum(['0', '1']).transform(value => value === '1').optional(),
@@ -580,13 +601,26 @@ agentRoutes.get(
       const workspace = c.get('workspace');
       const query = parseQueryParams(c, agentListQuerySchema, 'Invalid agent list query');
       if (!query.ok) return query.response;
+      // `?names=a&names=b` looks up those agents in one read, instead of one
+      // `GET /v1/agents/:name` each. Repeated, not comma-separated: agent
+      // names may contain commas.
+      const names = c.req.queries('names');
+      if (names !== undefined) {
+        if (query.data.status !== undefined || query.data.include_stale !== undefined) {
+          return jsonInvalidRequest(c, 'names cannot be combined with status or include_stale');
+        }
+        if (names.length > AGENT_NAME_LOOKUP_MAX || names.some(name => name.length === 0)) {
+          return jsonInvalidRequest(c, `names takes 1 to ${AGENT_NAME_LOOKUP_MAX} non-empty names`);
+        }
+      }
       const observer = getObserverTokenFromContext(c);
       const agents = (await agentEngine.listAgents(db, workspace.id, query.data.status, {
         includeStale: query.data.include_stale,
         includeMetadata: query.data.include_metadata,
+        names: names && [...new Set(names)],
       }))
         .filter((agent) => observerAllowsAgent(observer, agent.id));
-      return jsonOk(c, agents);
+      return jsonOkWithEtag(c, agents);
     } catch (err: unknown) {
       return errorResponse(c, err);
     }
