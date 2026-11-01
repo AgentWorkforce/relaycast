@@ -1,4 +1,4 @@
-import { nodeLive, nodeReady, providerLive } from './nodeLiveness.js';
+import { invalidateDirectPresence, nodeLive, nodeReady, providerLive } from './nodeLiveness.js';
 import { and, asc, eq, inArray, isNotNull, isNull, like, lt, lte, or, sql } from 'drizzle-orm';
 import type { getDb } from '../db/index.js';
 import { actions, actionInvocations, agents, agentNodeBindings, channelMembers, dmParticipants, nodes } from '../db/schema.js';
@@ -1465,6 +1465,7 @@ async function dispatchRelease(args: {
 
     // External completion effects belong after the durable atomic unit: an
     // aborted local reap must never publish agent.exited.
+    if (completed.length > 0) await invalidateDirectPresence(args.db, args.workspaceId, [agent.id]);
     if (completed.length > 0 && args.completionDeps && completedExitNodeId) {
       await emitAgentExitedEffects(args.completionDeps, args.workspaceId, {
         agentId: agent.id,
@@ -2611,6 +2612,7 @@ async function completeReleaseNodeInvocation(
   const settled = completed[0] ?? generationConflict[0];
   if (!settled) return null;
 
+  if (completed[0]) await invalidateDirectPresence(db, workspaceId, [agent.id]);
   if (completed[0] && deps) {
     await emitAgentExitedEffects(deps, workspaceId, {
       agentId: agent.id,

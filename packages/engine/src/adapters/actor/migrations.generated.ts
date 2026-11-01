@@ -833,6 +833,12 @@ export const ACTOR_MIGRATIONS: readonly (readonly [string, readonly string[]])[]
       "CREATE TABLE credential_upgrades (\n  legacy_hash TEXT PRIMARY KEY NOT NULL,\n  kind TEXT NOT NULL,\n  principal_id TEXT NOT NULL,\n  workspace_id TEXT NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,\n  ar_hash TEXT NOT NULL,\n  sealed_credential TEXT NOT NULL,\n  created_at INTEGER NOT NULL DEFAULT (unixepoch()),\n  expires_at INTEGER NOT NULL\n)",
       "CREATE INDEX idx_credential_upgrades_workspace ON credential_upgrades(workspace_id)"
     ]
+  ],
+  [
+    "0080_nodes_context_reachable_index.sql",
+    [
+      "CREATE INDEX IF NOT EXISTS idx_nodes_context_reachable\n  ON nodes(workspace_id, id)\n  WHERE kind = 'http_push' OR (kind IN ('ws', 'fleet_ws', 'direct_ws') AND status <> 'offline')"
+    ]
   ]
 ];
 

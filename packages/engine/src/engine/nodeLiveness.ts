@@ -10,6 +10,26 @@ export async function inspectNodeLiveness(db: EngineDb, workspaceId: string, nod
   try { return await authority.inspect(workspaceId, nodeId); }
   catch { return { status: 'unknown', providers: [] }; }
 }
+/**
+ * The agents' binding, location or release state changed: their direct nodes'
+ * socket owners must stop acknowledging presence from memory. Runs after the
+ * write commits, on the outer handle (a transaction handle carries no
+ * authority). A lost call is bounded by the owner's durable checkpoint, which
+ * re-reads the binding.
+ */
+export async function invalidateDirectPresence(db: EngineDb, workspaceId: string, agentIds: Iterable<string>): Promise<void> {
+  const authority = nodeLivenessAuthority(db);
+  if (!authority?.invalidate) return;
+  // At most eight owners at a time: an inventory can move a whole roster.
+  // Never throws: callers run this in a finally after their writes committed.
+  await filterAsync([...new Set(agentIds)], async agentId => {
+    // directNodeIdForAgent, inlined: node.ts imports this module.
+    try { await authority.invalidate!(workspaceId, `node_direct_${agentId}`); }
+    // A lost call is bounded by the owner's checkpoint; leave a trace of it.
+    catch (err) { console.warn('[node.presence] direct presence invalidation failed', { workspaceId, agentId, err }); }
+    return false;
+  });
+}
 export async function nodeLive(db: EngineDb, row: { workspaceId: string; id: string; status: string; lastHeartbeatAt: Date | null }): Promise<boolean> {
   const snapshot = await inspectNodeLiveness(db, row.workspaceId, row.id);
   return snapshot ? snapshotOnline(snapshot) : isNodeLive(row);

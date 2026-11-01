@@ -377,17 +377,16 @@ export async function materializeProviderActions(
 }
 
 /**
- * Refresh a broker node's aggregate columns in ONE UPDATE when the beat cannot
- * have changed the provider manifest (a heartbeat with no `capabilities`
- * field). The derived columns fold into correlated subqueries — replacing the
- * listProviders read + UPDATE pair `recomputeNodeAggregate` needs for the
- * general case. The subqueries observe provider rows atomically with the
- * write, so this is strictly more atomic than the read-then-write form on a
- * handle without interactive transactions.
+ * Refresh a broker node's aggregate columns in ONE UPDATE — the heartbeat
+ * path. The derived columns fold into correlated subqueries instead of the
+ * listProviders read + UPDATE pair `recomputeNodeAggregate` uses. The
+ * subqueries observe provider rows atomically with the write, so this is
+ * strictly more atomic than the read-then-write form on a handle without
+ * interactive transactions.
  *
- * `capabilities` still refreshes for provider-backed nodes: REST enrollment
- * can write the node manifest directly, and without the union refresh a
- * drifted value persisted until the next capabilities-carrying frame. The
+ * `capabilities` refreshes for provider-backed nodes, so a heartbeat that
+ * changed its provider's manifest updates the union in the same statement, and
+ * a manifest REST enrollment wrote directly cannot drift indefinitely. The
  * union is recomputed in-database (json_each over the provider manifests,
  * deduped by capability name like `recomputeNodeAggregate`); a provider-less
  * node keeps its enrolled manifest — it has no rows to derive from.
@@ -396,7 +395,7 @@ export async function refreshNodeAggregate(
   db: Db,
   workspaceId: string,
   nodeId: string,
-  extra: { version?: string; provenLiveAt?: Date } = {},
+  extra: { name?: string; version?: string; provenLiveAt?: Date } = {},
 ): Promise<typeof nodes.$inferSelect | undefined> {
   const onNode = and(eq(nodeProviders.workspaceId, workspaceId), eq(nodeProviders.nodeId, nodeId));
   const online = and(onNode, eq(nodeProviders.status, 'online'));
@@ -430,6 +429,7 @@ export async function refreshNodeAggregate(
       // disconnect timestamp is fresh and must not keep a stale node "live".
       // last_heartbeat_at stores unix seconds (drizzle `timestamp` mode).
       lastHeartbeatAt: sql`COALESCE((SELECT max(${nodeProviders.lastHeartbeatAt}) FROM ${nodeProviders} WHERE ${online}), ${Math.floor(Date.now() / 1000)})`,
+      ...(extra.name !== undefined ? { name: extra.name } : {}),
       ...(extra.version !== undefined ? { version: extra.version } : {}),
       // provenLiveAt rides this UPDATE so "a heartbeat frame arrived" lands in
       // the same statement that refreshes the derived lastHeartbeatAt.

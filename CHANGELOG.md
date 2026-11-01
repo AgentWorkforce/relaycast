@@ -16,7 +16,14 @@ This project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 Packages without a separate changelog are covered by the cross-package notes below.
 
-## [Unreleased]
+## [Unreleased - Minor]
+
+- A broker's changing live-agent roster no longer rewrites its action rows on every heartbeat.
+- A heartbeat writes the node aggregate in one statement and reads drain state in one statement.
+- A socket owner can hold the workspace deadline, so heartbeats check it without reading the workspace row.
+- A socket owner can mark checkpoint heartbeats, which skip the transition-state read and the drain.
+- Taking a node offline updates that node, its providers, its invocations and only the agents routed through it.
+- Presence fanout reads only reachable nodes' bindings.
 
 ## [12.5.0] - 2026-11-01
 
