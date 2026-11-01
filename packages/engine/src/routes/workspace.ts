@@ -254,7 +254,7 @@ workspaceRoutes.post('/workspaces', async (c) => {
       if (!ownerAuth.ok) {
         return jsonError(c, ownerAuth.code, ownerAuth.message, ownerAuth.status as ContentfulStatusCode);
       }
-      noteAuthenticatedCredential(c, ownerApiKey, ownerAuth.workspace.id);
+      noteAuthenticatedCredential(c, ownerApiKey);
     }
     const requestDigest = idempotencyKey
       ? await workspaceEngine.workspaceCreateRequestDigest({

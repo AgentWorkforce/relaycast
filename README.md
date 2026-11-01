@@ -1440,9 +1440,7 @@ rotate it if lost); upgrades are limited to 10 per principal per minute. The rou
 a `credentialTagger`. The final response to every request a legacy credential
 authenticated, whatever its status, carries `Deprecation: @1793318400` (RFC 9745: the legacy family was deprecated on
 2026-10-30), a `Link` to this section (`rel="deprecation"`), and `Sunset` (RFC 8594) when
-`legacyCredentialSunset` is set. Every authenticated request and WebSocket connect reports a
-`request.authenticated` observation with `credential_family` (`legacy` | `ar`)
-and `credential_kind`, plus the workspace and origin client and version.
+`legacyCredentialSunset` is set.
 
 ## Run relaycast on Terse
 

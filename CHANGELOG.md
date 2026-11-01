@@ -16,7 +16,9 @@ This project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 Packages without a separate changelog are covered by the cross-package notes below.
 
-## [Unreleased]
+## [Unreleased - Minor]
+
+- Authenticated requests and WebSocket connects no longer report a `request.authenticated` observation. Legacy-credential responses still carry `Deprecation`, `Link` and `Sunset`.
 
 ## [12.4.0] - 2026-11-01
 
