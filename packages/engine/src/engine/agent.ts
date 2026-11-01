@@ -1,4 +1,4 @@
-import { nodeLivenessAuthority, inspectNodeLiveness, inspectNodesLiveness } from './nodeLiveness.js';
+import { nodeLivenessAuthority, inspectNodeLiveness, inspectNodesLiveness, invalidateDirectPresence } from './nodeLiveness.js';
 import type { NodeLivenessSnapshot } from '../ports/nodeLiveness.js';
 import { eq, and, exists, gt, lt, ne, sql, inArray, type SQL } from 'drizzle-orm';
 import type { getDb } from '../db/index.js';
@@ -882,6 +882,7 @@ export async function deleteAgent(db: Db, workspaceId: string, name: string) {
     ));
     return writes;
   }, { requireAtomic: true });
+  await invalidateDirectPresence(db, workspaceId, [agent.id]);
   // Capture memberships at deletion, not a preflight read that can race joins.
   const removed = releaseResults[1] as Array<{ channelId: string }>;
   const joinedChannels = await queryInChunks(removed.map(row => row.channelId), ids => db

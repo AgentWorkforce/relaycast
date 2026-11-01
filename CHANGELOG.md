@@ -16,7 +16,10 @@ This project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 Packages without a separate changelog are covered by the cross-package notes below.
 
-## [Unreleased]
+## [Unreleased - Minor]
+
+- Node heartbeats cost far fewer database statements. A broker's changing live-agent roster no longer rewrites its action rows, a beat writes the node aggregate in one statement, and a socket owner can hold the workspace deadline and mark checkpoint heartbeats so steady state reads nothing it already knows.
+- Taking a node offline touches only that node's agents, and presence fanout reads only reachable nodes' bindings, instead of walking the workspace.
 
 ## [12.5.0] - 2026-11-01
 

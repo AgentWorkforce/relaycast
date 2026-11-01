@@ -7,7 +7,21 @@ See the [root changelog](../../CHANGELOG.md) for cross-package release highlight
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [Unreleased - Minor]
+
+### Added
+
+- `handleNodeControlMessage` accepts `workspaceDeadline` (a `WorkspaceDeadlineHolder`, exported from `@relaycast/engine/node-control`): heartbeats check the held `workspaces.expires_at` copy, every other gated frame reads the row and refreshes it.
+- `handleNodeControlMessage` accepts `heartbeatCheckpoint: { role }` for a heartbeat the socket owner verified is identical to the last accepted one in the same liveness generation; the engine then skips the transition read and the drain.
+- `NodeLivenessAuthority.invalidate?(workspaceId, nodeId)`. The engine calls it for an agent's direct node after a bind, unbind, recover, deregister, inventory adoption or release commits, so a socket owner stops acknowledging presence from memory.
+- Migration `0080_nodes_context_reachable_index.sql`: partial index `idx_nodes_context_reachable`.
+
+### Changed
+
+- `node.heartbeat` re-materializes a provider's actions only when its action-kind capabilities change; capacity changes (the broker's live-agent roster) no longer prune and rewrite action rows.
+- `node.heartbeat` updates the node aggregate, name and version in one statement (`refreshNodeAggregate`) and reads the drain state in one statement.
+- `settleNodeOffline` marks agents offline through `idx_agents_location_node_liveness_revision`; without table statistics it previously walked every live agent in the workspace.
+- `sendNodePresenceContext` starts from reachable nodes (`idx_nodes_context_reachable`) instead of every active binding in the workspace.
 
 ## [12.5.0] - 2026-11-01
 

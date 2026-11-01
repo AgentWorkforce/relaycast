@@ -1,4 +1,4 @@
-import { nodeMayOwn, providerLive, filterAsync, nodeLivenessAuthority, inspectNodeLiveness, snapshotOnline } from './nodeLiveness.js';
+import { nodeMayOwn, providerLive, filterAsync, nodeLivenessAuthority, inspectNodeLiveness, snapshotOnline, invalidateDirectPresence } from './nodeLiveness.js';
 import { z } from 'zod';
 import { invalidateChannelCache } from './cache.js';
 import { and, asc, eq, exists, gt, gte, inArray, isNotNull, isNull, like, lt, lte, ne, notExists, or, sql } from 'drizzle-orm';
@@ -100,7 +100,33 @@ export interface HandleNodeControlMessageArgs {
    * Absent when the host has no `admit` hook.
    */
   admitRegistration?: RegistrationAdmission;
+  /**
+   * The socket owner's copy of this workspace's deadline. Heartbeats check it
+   * instead of reading `workspaces.expires_at`; every other gated frame reads
+   * the row and refreshes the copy. Absent: every gated frame reads the row.
+   */
+  workspaceDeadline?: WorkspaceDeadlineHolder;
+  /**
+   * Set by a socket owner that verified this `node.heartbeat` is identical to
+   * the last heartbeat the engine accepted on this connection, in the same
+   * liveness generation, under `role`: a durable checkpoint of unchanged
+   * state. The engine skips the transition read and the drain, which only a
+   * different earlier frame could have made necessary.
+   */
+  heartbeatCheckpoint?: { role: NodeRole };
   raw: string;
+}
+
+/**
+ * A host-held copy of `workspaces.expires_at`. The deadline is set when the
+ * workspace is created and only ever moves earlier (a deferred delete pulls it
+ * to now), so a held copy enforces natural expiry exactly. `get` returns
+ * undefined when the host holds no copy or wants it re-read; the host bounds
+ * how long a copy may hide a deletion.
+ */
+export interface WorkspaceDeadlineHolder {
+  get(): { expiresAt: Date | null } | undefined;
+  set(expiresAt: Date | null): void;
 }
 
 function resolveProviderIdentity(
@@ -1064,16 +1090,20 @@ export async function heartbeatNode(
           ...providerWrite,
         });
       }
-      // Re-materializing an identical manifest rewrites the same action rows
-      // on every beat (~4 statements per action capability, every ~12s per
-      // provider). The prune/upsert pass runs only when the roster actually
-      // changes or the materialized rows drifted (a cheap one-read check that
-      // keeps the heartbeat self-healing); every node.register still goes
-      // through materializeProviderActions unconditionally.
+      // Only action capabilities materialize into rows, so only a change to
+      // that subset re-runs the prune/upsert pass. Capacity entries feed
+      // placement: the broker's live-agent roster rides in one of them and
+      // changes on every spawn and exit, which must not rewrite action rows.
+      // The one-read drift check keeps the heartbeat self-healing; every
+      // node.register still materializes unconditionally.
+      const actionCaps = caps.filter((cap) => capabilityKind(cap) === 'action');
       if (
         existingProvider === undefined
-        || !sameCapabilities(existingProvider.capabilities ?? [], caps)
-        || !(await providerActionsMaterialized(tx, workspaceId, nodeId, providerName, caps.filter((cap) => capabilityKind(cap) === 'action')))
+        || !sameCapabilities(
+          (existingProvider.capabilities ?? []).filter((cap) => capabilityKind(cap) === 'action'),
+          actionCaps,
+        )
+        || !(await providerActionsMaterialized(tx, workspaceId, nodeId, providerName, actionCaps))
       ) {
         await materializeProviderActions(tx, workspaceId, nodeId, providerName, caps);
       }
@@ -1085,25 +1115,16 @@ export async function heartbeatNode(
         handlersLive: message.handlers_live,
       });
     }
-    if (message.name !== undefined) {
-      await tx.update(nodes).set({ name: message.name }).where(and(eq(nodes.workspaceId, workspaceId), eq(nodes.id, nodeId)));
-    }
-    // provenLiveAt rides the same UPDATE as the aggregate, preserving the
-    // ordering the separate stamp used to guarantee: the aggregate derives
-    // lastHeartbeatAt from provider rows, which registration also writes,
-    // whereas this column is only ever set by an arriving frame.
-    // A capability-free beat cannot change the manifest union, so it takes the
-    // single-statement aggregate path; only a beat carrying `capabilities`
-    // pays the provider-listing recompute.
-    updated = message.capabilities === undefined
-      ? await refreshNodeAggregate(tx, workspaceId, nodeId, {
-        ...(message.version !== undefined ? { version: message.version } : {}),
-        provenLiveAt: now,
-      })
-      : await recomputeNodeAggregate(tx, workspaceId, nodeId, {
-        ...(message.version !== undefined ? { version: message.version } : {}),
-        provenLiveAt: now,
-      });
+    // One UPDATE carries the roster name, the aggregate (derived in-database
+    // from the provider row written above, manifest union included) and
+    // provenLiveAt. provenLiveAt rides the aggregate because the aggregate
+    // derives lastHeartbeatAt from provider rows, which registration also
+    // writes, whereas this column is only ever set by an arriving frame.
+    updated = await refreshNodeAggregate(tx, workspaceId, nodeId, {
+      ...(message.name !== undefined ? { name: message.name } : {}),
+      ...(message.version !== undefined ? { version: message.version } : {}),
+      provenLiveAt: now,
+    });
   });
 
   return updated ? publicNode(updated) : null;
@@ -1219,15 +1240,19 @@ export async function settleNodeOffline(
     ));
 
   const routeLostAt = new Date();
+  // Literal predicates so SQLite can prove the partial
+  // idx_agents_location_node_liveness_revision covers this statement. With
+  // bound status values, and no stats (as on D1), the planner picks
+  // idx_agents_roster and walks every live agent in the workspace.
   await db
     .update(agents)
     .set({ ...agentLivenessLoss(), lastSeen: routeLostAt })
     .where(and(
       eq(agents.workspaceId, workspaceId),
-      ne(agents.status, 'offline'),
-      ne(agents.status, RELEASED_AGENT_STATUS),
-      eq(agents.locationType, 'via_node'),
       eq(agents.locationNodeId, nodeId),
+      sql`${agents.locationType} = 'via_node'`,
+      sql`${agents.locationNodeId} IS NOT NULL`,
+      sql`${agents.status} NOT IN ('offline', 'released')`,
       ...(claimRevision !== undefined
         ? [lt(agents.nodeLivenessRevision, claimRevision)]
         : []),
@@ -1963,7 +1988,7 @@ export async function bindAgentToNode(
   const hasInteractiveTransaction = typeof (db as EngineDb & {
     withTransaction?: unknown;
   }).withTransaction === 'function';
-  return runAtomic(db, async (tx) => {
+  const bound = await runAtomic(db, async (tx) => {
     const node = await getNodeByName(tx, workspaceId, nodeName);
     if (!node) throw codedError(`Node "${nodeName}" not found`, 'node_not_found', 404);
 
@@ -2094,6 +2119,8 @@ export async function bindAgentToNode(
       move: { nodeId: node.id, agentId: agent.id, providerName: adoptedProviderName },
     };
   });
+  await invalidateDirectPresence(db, workspaceId, [bound.move.agentId]);
+  return bound;
 }
 
 /**
@@ -2124,14 +2151,14 @@ export async function completeBoundAgentDelivery(
 }
 
 export async function unbindAgentFromNode(db: Db, workspaceId: string, nodeName: string, agentName: string) {
-  return runAtomic(db, async (tx) => {
+  const unboundAgentId = await runAtomic(db, async (tx) => {
     const node = await getNodeByName(tx, workspaceId, nodeName);
-    if (!node) return false;
+    if (!node) return undefined;
     const [agent] = await tx
       .select()
       .from(agents)
       .where(and(eq(agents.workspaceId, workspaceId), eq(agents.name, agentName)));
-    if (!agent) return false;
+    if (!agent) return undefined;
 
     const updated = await tx
       .update(agentNodeBindings)
@@ -2144,14 +2171,17 @@ export async function unbindAgentFromNode(db: Db, workspaceId: string, nodeName:
       ))
       .returning({ id: agentNodeBindings.id });
 
-    if (updated.length === 0) return false;
+    if (updated.length === 0) return undefined;
     await releaseNodeAgentSlots(tx, workspaceId, [node.id]);
 
     if (agent.locationNodeId === node.id) {
       await ensureDirectNodeForAgentInTx(tx, workspaceId, agent, { force: true });
     }
-    return true;
+    return agent.id;
   });
+  if (unboundAgentId === undefined) return false;
+  await invalidateDirectPresence(db, workspaceId, [unboundAgentId]);
+  return true;
 }
 
 /** A forced delete re-claims a node a live heartbeat keeps refreshing at most this often. */
@@ -2665,7 +2695,7 @@ export async function recoverAgentViaNode(
   const hasInteractiveTransaction = typeof (db as EngineDb & {
     withTransaction?: unknown;
   }).withTransaction === 'function';
-  return runAtomic(db, async (tx) => {
+  const recovered = await runAtomic(db, async (tx) => {
     const [node] = await tx
       .select()
       .from(nodes)
@@ -2781,6 +2811,8 @@ export async function recoverAgentViaNode(
       throw err;
     }
   });
+  await invalidateDirectPresence(db, workspaceId, [recovered.agent_id]);
+  return recovered;
 }
 
 export async function deregisterAgentViaNode(
@@ -2827,6 +2859,7 @@ export async function deregisterAgentViaNode(
       .where(and(eq(agents.workspaceId, workspaceId), eq(agents.id, updated.id)));
     await markDirectNodeOfflineForAgent(db, workspaceId, updated.id);
     await releaseNodeAgentSlots(db, workspaceId, activeNodeIds.filter((activeNodeId) => activeNodeId !== nodeId));
+    await invalidateDirectPresence(db, workspaceId, [updated.id]);
 
     if (deps) {
       await emitAgentExitedEffects(deps, workspaceId, {
@@ -3308,6 +3341,9 @@ export async function reconcileInventory(
     }
   }
 
+  // An agent this snapshot newly routed may have been answering presence from
+  // its direct node; that node must stop acknowledging it from memory.
+  await invalidateDirectPresence(db, workspaceId, newlyRoutedAgentIds);
   return {
     reply: {
       rebound_agents: reconciledAgentIds.length,
@@ -3530,33 +3566,37 @@ async function readHeartbeatDrainState(
   nodeId: string,
   providerName: string,
 ) {
-  const [nodeRows, providerRows] = await Promise.all([
-    db
-      .select({
-        status: nodes.status,
-        role: nodes.role,
-        handlersLive: nodes.handlersLive,
-        maxAgents: nodes.maxAgents,
-        activeAgents: nodes.activeAgents,
-        reservedAgents: nodes.reservedAgents,
-        lastHeartbeatAt: nodes.lastHeartbeatAt,
-      })
-      .from(nodes)
-      .where(and(eq(nodes.workspaceId, workspaceId), eq(nodes.id, nodeId))),
-    db
-      .select({
-        status: nodeProviders.status,
-        handlersLive: nodeProviders.handlersLive,
-        lastHeartbeatAt: nodeProviders.lastHeartbeatAt,
-      })
-      .from(nodeProviders)
-      .where(and(
-        eq(nodeProviders.workspaceId, workspaceId),
-        eq(nodeProviders.nodeId, nodeId),
-        eq(nodeProviders.name, providerName),
-      )),
-  ]);
-  return { node: nodeRows[0], provider: providerRows[0] };
+  const [row] = await db
+    .select({
+      status: nodes.status,
+      role: nodes.role,
+      handlersLive: nodes.handlersLive,
+      maxAgents: nodes.maxAgents,
+      activeAgents: nodes.activeAgents,
+      reservedAgents: nodes.reservedAgents,
+      lastHeartbeatAt: nodes.lastHeartbeatAt,
+      providerId: nodeProviders.id,
+      providerStatus: nodeProviders.status,
+      providerHandlersLive: nodeProviders.handlersLive,
+      providerLastHeartbeatAt: nodeProviders.lastHeartbeatAt,
+    })
+    .from(nodes)
+    .leftJoin(nodeProviders, and(
+      eq(nodeProviders.workspaceId, nodes.workspaceId),
+      eq(nodeProviders.nodeId, nodes.id),
+      eq(nodeProviders.name, providerName),
+    ))
+    .where(and(eq(nodes.workspaceId, workspaceId), eq(nodes.id, nodeId)));
+  if (!row) return { node: undefined, provider: undefined };
+  const { providerId, providerStatus, providerHandlersLive, providerLastHeartbeatAt, ...node } = row;
+  return {
+    node,
+    provider: providerId === null ? undefined : {
+      status: providerStatus!,
+      handlersLive: providerHandlersLive!,
+      lastHeartbeatAt: providerLastHeartbeatAt,
+    },
+  };
 }
 
 /**
@@ -3634,13 +3674,24 @@ const SETTLING_CONTROL_FRAMES: ReadonlySet<string> = new Set([
   'agent.deregister',
 ]);
 
-async function assertWorkspaceUnexpired(db: EngineDb, workspaceId: string): Promise<void> {
-  const [row] = await db
-    .select({ expiresAt: workspaces.expiresAt })
-    .from(workspaces)
-    .where(eq(workspaces.id, workspaceId))
-    .limit(1);
-  if (!row || isWorkspaceExpired(row)) {
+async function assertWorkspaceUnexpired(
+  db: EngineDb,
+  workspaceId: string,
+  deadline: WorkspaceDeadlineHolder | undefined,
+  useHeld: boolean,
+): Promise<void> {
+  let held = useHeld ? deadline?.get() : undefined;
+  if (!held) {
+    const [row] = await db
+      .select({ expiresAt: workspaces.expiresAt })
+      .from(workspaces)
+      .where(eq(workspaces.id, workspaceId))
+      .limit(1);
+    if (!row) throw codedError(WORKSPACE_EXPIRED_MESSAGE, WORKSPACE_EXPIRED_CODE, 401);
+    held = { expiresAt: row.expiresAt };
+    deadline?.set(row.expiresAt);
+  }
+  if (isWorkspaceExpired(held)) {
     throw codedError(WORKSPACE_EXPIRED_MESSAGE, WORKSPACE_EXPIRED_CODE, 401);
   }
 }
@@ -3688,8 +3739,15 @@ export async function handleNodeControlMessage(args: HandleNodeControlMessageArg
     // A socket outlives its workspace's deletion, and every other frame writes
     // durable state (a heartbeat can insert provider and action rows). Only
     // frames that settle work already in flight or tear identity down pass.
+    // A heartbeat may use the host's held deadline (see WorkspaceDeadlineHolder);
+    // frames that create identity always read it.
     if (!SETTLING_CONTROL_FRAMES.has(message.type)) {
-      await assertWorkspaceUnexpired(args.db, args.workspaceId);
+      await assertWorkspaceUnexpired(
+        args.db,
+        args.workspaceId,
+        args.workspaceDeadline,
+        message.type === 'node.heartbeat',
+      );
     }
     switch (message.type) {
       case 'node.register': {
@@ -3794,7 +3852,12 @@ export async function handleNodeControlMessage(args: HandleNodeControlMessageArg
         return;
       }
       case 'node.heartbeat': {
-        const prior = await readHeartbeatDrainState(
+        // A checkpoint repeats a heartbeat the engine already accepted in this
+        // liveness generation: every transition it could reveal was handled
+        // when that heartbeat was, so it needs neither the prior state nor a
+        // drain. It only renews the durable projection.
+        const checkpoint = args.heartbeatCheckpoint;
+        const prior = checkpoint ? undefined : await readHeartbeatDrainState(
           args.db,
           args.workspaceId,
           args.nodeId,
@@ -3806,14 +3869,16 @@ export async function handleNodeControlMessage(args: HandleNodeControlMessageArg
           args.nodeId,
           frameProviderName,
           message,
-          prior.node ?? null,
+          checkpoint ? { role: checkpoint.role } : prior!.node ?? null,
         );
         // The node row is already persisted, so emit the durable online
         // transition before draining: a drainNode rejection must not skip the
         // node.status.online event. Isolated so its own failure can't either.
-        await emitNodeOnlineTransition(args.completionDeps, args.workspaceId, prior.node?.status, beat)
-          .catch((err) => console.error('[node.status] online event emission failed', err));
-        if (shouldDrainAfterHeartbeat(prior, beat, message)) {
+        if (prior) {
+          await emitNodeOnlineTransition(args.completionDeps, args.workspaceId, prior.node?.status, beat)
+            .catch((err) => console.error('[node.status] online event emission failed', err));
+        }
+        if (prior && shouldDrainAfterHeartbeat(prior, beat, message)) {
           // A readiness transition invalidates the old backoff condition. Include
           // retry-delayed rows in this one bounded pass so a transition just
           // before retryAfterAt cannot strand work until another reconnect.
