@@ -34,7 +34,30 @@ export function normalizeRoutePathForTelemetry(value: string): string {
 export type TelemetryActor = Pick<
   typeof agents.$inferSelect,
   "id" | "name" | "type"
->;
+> & Partial<Pick<typeof agents.$inferSelect, "metadata">>;
+
+/** Bounded analytics dimensions; metadata never establishes identity. */
+export const TELEMETRY_HARNESSES = [
+  'claude-code', 'codex', 'cursor', 'gemini-cli', 'aider', 'opencode',
+  'goose', 'devin', 'droid', 'grok', 'amp', 'github-copilot', 'zed', 'unknown',
+] as const;
+
+export function telemetryHarness(metadata: Record<string, unknown> | null | undefined): string {
+  // Broker registration writes cli; Desktop writes session_kind. Explicit
+  // harness is also accepted, but command lines and model suffixes are not.
+  const aliases: Record<string, string> = {
+    claude: 'claude-code', gemini: 'gemini-cli', 'cursor-agent': 'cursor',
+    'claude-terminal': 'claude-code', 'claude-cloud': 'claude-code',
+    'cursor-cli': 'cursor', 'grok-open': 'grok', 'opencode-open': 'opencode',
+  };
+  for (const raw of [metadata?.cli, metadata?.session_kind, metadata?.harness]) {
+    if (typeof raw !== 'string') continue;
+    const value = raw.trim().toLowerCase();
+    const canonical = Object.hasOwn(aliases, value) ? aliases[value]! : value;
+    if ((TELEMETRY_HARNESSES as readonly string[]).includes(canonical)) return canonical;
+  }
+  return 'unknown';
+}
 
 /** Optional domain sender override; never changes the authenticated principal. */
 export interface ServerEventAttribution {
@@ -49,7 +72,7 @@ function senderType(type: string): 'human' | 'agent' | 'system' {
 
 export function emitServerEvent<E extends EngineObservationKind>(
   c: Context<AppEnv>,
-  workspaceId: string,
+  workspaceId: E extends 'request.completed' ? string | undefined : string,
   event: E,
   properties: EngineObservationFacts<E>,
   attribution: ServerEventAttribution = {},
@@ -78,6 +101,12 @@ export function emitServerEvent<E extends EngineObservationKind>(
     attribution.actor ??
     (contextAgent?.workspaceId === workspaceId ? contextAgent : undefined);
 
+
+  if (['message.created', 'thread.reply.created', 'dm.sent', 'group.dm.message.sent'].includes(event)) {
+    normalizedProperties.sender_harness = telemetryHarness(actingAgent?.metadata);
+    normalizedProperties.recipient_type ??= 'unknown';
+    normalizedProperties.recipient_harness ??= 'unknown';
+  }
 
   const sender = actingAgent ? { id: actingAgent.id, name: actingAgent.name, type: senderType(actingAgent.type) } : undefined;
   // Only the credential-authenticated agent can establish ownership. A node

@@ -198,6 +198,7 @@ messageRoutes.post(
         emitServerEvent(c, workspace.id, 'message.created', {
           channel_id: channel.id,
           message_id: String(publicData.id),
+          recipient_type: 'channel',
           message_kind: publicData.thread_id ? 'thread_reply' : 'channel_message',
           has_attachments: Boolean(publicData.has_attachments),
         }, { actor: sender });

@@ -13,6 +13,7 @@ import type { AppEnv, EngineRuntime } from './env.js';
 import type { EngineDeps } from './ports/index.js';
 import { engineContext } from './middleware/engine-context.js';
 import { loggerMiddleware } from './middleware/logger.js';
+import { requestObservationMiddleware } from './middleware/requestObservation.js';
 import { getRequestLogger, toErrorDetails } from './lib/logger.js';
 import { asCodedError, safeClientErrorMessage } from './lib/httpError.js';
 import { jsonError, jsonMalformedBody, jsonNotFound } from './lib/httpResponse.js';
@@ -117,6 +118,7 @@ export function createEngine(deps: EngineDeps): Hono<AppEnv> {
   // Before CORS so a preflight, which returns without calling later
   // middleware, still carries the request id. exposeHeaders lets browser
   // clients read it.
+  app.use('*', requestObservationMiddleware);
   app.use('*', loggerMiddleware);
   app.use('*', cors({ exposeHeaders: ['X-Request-Id'] }));
 

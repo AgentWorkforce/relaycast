@@ -31,6 +31,7 @@ export const CLIENT_TELEMETRY_EVENTS = [
 ] as const;
 
 export const SERVER_TELEMETRY_EVENTS = [
+  'relaycast_server_request',
   'relaycast_server_workspace_created',
   'relaycast_server_workspace_updated',
   'relaycast_server_workspace_deleted',
@@ -180,6 +181,7 @@ export const internalTelemetryEventSchema = telemetryEnvelopeBaseSchema.extend({
 export type InternalTelemetryEvent = z.infer<typeof internalTelemetryEventSchema>;
 
 const REQUIRED_SERVER_EVENT_PROPS = {
+  relaycast_server_request: ['route_template', 'method', 'status_code', 'duration_ms', 'sample_rate'],
   relaycast_server_workspace_created: ['workspace_id'],
   relaycast_server_workspace_updated: ['workspace_id'],
   relaycast_server_workspace_deleted: ['workspace_id'],

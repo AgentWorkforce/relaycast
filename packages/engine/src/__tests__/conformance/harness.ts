@@ -62,6 +62,7 @@ export function makeNodeStack(options?: {
   legacyCredentialGraceSeconds?: number;
   legacyCredentialSunset?: Date;
   telemetry?: TelemetrySink;
+  telemetryRequestSampleRate?: number;
   maxUploadBytes?: number;
 }): TestStack {
   const tasks = new BackgroundTasks();
@@ -84,6 +85,7 @@ export function makeNodeStack(options?: {
       migrate: true,
       config: {
         environment: options?.environment ?? 'test',
+        telemetryRequestSampleRate: options?.telemetryRequestSampleRate ?? 0,
         mailbox: options?.mailbox,
         httpPushProxy: options?.httpPushProxy,
         workspaceBootstrapSecret: options?.workspaceBootstrapSecret ?? 'test-bootstrap-secret',

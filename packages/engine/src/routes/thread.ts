@@ -67,6 +67,7 @@ threadRoutes.post(
         fromName: agent?.name ?? 'unknown',
       });
 
+      let recipientType: 'channel' | 'unknown' = 'unknown';
       const idempotent = await runIdempotent({
         workspaceId: workspace.id,
         actorId: agentId,
@@ -83,7 +84,7 @@ threadRoutes.post(
             parentId,
             agentId,
             { text, blocks, data },
-            { mailbox, workspaceDeliveryPolicy },
+            { mailbox, workspaceDeliveryPolicy, onRecipientResolved: type => { recipientType = type; } },
           );
         },
         afterOperation: async (data) => {
@@ -132,6 +133,7 @@ threadRoutes.post(
           message_id: publicReplyData.id,
           parent_message_id: parentId,
           channel_id: publicReplyData.channel_id ?? null,
+          recipient_type: recipientType,
         });
       }
 

@@ -31,7 +31,7 @@ export async function postReply(
   parentId: string,
   agentId: string,
   data: { text: string; blocks?: unknown[] | null; data?: Record<string, unknown> | null },
-  options: { mailbox?: MailboxConfig; workspaceDeliveryPolicy?: WorkspaceDeliveryPolicy } = {},
+  options: { mailbox?: MailboxConfig; workspaceDeliveryPolicy?: WorkspaceDeliveryPolicy; onRecipientResolved?: (type: 'channel' | 'unknown') => void } = {},
 ) {
   // Get the parent message
   const [parent] = await db
@@ -51,6 +51,8 @@ export async function postReply(
     .select({ id: dmConversations.id, dmType: dmConversations.dmType })
     .from(dmConversations)
     .where(eq(dmConversations.channelId, parent.channelId));
+
+  try { options.onRecipientResolved?.(dmConversation ? 'unknown' : 'channel'); } catch { /* observation is best effort */ }
 
   const [agent] = await db
     .select({ name: agents.name, node: addressNodeSelection })

@@ -15,7 +15,7 @@ import { notifyDeliveryRejections, routeDeliveryOutcomes } from './deliveryRouti
 import { buildDmReceivedEventData } from '../engine/deliveryWire.js';
 import { runInBackground } from './background.js';
 import { sendWebhookEvent, shouldEnqueueWebhookEvent } from './webhookOutbox.js';
-import { emitServerEvent } from '../lib/serverTelemetry.js';
+import { emitServerEvent, telemetryHarness } from '../lib/serverTelemetry.js';
 import { asCodedError, errorResponse } from '../lib/httpError.js';
 import { jsonError, jsonOk, parseJsonBody, parseQueryParams } from '../lib/httpResponse.js';
 import { parsePaginationQuery, positiveIntQueryParam } from '../lib/httpQuery.js';
@@ -111,7 +111,9 @@ dmRoutes.post(
       });
 
       // `data.to` is the resolved recipient name; `to` may be a raw address.
+      let recipientDimensions = { recipient_type: 'unknown', recipient_harness: 'unknown' };
       const trackDmSent = (data: { conversation_id: string; id: string; to?: string }) => emitServerEvent(c, workspace.id, 'dm.sent', {
+        ...recipientDimensions,
         conversation_id: data.conversation_id,
         message_id: data.id,
         from_agent_id: agent!.id,
@@ -140,7 +142,12 @@ dmRoutes.post(
             attachments: normalizedAttachments,
             data,
             mode,
-          }, { mailbox, resolveWorkspaceDeliveryPolicy: () => resolveWorkspaceDeliveryPolicyFor(c.get('engine').config, workspace), idempotencyKey, address,
+          }, { mailbox, onRecipientResolved: recipient => {
+            recipientDimensions = {
+              recipient_type: recipient.type === 'human' ? 'human' : recipient.type === 'agent' ? 'agent' : 'unknown',
+              recipient_harness: telemetryHarness(recipient.metadata),
+            };
+          }, resolveWorkspaceDeliveryPolicy: () => resolveWorkspaceDeliveryPolicyFor(c.get('engine').config, workspace), idempotencyKey, address,
             hasWebhookSubscriptions,
             afterAdmission: (data, event) => {
               runInBackground(c, c.get('engine').realtime.publishToWorkspaceStream({

@@ -1,5 +1,6 @@
 /** Engine domain observations. Hosts decide whether and how to consume them. */
 export const ENGINE_OBSERVATION_FACTS = {
+  'request.completed': ['route_template', 'method', 'status_code', 'duration_ms', 'sample_rate'],
   'workspace.created': [],
   'workspace.updated': [],
   'workspace.deleted': [],
@@ -67,7 +68,7 @@ export type EngineObservationFacts<K extends EngineObservationKind> = Record<str
 interface ObservationFor<K extends EngineObservationKind> {
   kind: K;
   occurredAt: string;
-  workspaceId: string;
+  workspaceId: K extends 'request.completed' ? string | undefined : string;
   /** Credential-authenticated principal only. Internal proof: never export this hash. */
   authenticatedActor?: { agentId: string; credentialHash?: string; type: 'human' | 'agent' | 'system' };
   /** Domain sender, which may differ from the authenticated principal (node posting as). */

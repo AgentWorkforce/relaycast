@@ -7,6 +7,19 @@ import {
 } from '../telemetry.js';
 
 describe('telemetry schemas', () => {
+  it('accepts sampled unauthenticated requests but requires the complete denominator facts', () => {
+    const event = {
+      event: 'relaycast_server_request', distinct_id: 'request:sample',
+      origin_client: 'unknown', origin_version: 'unknown',
+      properties: { route_template: '/agents/:name', method: 'GET', status_code: 401, duration_ms: 2, sample_rate: 0.01 },
+    };
+    expect(parseInternalTelemetryEvent(event).properties).toEqual(event.properties);
+    for (const key of Object.keys(event.properties)) {
+      const properties = { ...event.properties };
+      delete properties[key as keyof typeof properties];
+      expect(() => parseInternalTelemetryEvent({ ...event, properties })).toThrow(/Missing required properties/);
+    }
+  });
   it('parses client ingestion events and strips blocked properties', () => {
     const parsed = parseTelemetryIngestionEvent({
       event: 'relaycast_cli_started',

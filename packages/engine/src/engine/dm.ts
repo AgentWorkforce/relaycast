@@ -56,6 +56,8 @@ type Db = ReturnType<typeof getDb>;
 const DIRECT_DM_IDEMPOTENCY_TTL_MS = 24 * 60 * 60 * 1000;
 
 interface SendDmOptions {
+  /** Request-local observation only; absent on durable replays. Never serialized. */
+  onRecipientResolved?: (recipient: Pick<typeof agents.$inferSelect, 'type' | 'metadata'>) => void;
   skipA2aIntercept?: boolean;
   /** Stable request identity for resuming already admitted outbound A2A. */
   idempotencyKey?: string;
@@ -658,6 +660,8 @@ export async function sendDm(
   if (!toAgent) {
     throw codedError(`Agent "${data.to}" not found`, 'agent_not_found', 404);
   }
+
+  try { options.onRecipientResolved?.({ type: toAgent.type, metadata: toAgent.metadata }); } catch { /* observation is best effort */ }
 
   const [fromAgent] = await db
     .select({ name: agents.name, node: addressNodeSelection })
