@@ -16,7 +16,11 @@ This project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 Packages without a separate changelog are covered by the cross-package notes below.
 
-## [Unreleased]
+## [Unreleased - Minor]
+
+- Hosted roster reads are much cheaper. Under node liveness authority, `GET /v1/agents?status=<s>` now bounds its SQL to rows that can resolve to that status instead of reading and probing the whole workspace, the default roster no longer reads or probes long-dead hosted rows that always resolve to offline, and each distinct node is asked for liveness once per read instead of once per agent. Results are unchanged.
+- `GET /v1/agents?names=a&names=b` looks up up to 100 agents in one read, replacing one `GET /v1/agents/:name` per agent.
+- `GET /v1/agents` returns a weak `ETag` and answers a matching `If-None-Match` with `304`.
 
 ## [12.3.0] - 2026-10-31
 

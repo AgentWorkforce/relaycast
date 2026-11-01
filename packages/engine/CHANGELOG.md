@@ -7,7 +7,16 @@ See the [root changelog](../../CHANGELOG.md) for cross-package release highlight
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [Unreleased - Minor]
+
+### Added
+
+- `listAgents(db, workspaceId, undefined, { names })` and `GET /v1/agents?names=` (repeated, 1 to 100) look up named agents in one query, with the same projection and presence as the roster.
+- `GET /v1/agents` sends a weak `ETag` and returns `304` for a matching `If-None-Match`.
+
+### Changed
+
+- Under node liveness authority, `listAgents` pushes a sound status bound into SQL for every status but `offline`, leaves offline hosted rows with no saved pre-loss status out of the default roster's SQL once they are older than the recency window, and inspects each node once per call. Measured on the largest production workspace (7,388 roster rows): the default roster selects 679 rows and makes 386 authority calls instead of 7,015 rows and 7,015 calls; `status=waiting` selects 0 rows instead of 7,388.
 
 ## [12.3.0] - 2026-10-31
 
