@@ -20,7 +20,8 @@ export const requestObservationMiddleware: MiddlewareHandler<AppEnv> = async (c,
   // Auth middleware can terminate before the endpoint runs. matchedRoutes still
   // contains its registered endpoint, unlike the current middleware routePath.
   const route = matchedRoutes(c).filter(route => route.method !== 'ALL').at(-1);
-  emitServerEvent(c, c.get('workspace')?.id, 'request.completed', {
+  const workspaceId = c.get('workspace')?.id;
+  emitServerEvent(c, workspaceId, 'request.completed', {
     route_template: route?.path ?? 'unmatched',
     method: METHODS.has(c.req.method) ? c.req.method : 'OTHER',
     status_code: c.res.status,
