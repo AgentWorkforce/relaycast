@@ -46,7 +46,7 @@ Every SDK already attaches an agent as its own direct node:
 | `ack` | `delivery.ack` frame with `up_to_seq` → `ackDeliveriesUpToSeq` (cumulative) |
 | `limit` | Replay pages of 50, bounded by the high-water `seq` read at register |
 | `mode` / `reason` / `deadline` | `deliver` frame carries `mode` (`wait` / `steer`); `reason`, `deadline` and `expires_at` stay on the row and gate replay |
-| `fail` / `defer` | HTTP only (`POST /v1/deliveries/:id/fail|defer`); a socket client calls them exactly like a poller |
+| `fail` / `defer` | HTTP only (`POST /v1/deliveries/:id/fail` and `/defer`); a socket client calls them exactly like a poller |
 | Presence (`POST /v1/agents/heartbeat`) | `node.heartbeat` every ≤30 s; the correlated presence ack lets the SDK skip REST heartbeats (`confirmedPresenceRemainingMs`). NodeDO answers an unchanged direct beat with 0 D1 statements and checkpoints every 4 min |
 
 So an agent with a live socket needs no HTTP poll at all. Polling survives in two places: clients that cannot or do not hold the socket, and clients that ack only after side effects (relay-desktop acks over HTTP after the message is in the session, because the published Rust `WsClient` acks every `deliver` frame on arrival). Both are what the long-poll serves.
@@ -67,7 +67,7 @@ GET /v1/deliveries?limit=50&wait=25000
 
 ### The wake signal
 
-Every row creation goes through `routeDeliveryOutcomes` (message post, thread reply, DM, group DM, inbound webhook, relayfile inbound). That is the same call that pushes `deliver` frames to node sockets, so it is the one place to signal. It now calls the `DeliveryWaiters` port with the recipient agent ids before routing:
+Every row creation goes through `routeDeliveryOutcomes` (message post, thread reply, DM, group DM, inbound webhook, relayfile inbound). That is the same call that pushes `deliver` frames to node sockets, so it is the one place to signal. It now calls the `DeliveryWaiters` port with the recipient agent ids beside routing. Socket pushes never wait on it: routing's background work awaits the notify only after routing, for at most 2 s, and logs a failure or timeout.
 
 ```ts
 export interface DeliveryWaiters {
@@ -77,7 +77,7 @@ export interface DeliveryWaiters {
 }
 ```
 
-Only creation needs a signal: a parked request exists only when its list was empty, and ack, fail, expiry and dead-lettering only shrink the active queue. A `status` filter a new row doesn't match re-lists empty and parks again. The one shrink-to-grow transition, deferring a `failed` row back to `queued`, is made by the agent itself.
+Only creation needs a signal for the default queue: a parked request exists only when its list was empty, and ack, fail, expiry and dead-lettering only shrink the active queue. The one shrink-to-grow transition, deferring a `failed` row back to `queued`, is made by the agent itself. An explicit `status` filter is different: transitions into `delivered`, `acked`, `failed` or `dead_lettered` grow it without a notify. Such a poll answers when a delivery it matches is created or when the wait expires; a creation it doesn't match re-lists empty and parks again.
 
 Race: the route reads, finds nothing, then registers. A row committed between the two would notify before the waiter exists. `since` is the time the read started; the waiter holder keeps each agent's last notify time for a minute and resolves a registration immediately when that time is at or after `since`. A wake that is still lost (holder evicted between notify and register) costs latency up to `wait`, never a delivery: the row stays in the queue and the next poll reads it.
 

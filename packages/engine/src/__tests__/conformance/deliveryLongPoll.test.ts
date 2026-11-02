@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { makeNodeStack, createWorkspace, registerAgent, type TestStack } from './harness.js';
+import { makeNodeStack, createWorkspace, registerAgent, attachDirectNodeSocket, deliverFramesOfType, type TestStack } from './harness.js';
 
 /**
  * `GET /v1/deliveries?wait=`: an empty answer parks until a delivery is
@@ -119,10 +119,26 @@ describe('delivery long-poll', () => {
     expect(Date.now() - started).toBeLessThan(5_000);
   });
 
+  it('pushes socket deliveries while a waiter notify never settles', async () => {
+    const { ws, alice, bob } = await seed();
+    const { sock } = await attachDirectNodeSocket(stack, ws.workspaceId, bob);
+    stack.runtime.deps.deliveryWaiters!.notify = () => new Promise<void>(() => {});
+
+    await dm(alice.token, 'bob', 'over the socket');
+    for (let i = 0; i < 100 && deliverFramesOfType(sock, 'dm.received').length === 0; i += 1) {
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    }
+    expect(deliverFramesOfType(sock, 'dm.received')).toHaveLength(1);
+    // The routing task still finishes: the abandoned notify is bounded.
+    await stack.settle();
+  });
+
   it('rejects a wait outside 0 to 25000 ms', async () => {
     const { bob } = await seed();
     expect((await poll(bob.token, '?wait=25001')).status).toBe(400);
     expect((await poll(bob.token, '?wait=-1')).status).toBe(400);
+    expect((await poll(bob.token, '?wait=')).status).toBe(400);
+    expect((await poll(bob.token, '?wait=%20')).status).toBe(400);
     expect(await items(await poll(bob.token, '?wait=0'))).toEqual([]);
   });
 });

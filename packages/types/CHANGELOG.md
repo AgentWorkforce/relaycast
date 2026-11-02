@@ -11,7 +11,7 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Added
 
-- `ListDeliveriesQuerySchema.wait`: long-poll milliseconds, 0–25000.
+- `ListDeliveriesQuerySchema.wait`: long-poll milliseconds, 0–25000. A blank value fails validation.
 
 ## [12.5.0] - 2026-11-01
 

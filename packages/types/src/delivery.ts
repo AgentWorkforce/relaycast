@@ -71,7 +71,11 @@ export const ListDeliveriesQuerySchema = z.object({
   // Coerce so the same schema validates both typed callers and raw HTTP query strings.
   limit: z.coerce.number().int().positive().max(200).optional(),
   // Long-poll: milliseconds to hold an empty answer open until a delivery arrives.
-  wait: z.coerce.number().int().min(0).max(25_000).optional(),
+  // A blank value is rejected rather than coerced to 0.
+  wait: z.preprocess(
+    (value) => (typeof value === 'string' && value.trim() === '' ? Number.NaN : value),
+    z.coerce.number().int().min(0).max(25_000),
+  ).optional(),
 });
 export type ListDeliveriesQuery = z.infer<typeof ListDeliveriesQuerySchema>;
 

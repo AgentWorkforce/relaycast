@@ -4965,9 +4965,12 @@ paths:
           in: query
           required: false
           description: >
-            Long-poll milliseconds (0-25000). When the list is empty, the
-            request waits until a delivery is created for the agent or the wait
-            expires, then answers. Omitted or 0 answers at once.
+            Long-poll milliseconds (0-25000). On a host with a delivery waiter
+            (cast.agentrelay.com and the self-hosted server), an empty list
+            waits until a matching delivery is created for the agent or the
+            wait expires, then answers; a transition into a filtered `status`
+            does not end the wait. A host without one answers at once.
+            Omitted or 0 answers at once; a blank value is rejected.
           schema:
             type: integer
             minimum: 0
