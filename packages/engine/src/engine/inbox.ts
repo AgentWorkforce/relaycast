@@ -30,7 +30,7 @@ export const MESSAGE_MENTION_BACKFILL_BATCH = 500;
  * represent it. The prefix is limited to the `body` column: an unscoped
  * `"1"*` also matches workspace snowflakes and returns every row. The last
  * token is a prefix so `@alice你好` (one unicode61 token) still matches
- * handle `alice`. Callers keep the LIKE and `parseMessageMentions` checks.
+ * handle `alice`. Callers keep the `instr` and `parseMessageMentions` checks.
  */
 function mentionFtsMatch(workspaceId: string, tokens: string[]): string | null {
   if (tokens.length === 0) return null;
@@ -157,10 +157,10 @@ async function getInboxUnlabeled(db: Db, workspaceId: string, agentId: string) {
   // token (escaped `\@x`, `user@x`, and prefix/superstring names are NOT
   // mentions), delivered only where the agent has live access — a member of a
   // live channel (channel_type 0) or a participant of a live DM (channel_type
-  // != 0). SQL narrows candidates with the ESCAPED LITERAL name; a keyset scan
-  // then walks history in bounded batches until 20 canonical matches or source
-  // exhaustion, so a valid older mention behind a batch of false candidates is
-  // never silently dropped. Memory is bounded per batch.
+  // != 0). SQL narrows candidates to bodies containing the literal `@name`; a
+  // keyset scan then walks history in bounded batches until 20 canonical
+  // matches or source exhaustion, so a valid older mention behind a batch of
+  // false candidates is never silently dropped. Memory is bounded per batch.
   const MAX_MENTIONS = 20;
   const MENTION_BATCH = 200;
   const mentionsEnriched: Array<{
@@ -175,12 +175,11 @@ async function getInboxUnlabeled(db: Db, workspaceId: string, agentId: string) {
   const canMention = MENTION_HANDLE.test(agentName);
   const mentionTokens = canMention ? agentName.split(/[_-]+/).filter(Boolean) : [];
   if (canMention) {
-    const escapedName = agentName.replace(/[\\%_]/g, (ch) => `\\${ch}`);
     // Candidates come from messages_mention_fts once its backfill has caught
     // up. The MATCH includes the workspace id and restricts the prefix to
     // `body`, so a common or numeric handle cannot read other tenants or every
     // row of this workspace. Until the backfill finishes, and for handles FTS
-    // cannot represent, the workspace-scoped LIKE scan stays.
+    // cannot represent, the workspace-scoped scan stays.
     const mentionMatch = await messageMentionIndexReady(db)
       ? mentionFtsMatch(workspaceId, mentionTokens)
       : null;
@@ -225,7 +224,10 @@ async function getInboxUnlabeled(db: Db, workspaceId: string, agentId: string) {
             ...(mentionMatch
               ? [sql`messages.rowid IN (SELECT rowid FROM messages_mention_fts WHERE messages_mention_fts MATCH ${sql.raw(`'${mentionMatch}'`)})`]
               : []),
-            sql`${messages.body} LIKE ${'%@' + escapedName + '%'} ESCAPE '\\'`,
+            // instr, not LIKE: D1 rejects LIKE patterns over 50 bytes and agent
+            // names have no length cap. `parseMessageMentions` is case-sensitive
+            // and needs the literal `@name`, so instr drops no canonical mention.
+            sql`instr(${messages.body}, ${'@' + agentName}) > 0`,
             or(
               and(eq(channels.channelType, 0), eq(channelMembers.agentId, agentId)),
               and(ne(channels.channelType, 0), eq(dmParticipants.agentId, agentId)),

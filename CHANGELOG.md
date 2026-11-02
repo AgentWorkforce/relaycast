@@ -19,6 +19,7 @@ Packages without a separate changelog are covered by the cross-package notes bel
 ## [Unreleased - Minor]
 
 - `GET /v1/deliveries?wait=<ms>` long-polls (0–25000 ms): an empty queue answers once a delivery is created for the agent or the wait expires, and reads nothing while it waits. The TypeScript (`waitMs`), Rust (`wait_ms`) and Swift (`waitMs`) SDKs pass it from `deliveries()`. Self-hosted engines wake waiters in process; hosts plug in their own `DeliveryWaiters`.
+- `GET /v1/inbox` returns mentions for agents with long names (about 47 bytes or more) on Cloudflare D1 instead of `500 internal_error`.
 
 ## [12.6.2] - 2026-11-02
 

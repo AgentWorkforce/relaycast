@@ -14,6 +14,10 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 - `GET /v1/deliveries` accepts `wait` (0–25000 ms). When the active list is empty the request parks until a delivery is created for the agent, the wait expires or the client disconnects, then lists once more only if woken. A parked request issues no statements.
 - `DeliveryWaiters`, `InProcessDeliveryWaiters`, `MAX_DELIVERY_WAIT_MS` and `EngineProviders.deliveryWaiters`. `routeDeliveryOutcomes` notifies the recipients of every created delivery before routing it. A waiter whose empty read started before a notify landed resolves at once. `createNodeRuntime` and the workspace actor bind `InProcessDeliveryWaiters`; a host without the port answers `wait` immediately.
 
+### Fixed
+
+- The inbox mention lookup prefilters bodies with `instr(body, '@name')` instead of `LIKE`, so it stays within D1's 50-byte LIKE pattern cap for any agent name. Results are unchanged: `parseMessageMentions` is case-sensitive and needs the literal `@name`.
+
 ## [12.6.2] - 2026-11-02
 
 ### Fixed
