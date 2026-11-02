@@ -59,6 +59,7 @@ import {
   detachInvocationsFromLostNode,
   dispatchCapacitySpawn,
   emitFailedInvocationEffects,
+  isSpawnInvocation,
   rescheduleInvocationsForLostNode,
   rescheduleNodeInvocation,
 } from './action.js';
@@ -2874,10 +2875,14 @@ export async function deregisterAgentViaNode(
   return updated ?? null;
 }
 
-/** Inventory proves identity/presence, never a harness's ready state. */
+/**
+ * Inventory proves identity/presence, never a harness's ready state. Only a
+ * spawn honors `verify_ready` (`dispatchSpawn`); on any other action it is an
+ * ordinary input field.
+ */
 const spawnReadinessSchema = z.object({ verify_ready: z.literal(true) }).passthrough();
-function requiresSpawnReadiness(input: unknown): boolean {
-  return spawnReadinessSchema.safeParse(input).success;
+function requiresSpawnReadiness(invocation: { actionName: string; input: unknown }): boolean {
+  return isSpawnInvocation(invocation.actionName) && spawnReadinessSchema.safeParse(invocation.input).success;
 }
 
 /**
@@ -3113,7 +3118,7 @@ export async function reconcileInventory(
       inArray(actionInvocations.status, ['pending', 'dispatched']),
     ));
   const providerInvocationIds = new Set(openInvocations
-    .filter((invocation) => !requiresSpawnReadiness(invocation.input))
+    .filter((invocation) => !requiresSpawnReadiness(invocation))
     .map((invocation) => invocation.id));
 
   const reconciledAgentIds: string[] = [];
@@ -3325,7 +3330,7 @@ export async function reconcileInventory(
       // A live broker owns the bounded readiness wait and cleanup. A transient
       // empty inventory during launch/teardown must not redispatch this spawn.
       // Actual provider disconnect and invocation expiry retain their own recovery.
-      if (liveInvocationIds.has(invocation.id) || requiresSpawnReadiness(invocation.input)) continue;
+      if (liveInvocationIds.has(invocation.id) || requiresSpawnReadiness(invocation)) continue;
       try {
         if (await rescheduleNodeInvocation(db, registry, invocation)) {
           rescheduledInvocations++;

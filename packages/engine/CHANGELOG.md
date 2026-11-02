@@ -23,6 +23,10 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 - `settleNodeOffline` scans only the agents routed through the settling node.
 - `sendNodePresenceContext` starts from reachable nodes (`idx_nodes_context_reachable`) instead of every active binding in the workspace.
 
+### Fixed
+
+- `inventory.sync` defers only spawn invocations with `verify_ready: true` to the broker's readiness result. Any other action carrying a top-level `verify_ready` is completed or rescheduled on inventory like every other open invocation, instead of waiting for the dispatch-timeout sweep.
+
 ## [12.5.0] - 2026-11-01
 
 - Removed the `request.authenticated` observation kind (`ENGINE_OBSERVATION_FACTS`, `EngineObservationKind`) and its per-request emission; `@relaycast/types` drops `relaycast_server_request_authenticated`. Legacy-credential `Deprecation` / `Link` / `Sunset` headers are unchanged.

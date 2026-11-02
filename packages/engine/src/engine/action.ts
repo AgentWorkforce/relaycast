@@ -94,7 +94,7 @@ function capabilityName(capability: string | { name?: string } | null | undefine
   return null;
 }
 
-function isSpawnInvocation(actionName: string): boolean {
+export function isSpawnInvocation(actionName: string): boolean {
   return actionName === 'spawn' || actionName.startsWith('spawn:');
 }
 

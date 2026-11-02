@@ -140,6 +140,44 @@ describe('node-control provider-disconnect exports', () => {
     }
   });
 
+  it.each([
+    ['ping', 1],
+    ['spawn', 0],
+  ] as const)('inventory honors verify_ready only on spawn when rescheduling: %s', async (actionName, rescheduled) => {
+    const ws = await createWorkspace(stack.app, `inventory-readiness-scope-${actionName}`);
+    const caller = await registerAgent(stack.app, ws.workspaceKey, 'caller');
+    const attach = (nodeId: string, nodeName: string) => (actionName === 'spawn'
+      ? attachProvider(ws.workspaceId, nodeId, nodeName, 'broker', 'spawn:claude', 0, 'broker-i1', 'capacity')
+      : attachProvider(ws.workspaceId, nodeId, nodeName, 'broker', actionName));
+    await enrollNode(ws, 'node-scope', 'scope');
+    const provider = await attach('node-scope', 'scope');
+    const input = actionName === 'spawn'
+      ? { name: 'worker', cli: 'claude', verify_ready: true }
+      : { verify_ready: true };
+    const response = await stack.app.request(`/v1/nodes/scope/actions/${actionName}/invoke`, {
+      method: 'POST', headers: { 'content-type': 'application/json', authorization: `Bearer ${caller.token}` },
+      body: JSON.stringify({ input }),
+    });
+    expect(response.status).toBe(201);
+    const invocationId = (await response.json()).data.invocation_id;
+    const invokes = (sock: FakeSocket) => sock.ofType('action.invoke').filter((frame) => frame.invocation_id === invocationId);
+    expect(invokes(provider.sock)).toHaveLength(1);
+    // A second eligible node, attached after placement, gives rescheduling a target.
+    await enrollNode(ws, 'node-fallback', 'fallback');
+    const fallback = await attach('node-fallback', 'fallback');
+
+    await provider.handle.handleMessage(JSON.stringify({ v: 1, id: 'empty-inventory', type: 'inventory.sync', agents: [] }));
+
+    expect(provider.sock.ofType('reply').find((frame) => frame.id === 'empty-inventory'))
+      .toMatchObject({ ok: true, data: { rescheduled_invocations: rescheduled } });
+    expect(invokes(fallback.sock)).toHaveLength(rescheduled);
+    const [invocation] = await db().select().from(actionInvocations).where(eq(actionInvocations.id, invocationId));
+    expect(invocation).toMatchObject({
+      status: 'dispatched',
+      dispatchedNodeId: rescheduled ? 'node-fallback' : 'node-scope',
+    });
+  });
+
   it.each(['not-live', 'stale'])('verified native spawn checks its own provider: %s', async (state) => {
     const ws = await createWorkspace(stack.app, 'provider-readiness-' + state);
     const caller = await registerAgent(stack.app, ws.workspaceKey, 'caller');
