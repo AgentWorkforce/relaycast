@@ -1,8 +1,14 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { createWorkspace, makeNodeStack, registerAgent, type TestStack } from './harness.js';
+import {
+  createWorkspace,
+  D1_MAX_BOUND_PARAMETERS,
+  enforceD1ParameterLimit,
+  makeNodeStack,
+  registerAgent,
+  type TestStack,
+} from './harness.js';
 
 const CONVERSATION_COUNT = 151;
-const D1_MAX_BOUND_PARAMETERS = 100;
 
 function seedDmConversations(
   stack: TestStack,
@@ -54,38 +60,6 @@ function seedDmConversations(
       insertMessage.run(`message_${suffix}`, workspaceId, channelId, peerId, `message ${suffix}`);
     }
   })();
-}
-
-/**
- * better-sqlite3 accepts far more parameters than hosted D1. Guard prepare()
- * at D1's real 100-parameter ceiling so a regression cannot pass locally while
- * still failing in production.
- */
-function enforceD1ParameterLimit(stack: TestStack): {
-  maxObserved: () => number;
-  restore: () => void;
-} {
-  const sqlite = stack.runtime.handle.sqlite;
-  const originalPrepare = sqlite.prepare.bind(sqlite);
-  let maxObserved = 0;
-
-  sqlite.prepare = ((source: string) => {
-    const parameterCount = source.match(/\?/g)?.length ?? 0;
-    maxObserved = Math.max(maxObserved, parameterCount);
-    if (parameterCount > D1_MAX_BOUND_PARAMETERS) {
-      throw new Error(
-        `D1_ERROR: too many bound parameters (${parameterCount}; maximum ${D1_MAX_BOUND_PARAMETERS})`,
-      );
-    }
-    return originalPrepare(source);
-  }) as typeof sqlite.prepare;
-
-  return {
-    maxObserved: () => maxObserved,
-    restore: () => {
-      sqlite.prepare = originalPrepare as typeof sqlite.prepare;
-    },
-  };
 }
 
 describe('DM inbox scaling', () => {

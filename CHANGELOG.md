@@ -19,6 +19,8 @@ Packages without a separate changelog are covered by the cross-package notes bel
 ## [Unreleased - Patch]
 
 - `GET /v1/inbox` returns mentions for agents with long names (about 47 bytes or more) on Cloudflare D1 instead of `500 internal_error`.
+- An `inventory.sync` that drops more than 90 agents from a node offlines all of them in one atomic batch. It no longer fails on D1's 100-parameter statement limit.
+- Server error logs for failed database queries include the underlying cause (constraint, bind limit, D1 overload), not only the `Failed query` text.
 
 ## [12.6.2] - 2026-11-02
 
