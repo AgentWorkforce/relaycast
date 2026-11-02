@@ -1,5 +1,4 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import Database from 'better-sqlite3';
 import { makeNodeStack, createWorkspace, registerAgent, type TestStack } from './harness.js';
 
 /**
@@ -299,7 +298,9 @@ describe('inbox mention scope', () => {
   // D1 caps LIKE/GLOB patterns at 50 bytes ("LIKE or GLOB pattern too complex"),
   // and a LIKE prefilter built from the agent name failed every inbox call of
   // an agent with a long name. This connection is given the same cap.
-  it('finds mentions of a handle longer than D1 allows in a LIKE pattern', async () => {
+  // bun:sqlite (the standalone driver under `npm run test:bun`) has no
+  // user-defined SQL functions, which the cap emulation relies on.
+  it.skipIf(Boolean(process.versions.bun))('finds mentions of a handle longer than D1 allows in a LIKE pattern', async () => {
     const handle = 'orchestrator-review-lead-'.padEnd(64, 'x');
     const ws = await createWorkspace(stack.app, 'inbox-long-handle');
     const sender = await registerAgent(stack.app, ws.workspaceKey, 'sender');
@@ -310,6 +311,7 @@ describe('inbox mention scope', () => {
     await send(sender.token, 'live', `@${handle}-2 superstring`);
 
     // Patterns within the cap keep SQLite's own LIKE semantics.
+    const { default: Database } = await import('better-sqlite3');
     const reference = new Database(':memory:');
     const likeOf = (pattern: string, value: string, escape?: string) => {
       if (Buffer.byteLength(pattern) > 50) throw new Error('LIKE or GLOB pattern too complex');
