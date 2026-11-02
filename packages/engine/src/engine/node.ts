@@ -3087,7 +3087,12 @@ export async function reconcileInventory(
     agent.invocation_id ? [agent.invocation_id] : []
   )));
 
-  const openInvocations = await db
+  // Inventory lists agents, so it is evidence only about the spawns that
+  // create them. Any other action dispatched to this provider (`task.run`,
+  // native-session delivery) is absent from every snapshot while it runs;
+  // its loss is recovered by provider disconnect and the dispatch-timeout
+  // sweep, never by inventory.
+  const openSpawns = await db
     .select({
       id: actionInvocations.id,
       workspaceId: actionInvocations.workspaceId,
@@ -3111,8 +3116,9 @@ export async function reconcileInventory(
       eq(actionInvocations.dispatchedNodeId, nodeId),
       eq(actionInvocations.dispatchedProvider, providerName),
       inArray(actionInvocations.status, ['pending', 'dispatched']),
+      or(eq(actionInvocations.actionName, 'spawn'), like(actionInvocations.actionName, 'spawn:%')),
     ));
-  const providerInvocationIds = new Set(openInvocations
+  const providerInvocationIds = new Set(openSpawns
     .filter((invocation) => !requiresSpawnReadiness(invocation.input))
     .map((invocation) => invocation.id));
 
@@ -3321,7 +3327,7 @@ export async function reconcileInventory(
       }
     }
 
-    for (const invocation of openInvocations) {
+    for (const invocation of openSpawns) {
       // A live broker owns the bounded readiness wait and cleanup. A transient
       // empty inventory during launch/teardown must not redispatch this spawn.
       // Actual provider disconnect and invocation expiry retain their own recovery.
@@ -3353,7 +3359,7 @@ export async function reconcileInventory(
     reply: {
       rebound_agents: reconciledAgentIds.length,
       rejected_agents: rejectedInventoryErrors.length,
-      open_invocations: openInvocations.length,
+      open_invocations: openSpawns.length,
       completed_invocations: completedInvocations,
       rescheduled_invocations: rescheduledInvocations,
     },

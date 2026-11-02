@@ -16,7 +16,9 @@ This project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 Packages without a separate changelog are covered by the cross-package notes below.
 
-## [Unreleased]
+## [Unreleased - Patch]
+
+- A broker's periodic inventory sync no longer redispatches in-flight non-spawn actions to another node; it only reschedules spawns whose agents it no longer lists.
 
 ## [12.6.1] - 2026-11-02
 
