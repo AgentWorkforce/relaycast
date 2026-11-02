@@ -1,5 +1,6 @@
 import { sql, type SQL } from 'drizzle-orm';
 import { z } from 'zod';
+import { orphanedAliasClaimants } from './nodeProvider.js';
 
 export interface AgentRetentionDb {
   all<T>(query: SQL): PromiseLike<T[]>;
@@ -110,6 +111,11 @@ export async function retainAgents(
         AND a.id IN (SELECT value FROM json_each(${JSON.stringify(eligible.map(row => row.id))}))
         AND ${reason(cutoff, indexesReady)} = 'eligible'
       RETURNING id`);
+    // Agent-hosted actions cascade with their handler; a freed alias passes
+    // to a node's default provider.
+    if (deleted.length) {
+      await db.all(sql`UPDATE actions SET is_global = 1 WHERE id IN (${orphanedAliasClaimants(workspaceId)}) RETURNING id`);
+    }
   }
   const counts: Record<Reason, number> = {
     not_offline: 0, recent_or_unknown: 0, ownership_protected: 0, history_unverified: 0, history_referenced: 0, eligible: 0,

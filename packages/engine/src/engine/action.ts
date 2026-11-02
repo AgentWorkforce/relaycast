@@ -24,7 +24,7 @@ import type { NodeConnectionRegistry, NodeDrainOptions } from '../ports/realtime
 import { runAtomic, runAtomicWrites, type AtomicWrite } from '../ports/database.js';
 import { exclusiveClaimWrite, retryAfterAtMatches, type InvocationClaimStatus } from './invocationClaim.js';
 import { claimSpawnNode, chooseNodeForAction, releaseNodeCapacity, reserveNodeCapacity } from './placement.js';
-import { DEFAULT_PROVIDER_NAME, capacityProviderName, getProvider } from './nodeProvider.js';
+import { DEFAULT_PROVIDER_NAME, capacityProviderName, claimOrphanedGlobalAliases, getProvider } from './nodeProvider.js';
 import { AGENT_TOKEN_HASH_PATTERN } from '@relaycast/types';
 import { createTaskState, expireTaskInvocation, expireTaskInvocations, taskExecution } from './taskInvocation.js';
 import { withEngineOperation } from '../lib/engineDiagnostics.js';
@@ -435,6 +435,19 @@ export async function registerAction(
             : { target: [actions.workspaceId, actions.name], targetWhere: isNull(actions.handlerNodeId), set: refresh },
         )
         .returning();
+      // An agent-hosted action outranks a node's alias for the same name, and
+      // a default provider claims the alias only while no agent hosts it.
+      if (!handlerNodeId) {
+        await tx
+          .update(actions)
+          .set({ isGlobal: false })
+          .where(and(
+            eq(actions.workspaceId, workspaceId),
+            eq(actions.name, data.name),
+            eq(actions.handlerProvider, DEFAULT_PROVIDER_NAME),
+            eq(actions.isGlobal, true),
+          ));
+      }
 
       // A refresh that moves the handler to a DIFFERENT agent strands
       // invocations still waiting for provider acceptance. Once the previous
@@ -554,18 +567,29 @@ export async function deleteAction(
   // null on action delete, which would orphan them outside every
   // handler-resolution join (the TTL sweep included) so they retry forever and
   // the caller never hears back. Atomicity closes the window where an invoke
-  // lands between the stranded snapshot and the delete.
+  // lands between the stranded snapshot and the delete. Rows a node provider
+  // materialized belong to its advertised capabilities and are left to it.
   const { deleted, stranded } = await runAtomic(db, async (tx) => {
     const rows = await tx
-      .select({ id: actions.id })
+      .select({ id: actions.id, handlerProvider: actions.handlerProvider })
       .from(actions)
       .where(and(eq(actions.workspaceId, workspaceId), eq(actions.name, name)));
-    const strandedIds = await openInvocationIdsForActions(tx, workspaceId, rows.map((row) => row.id));
+    const ids = rows.filter((row) => row.handlerProvider === null).map((row) => row.id);
+    if (ids.length === 0 && rows.length > 0) {
+      throw codedError(
+        `Action "${name}" is provided by a node provider; it is removed when the provider stops advertising it`,
+        'action_provider_owned',
+        409,
+      );
+    }
+    const strandedIds = await openInvocationIdsForActions(tx, workspaceId, ids);
     const strandedRows = await failOpenInvocationRows(tx, workspaceId, strandedIds, 'action_deleted');
-    const result = await tx
+    const result = ids.length === 0 ? [] : await tx
       .delete(actions)
-      .where(and(eq(actions.workspaceId, workspaceId), eq(actions.name, name)))
-      .returning();
+      .where(and(eq(actions.workspaceId, workspaceId), inArray(actions.id, ids)))
+      .returning({ id: actions.id });
+    // A deleted agent-hosted action frees the alias for a node's default provider.
+    if (result.length > 0) await claimOrphanedGlobalAliases(tx, workspaceId);
     return { deleted: result.length > 0, stranded: strandedRows };
   });
   if (options.completionDeps) {

@@ -7,7 +7,16 @@ See the [root changelog](../../CHANGELOG.md) for cross-package release highlight
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased - Patch]
+## [Unreleased - Minor]
+
+### Removed
+
+- `actions_provided` and `actions_available_to` on agent detail (`getAgentByName`, `GET /v1/agent`, `GET /v1/agents/:name`), and the workspace `actions` read that built them.
+
+### Changed
+
+- `node.heartbeat` re-materializes a provider's actions only when its action-kind capabilities change; it no longer reads action rows to check them. The writes that change which row may claim a workspace-global alias settle it in the same atomic unit: registering an agent-hosted action demotes a default provider's alias of that name; deleting an agent-hosted action, pruning or deregistering a provider, deleting a node, and agent retention promote the oldest default-provider row of each name left without a claimant (`claimOrphanedGlobalAliases`). A row edited outside the engine is corrected at the provider's next registration.
+- `deleteAction` deletes only rows registered through the API (no `handler_provider`) and throws `409 action_provider_owned` when a node provider offers every row of the name; a provider removes its actions by no longer advertising them.
 
 ### Fixed
 

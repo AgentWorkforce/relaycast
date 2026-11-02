@@ -5371,7 +5371,11 @@ paths:
                 $ref: '#/components/schemas/SuccessResponse'
     delete:
       summary: Delete action
-      description: Delete a registered action. Open invocations of the action are failed (`action_deleted`) and their callers receive `action.failed`.
+      description: >-
+        Delete an action registered through this API. Open invocations of the
+        deleted rows are failed (`action_deleted`) and their callers receive
+        `action.failed`. Actions a node provider offers are removed when the
+        provider stops advertising them.
       tags:
         - Actions
       security:
@@ -5386,6 +5390,18 @@ paths:
       responses:
         '204':
           description: Action deleted
+        '404':
+          description: '`action_not_found` — no action has this name'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '409':
+          description: '`action_provider_owned` — only node providers offer this action'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
 
   /actions/{name}/invoke:
     post:

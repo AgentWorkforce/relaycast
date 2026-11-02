@@ -43,11 +43,11 @@ import {
   DEFAULT_PROVIDER_NAME,
   assertActionTaskMode,
   capabilityKind,
+  claimOrphanedGlobalAliases,
   heartbeatProvider,
   isProviderLive,
   markProviderOffline,
   materializeProviderActions,
-  providerActionsMaterialized,
   recomputeNodeAggregate,
   refreshNodeAggregate,
   removeProvider,
@@ -1095,16 +1095,14 @@ export async function heartbeatNode(
       // that subset re-runs the prune/upsert pass. Capacity entries feed
       // placement: the broker's live-agent roster rides in one of them and
       // changes on every spawn and exit, which must not rewrite action rows.
-      // The one-read drift check keeps the heartbeat self-healing; every
-      // node.register still materializes unconditionally.
-      const actionCaps = caps.filter((cap) => capabilityKind(cap) === 'action');
+      // The rows need no re-check: every other write that touches them keeps
+      // them in the state materialization would produce.
       if (
         existingProvider === undefined
         || !sameCapabilities(
           (existingProvider.capabilities ?? []).filter((cap) => capabilityKind(cap) === 'action'),
-          actionCaps,
+          caps.filter((cap) => capabilityKind(cap) === 'action'),
         )
-        || !(await providerActionsMaterialized(tx, workspaceId, nodeId, providerName, actionCaps))
       ) {
         await materializeProviderActions(tx, workspaceId, nodeId, providerName, caps);
       }
@@ -2358,6 +2356,8 @@ export async function deleteNode(
     // actually removed.
     w.delete(actions).where(and(hostedActions, nodeStillDeletable)).returning({ id: actions.id }),
     w.delete(nodes).where(deletable).returning({ id: nodes.id }),
+    // A deleted global alias passes to another node's default provider.
+    claimOrphanedGlobalAliases(w, workspaceId),
   ], { requireAtomic: true });
   const [failed, , removedActions, deleted] = results as [
     Array<typeof actionInvocations.$inferSelect>, unknown, Array<{ id: string }>, Array<{ id: string }>,
