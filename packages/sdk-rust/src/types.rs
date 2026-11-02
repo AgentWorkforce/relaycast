@@ -1019,6 +1019,9 @@ pub struct DeliveryItem {
 pub struct ListDeliveriesOptions {
     pub status: Option<DeliveryStatus>,
     pub limit: Option<i32>,
+    /// Long-poll in milliseconds (0–25000): an empty queue answers once a
+    /// delivery arrives or the wait expires.
+    pub wait_ms: Option<u32>,
 }
 
 #[derive(Debug, Clone, Serialize, Default)]

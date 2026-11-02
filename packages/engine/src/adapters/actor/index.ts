@@ -8,6 +8,7 @@ import { NoopTelemetrySink } from '../../providers/noop-telemetry.js';
 import { InProcessRealtime } from '../node/realtime.js';
 import { InProcessPresence } from '../node/presence.js';
 import { InProcessRateLimiter } from '../node/rate-limit.js';
+import { InProcessDeliveryWaiters } from '../../ports/deliveryWaiters.js';
 import { createDeliveryMaintenanceRunner } from '../node/delivery-maintenance.js';
 import { sweepOfflineNodes } from '../../engine/node.js';
 import { AGENT_LIVENESS_TTL_MS, sweepStaleAgents } from '../../engine/agent.js';
@@ -223,6 +224,7 @@ export function createActorRuntime(options: ActorRuntimeOptions): ActorRuntime {
     nodeConnections: realtime,
     presence,
     rateLimiter: new InProcessRateLimiter(),
+    deliveryWaiters: new InProcessDeliveryWaiters(),
     files,
     kv,
     webhookQueue,

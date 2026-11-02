@@ -1048,10 +1048,14 @@ public struct DeliveryItem: Codable, Equatable, Sendable {
 public struct ListDeliveriesOptions: Equatable, Sendable {
     public var status: DeliveryStatus?
     public var limit: Int?
+    /// Long-poll in milliseconds (0–25000): an empty queue answers once a
+    /// delivery arrives or the wait expires.
+    public var waitMs: Int?
 
-    public init(status: DeliveryStatus? = nil, limit: Int? = nil) {
+    public init(status: DeliveryStatus? = nil, limit: Int? = nil, waitMs: Int? = nil) {
         self.status = status
         self.limit = limit
+        self.waitMs = waitMs
     }
 }
 

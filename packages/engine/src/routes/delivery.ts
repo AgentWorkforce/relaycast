@@ -20,22 +20,37 @@ export const deliveryRoutes = new Hono<AppEnv>();
 
 // GET /v1/deliveries - durable delivery queue for the calling agent.
 // Defaults to non-terminal items (queued + delivered) so offline consumers
-// can replay what they missed after reconnect.
+// can replay what they missed after reconnect. `wait` (ms) long-polls: an
+// empty answer is held until a delivery is created for the agent, the wait
+// expires or the client goes away. A parked request reads nothing; it lists
+// again only when woken.
 deliveryRoutes.get(
   '/deliveries',
   requireAgentToken,
   rateLimit,
   async (c) => {
     try {
-      const parsed = parseQueryParams(c, ListDeliveriesQuerySchema, 'Invalid status or limit');
+      const parsed = parseQueryParams(c, ListDeliveriesQuerySchema, 'Invalid status, limit or wait');
       if (!parsed.ok) {
         return parsed.response;
       }
       const db = c.get('db');
       const workspace = c.get('workspace');
       const agent = c.get('agent');
-      const result = await deliveryEngine.listDeliveries(db, workspace.id, agent!.id, parsed.data);
-      return jsonOk(c, result);
+      const { wait, ...query } = parsed.data;
+      const since = Date.now();
+      const result = await deliveryEngine.listDeliveries(db, workspace.id, agent!.id, query);
+      const waiters = c.get('engine').deliveryWaiters;
+      if (result.length > 0 || !wait || !waiters) return jsonOk(c, result);
+      const outcome = await waiters.wait({
+        workspaceId: workspace.id,
+        agentId: agent!.id,
+        since,
+        timeoutMs: wait,
+        signal: c.req.raw.signal,
+      });
+      if (outcome === 'timeout') return jsonOk(c, result);
+      return jsonOk(c, await deliveryEngine.listDeliveries(db, workspace.id, agent!.id, query));
     } catch (err: unknown) {
       return errorResponse(c, err);
     }

@@ -900,6 +900,8 @@ impl AgentClient {
     ///
     /// Defaults to the non-terminal replay queue (`queued` + `delivered`) when
     /// no status is provided. Each item carries the associated message payload.
+    /// `wait_ms` long-polls an empty queue; a connected agent receives
+    /// deliveries over its socket and needs no polling.
     pub async fn deliveries(
         &self,
         opts: Option<ListDeliveriesOptions>,
@@ -914,6 +916,9 @@ impl AgentClient {
         }
         if let Some(limit) = opts.limit {
             query_params.push(("limit".to_string(), limit.to_string()));
+        }
+        if let Some(wait_ms) = opts.wait_ms {
+            query_params.push(("wait".to_string(), wait_ms.to_string()));
         }
 
         let query: Vec<(&str, &str)> = query_params

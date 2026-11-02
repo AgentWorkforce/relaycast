@@ -484,7 +484,25 @@ export async function routeDeliveryOutcomes(
   eventData: Record<string, unknown>,
   opts: { workspaceId?: string } = {},
 ): Promise<void> {
-  await routeDeliveryOutcomesForContext(routingContextFromHono(c, opts.workspaceId), deliveries, eventType, eventData);
+  const ctx = routingContextFromHono(c, opts.workspaceId);
+  await Promise.all([
+    notifyDeliveryWaiters(ctx, deliveries),
+    routeDeliveryOutcomesForContext(ctx, deliveries, eventType, eventData),
+  ]);
+}
+
+/** Wake long-polls parked on these recipients (`GET /v1/deliveries?wait=`). */
+async function notifyDeliveryWaiters(ctx: RoutingContext, deliveries: DeliveryFanoutRecord[]): Promise<void> {
+  const waiters = ctx.engine.deliveryWaiters;
+  if (!waiters || deliveries.length === 0) return;
+  try {
+    await waiters.notify(ctx.workspaceId, [...new Set(deliveries.map((delivery) => delivery.agentId))]);
+  } catch (err) {
+    console.warn('[delivery.route] delivery waiter notify failed', {
+      workspace_id: ctx.workspaceId,
+      error: err instanceof Error ? err.message : String(err),
+    });
+  }
 }
 
 /**

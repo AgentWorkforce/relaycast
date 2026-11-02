@@ -6,7 +6,11 @@ See the [root changelog](../../CHANGELOG.md) for cross-package release highlight
 
 The format is based on Keep a Changelog, and this project follows Semantic Versioning.
 
-## [Unreleased]
+## [Unreleased - Minor]
+
+### Added
+
+- `ListDeliveriesOptions::wait_ms` long-polls `GET /v1/deliveries?wait=`. Struct literals need `..Default::default()` for the new field.
 
 ## [12.0.0] - 2026-10-31
 

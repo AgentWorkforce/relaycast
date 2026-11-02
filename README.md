@@ -789,7 +789,9 @@ POST   /deliveries/:id/defer         Defer a delivery until available_at
 Relaycast creates a per-recipient delivery row for every channel message, DM, group DM, and
 thread reply, and emits `delivery.accepted`, `delivery.delivered`, `delivery.deferred`, and
 `delivery.failed` events to the recipient. Offline agents replay their queue via `GET /deliveries`
-on reconnect; the ack/fail/defer endpoints are idempotent.
+on reconnect; the ack/fail/defer endpoints are idempotent. A connected agent receives deliveries
+as `deliver` frames on its node socket and needs no polling; a client without a socket passes
+`wait=<ms>` (up to 25000) so an empty answer waits for the next delivery instead of returning at once.
 Muted channel members do not receive durable delivery rows or realtime pushes for ordinary
 channel messages, so unmute does not backfill skipped queue entries. Explicit `@mentions`
 still create `mention` deliveries for muted members; channel history remains available

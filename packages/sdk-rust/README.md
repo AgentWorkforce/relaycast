@@ -146,6 +146,7 @@ use relaycast::{DeferDeliveryRequest, DeliveryStatus, FailDeliveryRequest, ListD
 let queued = agent.deliveries(Some(ListDeliveriesOptions {
     status: Some(DeliveryStatus::Accepted),
     limit: Some(25),
+    ..Default::default()
 })).await?;
 
 for item in queued {

@@ -1,5 +1,12 @@
 export { configureNodeLiveness, inspectNodeLiveness } from './engine/nodeLiveness.js';
 export type { NodeLivenessAuthority, NodeLivenessSnapshot } from './ports/nodeLiveness.js';
+export {
+  InProcessDeliveryWaiters,
+  MAX_DELIVERY_WAIT_MS,
+  DELIVERY_NOTIFY_MEMORY_MS,
+  type DeliveryWaiters,
+  type DeliveryWaitArgs,
+} from './ports/deliveryWaiters.js';
 export const SERVER_VERSION = '0.1.0' as const;
 
 // The engine factory + the Hono Env type consumers extend.

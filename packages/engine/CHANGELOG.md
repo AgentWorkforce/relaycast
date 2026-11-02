@@ -7,7 +7,12 @@ See the [root changelog](../../CHANGELOG.md) for cross-package release highlight
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [Unreleased - Minor]
+
+### Added
+
+- `GET /v1/deliveries` accepts `wait` (0–25000 ms). When the active list is empty the request parks until a delivery is created for the agent, the wait expires or the client disconnects, then lists once more only if woken. A parked request issues no statements.
+- `DeliveryWaiters`, `InProcessDeliveryWaiters`, `MAX_DELIVERY_WAIT_MS` and `EngineProviders.deliveryWaiters`. `routeDeliveryOutcomes` notifies the recipients of every created delivery before routing it. A waiter whose empty read started before a notify landed resolves at once. `createNodeRuntime` and the workspace actor bind `InProcessDeliveryWaiters`; a host without the port answers `wait` immediately.
 
 ## [12.6.2] - 2026-11-02
 

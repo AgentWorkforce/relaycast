@@ -1000,6 +1000,7 @@ async fn durable_delivery_methods_use_expected_endpoints() {
         .and(path("/v1/deliveries"))
         .and(query_param("status", "queued"))
         .and(query_param("limit", "25"))
+        .and(query_param("wait", "25000"))
         .respond_with(ok(json!([
             {
                 "id": "del_1",
@@ -1035,6 +1036,7 @@ async fn durable_delivery_methods_use_expected_endpoints() {
         .deliveries(Some(ListDeliveriesOptions {
             status: Some(DeliveryStatus::Queued),
             limit: Some(25),
+            wait_ms: Some(25_000),
         }))
         .await
         .expect("deliveries failed");
@@ -1061,6 +1063,7 @@ async fn durable_delivery_methods_use_expected_endpoints() {
         .deliveries(Some(ListDeliveriesOptions {
             status: Some(DeliveryStatus::Unknown),
             limit: Some(10),
+            ..Default::default()
         }))
         .await
         .expect("deliveries with unknown status failed");

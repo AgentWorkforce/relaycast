@@ -16,7 +16,9 @@ This project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 Packages without a separate changelog are covered by the cross-package notes below.
 
-## [Unreleased]
+## [Unreleased - Minor]
+
+- `GET /v1/deliveries?wait=<ms>` long-polls (0–25000 ms): an empty queue answers once a delivery is created for the agent or the wait expires, and reads nothing while it waits. The TypeScript (`waitMs`), Rust (`wait_ms`) and Swift (`waitMs`) SDKs pass it from `deliveries()`. Self-hosted engines wake waiters in process; hosts plug in their own `DeliveryWaiters`.
 
 ## [12.6.2] - 2026-11-02
 

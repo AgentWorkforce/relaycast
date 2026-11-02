@@ -21,6 +21,7 @@ import { createDeliveryMaintenanceRunner } from './delivery-maintenance.js';
 import { sweepPendingA2aEgress } from '../../engine/a2aEgress.js';
 import { reapExpiredWorkspaces } from '../../engine/workspace.js';
 import { createNodeOutboundWebhookFetch } from './ssrf-fetch.js';
+import { InProcessDeliveryWaiters } from '../../ports/deliveryWaiters.js';
 
 export {
   InProcessRealtime,
@@ -181,6 +182,7 @@ export function createNodeRuntime(options: NodeRuntimeOptions): NodeRuntime {
     nodeConnections: realtime,
     presence,
     rateLimiter,
+    deliveryWaiters: new InProcessDeliveryWaiters(),
     files: fileStorage,
     kv,
     webhookQueue,
