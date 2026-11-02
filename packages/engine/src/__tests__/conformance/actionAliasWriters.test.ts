@@ -151,6 +151,33 @@ describe('action alias writers', () => {
     expect(isGlobal(ws.workspaceId, 'node_c', 'etl')).toBe(1);
   });
 
+  it('re-creates a provider row deleted outside the engine when the provider registers again', async () => {
+    const ws = await createWorkspace(stack.app, 'alias-register-recreate');
+    await enrollNode(ws.workspaceKey, 'node_a');
+    const a = await provide(ws.workspaceId, 'node_a', ['echo']);
+    stack.runtime.handle.sqlite.prepare('DELETE FROM actions WHERE workspace_id = ? AND name = ?').run(ws.workspaceId, 'echo');
+
+    await a.register(['echo']);
+    expect(isGlobal(ws.workspaceId, 'node_a', 'echo')).toBe(1);
+  });
+
+  it('materializes a name listed twice from its last entry', async () => {
+    const ws = await createWorkspace(stack.app, 'alias-duplicate-name');
+    await enrollNode(ws.workspaceKey, 'node_a');
+    await enrollNode(ws.workspaceKey, 'node_b');
+    await provide(ws.workspaceId, 'node_a', [{ name: 'etl', kind: 'action', global: true }], 'py');
+    await provide(ws.workspaceId, 'node_b', ['etl']);
+
+    // Without rollback (D1), an order-dependent pass would demote, hand the
+    // alias to node_b, then fail reclaiming it.
+    const d1Like = drizzle(stack.runtime.handle.sqlite, { schema }) as unknown as EngineDb;
+    await heartbeatNode(d1Like, ws.workspaceId, 'node_a', 'py', {
+      type: 'node.heartbeat', load: 0, active_agents: 0, handlers_live: true, max_agents: 4,
+      capabilities: [{ name: 'etl', kind: 'action', global: false }, { name: 'sync', kind: 'action' }, { name: 'etl', kind: 'action', global: true }],
+    });
+    expect([isGlobal(ws.workspaceId, 'node_a', 'etl'), isGlobal(ws.workspaceId, 'node_b', 'etl')]).toEqual([1, 0]);
+  });
+
   it('refuses to delete an action a node provider owns, and deletes only the rows it does not', async () => {
     const ws = await createWorkspace(stack.app, 'alias-provider-owned');
     const agent = await registerAgent(stack.app, ws.workspaceKey, 'handler');

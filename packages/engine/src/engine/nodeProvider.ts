@@ -250,7 +250,11 @@ export async function materializeProviderActions(
   providerName: string,
   capabilities: FleetCapability[],
 ): Promise<void> {
-  const actionCaps = capabilities.filter((cap) => capabilityKind(cap) === 'action');
+  // One row per name: a name listed twice materializes its last entry, so the
+  // pass never depends on the order of duplicates.
+  const actionCaps = [...new Map(capabilities
+    .filter((cap) => capabilityKind(cap) === 'action')
+    .map((cap) => [cap.name, cap] as const)).values()];
   assertActionTaskMode(capabilities);
   const keepNames = actionCaps.map((cap) => cap.name);
 

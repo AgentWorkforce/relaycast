@@ -2662,6 +2662,7 @@ export async function registerAgentViaNode(
                 .delete(agents)
                 .where(and(eq(agents.workspaceId, workspaceId), eq(agents.id, agentId))),
               ...releaseNodeAgentSlotWrites(tx, workspaceId, [nodeId]),
+              claimOrphanedGlobalAliases(tx, workspaceId),
             ], []);
             throw landingErr;
           }
@@ -2672,6 +2673,8 @@ export async function registerAgentViaNode(
         compensations.push(tx
           .delete(agents)
           .where(and(eq(agents.workspaceId, workspaceId), eq(agents.id, agentId))));
+        // An action registered for the agent meanwhile cascades with it.
+        compensations.push(claimOrphanedGlobalAliases(tx, workspaceId));
       }
       if ((admissionResults[0] as { id: string }[] | undefined)?.[0]) {
         compensations.push(...releaseNodeAgentSlotWrites(tx, workspaceId, [nodeId]));
