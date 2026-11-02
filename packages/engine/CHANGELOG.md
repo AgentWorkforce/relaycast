@@ -11,8 +11,8 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Added
 
-- `GET /v1/deliveries` accepts `wait` (0–25000 ms). When the active list is empty the request parks until a delivery is created for the agent, the wait expires or the client disconnects, then lists once more only if woken. A parked request issues no statements.
-- `DeliveryWaiters`, `InProcessDeliveryWaiters`, `MAX_DELIVERY_WAIT_MS` and `EngineProviders.deliveryWaiters`. `routeDeliveryOutcomes` notifies the recipients of every created delivery before routing it. A waiter whose empty read started before a notify landed resolves at once. `createNodeRuntime` and the workspace actor bind `InProcessDeliveryWaiters`; a host without the port answers `wait` immediately.
+- `GET /v1/deliveries` accepts `wait` (0–25000 ms). When the list is empty the request parks until a delivery is created for the agent, the wait expires or the client disconnects. A woken request lists again with the same `status` and `limit` and parks again for the rest of the wait if that is still empty. A parked request issues no statements.
+- `DeliveryWaiters`, `InProcessDeliveryWaiters`, `MAX_DELIVERY_WAIT_MS`, `DELIVERY_NOTIFY_MEMORY_MS` and `EngineProviders.deliveryWaiters`. `routeDeliveryOutcomes` notifies the recipients of every created delivery, then routes it. A waiter whose empty read started before a notify landed resolves at once. `createNodeRuntime` binds `InProcessDeliveryWaiters` and answers parked waits when it closes. The workspace actor binds none: a wait inside an actor call would hold its mailbox, so `wait` answers at once there. A host without the port answers `wait` at once.
 
 ### Fixed
 

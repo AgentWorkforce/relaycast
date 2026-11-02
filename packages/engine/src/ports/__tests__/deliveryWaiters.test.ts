@@ -25,6 +25,35 @@ describe('InProcessDeliveryWaiters', () => {
     expect(await waiters.wait({ workspaceId: 'w', agentId: 'a', since: 0, timeoutMs: 10 })).toBe('timeout');
   });
 
+  it('answers an aborted or zero-length wait with timeout even after a recent notify', async () => {
+    const waiters = new InProcessDeliveryWaiters();
+    await waiters.notify('w', ['a']);
+    const aborted = new AbortController();
+    aborted.abort();
+    expect(await waiters.wait({ workspaceId: 'w', agentId: 'a', since: 0, timeoutMs: 5_000, signal: aborted.signal })).toBe('timeout');
+    expect(await waiters.wait({ workspaceId: 'w', agentId: 'a', since: 0, timeoutMs: 0 })).toBe('timeout');
+  });
+
+  it('keeps a re-notified agent when older entries expire', async () => {
+    let now = 0;
+    const waiters = new InProcessDeliveryWaiters(() => now);
+    await waiters.notify('w', ['a', 'b']);
+    now = DELIVERY_NOTIFY_MEMORY_MS;
+    await waiters.notify('w', ['a']);
+    now = DELIVERY_NOTIFY_MEMORY_MS + 1;
+    await waiters.notify('w', ['c']);
+    expect(await waiters.wait({ workspaceId: 'w', agentId: 'a', since: 1, timeoutMs: 10 })).toBe('notified');
+    expect(await waiters.wait({ workspaceId: 'w', agentId: 'b', since: 0, timeoutMs: 10 })).toBe('timeout');
+  });
+
+  it('answers parked and later waits on close', async () => {
+    const waiters = new InProcessDeliveryWaiters();
+    const parked = waiters.wait({ workspaceId: 'w', agentId: 'a', since: Date.now(), timeoutMs: 60_000 });
+    waiters.close();
+    expect(await parked).toBe('timeout');
+    expect(await waiters.wait({ workspaceId: 'w', agentId: 'a', since: Date.now(), timeoutMs: 60_000 })).toBe('timeout');
+  });
+
   it('times out and aborts', async () => {
     const waiters = new InProcessDeliveryWaiters();
     expect(await waiters.wait({ workspaceId: 'w', agentId: 'a', since: Date.now(), timeoutMs: 10 })).toBe('timeout');

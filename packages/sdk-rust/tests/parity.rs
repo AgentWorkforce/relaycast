@@ -3,14 +3,15 @@ use relaycast::{
     CompleteInvocationRequest, CreateAgentRequest, CreateChannelRequest, CreateNodeRequest,
     CreateObserverTokenRequest, CreateSubscriptionRequest, CreateTriggerRequest,
     CreateWebhookRequest, DeferDeliveryRequest, DeliveryStatus, DmConversationSummary,
-    EmitSessionEventRequest, FailDeliveryRequest, HttpClient, HttpPushNodeDelivery,
-    ListDeliveriesOptions, ListSessionEventsQuery, MessageInjectionMode, MessageListQuery,
-    MonitorCertificationRequest, NodeDeliveryAuth, NodeDeliveryConfig, NodeListQuery,
-    ObserverScope, ObserverTokenFilters, RateDirectoryAgentRequest, RegisterA2aOptions,
-    ExactReleaseAgentRequest, RegisterActionRequest, RelayCast, RelayCastOptions, RelayError, ReleaseAgentRequest,
-    RouteFeedbackRequest, SearchDirectoryQuery, SpawnAgentRequest, SubmitCertificationRequest,
-    UpdateObserverTokenRequest, UpdateRoutingConfigRequest, WebhookTriggerRequest,
-    WorkspaceBootstrapOptions, WorkspaceProvenance, WsClient, WsClientOptions, WsEvent,
+    EmitSessionEventRequest, ExactReleaseAgentRequest, FailDeliveryRequest, HttpClient,
+    HttpPushNodeDelivery, ListDeliveriesOptions, ListSessionEventsQuery, MessageInjectionMode,
+    MessageListQuery, MonitorCertificationRequest, NodeDeliveryAuth, NodeDeliveryConfig,
+    NodeListQuery, ObserverScope, ObserverTokenFilters, RateDirectoryAgentRequest,
+    RegisterA2aOptions, RegisterActionRequest, RelayCast, RelayCastOptions, RelayError,
+    ReleaseAgentRequest, RouteFeedbackRequest, SearchDirectoryQuery, SpawnAgentRequest,
+    SubmitCertificationRequest, UpdateObserverTokenRequest, UpdateRoutingConfigRequest,
+    WebhookTriggerRequest, WorkspaceBootstrapOptions, WorkspaceProvenance, WsClient,
+    WsClientOptions, WsEvent,
 };
 use serde_json::json;
 use std::net::TcpListener;
@@ -318,8 +319,10 @@ async fn exact_release_uses_immutable_id_and_caller_idempotency_key() {
             "expected_agent_id": "agent_exact_1",
             "delete_agent": true
         })))
-        .respond_with(api_error(503, "database_overloaded", "retry exact release")
-            .insert_header("Retry-After", "0"))
+        .respond_with(
+            api_error(503, "database_overloaded", "retry exact release")
+                .insert_header("Retry-After", "0"),
+        )
         .up_to_n_times(1)
         .expect(1)
         .mount(&server)
@@ -342,13 +345,19 @@ async fn exact_release_uses_immutable_id_and_caller_idempotency_key() {
         .mount(&server)
         .await;
 
-    let released = relay.release_agent_exact(ExactReleaseAgentRequest {
-        name: "WorkerOne".to_string(),
-        expected_agent_id: "agent_exact_1".to_string(),
-        reason: None,
-        delete_agent: Some(true),
-        expected_token_hash: None,
-    }, "exact-release-key").await.expect("exact release succeeds");
+    let released = relay
+        .release_agent_exact(
+            ExactReleaseAgentRequest {
+                name: "WorkerOne".to_string(),
+                expected_agent_id: "agent_exact_1".to_string(),
+                reason: None,
+                delete_agent: Some(true),
+                expected_token_hash: None,
+            },
+            "exact-release-key",
+        )
+        .await
+        .expect("exact release succeeds");
     assert_eq!(released.invocation_id, "inv_exact_1");
 }
 
@@ -746,9 +755,9 @@ fn workspace_bootstrap_options_redacts_recovery_capabilities_from_debug_output()
     let idempotency_key = "hosted-run-407-9f3a7c1e5b8d2f4a6c0e8b2d4f6a8c0e";
     let secret = "self-host-deployment-secret";
     let options = WorkspaceBootstrapOptions::new(WorkspaceProvenance::sdk())
-    .with_base_url("https://self-host.example.test")
-    .with_idempotency_key(idempotency_key)
-    .with_bootstrap_secret(secret);
+        .with_base_url("https://self-host.example.test")
+        .with_idempotency_key(idempotency_key)
+        .with_bootstrap_secret(secret);
     let debug = format!("{options:?}");
 
     assert!(debug.contains("idempotency_key: Some(\"<redacted>\")"));
@@ -1033,11 +1042,13 @@ async fn durable_delivery_methods_use_expected_endpoints() {
         .await;
 
     let deliveries = agent
-        .deliveries(Some(ListDeliveriesOptions {
-            status: Some(DeliveryStatus::Queued),
-            limit: Some(25),
-            wait_ms: Some(25_000),
-        }))
+        .wait_for_deliveries(
+            Some(ListDeliveriesOptions {
+                status: Some(DeliveryStatus::Queued),
+                limit: Some(25),
+            }),
+            25_000,
+        )
         .await
         .expect("deliveries failed");
     assert_eq!(deliveries[0].delivery.id, "del_1");
@@ -1053,6 +1064,7 @@ async fn durable_delivery_methods_use_expected_endpoints() {
     Mock::given(method("GET"))
         .and(path("/v1/deliveries"))
         .and(query_param_is_missing("status"))
+        .and(query_param_is_missing("wait"))
         .and(query_param("limit", "10"))
         .respond_with(ok(json!([])))
         .expect(1)
@@ -1063,7 +1075,6 @@ async fn durable_delivery_methods_use_expected_endpoints() {
         .deliveries(Some(ListDeliveriesOptions {
             status: Some(DeliveryStatus::Unknown),
             limit: Some(10),
-            ..Default::default()
         }))
         .await
         .expect("deliveries with unknown status failed");
@@ -2153,7 +2164,10 @@ fn deserializes_delivery_ws_events() {
 #[test]
 fn delivery_status_query_values_match_canonical_lifecycle() {
     assert_eq!(DeliveryStatus::Queued.as_query_value(), Some("queued"));
-    assert_eq!(DeliveryStatus::Delivered.as_query_value(), Some("delivered"));
+    assert_eq!(
+        DeliveryStatus::Delivered.as_query_value(),
+        Some("delivered")
+    );
     assert_eq!(DeliveryStatus::Acked.as_query_value(), Some("acked"));
     assert_eq!(DeliveryStatus::Failed.as_query_value(), Some("failed"));
     assert_eq!(
@@ -2256,7 +2270,9 @@ async fn a2a_surface_uses_expected_endpoints() {
 
     Mock::given(method("POST"))
         .and(path("/v1/a2a/register"))
-        .and(body_json(json!({ "agent_card_url": "https://x.example.com/card" })))
+        .and(body_json(
+            json!({ "agent_card_url": "https://x.example.com/card" }),
+        ))
         .respond_with(ok(json!({
             "relay_name": "external-bot",
             "relay_token": "at_live_a2a",
@@ -2283,7 +2299,10 @@ async fn a2a_surface_uses_expected_endpoints() {
         .expect(1)
         .mount(&server)
         .await;
-    let agents = relay.list_a2a_agents().await.expect("list_a2a_agents failed");
+    let agents = relay
+        .list_a2a_agents()
+        .await
+        .expect("list_a2a_agents failed");
     assert!(agents.is_empty());
 
     Mock::given(method("GET"))
@@ -2453,7 +2472,9 @@ async fn routing_and_skills_use_expected_endpoints() {
 
     Mock::given(method("POST"))
         .and(path("/v1/route"))
-        .and(body_json(json!({ "skill": "summarize", "message": "do it" })))
+        .and(body_json(
+            json!({ "skill": "summarize", "message": "do it" }),
+        ))
         .respond_with(ok(json!({
             "agent_name": "Summarizer",
             "score": 0.81,
@@ -2471,7 +2492,9 @@ async fn routing_and_skills_use_expected_endpoints() {
 
     Mock::given(method("POST"))
         .and(path("/v1/route/feedback"))
-        .and(body_json(json!({ "agent_name": "Summarizer", "success": true })))
+        .and(body_json(
+            json!({ "agent_name": "Summarizer", "success": true }),
+        ))
         .respond_with(ok(json!({ "ok": true })))
         .expect(1)
         .mount(&server)
@@ -2990,7 +3013,9 @@ async fn certify_and_console_use_expected_endpoints() {
 
     Mock::given(method("POST"))
         .and(path("/v1/certify"))
-        .and(body_json(json!({ "agent_url": "https://x.example.com", "level": 1 })))
+        .and(body_json(
+            json!({ "agent_url": "https://x.example.com", "level": 1 }),
+        ))
         .respond_with(ok(json!({
             "id": "cert_1",
             "agent_url": "https://x.example.com",

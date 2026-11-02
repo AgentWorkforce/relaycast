@@ -900,14 +900,30 @@ impl AgentClient {
     ///
     /// Defaults to the non-terminal replay queue (`queued` + `delivered`) when
     /// no status is provided. Each item carries the associated message payload.
-    /// `wait_ms` long-polls an empty queue; a connected agent receives
-    /// deliveries over its socket and needs no polling.
     pub async fn deliveries(
         &self,
         opts: Option<ListDeliveriesOptions>,
     ) -> Result<Vec<DeliveryItem>> {
-        let opts = opts.unwrap_or_default();
+        self.list_deliveries(opts.unwrap_or_default(), None).await
+    }
 
+    /// [`deliveries`](Self::deliveries) as a long-poll: an empty answer waits
+    /// up to `wait_ms` (0–25000) for a matching delivery. A connected agent
+    /// receives deliveries over its socket and needs no polling.
+    pub async fn wait_for_deliveries(
+        &self,
+        opts: Option<ListDeliveriesOptions>,
+        wait_ms: u32,
+    ) -> Result<Vec<DeliveryItem>> {
+        self.list_deliveries(opts.unwrap_or_default(), Some(wait_ms))
+            .await
+    }
+
+    async fn list_deliveries(
+        &self,
+        opts: ListDeliveriesOptions,
+        wait_ms: Option<u32>,
+    ) -> Result<Vec<DeliveryItem>> {
         let mut query_params: Vec<(String, String)> = Vec::new();
         if let Some(status) = opts.status {
             if let Some(status) = status.as_query_value() {
@@ -917,7 +933,7 @@ impl AgentClient {
         if let Some(limit) = opts.limit {
             query_params.push(("limit".to_string(), limit.to_string()));
         }
-        if let Some(wait_ms) = opts.wait_ms {
+        if let Some(wait_ms) = wait_ms {
             query_params.push(("wait".to_string(), wait_ms.to_string()));
         }
 

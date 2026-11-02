@@ -59,7 +59,7 @@ So an agent with a live socket needs no HTTP poll at all. Polling survives in tw
 GET /v1/deliveries?limit=50&wait=25000
   → rows pending          : 200 immediately (one list read)
   → empty                 : park until the agent's queue gains a row, the wait expires, or the client disconnects
-       woken              : list again, 200 with rows
+       woken              : list again with the same query; rows → 200, still empty → park for the rest of the wait
        expired / aborted  : 200 [] (no second read)
 ```
 
@@ -77,13 +77,13 @@ export interface DeliveryWaiters {
 }
 ```
 
-Only creation needs a signal: a parked request exists only when the active list was empty, and ack, fail, expiry and dead-lettering only shrink it. The one shrink-to-grow transition, deferring a `failed` row back to `queued`, is made by the agent itself.
+Only creation needs a signal: a parked request exists only when its list was empty, and ack, fail, expiry and dead-lettering only shrink the active queue. A `status` filter a new row doesn't match re-lists empty and parks again. The one shrink-to-grow transition, deferring a `failed` row back to `queued`, is made by the agent itself.
 
 Race: the route reads, finds nothing, then registers. A row committed between the two would notify before the waiter exists. `since` is the time the read started; the waiter holder keeps each agent's last notify time for a minute and resolves a registration immediately when that time is at or after `since`. A wake that is still lost (holder evicted between notify and register) costs latency up to `wait`, never a delivery: the row stays in the queue and the next poll reads it.
 
 ### Self-host and the actor adapter
 
-`InProcessDeliveryWaiters` (engine) keeps waiters and last-notify times in memory. The Node runtime and the per-workspace actor run every request for a workspace in one process, so in-process is exact. A host that omits the port answers `wait` immediately, which is today's behavior.
+`InProcessDeliveryWaiters` (engine) keeps waiters and last-notify times in memory. The Node runtime runs every request in one process, so in-process is exact, and it answers parked waits when it closes. The per-workspace actor binds no waiter: its `handle()` runs inside an actor call that holds the mailbox, so a wait there would block the very write that wakes it. A long-poll in front of an actor parks outside the call, as the Cloudflare Worker does. A host that omits the port answers `wait` immediately, which is today's behavior.
 
 ### Cloudflare
 
@@ -141,7 +141,7 @@ In the sample, desktop reads arrive in same-instant bursts from one address (3�
 Push first, everywhere it can hold a socket:
 
 1. **Connect seats on push.** A seat holds an agent token, which is all `push.rs` needs to mint a direct node token and hold a socket. Put seats in the push manager like registrations. The inbox is then read when its socket comes up or ends, or when a frame asks, plus the 5-min safety timer.
-2. **No queue read for frames that aren't deliveries.** A `deliver` frame with `seq: 0` (delivery id `evt_…`) is an ephemeral event; desktop drops it instead of reading the queue.
+2. **No queue read for frames that aren't deliveries.** A `deliver` frame with `seq: 0` (delivery id `evt_…`) is an ephemeral event. Desktop handles the payloads it uses from the frame itself (action results addressed to the caller, lifecycle notices) and never turns one into a queue read.
 3. **Channel posts carried by the frame.** The engine adds the row's `reason` to `deliver` frames, a wire addition and minor bump, so `from_push_frame` can decide mention vs traffic without a read. Until then, (1) and (2) still stand.
 4. **`wait` only where no socket is live.** The fallback tier and a Connect seat whose socket is down pass `wait=25000` and drop the 3 s step. Parked reads return as soon as a delivery lands, so latency doesn't regress.
 
@@ -160,7 +160,7 @@ Per idle reader-minute, at 2 D1 statements per read:
 
 1. **Engine** (`relaycast`, minor): `wait` on `GET /v1/deliveries`, the `DeliveryWaiters` port and in-process implementation, notify in `routeDeliveryOutcomes`, `wait` on `deliveries()` in the TypeScript, Rust and Swift SDKs, OpenAPI and README.
 2. **relaycast-cloud**: pin the engine release; `WorkspaceStreamDO` waiter endpoints; `createCloudflareEngineDeps` binds the DO-backed `DeliveryWaiters`; hot-path statement test for a parked poll.
-3. **relay-desktop**: Connect seats on push and seq-0 frames ignored (no release needed), then `wait` on the remaining fallback reads once the engine release is out.
+3. **relay-desktop**: Connect seats on push and no queue reads for seq-0 frames (no release needed), then `wait` on the remaining fallback reads once the engine release is out.
 4. **relay**: bump `@relaycast/sdk` (`^8.0.7` today) and the `relaycast` crate (9 / 10) to the release.
 
 Old clients keep their current cost until they update. relay-desktop auto-updates (ten builds from 2026.10.14 to .67 in the sample), so its share moves with its release train.

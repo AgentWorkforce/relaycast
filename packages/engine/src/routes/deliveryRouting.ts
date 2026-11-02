@@ -485,10 +485,9 @@ export async function routeDeliveryOutcomes(
   opts: { workspaceId?: string } = {},
 ): Promise<void> {
   const ctx = routingContextFromHono(c, opts.workspaceId);
-  await Promise.all([
-    notifyDeliveryWaiters(ctx, deliveries),
-    routeDeliveryOutcomesForContext(ctx, deliveries, eventType, eventData),
-  ]);
+  // Wake parked polls before routing can move the rows on to `delivered`.
+  await notifyDeliveryWaiters(ctx, deliveries);
+  await routeDeliveryOutcomesForContext(ctx, deliveries, eventType, eventData);
 }
 
 /** Wake long-polls parked on these recipients (`GET /v1/deliveries?wait=`). */

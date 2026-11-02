@@ -79,10 +79,7 @@ impl std::fmt::Debug for WorkspaceBootstrapOptions {
             .field("origin_client", &self.origin_client)
             .field("origin_version", &self.origin_version)
             .field("provenance", &self.provenance)
-            .field(
-                "metadata",
-                &self.metadata.as_ref().map(|_| "<redacted>"),
-            )
+            .field("metadata", &self.metadata.as_ref().map(|_| "<redacted>"))
             .field(
                 "idempotency_key",
                 &self.idempotency_key.as_ref().map(|_| "<redacted>"),
@@ -1019,9 +1016,6 @@ pub struct DeliveryItem {
 pub struct ListDeliveriesOptions {
     pub status: Option<DeliveryStatus>,
     pub limit: Option<i32>,
-    /// Long-poll in milliseconds (0–25000): an empty queue answers once a
-    /// delivery arrives or the wait expires.
-    pub wait_ms: Option<u32>,
 }
 
 #[derive(Debug, Clone, Serialize, Default)]

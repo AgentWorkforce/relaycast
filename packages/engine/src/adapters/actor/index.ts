@@ -8,7 +8,6 @@ import { NoopTelemetrySink } from '../../providers/noop-telemetry.js';
 import { InProcessRealtime } from '../node/realtime.js';
 import { InProcessPresence } from '../node/presence.js';
 import { InProcessRateLimiter } from '../node/rate-limit.js';
-import { InProcessDeliveryWaiters } from '../../ports/deliveryWaiters.js';
 import { createDeliveryMaintenanceRunner } from '../node/delivery-maintenance.js';
 import { sweepOfflineNodes } from '../../engine/node.js';
 import { AGENT_LIVENESS_TTL_MS, sweepStaleAgents } from '../../engine/agent.js';
@@ -224,7 +223,9 @@ export function createActorRuntime(options: ActorRuntimeOptions): ActorRuntime {
     nodeConnections: realtime,
     presence,
     rateLimiter: new InProcessRateLimiter(),
-    deliveryWaiters: new InProcessDeliveryWaiters(),
+    // No deliveryWaiters: a wait inside an actor call holds the mailbox, so
+    // the write that would wake it could never run. `wait` answers at once
+    // here; a host that long-polls parks outside the actor call.
     files,
     kv,
     webhookQueue,

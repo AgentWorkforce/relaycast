@@ -84,6 +84,17 @@ describe('delivery long-poll', () => {
     expect(await items(await poll(alice.token, ''))).toHaveLength(1);
   });
 
+  it('keeps a status-filtered poll parked when a new delivery does not match it', async () => {
+    const { alice, bob } = await seed();
+    const started = Date.now();
+    const parked = poll(bob.token, '?status=acked&wait=400');
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    await dm(alice.token, 'bob', 'queued, not acked');
+    expect(await items(await parked)).toEqual([]);
+    expect(Date.now() - started).toBeGreaterThanOrEqual(390);
+    await stack.settle();
+  });
+
   it('issues the same statements as an immediate poll when the wait expires', async () => {
     const { bob } = await seed();
     await items(await poll(bob.token, ''));

@@ -1117,7 +1117,10 @@ impl RelayCast {
             .header("X-SDK-Version", SDK_VERSION)
             .header(
                 "X-Relaycast-Origin-Client",
-                options.origin_client.as_deref().unwrap_or(DEFAULT_ORIGIN_CLIENT),
+                options
+                    .origin_client
+                    .as_deref()
+                    .unwrap_or(DEFAULT_ORIGIN_CLIENT),
             )
             .header(
                 "X-Relaycast-Origin-Version",
@@ -1754,7 +1757,10 @@ mod tests {
         for (credential, kind) in [("rk_live_test", "workspace"), ("at_live_agent", "agent")] {
             Mock::given(method("POST"))
                 .and(path("/v1/credentials/upgrade"))
-                .and(header("authorization", format!("Bearer {credential}").as_str()))
+                .and(header(
+                    "authorization",
+                    format!("Bearer {credential}").as_str(),
+                ))
                 .respond_with(ok(json!({
                     "credential": format!("ar_{kind}"),
                     "kind": kind,

@@ -39,15 +39,17 @@ export const DELIVERY_NOTIFY_MEMORY_MS = 60_000;
 
 /** Waiters and recent notify times held in this process. */
 export class InProcessDeliveryWaiters implements DeliveryWaiters {
-  private readonly waiters = new Map<string, Set<() => void>>();
+  private readonly waiters = new Map<string, Set<(outcome: 'notified' | 'timeout') => void>>();
+  /** Oldest notify first: a key is re-inserted on every notify, so pruning stops at the first live entry. */
   private readonly lastNotified = new Map<string, number>();
+  private closed = false;
 
   constructor(private readonly now: () => number = Date.now) {}
 
   wait(args: DeliveryWaitArgs): Promise<'notified' | 'timeout'> {
+    if (this.closed || args.signal?.aborted || args.timeoutMs <= 0) return Promise.resolve('timeout');
     const key = waiterKey(args.workspaceId, args.agentId);
     if ((this.lastNotified.get(key) ?? -Infinity) >= args.since) return Promise.resolve('notified');
-    if (args.signal?.aborted || args.timeoutMs <= 0) return Promise.resolve('timeout');
     return new Promise((resolve) => {
       let set = this.waiters.get(key);
       if (!set) {
@@ -57,31 +59,36 @@ export class InProcessDeliveryWaiters implements DeliveryWaiters {
       const finish = (outcome: 'notified' | 'timeout') => {
         clearTimeout(timer);
         args.signal?.removeEventListener('abort', onAbort);
-        set.delete(wake);
+        set.delete(finish);
         if (set.size === 0 && this.waiters.get(key) === set) this.waiters.delete(key);
         resolve(outcome);
       };
-      const wake = () => finish('notified');
       const onAbort = () => finish('timeout');
       const timer = setTimeout(() => finish('timeout'), args.timeoutMs);
-      set.add(wake);
+      set.add(finish);
       args.signal?.addEventListener('abort', onAbort, { once: true });
     });
   }
 
   async notify(workspaceId: string, agentIds: readonly string[]): Promise<void> {
     const now = this.now();
-    this.prune(now);
+    for (const [key, at] of this.lastNotified) {
+      if (now - at <= DELIVERY_NOTIFY_MEMORY_MS) break;
+      this.lastNotified.delete(key);
+    }
     for (const agentId of new Set(agentIds)) {
       const key = waiterKey(workspaceId, agentId);
+      this.lastNotified.delete(key);
       this.lastNotified.set(key, now);
-      for (const wake of [...(this.waiters.get(key) ?? [])]) wake();
+      for (const finish of [...(this.waiters.get(key) ?? [])]) finish('notified');
     }
   }
 
-  private prune(now: number): void {
-    for (const [key, at] of this.lastNotified) {
-      if (now - at > DELIVERY_NOTIFY_MEMORY_MS) this.lastNotified.delete(key);
+  /** Answers every parked wait, and every later one, with `'timeout'` (runtime shutdown). */
+  close(): void {
+    this.closed = true;
+    for (const set of [...this.waiters.values()]) {
+      for (const finish of [...set]) finish('timeout');
     }
   }
 }

@@ -10,7 +10,7 @@ The format is based on Keep a Changelog, and this project follows Semantic Versi
 
 ### Added
 
-- `ListDeliveriesOptions::wait_ms` long-polls `GET /v1/deliveries?wait=`. Struct literals need `..Default::default()` for the new field.
+- `AgentClient::wait_for_deliveries(opts, wait_ms)` long-polls `GET /v1/deliveries?wait=`. `ListDeliveriesOptions` is unchanged.
 
 ## [12.0.0] - 2026-10-31
 

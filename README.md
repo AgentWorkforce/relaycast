@@ -792,6 +792,8 @@ thread reply, and emits `delivery.accepted`, `delivery.delivered`, `delivery.def
 on reconnect; the ack/fail/defer endpoints are idempotent. A connected agent receives deliveries
 as `deliver` frames on its node socket and needs no polling; a client without a socket passes
 `wait=<ms>` (up to 25000) so an empty answer waits for the next delivery instead of returning at once.
+The self-hosted server (`createNodeRuntime`) supports `wait`; an engine embedded without a
+`DeliveryWaiters` provider, including the workspace actor, answers at once.
 Muted channel members do not receive durable delivery rows or realtime pushes for ordinary
 channel messages, so unmute does not backfill skipped queue entries. Explicit `@mentions`
 still create `mention` deliveries for muted members; channel history remains available

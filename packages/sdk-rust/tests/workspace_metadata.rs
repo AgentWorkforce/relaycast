@@ -80,7 +80,10 @@ async fn workspace_metadata_create_update_and_read() {
 
 #[test]
 fn workspace_without_metadata_defaults_to_empty_object() {
-    let workspace: Workspace = serde_json::from_value(json!({"id": "ws_1", "name": "legacy", "system_prompt": null, "created_at": "now"})).unwrap();
+    let workspace: Workspace = serde_json::from_value(
+        json!({"id": "ws_1", "name": "legacy", "system_prompt": null, "created_at": "now"}),
+    )
+    .unwrap();
     assert!(workspace.metadata.is_empty());
     assert!(workspace.api_key_hash.is_empty());
     assert_eq!(

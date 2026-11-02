@@ -22,8 +22,8 @@ export const deliveryRoutes = new Hono<AppEnv>();
 // Defaults to non-terminal items (queued + delivered) so offline consumers
 // can replay what they missed after reconnect. `wait` (ms) long-polls: an
 // empty answer is held until a delivery is created for the agent, the wait
-// expires or the client goes away. A parked request reads nothing; it lists
-// again only when woken.
+// expires or the client goes away. A parked request reads nothing; when woken
+// it lists again with the same query and parks again if that is still empty.
 deliveryRoutes.get(
   '/deliveries',
   requireAgentToken,
@@ -38,19 +38,22 @@ deliveryRoutes.get(
       const workspace = c.get('workspace');
       const agent = c.get('agent');
       const { wait, ...query } = parsed.data;
-      const since = Date.now();
-      const result = await deliveryEngine.listDeliveries(db, workspace.id, agent!.id, query);
       const waiters = c.get('engine').deliveryWaiters;
-      if (result.length > 0 || !wait || !waiters) return jsonOk(c, result);
-      const outcome = await waiters.wait({
-        workspaceId: workspace.id,
-        agentId: agent!.id,
-        since,
-        timeoutMs: wait,
-        signal: c.req.raw.signal,
-      });
-      if (outcome === 'timeout') return jsonOk(c, result);
-      return jsonOk(c, await deliveryEngine.listDeliveries(db, workspace.id, agent!.id, query));
+      const deadline = Date.now() + (wait ?? 0);
+      for (;;) {
+        const since = Date.now();
+        const result = await deliveryEngine.listDeliveries(db, workspace.id, agent!.id, query);
+        const remaining = deadline - Date.now();
+        if (result.length > 0 || !waiters || remaining <= 0) return jsonOk(c, result);
+        const outcome = await waiters.wait({
+          workspaceId: workspace.id,
+          agentId: agent!.id,
+          since,
+          timeoutMs: remaining,
+          signal: c.req.raw.signal,
+        });
+        if (outcome === 'timeout') return jsonOk(c, result);
+      }
     } catch (err: unknown) {
       return errorResponse(c, err);
     }
