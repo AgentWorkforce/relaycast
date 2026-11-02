@@ -12,7 +12,7 @@ import {
 } from './agent.js';
 import { randomHex, sha256Hex } from '../lib/crypto.js';
 import { codedError } from '../lib/httpError.js';
-import { D1_SAFE_IN_QUERY_CHUNK_SIZE, queryInChunks } from '../lib/queryChunks.js';
+import { D1_SAFE_IN_QUERY_CHUNK_SIZE, chunkValues, queryInChunks } from '../lib/queryChunks.js';
 import { toFleetWireJson } from './deliveryWire.js';
 import {
   emitAgentExitedEffects,
@@ -569,6 +569,7 @@ export async function deleteAction(
   // the caller never hears back. Atomicity closes the window where an invoke
   // lands between the stranded snapshot and the delete. Rows a node provider
   // materialized belong to its advertised capabilities and are left to it.
+  const hasInteractiveTransaction = typeof (db as Db & { withTransaction?: unknown }).withTransaction === 'function';
   const { deleted, stranded } = await runAtomic(db, async (tx) => {
     const rows = await tx
       .select({ id: actions.id, handlerProvider: actions.handlerProvider })
@@ -584,13 +585,25 @@ export async function deleteAction(
     }
     const strandedIds = await openInvocationIdsForActions(tx, workspaceId, ids);
     const strandedRows = await failOpenInvocationRows(tx, workspaceId, strandedIds, 'action_deleted');
-    const result = await queryInChunks(ids, (chunk) => tx
-      .delete(actions)
-      .where(and(eq(actions.workspaceId, workspaceId), inArray(actions.id, chunk), isNull(actions.handlerProvider)))
-      .returning({ id: actions.id }));
-    // A deleted agent-hosted action frees the alias for a node's default provider.
-    if (result.length > 0) await claimOrphanedGlobalAliases(tx, workspaceId);
-    return { deleted: result.length > 0, stranded: strandedRows };
+    if (ids.length === 0) return { deleted: false, stranded: strandedRows };
+    // The deletes (chunked under D1's bind cap) and the alias settlement a
+    // deleted agent-hosted action calls for commit as one unit, so neither a
+    // partial delete nor an unsettled alias can outlive a failure.
+    const writes = (w: Db) => [
+      ...chunkValues(ids).map((chunk) => w
+        .delete(actions)
+        .where(and(eq(actions.workspaceId, workspaceId), inArray(actions.id, chunk), isNull(actions.handlerProvider)))
+        .returning({ id: actions.id })),
+      claimOrphanedGlobalAliases(w, workspaceId),
+    ];
+    const results: unknown[] = [];
+    if (hasInteractiveTransaction) {
+      for (const write of writes(tx)) results.push(await write);
+    } else {
+      results.push(...await runAtomicWrites(tx, writes, { requireAtomic: true }));
+    }
+    const deletedRows = (results.slice(0, -1) as Array<Array<{ id: string }>>).flat();
+    return { deleted: deletedRows.length > 0, stranded: strandedRows };
   });
   if (options.completionDeps) {
     await emitFailedInvocationEffects(options.completionDeps, workspaceId, stranded);
