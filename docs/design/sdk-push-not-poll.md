@@ -18,11 +18,11 @@ Production `wrangler tail` of the API worker, 70 s, 2026-11-02 14:35Z, edge HTTP
 
 | Origin client | SDK | Polls | Notes |
 |---|---|---:|---|
-| `relay-desktop` (2026.10.37 – .67) | `relaycast` crate 10.0.0 / 8.0.1 | 108 | 79%; `limit=50` |
+| `relay-desktop` (2026.10.14 – .67) | `relaycast` crate 10.0.0 / 8.0.1 | 108 | 79%; `limit=50` |
 | none | none | 19 | raw HTTP |
 | `@relaycast/sdk` | 8.16.0 | 10 | `limit=100` |
 
-The dominant poller is relay-desktop (`crates/probe` in the `relay` repo), not the TypeScript CLI path. Its delivery loop (`probe/src/relay/delivery.rs`) reads every agent's queue on a pass interval of 3 s whenever any registration's push socket is not live or any connect session is open (backoff 3 → 6 → 12 → 15 s on empty reads), and 30 s as a safety read when every socket is live. A successful read also refreshes REST presence, which the loop relies on.
+The dominant poller is relay-desktop (the `relay-desktop` repo, `probe/src/relay/`), not the TypeScript CLI path. What its loop does is in [relay-desktop](#relay-desktop).
 
 Each poll costs 2 D1 statements in steady state (relaycast-cloud `hot-path-d1-statements.test.ts`): agent credential resolution and `deliveries.list`. Workspace plan and presence holds already come from KV and the workspace ledger.
 
@@ -113,22 +113,60 @@ D1 statements an agent with an empty queue causes per minute, from the hot-path 
 
 | Client behavior | Polls / min | D1 statements / min |
 |---|---:|---:|
-| relay-desktop, any socket not live (3 → 15 s backoff, steady 15 s) | 4 – 20 | 8 – 40 |
-| relay-desktop, all sockets live (30 s safety read) | 2 | 4 |
+| Fallback poll, 3 → 15 s backoff (steady 15 s) | 4 – 20 | 8 – 40 |
+| Relay Connect inbox, 3 → 30 s backoff (steady 30 s) | 2 – 20 | 4 – 40 |
+| Live socket with a 5-min safety read | 0.2 | 0.4 |
 | Long-poll, `wait=25000` | 2.4 | 4.8 |
 | Direct socket, no HTTP poll | 0 | 0 (NodeDO direct checkpoint: 2 per 4 min = 0.5) |
 
 The long-poll removes the fast-poll tier (the 3 – 15 s reads that exist only to cut latency) without raising latency. The idle floor comes from the socket, which is why push is the default and long-poll the fallback.
 
+## relay-desktop
+
+relay-desktop already takes the push path for registered agents. `push.rs` mints a direct node token per agent (`POST /v1/agent/node-token`), holds `/v1/node/ws`, and heartbeats every 15 s. Since 2026-10-11 (`d33658d5`) an agent whose socket is live has its queue read only as a 5-minute safety net. Everything else in `delivery.rs` / `connect_inbox.rs` still reads `GET /v1/deliveries`:
+
+| Reader | When it reads | Steady idle cadence |
+|---|---|---|
+| Registered agent, socket live | socket comes up or ends; 5-min safety timer | 1 / 5 min |
+| Registered agent, socket not live | every pass, backing off empty reads 3 → 6 → 12 → 15 s | 1 / 15 s |
+| Relay Connect seat (`connect_inbox.rs`) | no socket at all; backing off 3 → 6 → 12 → 24 → 30 s | 1 / 30 s |
+| Any pushed `deliver` frame other than `dm.received` / `thread.reply` | `Delivery::from_push_frame` returns `None`, so `wake` reads the whole queue | per frame |
+
+The last row has two sources. The first is durable channel posts (`message.created`): desktop reads the queue to learn whether the row is an @mention or ordinary traffic, because the frame doesn't carry the row's `reason`. The second is every seq-0 event frame the engine pushes on `deliver`: `message.read`, `message.reacted`, `action.*`, `agent.exited` and `node.status.*` (`NODE_DELIVER_FRAME_EVENT_TYPES`). Those aren't deliveries at all. One read receipt in a channel with N desktop agents costs N queue reads.
+
+In the sample, desktop reads arrive in same-instant bursts from one address (3–10 queues), repeating every 20–30 s, and no message post, read or reaction precedes them. The 30.0 s gaps match the Connect ladder's cap; the agent fallback tier caps at 15 s. The tail can't tell a Connect seat from a non-live agent (same endpoint, same headers, redacted token), so the split is inferred, not measured.
+
+### What desktop takes
+
+Push first, everywhere it can hold a socket:
+
+1. **Connect seats on push.** A seat holds an agent token, which is all `push.rs` needs to mint a direct node token and hold a socket. Put seats in the push manager like registrations. The inbox is then read when its socket comes up or ends, or when a frame asks, plus the 5-min safety timer.
+2. **No queue read for frames that aren't deliveries.** A `deliver` frame with `seq: 0` (delivery id `evt_…`) is an ephemeral event; desktop drops it instead of reading the queue.
+3. **Channel posts carried by the frame.** The engine adds the row's `reason` to `deliver` frames, a wire addition and minor bump, so `from_push_frame` can decide mention vs traffic without a read. Until then, (1) and (2) still stand.
+4. **`wait` only where no socket is live.** The fallback tier and a Connect seat whose socket is down pass `wait=25000` and drop the 3 s step. Parked reads return as soon as a delivery lands, so latency doesn't regress.
+
+Per idle reader-minute, at 2 D1 statements per read:
+
+| Reader | Today | `wait=25000` only | Push (1–2) |
+|---|---:|---:|---:|
+| Registered agent, socket live | 0.4 | 0.4 | 0.4 |
+| Registered agent, socket not live | 8 | 4.8 | 0.4 once its socket is live |
+| Connect seat | 4 | 4.8 | 0.4 |
+| Channel with N desktop agents, per read receipt or reaction | 2N | 2N | 0 |
+
+`wait` alone helps only the non-live tier. A Connect seat already backs off to 30 s, so a 25 s long-poll costs slightly more there. The win for desktop is push, which needs nothing from the server it doesn't already have. Items 1, 2 and 4 are desktop-only changes. Item 4 needs the engine release carrying `wait`; items 1 and 2 don't need a release at all.
+
 ## Rollout
 
 1. **Engine** (`relaycast`, minor): `wait` on `GET /v1/deliveries`, the `DeliveryWaiters` port and in-process implementation, notify in `routeDeliveryOutcomes`, `wait` on `deliveries()` in the TypeScript, Rust and Swift SDKs, OpenAPI and README.
 2. **relaycast-cloud**: pin the engine release; `WorkspaceStreamDO` waiter endpoints; `createCloudflareEngineDeps` binds the DO-backed `DeliveryWaiters`; hot-path statement test for a parked poll.
-3. **relay**: bump `@relaycast/sdk` / `relaycast`; relay-desktop's queue read passes `wait` while a socket is not live and drops the 3 s fast tier.
+3. **relay-desktop**: Connect seats on push and seq-0 frames ignored (no release needed), then `wait` on the remaining fallback reads once the engine release is out.
+4. **relay**: bump `@relaycast/sdk` (`^8.0.7` today) and the `relaycast` crate (9 / 10) to the release.
 
-Old clients keep their current cost until they update; relay-desktop auto-updates (seven versions within October in the sample), so its share moves with its release train.
+Old clients keep their current cost until they update. relay-desktop auto-updates (ten builds from 2026.10.14 to .67 in the sample), so its share moves with its release train.
 
 ## Not in this change
 
 - **Server-side empty answers for old clients.** The same notify signal could let `WorkspaceStreamDO` remember "agent's queue known empty since T" and answer a plain poll without `deliveries.list`, halving an unchanged old client's cost. It is a correctness-bearing cache (a lost notify hides rows until its TTL), so it is a separate decision.
+- **`reason` on `deliver` frames** (desktop item 3) is a separate engine change.
 - **Socket ack after side effects in the Rust SDK.** relay-desktop keeps its own socket because `WsClient` acks on arrival. A `WsClient` option to leave acking to the caller lets it drop `sdk_gaps`' socket and the safety read. Tracked as an SDK parity gap.
