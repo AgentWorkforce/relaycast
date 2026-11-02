@@ -167,11 +167,17 @@ export function getRequestLogger(
   return createRequestLogger(c, source, fields);
 }
 
+/**
+ * Flatten an error for structured logs. Drizzle wraps driver failures as
+ * "Failed query: <sql>" and keeps the database's reason (e.g. a D1
+ * constraint or bind-limit error) on `cause`, so every cause message is
+ * appended to `error_message`.
+ */
 export function toErrorDetails(error: unknown): { error_name: string; error_message: string; error_stack?: string } {
   if (error instanceof Error) {
     return {
       error_name: error.name,
-      error_message: error.message,
+      error_message: [error.message, ...causeMessages(error)].join(' | cause: '),
       ...(error.stack ? { error_stack: error.stack } : {}),
     };
   }
@@ -179,4 +185,16 @@ export function toErrorDetails(error: unknown): { error_name: string; error_mess
     error_name: 'NonError',
     error_message: String(error),
   };
+}
+
+function causeMessages(error: Error): string[] {
+  const messages: string[] = [];
+  const seen = new Set<unknown>([error]);
+  let cause = error.cause;
+  while (cause !== undefined && cause !== null && !seen.has(cause)) {
+    seen.add(cause);
+    messages.push(cause instanceof Error ? cause.message : String(cause));
+    cause = cause instanceof Error ? cause.cause : undefined;
+  }
+  return messages;
 }

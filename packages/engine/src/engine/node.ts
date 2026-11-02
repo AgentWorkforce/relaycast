@@ -31,6 +31,7 @@ import { AdmissionDeniedError } from '../lib/admissionError.js';
 import { acceptTaskInvocation, completeTaskInvocation } from './taskInvocation.js';
 import { databaseConstraintKind, runAtomic, runAtomicWrites } from '../ports/database.js';
 import { retryD1Write } from '../lib/d1Retry.js';
+import { chunkValues } from '../lib/queryChunks.js';
 import type { AtomicWrite, BatchCapability, EngineDb } from '../ports/database.js';
 import type { PresenceTracker } from '../ports/presence.js';
 import type { NodeConnectionRegistry } from '../ports/realtime.js';
@@ -3283,14 +3284,17 @@ export async function reconcileInventory(
     const missing = missingAgents.map((agent) => agent.id);
     if (missing.length > 0) {
       const missingAt = new Date();
-      const invalidationResults = await runAtomicWrites(db, [
+      // A node can drop hundreds of agents at once; one statement per D1-safe
+      // chunk keeps every IN list under the bound-parameter cap, and the single
+      // batch keeps binding and agent invalidation atomic.
+      const invalidationResults = await runAtomicWrites(db, chunkValues(missing).flatMap((chunk) => [
         db
           .update(agentNodeBindings)
           .set({ status: 'inactive', updatedAt: missingAt })
           .where(and(
             eq(agentNodeBindings.workspaceId, workspaceId),
             eq(agentNodeBindings.nodeId, nodeId),
-            inArray(agentNodeBindings.agentId, missing),
+            inArray(agentNodeBindings.agentId, chunk),
             eq(agentNodeBindings.status, 'active'),
           )),
         db
@@ -3303,17 +3307,19 @@ export async function reconcileInventory(
           })
           .where(and(
             eq(agents.workspaceId, workspaceId),
-            inArray(agents.id, missing),
+            inArray(agents.id, chunk),
             eq(agents.locationType, 'via_node'),
             eq(agents.locationNodeId, nodeId),
             eq(agents.providerName, providerName),
             ne(agents.status, RELEASED_AGENT_STATUS),
           ))
           .returning({ id: agents.id }),
-      ]);
-      const invalidatedIds = new Set(
-        ((invalidationResults[1] ?? []) as Array<{ id: string }>).map((row) => row.id),
-      );
+      ]));
+      // Each chunk contributes [bindings update, agents update RETURNING].
+      const invalidatedIds = new Set(invalidationResults
+        .filter((_, index) => index % 2 === 1)
+        .flatMap((rows) => rows as Array<{ id: string }>)
+        .map((row) => row.id));
       if (completionDeps) {
         for (const agent of missingAgents.filter((candidate) => invalidatedIds.has(candidate.id))) {
           await emitAgentExitedEffects(completionDeps, workspaceId, {

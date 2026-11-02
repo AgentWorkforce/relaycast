@@ -7,7 +7,12 @@ See the [root changelog](../../CHANGELOG.md) for cross-package release highlight
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [Unreleased - Patch]
+
+### Fixed
+
+- `reconcileInventory` deactivates missing agents' node bindings and offlines the agents with one statement pair per 90-id chunk, all in one atomic batch. A node that drops more agents than one D1 statement can bind no longer fails the sync with `too many SQL variables`.
+- `toErrorDetails` appends each `cause` message to `error_message`, so a Drizzle `Failed query: ...` log line carries the D1 reason (constraint, bind limit, overload).
 
 ## [12.6.2] - 2026-11-02
 

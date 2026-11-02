@@ -16,7 +16,9 @@ This project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 Packages without a separate changelog are covered by the cross-package notes below.
 
-## [Unreleased]
+## [Unreleased - Patch]
+
+- An `inventory.sync` that drops more than 90 agents from a node offlines all of them in one atomic batch. It no longer fails on D1's 100-parameter statement limit.
 
 ## [12.6.2] - 2026-11-02
 
