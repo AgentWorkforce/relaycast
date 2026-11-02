@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { eq, sql } from 'drizzle-orm';
 import { SQLiteSyncDialect } from 'drizzle-orm/sqlite-core';
 import { attachDirectNodeSocket, createWorkspace, makeNodeStack, registerAgent, type TestStack } from './harness.js';
-import { agents, agentNodeBindings, channels, files, messages, nodes, webhooks } from '../../db/schema.js';
+import { actions, agents, agentNodeBindings, channels, files, messages, nodes, webhooks } from '../../db/schema.js';
 import { retainAgents } from '../../engine/agentRetention.js';
 
 const now = new Date('2026-09-08T12:00:00Z');
@@ -80,6 +80,18 @@ describe('bulk agent retention', () => {
         .toMatchObject({ candidates: [], deleted: 0 });
       expect(await remaining()).toEqual(before);
     }
+  });
+
+  it('retains an agent that handles a registered action', async () => {
+    await seed('handler');
+    await db().insert(actions).values({
+      id: 'act-handled', workspaceId: ws.workspaceId, name: 'handled', description: 'handled', handlerAgentId: 'handler',
+    });
+    for (const remove of [false, true]) {
+      expect(await retainAgents(db(), ws.workspaceId, { ...options, delete: remove }, now))
+        .toMatchObject({ counts: { ownership_protected: 1 }, deleted: 0 });
+    }
+    expect(await remaining()).toEqual(['handler']);
   });
 
   it('fails closed for every broker ownership signal, even disconnected or inactive owners', async () => {

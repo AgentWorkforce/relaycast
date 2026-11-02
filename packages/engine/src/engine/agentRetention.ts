@@ -1,6 +1,5 @@
 import { sql, type SQL } from 'drizzle-orm';
 import { z } from 'zod';
-import { orphanedAliasClaimants } from './nodeProvider.js';
 
 export interface AgentRetentionDb {
   all<T>(query: SQL): PromiseLike<T[]>;
@@ -32,7 +31,9 @@ const requiredIndexes = [
  * Deliberately requires absence of ALL ownership evidence. An offline broker,
  * inactive binding, dangling location, or old inventory is not proof of release.
  * Direct-node identities are also retained: remote socket absence cannot be
- * inferred from durable status. No remote liveness RPC can fail open here.
+ * inferred from durable status. No remote liveness RPC can fail open here. An
+ * agent that handles a registered action is retained: deleting it would
+ * cascade the action and leave its name's alias without a claimant.
  *
  * Keep this expression identical in preview and DELETE. The latter evaluates it
  * inside the write statement, after any concurrent heartbeat/register/bind.
@@ -47,6 +48,7 @@ function reason(cutoff: number, indexesReady: boolean): SQL {
       OR a.location_node_id IS NOT NULL OR a.origin_node_id IS NOT NULL
       OR EXISTS (SELECT 1 FROM agent_node_bindings b WHERE b.agent_id = a.id)
       OR EXISTS (SELECT 1 FROM nodes n WHERE n.id = 'node_direct_' || a.id)
+      OR EXISTS (SELECT 1 FROM actions h WHERE h.handler_agent_id = a.id)
       THEN 'ownership_protected'
     WHEN a.metadata IS NOT NULL AND NOT json_valid(a.metadata) THEN 'ownership_protected'
     WHEN json_type(COALESCE(a.metadata, '{}')) IS NOT 'object'
@@ -111,11 +113,6 @@ export async function retainAgents(
         AND a.id IN (SELECT value FROM json_each(${JSON.stringify(eligible.map(row => row.id))}))
         AND ${reason(cutoff, indexesReady)} = 'eligible'
       RETURNING id`);
-    // Agent-hosted actions cascade with their handler; a freed alias passes
-    // to a node's default provider.
-    if (deleted.length) {
-      await db.all(sql`UPDATE actions SET is_global = 1 WHERE id IN (${orphanedAliasClaimants(workspaceId)}) RETURNING id`);
-    }
   }
   const counts: Record<Reason, number> = {
     not_offline: 0, recent_or_unknown: 0, ownership_protected: 0, history_unverified: 0, history_referenced: 0, eligible: 0,

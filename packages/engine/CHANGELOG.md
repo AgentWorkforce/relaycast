@@ -15,7 +15,8 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Changed
 
-- `node.heartbeat` re-materializes a provider's actions only when its action-kind capabilities change; it no longer reads action rows to check them. The writes that change which row may claim a workspace-global alias settle it in the same atomic unit: registering an agent-hosted action demotes a default provider's alias of that name; deleting an agent-hosted action, pruning or deregistering a provider, deleting a node, and agent retention promote the oldest default-provider row of each name left without a claimant (`claimOrphanedGlobalAliases`). A row edited outside the engine is corrected at the provider's next registration.
+- `node.heartbeat` re-materializes a provider's actions only when its action-kind capabilities change; it no longer reads action rows to check them. The writes that change which row may claim a workspace-global alias settle it in the same atomic unit: registering an agent-hosted action demotes a default provider's alias of that name; deleting an agent-hosted action, pruning or deregistering a provider, and deleting a node promote the oldest default-provider row of each name left without a claimant (`claimOrphanedGlobalAliases`). A row edited outside the engine is corrected at the provider's next registration.
+- Agent retention keeps an agent that handles a registered action (`ownership_protected`).
 - `deleteAction` deletes only rows registered through the API (no `handler_provider`) and throws `409 action_provider_owned` when a node provider offers every row of the name; a provider removes its actions by no longer advertising them.
 
 ### Fixed

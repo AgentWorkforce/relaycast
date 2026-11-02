@@ -216,8 +216,7 @@ export function claimOrphanedGlobalAliases(db: Db, workspaceId: string) {
     .where(sql`${actions.id} IN (${orphanedAliasClaimants(workspaceId)})`);
 }
 
-/** The ids {@link claimOrphanedGlobalAliases} promotes, for handles that run raw SQL. */
-export function orphanedAliasClaimants(workspaceId: string): SQL {
+function orphanedAliasClaimants(workspaceId: string): SQL {
   return sql`
     SELECT (
       SELECT c.id FROM actions c
