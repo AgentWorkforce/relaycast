@@ -17,6 +17,10 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 - With a store bound, `node.heartbeat`'s drift check, agent detail and message triggers skip their `actions` and `triggers` reads while the workspace's catalog is unchanged. The drift check heals changes the engine wrote; rows edited outside the engine heal at the next re-registration or action write. A workspace with more than 1000 actions or enabled triggers is read directly.
 
+### Fixed
+
+- The inbox mention lookup prefilters bodies with `instr(body, '@name')` instead of `LIKE`, so it stays within D1's 50-byte LIKE pattern cap for any agent name. Results are unchanged: `parseMessageMentions` is case-sensitive and needs the literal `@name`.
+
 ## [12.6.2] - 2026-11-02
 
 ### Fixed

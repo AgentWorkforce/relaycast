@@ -19,6 +19,7 @@ Packages without a separate changelog are covered by the cross-package notes bel
 ## [Unreleased - Minor]
 
 - Node heartbeats, agent detail and message triggers skip repeated `actions` and `triggers` reads while a workspace's catalog is unchanged; self-hosted engines cache in process.
+- `GET /v1/inbox` returns mentions for agents with long names (about 47 bytes or more) on Cloudflare D1 instead of `500 internal_error`.
 
 ## [12.6.2] - 2026-11-02
 
