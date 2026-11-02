@@ -50,6 +50,13 @@ export interface DeliveryRejectionRecord {
   retryable: false;
 }
 
+export type ObservationRecipient = Pick<typeof agents.$inferSelect, 'type' | 'metadata'>;
+export type RecipientObserver = (recipients: readonly ObservationRecipient[]) => void;
+
+function observeRecipients(observer: RecipientObserver | undefined, recipients: readonly ObservationRecipient[]): void {
+  try { observer?.(recipients); } catch { /* observation is best effort */ }
+}
+
 export interface DeliveryOutcomeRecords {
   deliveries: DeliveryFanoutRecord[];
   rejections: DeliveryRejectionRecord[];
@@ -475,6 +482,7 @@ export function buildDirectDeliveryWrite(
 export async function fetchDeliveryFanoutRecords(
   db: EngineDb,
   messageId: string,
+  onRecipientsResolved?: RecipientObserver,
 ): Promise<DeliveryFanoutRecord[]> {
   const rows = await db
     .select({
@@ -493,11 +501,13 @@ export async function fetchDeliveryFanoutRecords(
       routeNodeRole: deliveries.routeNodeRole,
       deliveryAdapter: deliveries.deliveryAdapter,
       nextAttemptAt: deliveries.nextAttemptAt,
+      ...(onRecipientsResolved ? { recipientType: agents.type, recipientMetadata: agents.metadata } : {}),
     })
     .from(deliveries)
     .innerJoin(agents, eq(deliveries.agentId, agents.id))
     .where(eq(deliveries.messageId, messageId));
 
+  if (onRecipientsResolved) observeRecipients(onRecipientsResolved, rows.map(row => ({ type: row.recipientType ?? 'unknown', metadata: row.recipientMetadata ?? null })));
   return rows.map((row) => ({
     id: row.id,
     agentId: row.agentId,
@@ -599,14 +609,17 @@ export async function fetchGroupDeliveryOutcomes(
     offlineExcludeMs: number;
     authorityLeases?: readonly AuthorityRecipientLease[];
     excludeLongOffline?: boolean;
+    onRecipientsResolved?: RecipientObserver;
   },
 ): Promise<DeliveryOutcomeRecords> {
+  let deliveredRecipients: readonly ObservationRecipient[] = [];
   const [deliveries, intended] = await Promise.all([
-    fetchDeliveryFanoutRecords(db, input.messageId),
+    fetchDeliveryFanoutRecords(db, input.messageId, input.onRecipientsResolved ? recipients => { deliveredRecipients = recipients; } : undefined),
     db
       .select({
         agentId: dmParticipants.agentId,
         agentName: agents.name,
+        ...(input.onRecipientsResolved ? { recipientType: agents.type, recipientMetadata: agents.metadata } : {}),
         offline: input.excludeLongOffline === false ? sql<number>`0` : longOfflineSql(db, input.offlineExcludeMs, input.authorityLeases),
       })
       .from(dmParticipants)
@@ -629,6 +642,7 @@ export async function fetchGroupDeliveryOutcomes(
             newDeliveryIdentitySql(input.messageId, dmParticipants.agentId),
       )),
   ]);
+  if (input.onRecipientsResolved) observeRecipients(input.onRecipientsResolved, [...deliveredRecipients, ...intended.map(row => ({ type: row.recipientType ?? 'unknown', metadata: row.recipientMetadata ?? null }))]);
   return {
     deliveries,
     rejections: missingDeliveryRejections(intended, deliveries, input.messageId),

@@ -19,7 +19,7 @@ import {
 } from '../engine/observerToken.js';
 import { runInBackground } from './background.js';
 import { sendWebhookEvent } from './webhookOutbox.js';
-import { emitServerEvent } from '../lib/serverTelemetry.js';
+import { emitServerEvent, recipientDimensions } from '../lib/serverTelemetry.js';
 import { errorResponse } from '../lib/httpError.js';
 import { jsonError, jsonOk, parseJsonBody } from '../lib/httpResponse.js';
 import { parsePaginationQuery } from '../lib/httpQuery.js';
@@ -67,7 +67,7 @@ threadRoutes.post(
         fromName: agent?.name ?? 'unknown',
       });
 
-      let recipientType: 'channel' | 'unknown' = 'unknown';
+      let recipientFacts = recipientDimensions([]);
       const idempotent = await runIdempotent({
         workspaceId: workspace.id,
         actorId: agentId,
@@ -84,7 +84,7 @@ threadRoutes.post(
             parentId,
             agentId,
             { text, blocks, data },
-            { mailbox, workspaceDeliveryPolicy, onRecipientResolved: type => { recipientType = type; } },
+            { mailbox, workspaceDeliveryPolicy, onRecipientsResolved: recipients => { recipientFacts = recipients === null ? { recipient_type: 'channel', recipient_harness: 'unknown' } : recipientDimensions(recipients); } },
           );
         },
         afterOperation: async (data) => {
@@ -133,7 +133,7 @@ threadRoutes.post(
           message_id: publicReplyData.id,
           parent_message_id: parentId,
           channel_id: publicReplyData.channel_id ?? null,
-          recipient_type: recipientType,
+          ...recipientFacts,
         });
       }
 

@@ -23,6 +23,8 @@ async function emit(capture: TelemetrySink['capture'], workspaceId = 'ws_1') {
 describe('domain observations', () => {
   it('bounds harness metadata without accepting custom names, model suffixes or identity', () => {
     for (const harness of TELEMETRY_HARNESSES) expect(telemetryHarness({ harness })).toBe(harness);
+    expect(telemetryHarness({ orchestrator_harness: 'antigravity' })).toBe('antigravity');
+    expect(telemetryHarness({ orchestrator_harness: 'antigravity/private-model' })).toBe('unknown');
     expect(telemetryHarness({ cli: 'claude', source: 'broker' })).toBe('claude-code');
     expect(telemetryHarness({ cli: 'cursor-agent' })).toBe('cursor');
     expect(telemetryHarness({ session_kind: 'claude-terminal', source: 'relay-desktop' })).toBe('claude-code');

@@ -119,7 +119,8 @@ export interface EngineDeps extends EnginePorts, EngineProviders {
 export interface EngineConfig {
   /** Uniform HTTP completion observation sampling, before outcome is known.
    * Defaults to 0.01; 0 disables. Finite values are clamped to [0, 1].
-   * Covers requests reaching the engine, including unauthenticated failures.
+   * Covers non-heartbeat requests reaching the engine, including unauthenticated
+   * failures. POST /v1/agents/heartbeat is excluded entirely.
    */
   telemetryRequestSampleRate?: number;
   environment?: string;

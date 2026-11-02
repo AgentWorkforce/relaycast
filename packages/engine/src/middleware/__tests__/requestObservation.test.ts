@@ -21,6 +21,7 @@ function fixture(rate?: number) {
   });
   app.use('/private/*', c => c.text('unauthorized', 401));
   app.get('/private/:name', c => c.text('unreachable'));
+  app.post('/v1/agents/heartbeat', c => c.text('heartbeat', 401));
   app.get('/broken', () => { throw Error('private exception'); });
   return { app, events };
 }
@@ -70,6 +71,16 @@ describe('uniform HTTP completion observations', () => {
     const { app, events } = fixture(rate);
     await app.request('/broken');
     expect(events[0]!.facts.sample_rate).toBe(expected);
+  });
+
+  it('excludes registered heartbeat requests before sampling including failures', async () => {
+    const random = vi.spyOn(Math, 'random');
+    const { app, events } = fixture(1);
+    expect((await app.request('/v1/agents/heartbeat', { method: 'POST' })).status).toBe(401);
+    expect(events).toHaveLength(0);
+    expect(random).not.toHaveBeenCalled();
+    await app.request('/v1/agents/heartbeat/private?token=secret', { method: 'POST' });
+    expect(events[0]!.facts.route_template).toBe('unmatched');
   });
 
   it('uses OTHER for methods outside the receiver vocabulary', async () => {

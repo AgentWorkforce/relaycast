@@ -39,7 +39,7 @@ export type TelemetryActor = Pick<
 /** Bounded analytics dimensions; metadata never establishes identity. */
 export const TELEMETRY_HARNESSES = [
   'claude-code', 'codex', 'cursor', 'gemini-cli', 'aider', 'opencode',
-  'goose', 'devin', 'droid', 'grok', 'amp', 'github-copilot', 'zed', 'unknown',
+  'goose', 'devin', 'droid', 'grok', 'amp', 'github-copilot', 'zed', 'antigravity', 'unknown',
 ] as const;
 
 export function telemetryHarness(metadata: Record<string, unknown> | null | undefined): string {
@@ -50,13 +50,23 @@ export function telemetryHarness(metadata: Record<string, unknown> | null | unde
     'claude-terminal': 'claude-code', 'claude-cloud': 'claude-code',
     'cursor-cli': 'cursor', 'grok-open': 'grok', 'opencode-open': 'opencode',
   };
-  for (const raw of [metadata?.cli, metadata?.session_kind, metadata?.harness]) {
+  for (const raw of [metadata?.cli, metadata?.session_kind, metadata?.harness, metadata?.orchestrator_harness]) {
     if (typeof raw !== 'string') continue;
     const value = raw.trim().toLowerCase();
     const canonical = Object.hasOwn(aliases, value) ? aliases[value]! : value;
     if ((TELEMETRY_HARNESSES as readonly string[]).includes(canonical)) return canonical;
   }
   return 'unknown';
+}
+
+export function recipientDimensions(recipients: readonly { type: string; metadata: Record<string, unknown> | null }[]) {
+  const types = new Set(recipients.map(recipient => recipient.type));
+  const type = types.size === 1 ? recipients[0]?.type : undefined;
+  const harnesses = new Set(recipients.map(recipient => telemetryHarness(recipient.metadata)));
+  return {
+    recipient_type: type === 'human' || type === 'agent' ? type : 'unknown',
+    recipient_harness: harnesses.size === 1 ? [...harnesses][0]! : 'unknown',
+  };
 }
 
 /** Optional domain sender override; never changes the authenticated principal. */

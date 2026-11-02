@@ -18,9 +18,9 @@ Packages without a separate changelog are covered by the cross-package notes bel
 
 ## [Unreleased - Minor]
 
-- Message observations include bounded sender/recipient harness dimensions and recipient kinds from resolved records; unavailable group and DM-thread recipient dimensions remain `unknown`.
+- Message observations include bounded sender/recipient harness dimensions and recipient kinds from resolved records; group and DM-thread recipients derive from existing delivery rows, while mixed or unavailable recipient kinds remain `unknown`.
 
-- Hosts receive uniformly sampled HTTP completion observations, including authentication failures and unmatched requests, without raw request paths.
+- Hosts receive uniformly sampled HTTP completion observations, including authentication failures and unmatched requests, excluding the heartbeat route and raw request paths.
 
 - A broker's changing live-agent roster no longer rewrites its action rows on every heartbeat.
 - A heartbeat writes the node aggregate in one statement and reads drain state in one statement.

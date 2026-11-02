@@ -9,9 +9,9 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ## [Unreleased - Minor]
 
-- Message observations include bounded sender/recipient harness dimensions and recipient kinds from resolved records; unavailable group and DM-thread recipient dimensions remain `unknown`.
+- Message observations include bounded sender/recipient harness dimensions and recipient kinds from resolved records; group and DM-thread recipients derive from existing delivery rows, while mixed or unavailable recipient kinds remain `unknown`.
 
-- Add `request.completed` observations with route templates, method, status, latency and inclusion rate. `telemetryRequestSampleRate` defaults to 1%; workspace identity is optional only for HTTP completions.
+- Add `request.completed` observations with route templates, method, status, latency and inclusion rate. `telemetryRequestSampleRate` defaults to 1%; workspace identity is optional only for HTTP completions. `POST /v1/agents/heartbeat` is excluded from the sampled denominator.
 
 ### Added
 

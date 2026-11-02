@@ -31,7 +31,7 @@ export async function postReply(
   parentId: string,
   agentId: string,
   data: { text: string; blocks?: unknown[] | null; data?: Record<string, unknown> | null },
-  options: { mailbox?: MailboxConfig; workspaceDeliveryPolicy?: WorkspaceDeliveryPolicy; onRecipientResolved?: (type: 'channel' | 'unknown') => void } = {},
+  options: { mailbox?: MailboxConfig; workspaceDeliveryPolicy?: WorkspaceDeliveryPolicy; onRecipientsResolved?: (recipients: readonly import('./deliveryWrites.js').ObservationRecipient[] | null) => void } = {},
 ) {
   // Get the parent message
   const [parent] = await db
@@ -52,7 +52,7 @@ export async function postReply(
     .from(dmConversations)
     .where(eq(dmConversations.channelId, parent.channelId));
 
-  try { options.onRecipientResolved?.(dmConversation ? 'unknown' : 'channel'); } catch { /* observation is best effort */ }
+  try { if (!dmConversation) options.onRecipientsResolved?.(null); } catch { /* observation is best effort */ }
 
   const [agent] = await db
     .select({ name: agents.name, node: addressNodeSelection })
@@ -155,6 +155,7 @@ export async function postReply(
       offlineExcludeMs: mailbox.offlineExcludeMs,
         authorityLeases,
       excludeLongOffline: dmConversation.dmType !== '1:1',
+      onRecipientsResolved: options.onRecipientsResolved,
     })
     : await fetchChannelDeliveryOutcomes(db, {
       messageId: replyId,

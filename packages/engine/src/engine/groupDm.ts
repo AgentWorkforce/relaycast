@@ -93,7 +93,7 @@ export async function postGroupMessage(
     mode?: 'wait' | 'steer';
     data?: Record<string, unknown> | null;
   },
-  options: { mailbox?: MailboxConfig; workspaceDeliveryPolicy?: WorkspaceDeliveryPolicy } = {},
+  options: { mailbox?: MailboxConfig; workspaceDeliveryPolicy?: WorkspaceDeliveryPolicy; onRecipientsResolved?: import('./deliveryWrites.js').RecipientObserver } = {},
 ) {
   // Verify sender is a participant (and hasn't left)
   const [participant] = await db
@@ -211,6 +211,7 @@ export async function postGroupMessage(
     messageId,
     conversationId,
     senderAgentId: agentId,
+    onRecipientsResolved: options.onRecipientsResolved,
     offlineExcludeMs: mailbox.offlineExcludeMs,
         authorityLeases,
   });

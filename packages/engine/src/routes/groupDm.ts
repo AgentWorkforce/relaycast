@@ -14,7 +14,7 @@ import { notifyDeliveryRejections, routeDeliveryOutcomes } from './deliveryRouti
 import { buildGroupDmReceivedEventData } from '../engine/deliveryWire.js';
 import { runInBackground } from './background.js';
 import { sendWebhookEvent } from './webhookOutbox.js';
-import { emitServerEvent } from '../lib/serverTelemetry.js';
+import { emitServerEvent, recipientDimensions } from '../lib/serverTelemetry.js';
 import { sha256Hex } from '../lib/crypto.js';
 import { canonicalUserMessageMetadata } from '../engine/messageMetadata.js';
 import {
@@ -152,6 +152,7 @@ groupDmRoutes.post(
         fromName: agent!.name,
       });
 
+      let recipientFacts = recipientDimensions([]);
       const idempotent = await runIdempotent({
         workspaceId: workspace.id,
         actorId: agent!.id,
@@ -174,7 +175,7 @@ groupDmRoutes.post(
               data,
               mode,
             },
-            { mailbox, workspaceDeliveryPolicy: await resolveWorkspaceDeliveryPolicyFor(c.get('engine').config, workspace) },
+            { mailbox, workspaceDeliveryPolicy: await resolveWorkspaceDeliveryPolicyFor(c.get('engine').config, workspace), onRecipientsResolved: recipients => { recipientFacts = recipientDimensions(recipients); } },
           );
         },
         afterOperation: async (data) => {
@@ -214,6 +215,7 @@ groupDmRoutes.post(
         }
 
         emitServerEvent(c, workspace.id, 'group.dm.message.sent', {
+          ...recipientFacts,
           conversation_id: publicGroupData.conversation_id,
           message_id: publicGroupData.id,
           from_agent_id: agent!.id,
