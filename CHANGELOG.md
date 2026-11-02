@@ -19,7 +19,8 @@ Packages without a separate changelog are covered by the cross-package notes bel
 ## [Unreleased - Minor]
 
 - **Removed:** agent detail (`GET /v1/agent`, `GET /v1/agents/:name`) no longer returns `actions_provided` or `actions_available_to`. List actions with `GET /v1/actions`.
-- Node heartbeats no longer read action rows to check them; only a change to a provider's action capabilities rewrites them. An action's workspace-global alias passes to another node's default provider as soon as its owner (an agent-hosted action, or another node's alias) is deleted or stops being offered.
+- Node heartbeats no longer read action rows to check them; only a change to a provider's action capabilities rewrites them.
+- An action's workspace-global alias passes to another node's default provider as soon as its owner (an agent-hosted action, or another node's alias) is deleted or stops being offered.
 - `DELETE /v1/actions/:name` deletes only actions registered through the API; a name only node providers offer returns `409 action_provider_owned`.
 - `GET /v1/inbox` returns mentions for agents with long names (about 47 bytes or more) on Cloudflare D1 instead of `500 internal_error`.
 - An `inventory.sync` that drops more than 90 agents from a node offlines all of them in one atomic batch. It no longer fails on D1's 100-parameter statement limit.

@@ -132,6 +132,25 @@ describe('action alias writers', () => {
     expect(isGlobal(ws.workspaceId, 'node_b', 'etl')).toBe(1);
   });
 
+  it('settles a released alias even when a later capability in the same pass fails', async () => {
+    const ws = await createWorkspace(stack.app, 'alias-release-then-fail');
+    for (const node of ['node_a', 'node_b', 'node_c']) await enrollNode(ws.workspaceKey, node);
+    await provide(ws.workspaceId, 'node_a', [{ name: 'etl', kind: 'action', global: true }], 'py');
+    await provide(ws.workspaceId, 'node_b', [{ name: 'sync', kind: 'action', global: true }], 'py');
+    await provide(ws.workspaceId, 'node_c', ['etl']);
+    expect(isGlobal(ws.workspaceId, 'node_c', 'etl')).toBe(0);
+
+    // node_a drops `global` on etl, then claims sync, which node_b owns. The
+    // pass fails without rollback, as on D1, after the etl demotion committed.
+    const d1Like = drizzle(stack.runtime.handle.sqlite, { schema }) as unknown as EngineDb;
+    await expect(heartbeatNode(d1Like, ws.workspaceId, 'node_a', 'py', {
+      type: 'node.heartbeat', load: 0, active_agents: 0, handlers_live: true, max_agents: 4,
+      capabilities: [{ name: 'etl', kind: 'action', global: false }, { name: 'sync', kind: 'action', global: true }],
+    })).rejects.toMatchObject({ code: 'action_name_conflict' });
+    expect(isGlobal(ws.workspaceId, 'node_a', 'etl')).toBe(0);
+    expect(isGlobal(ws.workspaceId, 'node_c', 'etl')).toBe(1);
+  });
+
   it('refuses to delete an action a node provider owns, and deletes only the rows it does not', async () => {
     const ws = await createWorkspace(stack.app, 'alias-provider-owned');
     const agent = await registerAgent(stack.app, ws.workspaceKey, 'handler');

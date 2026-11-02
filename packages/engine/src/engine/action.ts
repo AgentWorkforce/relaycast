@@ -584,10 +584,10 @@ export async function deleteAction(
     }
     const strandedIds = await openInvocationIdsForActions(tx, workspaceId, ids);
     const strandedRows = await failOpenInvocationRows(tx, workspaceId, strandedIds, 'action_deleted');
-    const result = ids.length === 0 ? [] : await tx
+    const result = await queryInChunks(ids, (chunk) => tx
       .delete(actions)
-      .where(and(eq(actions.workspaceId, workspaceId), eq(actions.name, name), isNull(actions.handlerProvider)))
-      .returning({ id: actions.id });
+      .where(and(eq(actions.workspaceId, workspaceId), inArray(actions.id, chunk)))
+      .returning({ id: actions.id }));
     // A deleted agent-hosted action frees the alias for a node's default provider.
     if (result.length > 0) await claimOrphanedGlobalAliases(tx, workspaceId);
     return { deleted: result.length > 0, stranded: strandedRows };
