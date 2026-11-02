@@ -19,6 +19,9 @@ Packages without a separate changelog are covered by the cross-package notes bel
 ## [Unreleased - Minor]
 
 - Node heartbeats, agent detail (`GET /v1/agent`, `GET /v1/agents/:name`) and message triggers read a workspace's actions and enabled triggers from a writer-advanced cache, once per change, instead of querying them on every request. Self-hosted engines cache in process; hosts plug in their own store.
+
+## [12.6.2] - 2026-11-02
+
 - A broker's periodic inventory sync no longer redispatches in-flight non-spawn actions to another node; it only reschedules spawns whose agents it no longer lists.
 
 ## [12.6.1] - 2026-11-02
@@ -976,7 +979,8 @@ Packages without a separate changelog are covered by the cross-package notes bel
 
 Earlier releases are available on the [GitHub releases page](https://github.com/AgentWorkforce/relaycast/releases).
 
-[Unreleased]: https://github.com/AgentWorkforce/relaycast/compare/v12.6.1...HEAD
+[Unreleased]: https://github.com/AgentWorkforce/relaycast/compare/v12.6.2...HEAD
+[12.6.2]: https://github.com/AgentWorkforce/relaycast/compare/v12.6.1...v12.6.2
 [12.6.1]: https://github.com/AgentWorkforce/relaycast/compare/v12.6.0...v12.6.1
 [12.6.0]: https://github.com/AgentWorkforce/relaycast/compare/v12.5.0...v12.6.0
 [12.5.0]: https://github.com/AgentWorkforce/relaycast/compare/v12.4.0...v12.5.0

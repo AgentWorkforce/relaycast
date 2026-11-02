@@ -17,6 +17,8 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 - With a store bound, `node.heartbeat`'s materialization drift check, agent detail's `actions_provided` / `actions_available_to`, and message triggers read the cached catalog: a workspace with an unchanged catalog issues no `actions` or `triggers` statement on those paths. The drift check now heals changes the engine wrote; a row edited outside the engine is healed at the next re-registration or action write. A matching trigger's rate limit is enforced by its fire claim alone. A workspace with more than 1000 actions or enabled triggers is read directly.
 
+## [12.6.2] - 2026-11-02
+
 ### Fixed
 
 - `inventory.sync` completes and reschedules only spawn invocations, the only ones an agent inventory describes. Other open invocations dispatched to the provider (`task.run`, native-session delivery) are no longer redispatched to another node by a snapshot that never lists them; provider disconnect and the dispatch-timeout sweep recover them. The reply's `open_invocations` counts open spawns.
