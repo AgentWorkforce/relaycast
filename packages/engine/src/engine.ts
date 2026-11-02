@@ -103,6 +103,7 @@ export function createEngine(deps: EngineDeps): Hono<AppEnv> {
     webhookQueue: deps.webhookQueue,
     auth: deps.auth,
     admission: deps.admission,
+    deliveryWaiters: deps.deliveryWaiters,
     telemetry: safeTelemetrySink(deps.telemetry ?? new NoopTelemetrySink()),
     config: deps.config ?? {},
   };

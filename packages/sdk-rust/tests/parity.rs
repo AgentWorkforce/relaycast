@@ -1000,6 +1000,7 @@ async fn durable_delivery_methods_use_expected_endpoints() {
         .and(path("/v1/deliveries"))
         .and(query_param("status", "queued"))
         .and(query_param("limit", "25"))
+        .and(query_param("wait", "25000"))
         .respond_with(ok(json!([
             {
                 "id": "del_1",
@@ -1032,10 +1033,13 @@ async fn durable_delivery_methods_use_expected_endpoints() {
         .await;
 
     let deliveries = agent
-        .deliveries(Some(ListDeliveriesOptions {
-            status: Some(DeliveryStatus::Queued),
-            limit: Some(25),
-        }))
+        .wait_for_deliveries(
+            Some(ListDeliveriesOptions {
+                status: Some(DeliveryStatus::Queued),
+                limit: Some(25),
+            }),
+            25_000,
+        )
         .await
         .expect("deliveries failed");
     assert_eq!(deliveries[0].delivery.id, "del_1");
@@ -1051,6 +1055,7 @@ async fn durable_delivery_methods_use_expected_endpoints() {
     Mock::given(method("GET"))
         .and(path("/v1/deliveries"))
         .and(query_param_is_missing("status"))
+        .and(query_param_is_missing("wait"))
         .and(query_param("limit", "10"))
         .respond_with(ok(json!([])))
         .expect(1)

@@ -319,6 +319,7 @@ public final class AgentClient: @unchecked Sendable {
         var params: [String: String] = [:]
         if let status = options.status { params["status"] = status.rawValue }
         if let limit = options.limit { params["limit"] = String(limit) }
+        if let waitMs = options.waitMs { params["wait"] = String(waitMs) }
         return try await client.get("/v1/deliveries", query: params)
     }
 

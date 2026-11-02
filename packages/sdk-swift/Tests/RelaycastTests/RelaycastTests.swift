@@ -447,6 +447,26 @@ final class RelaycastTests: XCTestCase {
         XCTAssertEqual(message.id, "msg_1")
     }
 
+    func testDeliveriesSendsWaitAsLongPollQuery() async throws {
+        let session = makeMockSession()
+        let http = try HttpClient(
+            options: ClientOptions(apiKey: "at_test", baseURL: "https://relay.test", retryPolicy: RetryPolicy(maxRetries: 0)),
+            session: session
+        )
+        let agent = try AgentClient(client: http)
+
+        MockURLProtocol.handler = { request in
+            XCTAssertEqual(request.url?.path, "/v1/deliveries")
+            let query = URLComponents(url: try XCTUnwrap(request.url), resolvingAgainstBaseURL: false)?.queryItems ?? []
+            XCTAssertEqual(query.first { $0.name == "wait" }?.value, "25000")
+            XCTAssertEqual(query.first { $0.name == "limit" }?.value, "50")
+            return jsonResponse(["ok": true, "data": []])
+        }
+
+        let items = try await agent.deliveries(options: ListDeliveriesOptions(limit: 50, waitMs: 25_000))
+        XCTAssertTrue(items.isEmpty)
+    }
+
     func testNodesListSendsCapabilityFilterAndDecodesRoster() async throws {
         let session = makeMockSession()
         let relay = try RelayCast(

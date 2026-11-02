@@ -16,8 +16,11 @@ This project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 Packages without a separate changelog are covered by the cross-package notes below.
 
-## [Unreleased - Patch]
+## [Unreleased - Minor]
 
+- `GET /v1/deliveries?wait=<ms>` long-polls (0–25000 ms): an empty answer waits until a matching delivery is created for the agent or the wait expires, and reads nothing while it waits.
+- SDKs pass `wait`: TypeScript `deliveries({ waitMs })`, Rust `wait_for_deliveries(opts, wait_ms)`, Swift `ListDeliveriesOptions(waitMs:)`.
+- The self-hosted server wakes waiters in process; other hosts supply a `DeliveryWaiters` provider, and an engine without one answers `wait` at once.
 - `GET /v1/nodes?status=online` answers promptly in hosted workspaces with many historical nodes instead of timing out.
 - `GET /v1/nodes` honors `limit` on a `status` selection without `history`, returning the first matches in `id` order.
 - `GET /v1/inbox` returns mentions for agents with long names (about 47 bytes or more) on Cloudflare D1 instead of `500 internal_error`.

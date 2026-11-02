@@ -44,6 +44,16 @@ describe('AgentClient durable delivery', () => {
       expect(parsed.searchParams.get('limit')).toBe('25');
     });
 
+    it('passes waitMs as the wait long-poll query param', async () => {
+      mockFetch.mockImplementation(() => mockResponse([]));
+
+      await me.deliveries({ limit: 50, waitMs: 25_000 });
+
+      const parsed = new URL(mockFetch.mock.calls[0]![0] as string);
+      expect(parsed.searchParams.get('wait')).toBe('25000');
+      expect(parsed.searchParams.get('limit')).toBe('50');
+    });
+
     it('camelizes the delivery items in the response', async () => {
       mockFetch.mockImplementation(() => mockResponse([
         { id: 'del_1', message_id: 'm_1', channel_id: 'c_1', available_at: null, message: { agent_name: 'bob' } },

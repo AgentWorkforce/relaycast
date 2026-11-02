@@ -484,7 +484,48 @@ export async function routeDeliveryOutcomes(
   eventData: Record<string, unknown>,
   opts: { workspaceId?: string } = {},
 ): Promise<void> {
-  await routeDeliveryOutcomesForContext(routingContextFromHono(c, opts.workspaceId), deliveries, eventType, eventData);
+  const ctx = routingContextFromHono(c, opts.workspaceId);
+  // Socket delivery never waits on the long-poll signal: the notify runs
+  // beside routing and is only awaited, bounded, once routing is done.
+  const notified = notifyDeliveryWaiters(ctx, deliveries);
+  await routeDeliveryOutcomesForContext(ctx, deliveries, eventType, eventData);
+  await notified;
+}
+
+/** How long delivery routing's background work waits on a waiter notify. */
+export const DELIVERY_WAITER_NOTIFY_TIMEOUT_MS = 2_000;
+
+/**
+ * Wake long-polls parked on these recipients (`GET /v1/deliveries?wait=`).
+ * Never rejects: a failed or slow notify costs a parked poll latency, never a
+ * delivery, so it is logged and abandoned after the timeout.
+ */
+async function notifyDeliveryWaiters(ctx: RoutingContext, deliveries: DeliveryFanoutRecord[]): Promise<void> {
+  const waiters = ctx.engine.deliveryWaiters;
+  if (!waiters || deliveries.length === 0) return;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const timeout = new Promise<'timeout'>((resolve) => {
+    timer = setTimeout(() => resolve('timeout'), DELIVERY_WAITER_NOTIFY_TIMEOUT_MS);
+  });
+  try {
+    const outcome = await Promise.race([
+      waiters.notify(ctx.workspaceId, [...new Set(deliveries.map((delivery) => delivery.agentId))]),
+      timeout,
+    ]);
+    if (outcome === 'timeout') {
+      console.warn('[delivery.route] delivery waiter notify timed out', {
+        workspace_id: ctx.workspaceId,
+        timeout_ms: DELIVERY_WAITER_NOTIFY_TIMEOUT_MS,
+      });
+    }
+  } catch (err) {
+    console.warn('[delivery.route] delivery waiter notify failed', {
+      workspace_id: ctx.workspaceId,
+      error: err instanceof Error ? err.message : String(err),
+    });
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 /**
