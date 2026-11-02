@@ -5706,7 +5706,7 @@ paths:
         - name: status
           in: query
           required: false
-          description: Pushes a liveness predicate into SQL. `online` is fresh-heartbeat live nodes; `offline` is everything else.
+          description: Selects on liveness. `online` is live nodes; `offline` is everything else. Without a hosted liveness authority the predicate runs in SQL. With one, each candidate is checked against the authority, and `online` candidates are limited in SQL to nodes whose last durable checkpoint is recent enough for the authority to report them live. Rows come back in `id` order.
           schema:
             type: string
             enum: [online, offline]
@@ -5725,7 +5725,7 @@ paths:
         - name: limit
           in: query
           required: false
-          description: Page size, clamped server-side to a fixed maximum. Only meaningful with `history=true`.
+          description: With `history=true`, page size, clamped server-side to a fixed maximum. Without `history`, caps a `status` selection at the first `limit` matching nodes in `id` order. Ignored with neither.
           schema:
             type: integer
             minimum: 1
