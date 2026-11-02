@@ -178,6 +178,20 @@ describe('action alias writers', () => {
     expect([isGlobal(ws.workspaceId, 'node_a', 'etl'), isGlobal(ws.workspaceId, 'node_b', 'etl')]).toEqual([1, 0]);
   });
 
+  it('re-materializes when reordered duplicates change which entry counts', async () => {
+    const ws = await createWorkspace(stack.app, 'alias-duplicate-reorder');
+    await enrollNode(ws.workspaceKey, 'node_a');
+    const a = await provide(ws.workspaceId, 'node_a', [], 'py');
+    const queued = (queue: boolean) => ({ name: 'echo', kind: 'action', queue });
+    const queue = () => (stack.runtime.handle.sqlite
+      .prepare('SELECT queue FROM actions WHERE workspace_id = ? AND name = ?').get(ws.workspaceId, 'echo') as { queue: number }).queue;
+
+    await a.beat([queued(false), queued(true)] as unknown as Cap[]);
+    expect(queue()).toBe(1);
+    await a.beat([queued(true), queued(false)] as unknown as Cap[]);
+    expect(queue()).toBe(0);
+  });
+
   it('refuses to delete an action a node provider owns, and deletes only the rows it does not', async () => {
     const ws = await createWorkspace(stack.app, 'alias-provider-owned');
     const agent = await registerAgent(stack.app, ws.workspaceKey, 'handler');

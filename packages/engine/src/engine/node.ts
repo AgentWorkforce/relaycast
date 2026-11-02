@@ -44,6 +44,7 @@ import {
   assertActionTaskMode,
   capabilityKind,
   claimOrphanedGlobalAliases,
+  effectiveActionCapabilities,
   heartbeatProvider,
   isProviderLive,
   markProviderOffline,
@@ -1075,8 +1076,8 @@ export async function heartbeatNode(
       if (
         existingProvider === undefined
         || !sameCapabilities(
-          (existingProvider.capabilities ?? []).filter((cap) => capabilityKind(cap) === 'action'),
-          caps.filter((cap) => capabilityKind(cap) === 'action'),
+          effectiveActionCapabilities(existingProvider.capabilities ?? []),
+          effectiveActionCapabilities(caps),
         )
       ) {
         await materializeProviderActions(tx, workspaceId, nodeId, providerName, caps);
