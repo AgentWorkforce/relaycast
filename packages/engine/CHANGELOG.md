@@ -7,7 +7,11 @@ See the [root changelog](../../CHANGELOG.md) for cross-package release highlight
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [Unreleased - Patch]
+
+### Fixed
+
+- `inventory.sync` completes and reschedules only spawn invocations, the only ones an agent inventory describes. Other open invocations dispatched to the provider (`task.run`, native-session delivery) are no longer redispatched to another node by a snapshot that never lists them; provider disconnect and the dispatch-timeout sweep recover them. The reply's `open_invocations` counts open spawns.
 
 ## [12.6.0] - 2026-11-01
 
@@ -24,10 +28,6 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 - `node.heartbeat` updates the node aggregate, name and version in one statement (`refreshNodeAggregate`) and reads the drain state in one statement.
 - `settleNodeOffline` scans only the agents routed through the settling node.
 - `sendNodePresenceContext` starts from reachable nodes (`idx_nodes_context_reachable`) instead of every active binding in the workspace.
-
-### Fixed
-
-- `inventory.sync` completes and reschedules only spawn invocations, the only ones an agent inventory describes. Other open invocations dispatched to the provider (`task.run`, native-session delivery) are no longer redispatched to another node by a snapshot that never lists them; provider disconnect and the dispatch-timeout sweep recover them. The reply's `open_invocations` counts open spawns.
 
 ## [12.5.0] - 2026-11-01
 
