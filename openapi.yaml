@@ -2503,7 +2503,7 @@ paths:
   /agent:
     get:
       summary: Resolve authenticated agent
-      description: Resolve an agent token to that agent's identity, including channel memberships, callable/provided actions, and pending deliveries. Used by SDK reconnect flows.
+      description: Resolve an agent token to that agent's identity, including channel memberships and pending deliveries. Used by SDK reconnect flows. List actions with `GET /v1/actions`.
       tags:
         - Agents
       security:

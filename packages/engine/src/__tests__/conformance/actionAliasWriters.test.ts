@@ -95,6 +95,7 @@ describe('action alias writers', () => {
     await provide(ws.workspaceId, 'node_b', ['etl']);
 
     await deregisterProvider(stack.runtime.handle.db, stack.runtime.realtime, ws.workspaceId, 'node_a', 'default');
+    expect(isGlobal(ws.workspaceId, 'node_a', 'etl')).toBeUndefined();
     expect(isGlobal(ws.workspaceId, 'node_b', 'etl')).toBe(1);
   });
 

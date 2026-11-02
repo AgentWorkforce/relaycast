@@ -12,7 +12,7 @@ import {
 } from './agent.js';
 import { randomHex, sha256Hex } from '../lib/crypto.js';
 import { codedError } from '../lib/httpError.js';
-import { D1_SAFE_IN_QUERY_CHUNK_SIZE } from '../lib/queryChunks.js';
+import { D1_SAFE_IN_QUERY_CHUNK_SIZE, queryInChunks } from '../lib/queryChunks.js';
 import { toFleetWireJson } from './deliveryWire.js';
 import {
   emitAgentExitedEffects,
@@ -586,7 +586,7 @@ export async function deleteAction(
     const strandedRows = await failOpenInvocationRows(tx, workspaceId, strandedIds, 'action_deleted');
     const result = ids.length === 0 ? [] : await tx
       .delete(actions)
-      .where(and(eq(actions.workspaceId, workspaceId), inArray(actions.id, ids)))
+      .where(and(eq(actions.workspaceId, workspaceId), eq(actions.name, name), isNull(actions.handlerProvider)))
       .returning({ id: actions.id });
     // A deleted agent-hosted action frees the alias for a node's default provider.
     if (result.length > 0) await claimOrphanedGlobalAliases(tx, workspaceId);
@@ -1030,19 +1030,18 @@ async function failOpenInvocations(
 
 /** Ids of open invocations pointing at any of the given action rows. */
 async function openInvocationIdsForActions(db: Db, workspaceId: string, actionIds: string[]): Promise<string[]> {
-  if (actionIds.length === 0) return [];
-  const rows = await db
+  const rows = await queryInChunks(actionIds, (ids) => db
     .select({ id: actionInvocations.id })
     .from(actionInvocations)
     .where(and(
       eq(actionInvocations.workspaceId, workspaceId),
-      inArray(actionInvocations.actionId, actionIds),
+      inArray(actionInvocations.actionId, ids),
       inArray(actionInvocations.status, OPEN_INVOCATION_STATUSES),
       or(
         isNull(actionInvocations.providerAcceptedAttempt),
         sql`${actionInvocations.providerAcceptedAttempt} <> ${actionInvocations.dispatchAttempts}`,
       ),
-    ));
+    )));
   return rows.map((row) => row.id);
 }
 
