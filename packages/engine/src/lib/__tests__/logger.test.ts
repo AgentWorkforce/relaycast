@@ -29,6 +29,13 @@ describe('toErrorDetails', () => {
       error_message: 'Failed query: update "agent_node_bindings" set "status" = ? | cause: D1_ERROR: too many SQL variables at offset 481: SQLITE_ERROR',
     });
   });
+  it('reads plain-object causes and follows their own cause', () => {
+    const error = new Error('outer query failure', {
+      cause: { message: 'D1_ERROR: Network connection lost.', cause: { message: 'socket reset' } },
+    });
+    expect(toErrorDetails(error).error_message)
+      .toBe('outer query failure | cause: D1_ERROR: Network connection lost. | cause: socket reset');
+  });
   it('stops on a cyclic cause and stringifies non-Error causes', () => {
     const outer = new Error('outer', { cause: 'driver said no' });
     expect(toErrorDetails(outer).error_message).toBe('outer | cause: driver said no');

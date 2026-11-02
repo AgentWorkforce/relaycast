@@ -193,8 +193,15 @@ function causeMessages(error: Error): string[] {
   let cause = error.cause;
   while (cause !== undefined && cause !== null && !seen.has(cause)) {
     seen.add(cause);
-    messages.push(cause instanceof Error ? cause.message : String(cause));
-    cause = cause instanceof Error ? cause.cause : undefined;
+    if (typeof cause === 'object') {
+      // Drivers also attach plain `{ message, cause }` objects, not only Errors.
+      const record = cause as { message?: unknown; cause?: unknown };
+      messages.push(typeof record.message === 'string' ? record.message : String(cause));
+      cause = record.cause;
+    } else {
+      messages.push(String(cause));
+      cause = undefined;
+    }
   }
   return messages;
 }
