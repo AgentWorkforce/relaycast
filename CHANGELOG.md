@@ -16,7 +16,9 @@ This project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 Packages without a separate changelog are covered by the cross-package notes below.
 
-## [Unreleased]
+## [Unreleased - Patch]
+
+- Legacy credentials (`rk_live_`, `at_live_`, `nt_live_`, `ot_live_`) authenticate in one database query, including a key or agent token inside its rotation grace. Agent, node and observer tokens used to take two.
 
 ## [12.6.0] - 2026-11-01
 

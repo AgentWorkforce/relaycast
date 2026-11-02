@@ -7,7 +7,11 @@ See the [root changelog](../../CHANGELOG.md) for cross-package release highlight
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [Unreleased - Patch]
+
+### Changed
+
+- `SqliteApiKeyAuthProvider` resolves a legacy credential and its workspace in one indexed query per kind, matching `ar_` verification: the agent, node and observer lookups join their workspace, and the current and rotation-grace slots match together. The returned principal and workspace rows are unchanged, including `expires_at` and `last_seen`.
 
 ## [12.6.0] - 2026-11-01
 
