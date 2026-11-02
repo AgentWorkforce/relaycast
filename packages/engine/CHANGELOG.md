@@ -7,7 +7,11 @@ See the [root changelog](../../CHANGELOG.md) for cross-package release highlight
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [Unreleased - Patch]
+
+### Fixed
+
+- The inbox mention lookup prefilters bodies with `instr(body, '@name')` instead of `LIKE`, so it stays within D1's 50-byte LIKE pattern cap for any agent name. Results are unchanged: `parseMessageMentions` is case-sensitive and needs the literal `@name`.
 
 ## [12.6.2] - 2026-11-02
 
