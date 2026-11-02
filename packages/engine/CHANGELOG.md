@@ -11,7 +11,7 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Fixed
 
-- `GET /v1/nodes?status=online` under a liveness authority probes only nodes whose `last_heartbeat_at` is within `NODE_ONLINE_CANDIDATE_RECENCY_MS` (45 s lease + 5 min checkpoint interval + 60 s landing slack = 6 min 45 s), the oldest checkpoint a node the authority reports online can have. `NodeLivenessAuthority` documents the checkpoint interval as part of its contract. A workspace with 300 stale rows and 3 live nodes costs 3 authority probes instead of 303.
+- `GET /v1/nodes?status=online` under a liveness authority checks only nodes with a recent heartbeat checkpoint, so it no longer times out in workspaces with many historical nodes.
 - `GET /v1/nodes` without `history` honors `limit` when `status` is set: rows are taken in `id` order and probing stops once `limit` nodes match.
 - Node list liveness probes run as a pool of eight workers instead of lockstep batches of eight, so one slow probe no longer stalls the seven beside it.
 - The inbox mention lookup prefilters bodies with `instr(body, '@name')` instead of `LIKE`, so it stays within D1's 50-byte LIKE pattern cap for any agent name. Results are unchanged: `parseMessageMentions` is case-sensitive and needs the literal `@name`.

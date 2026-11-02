@@ -858,10 +858,13 @@ so a same-name takeover is left untouched.
 
 `GET /nodes` pushes `capability`, `name`, and a liveness `status` selector
 into its SQL query instead of fetching the full roster and filtering in JS.
-Without `history`, the response stays the legacy bare array every existing
-caller already handles; `status=online` is the server-filtered live-Fleet
-path a default listing should use, since it never reads or returns
-history no matter how many dead rows a workspace has accumulated.
+With a hosted liveness authority, `status` is decided per node by the
+authority, and `status=online` checks only nodes with a heartbeat checkpoint
+recent enough to be live. Without `history`, the response stays the legacy
+bare array every existing caller already handles, and `limit` caps a `status`
+selection at the first matches in `id` order; `status=online` is the
+server-filtered live-Fleet path a default listing should use, since it never
+returns history no matter how many dead rows a workspace has accumulated.
 `history=true` switches to a bounded, paginated contract
 (`{ nodes, next_cursor }`, paged with `cursor`/`limit`) for an explicit full
 read (e.g. `--all`): it visits and returns every matching row exactly once,
