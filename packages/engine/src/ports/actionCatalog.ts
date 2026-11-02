@@ -83,7 +83,8 @@ export class MemoryActionCatalogStore implements ActionCatalogStore {
   }
 
   async advance(workspaceId: string) {
-    // No entry means no reader holds a revision for it; the next read starts past every earlier one.
+    // With no entry, any revision a reader still holds (one read before a forget) matches nothing, so
+    // its fill is dropped; the next read starts past every earlier revision.
     if (this.entries.has(workspaceId)) this.entries.set(workspaceId, { revision: ++this.clock, snapshot: null });
   }
 
