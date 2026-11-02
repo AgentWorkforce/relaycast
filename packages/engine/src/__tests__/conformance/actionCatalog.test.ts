@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { drizzle } from 'drizzle-orm/better-sqlite3';
 import * as schema from '../../db/schema.js';
 import { makeNodeStack, createWorkspace, registerAgent, FakeSocket, type TestStack } from './harness.js';
@@ -6,7 +6,7 @@ import { handleNodeControlMessage } from '../../node-control.js';
 import { getAgentByName } from '../../engine/agent.js';
 import { createTrigger, deleteTrigger, fireMessageTriggers, updateTrigger, type TriggerMessageInput } from '../../engine/trigger.js';
 import { registerAction, deleteAction } from '../../engine/action.js';
-import { configureActionCatalog } from '../../engine/actionCatalog.js';
+import { advancingActionCatalog, configureActionCatalog } from '../../engine/actionCatalog.js';
 import { MemoryActionCatalogStore } from '../../ports/actionCatalog.js';
 import type { EngineDb } from '../../ports/database.js';
 
@@ -32,6 +32,32 @@ describe('MemoryActionCatalogStore', () => {
     expect((await store.read('ws')).snapshot).toEqual(snapshot);
     await store.advance('ws');
     expect((await store.read('ws')).snapshot).toBeNull();
+  });
+
+  it('releases a forgotten workspace without reviving a fill that predates it', async () => {
+    const store = new MemoryActionCatalogStore();
+    const snapshot = { shape: 1, oversize: false as const, actions: [], triggers: [] };
+    const { revision } = await store.read('ws');
+    await store.forget('ws');
+    await store.fill('ws', revision, snapshot);
+    const after = await store.read('ws');
+    expect(after.snapshot).toBeNull();
+    expect(after.revision).not.toBe(revision);
+  });
+});
+
+describe('advancingActionCatalog', () => {
+  it('returns the committed write when the store cannot advance', async () => {
+    const db = {} as EngineDb;
+    const store = new MemoryActionCatalogStore();
+    let calls = 0;
+    store.advance = async () => { calls++; throw new Error('store unavailable'); };
+    configureActionCatalog(db, store);
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    await expect(advancingActionCatalog(db, 'ws', async () => 'committed')).resolves.toBe('committed');
+    expect(calls).toBe(2);
+    expect(warn).toHaveBeenCalledWith('[actions] catalog advance failed', expect.objectContaining({ workspaceId: 'ws' }));
+    warn.mockRestore();
   });
 });
 

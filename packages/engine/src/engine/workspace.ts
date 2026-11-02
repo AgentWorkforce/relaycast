@@ -12,7 +12,7 @@ import type { FileStorage } from '../ports/files.js';
 import type { WorkspaceProvenanceRecord } from '../db/schema.js';
 import { resolveEffectiveMessageRetention } from './retention.js';
 import { reportEngineProgress, withEngineOperation } from '../lib/engineDiagnostics.js';
-import { advancingActionCatalog } from './actionCatalog.js';
+import { advancingActionCatalog, forgettingActionCatalog } from './actionCatalog.js';
 import {
   drainWorkspaceRows,
   exceedsAtomicDeleteSize,
@@ -757,7 +757,7 @@ async function deleteWorkspaceBatch(
   return withEngineOperation(
     'workspace.delete',
     workspaceIds.length === 1 ? workspaceIds[0] : undefined,
-    () => advancingActionCatalog(db, workspaceIds, () => deleteWorkspaceBatchUnlabeled(db, storage, workspaceIds)),
+    () => forgettingActionCatalog(db, workspaceIds, () => deleteWorkspaceBatchUnlabeled(db, storage, workspaceIds)),
   );
 }
 

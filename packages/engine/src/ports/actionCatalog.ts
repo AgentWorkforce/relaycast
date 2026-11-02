@@ -43,7 +43,9 @@ export type ActionCatalogSnapshot =
  * reader takes the current revision, reads the rows when no snapshot is held
  * at it, and offers them back with {@link fill}; the store keeps them only if
  * the revision is still current, so a fill that raced a write is dropped.
- * Nothing expires: a snapshot lives until the next advance.
+ * A snapshot lives until the next advance. The engine retries a failed
+ * advance once, then logs it and carries on, so a store whose calls can fail
+ * must bound how long it serves one snapshot.
  *
  * Every database handle that writes those tables must be bound to the same
  * store ({@link configureActionCatalog}); a handle without one reads the
@@ -53,26 +55,40 @@ export interface ActionCatalogStore {
   read(workspaceId: string): Promise<{ revision: string; snapshot: ActionCatalogSnapshot | null }>;
   fill(workspaceId: string, revision: string, snapshot: ActionCatalogSnapshot): Promise<void>;
   advance(workspaceId: string): Promise<void>;
+  /** The workspace was deleted: release what the store holds for it. Omitted: the engine advances instead. */
+  forget?(workspaceId: string): Promise<void>;
 }
 
-/** Single-process store for a self-hosted engine. */
+/**
+ * Single-process store for a self-hosted engine. Revisions come from one
+ * store-wide counter and are never reused, so a forgotten workspace's entry
+ * can go: a fill still holding one of its revisions matches nothing.
+ */
 export class MemoryActionCatalogStore implements ActionCatalogStore {
   private readonly entries = new Map<string, { revision: number; snapshot: ActionCatalogSnapshot | null }>();
+  private clock = 0;
 
   async read(workspaceId: string) {
-    const entry = this.entries.get(workspaceId);
-    return { revision: String(entry?.revision ?? 0), snapshot: entry?.snapshot ?? null };
+    let entry = this.entries.get(workspaceId);
+    if (!entry) {
+      entry = { revision: ++this.clock, snapshot: null };
+      this.entries.set(workspaceId, entry);
+    }
+    return { revision: String(entry.revision), snapshot: entry.snapshot };
   }
 
   async fill(workspaceId: string, revision: string, snapshot: ActionCatalogSnapshot) {
-    const entry = this.entries.get(workspaceId) ?? { revision: 0, snapshot: null };
-    if (String(entry.revision) !== revision) return;
-    this.entries.set(workspaceId, { revision: entry.revision, snapshot });
+    const entry = this.entries.get(workspaceId);
+    if (entry && String(entry.revision) === revision) entry.snapshot = snapshot;
   }
 
   async advance(workspaceId: string) {
-    const revision = (this.entries.get(workspaceId)?.revision ?? 0) + 1;
-    this.entries.set(workspaceId, { revision, snapshot: null });
+    // No entry means no reader holds a revision for it; the next read starts past every earlier one.
+    if (this.entries.has(workspaceId)) this.entries.set(workspaceId, { revision: ++this.clock, snapshot: null });
+  }
+
+  async forget(workspaceId: string) {
+    this.entries.delete(workspaceId);
   }
 }
 

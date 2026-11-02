@@ -81,29 +81,56 @@ export async function cachedActionCatalog(db: EngineDb, workspaceId: string): Pr
  * then advance their catalog revisions, whether the write committed or not
  * (a rolled-back transaction may have filled a snapshot from its own rows).
  * Call it around the outermost transaction: advancing before the commit lets a
- * concurrent reader fill the new revision from the old rows.
+ * concurrent reader fill the new revision from the old rows. The advance never
+ * throws, so the caller's post-commit effects still run.
  */
 export async function advancingActionCatalog<T>(
   db: object,
   workspaceIds: string | readonly string[],
   write: () => PromiseLike<T>,
 ): Promise<T> {
-  let result: T;
   try {
-    result = await write();
-  } catch (err) {
-    await advanceActionCatalog(db, workspaceIds).catch((advanceErr: unknown) => {
-      console.warn('[actions] catalog advance failed after a failed write', { workspaceIds, err: advanceErr });
-    });
-    throw err;
+    return await write();
+  } finally {
+    await advanceActionCatalog(db, workspaceIds);
   }
-  await advanceActionCatalog(db, workspaceIds);
-  return result;
 }
 
+/** Like {@link advancingActionCatalog}, for a write that deletes the workspaces. */
+export async function forgettingActionCatalog<T>(
+  db: object,
+  workspaceIds: readonly string[],
+  write: () => PromiseLike<T>,
+): Promise<T> {
+  try {
+    return await write();
+  } finally {
+    await updateCatalog(db, workspaceIds, 'forget');
+  }
+}
+
+/**
+ * Advance the workspaces' catalog revisions. Never throws: a store call that
+ * fails twice is logged, and the store's own bound on a snapshot's age
+ * (see {@link ActionCatalogStore}) covers the missed advance.
+ */
 export async function advanceActionCatalog(db: object, workspaceIds: string | readonly string[]): Promise<void> {
+  await updateCatalog(db, typeof workspaceIds === 'string' ? [workspaceIds] : workspaceIds, 'advance');
+}
+
+async function updateCatalog(db: object, workspaceIds: readonly string[], op: 'advance' | 'forget'): Promise<void> {
   const store = actionCatalogStore(db);
   if (!store) return;
-  const ids = typeof workspaceIds === 'string' ? [workspaceIds] : [...new Set(workspaceIds)];
-  await Promise.all(ids.map((id) => store.advance(id)));
+  const apply = (id: string) => (op === 'forget' && store.forget ? store.forget(id) : store.advance(id));
+  await Promise.all([...new Set(workspaceIds)].map(async (id) => {
+    try {
+      await apply(id);
+    } catch {
+      try {
+        await apply(id);
+      } catch (err) {
+        console.warn(`[actions] catalog ${op} failed`, { workspaceId: id, err });
+      }
+    }
+  }));
 }

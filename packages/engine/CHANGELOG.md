@@ -11,7 +11,7 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Added
 
-- `ActionCatalogStore`, `MemoryActionCatalogStore` and `configureActionCatalog`, and `EngineProviders.actionCatalog`: a per-workspace cache of the `actions` rows and enabled `triggers` rows. The engine advances a workspace's revision after every write that can change them (action register and delete, provider materialize and deregister, node delete, trigger create, update and delete, agent retention, workspace delete), reads the rows at most once per revision, and drops a fill that raced an advance. Nothing expires. Bind the store to every database handle that writes those tables; a handle without one reads them directly. `createNodeRuntime` binds a `MemoryActionCatalogStore`.
+- `ActionCatalogStore`, `MemoryActionCatalogStore` and `configureActionCatalog`, and `EngineProviders.actionCatalog`: a per-workspace cache of the `actions` rows and enabled `triggers` rows. The engine advances a workspace's revision after every write that can change them (action register and delete, provider materialize and deregister, node delete, trigger create, update and delete, agent retention, workspace delete), reads the rows at most once per revision, and drops a fill that raced an advance. A failed advance is retried once and then logged, never thrown, so a store whose calls can fail bounds a snapshot's age itself. Workspace delete calls the optional `forget`, which `MemoryActionCatalogStore` uses to release the workspace's entry. Bind the store to every database handle that writes those tables; a handle without one reads them directly. `createNodeRuntime` binds a `MemoryActionCatalogStore`.
 
 ### Changed
 
