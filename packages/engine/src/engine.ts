@@ -1,4 +1,5 @@
 import { configureNodeLiveness } from './engine/nodeLiveness.js';
+import { configureActionCatalog } from './ports/actionCatalog.js';
 import { isArWorkspaceId } from '@relaycast/types';
 import { acceptsOnlyAr, configureCredentials } from './auth/credentials.js';
 import { legacyCredentialHeaders, noteAuthenticatedCredential } from './lib/credentialNotice.js';
@@ -76,6 +77,7 @@ import { internalRoutes } from './routes/internal.js';
 export function createEngine(deps: EngineDeps): Hono<AppEnv> {
   assertInternalSecretStrength(deps.config?.internalSecret);
   if (deps.nodeLiveness) configureNodeLiveness(deps.db, deps.nodeLiveness);
+  if (deps.actionCatalog) configureActionCatalog(deps.db, deps.actionCatalog);
   if (deps.config?.credentialFormat === 'ar' && deps.config.workspaceId !== undefined && !isArWorkspaceId(deps.config.workspaceId)) {
     throw new Error('EngineConfig.workspaceId must be a 64-bit snowflake to mint ar_ credentials');
   }

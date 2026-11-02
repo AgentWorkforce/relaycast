@@ -28,6 +28,7 @@ import { DEFAULT_PROVIDER_NAME, capacityProviderName, getProvider } from './node
 import { AGENT_TOKEN_HASH_PATTERN } from '@relaycast/types';
 import { createTaskState, expireTaskInvocation, expireTaskInvocations, taskExecution } from './taskInvocation.js';
 import { withEngineOperation } from '../lib/engineDiagnostics.js';
+import { advancingActionCatalog } from './actionCatalog.js';
 
 type Db = ReturnType<typeof getDb>;
 type ActionRow = typeof actions.$inferSelect;
@@ -402,7 +403,7 @@ export async function registerAction(
     // cannot land between the handler move and the stranded-invocation snapshot
     // (it either targets the old handler and is swept, or the new handler and
     // is untouched).
-    ({ action, stranded } = await runAtomic(db, async (tx) => {
+    ({ action, stranded } = await advancingActionCatalog(db, workspaceId, () => runAtomic(db, async (tx) => {
       // Read the row the upsert may refresh so a handler move can be detected.
       // The agent branch conflicts on the agent-hosted partial index, the node
       // branch on the per-node index.
@@ -458,7 +459,7 @@ export async function registerAction(
         strandedRows = await failOpenInvocationRows(tx, workspaceId, strandedIds, 'handler_unavailable');
       }
       return { action: row, stranded: strandedRows };
-    }));
+    })));
   } catch (err) {
     // A residual uniqueness race must surface as a conflict, never as a 500
     // internal_error (which reads as a server outage and invites retries).
@@ -555,7 +556,7 @@ export async function deleteAction(
   // handler-resolution join (the TTL sweep included) so they retry forever and
   // the caller never hears back. Atomicity closes the window where an invoke
   // lands between the stranded snapshot and the delete.
-  const { deleted, stranded } = await runAtomic(db, async (tx) => {
+  const { deleted, stranded } = await advancingActionCatalog(db, workspaceId, () => runAtomic(db, async (tx) => {
     const rows = await tx
       .select({ id: actions.id })
       .from(actions)
@@ -567,7 +568,7 @@ export async function deleteAction(
       .where(and(eq(actions.workspaceId, workspaceId), eq(actions.name, name)))
       .returning();
     return { deleted: result.length > 0, stranded: strandedRows };
-  });
+  }));
   if (options.completionDeps) {
     await emitFailedInvocationEffects(options.completionDeps, workspaceId, stranded);
   }

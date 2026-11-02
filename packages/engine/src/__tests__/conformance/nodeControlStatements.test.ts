@@ -7,6 +7,7 @@ import { bindAgentToNode, deregisterAgentViaNode, settleNodeOffline, unbindAgent
 import { deleteAgent } from '../../engine/agent.js';
 import { sendNodePresenceContext } from '../../engine/nodeContext.js';
 import { configureNodeLiveness } from '../../engine/nodeLiveness.js';
+import { configureActionCatalog } from '../../engine/actionCatalog.js';
 import type { EngineDb } from '../../ports/database.js';
 import type { PresenceTracker } from '../../ports/presence.js';
 
@@ -57,6 +58,7 @@ describe('node control D1 statements per frame', () => {
     const db = drizzle(sqlite, { schema, logger: { logQuery: (sql, params) => {
       raw.push({ sql, params });
     } } }) as unknown as EngineDb;
+    configureActionCatalog(db, stack.runtime.deps.actionCatalog);
     return {
       db,
       raw,
@@ -158,14 +160,12 @@ describe('node control D1 statements per frame', () => {
         "brokerCheckpoint": [
           "select from "node_providers"",
           "update "node_providers"",
-          "select from "actions"",
           "update "nodes"",
         ],
         "changedBeat": [
           "select from "nodes"",
           "select from "node_providers"",
           "update "node_providers"",
-          "select from "actions"",
           "update "nodes"",
         ],
         "directBeat": [
@@ -223,7 +223,6 @@ describe('node control D1 statements per frame', () => {
           "select from "nodes"",
           "select from "node_providers"",
           "update "node_providers"",
-          "select from "actions"",
           "update "nodes"",
         ],
       }

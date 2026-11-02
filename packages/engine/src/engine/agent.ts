@@ -12,6 +12,7 @@ import type { RegistrationAdmission } from './registrationAdmission.js';
 import { directNodeIdForAgent } from './node.js';
 import { addressNodeSelection, formatAgentAddress } from './address.js';
 import { runAtomicWrites, type AtomicWrite } from '../ports/database.js';
+import { cachedActionCatalog } from './actionCatalog.js';
 import { AGENT_RECOVERY_PROOF_HASH_PATTERN } from '@relaycast/types';
 import { WEBHOOK_AGENT_NAME } from './messageMetadata.js';
 import { issueCredential } from '../auth/credentials.js';
@@ -553,6 +554,8 @@ export async function listAgents(
       && Date.parse(a.last_seen) < now - AGENT_ROSTER_RECENCY_MS));
 }
 
+const AGENT_DETAIL_ACTION_LIMIT = 500;
+
 export async function getAgentByName(db: Db, workspaceId: string, name: string) {
   const [row] = await db
     .select({ agent: agents, node: addressNodeSelection })
@@ -575,18 +578,20 @@ export async function getAgentByName(db: Db, workspaceId: string, name: string) 
       .from(channelMembers)
       .innerJoin(channels, eq(channelMembers.channelId, channels.id))
       .where(eq(channelMembers.agentId, agent.id)),
-    db
-      .select({
-        id: actions.id,
-        name: actions.name,
-        description: actions.description,
-        handlerAgentId: actions.handlerAgentId,
-        availableTo: actions.availableTo,
-        isActive: actions.isActive,
-      })
-      .from(actions)
-      .where(and(eq(actions.workspaceId, workspaceId), eq(actions.isActive, true)))
-      .limit(500),
+    cachedActionCatalog(db, workspaceId).then((catalog) => catalog
+      ? catalog.actions.filter((action) => action.isActive).slice(0, AGENT_DETAIL_ACTION_LIMIT)
+      : db
+        .select({
+          id: actions.id,
+          name: actions.name,
+          description: actions.description,
+          handlerAgentId: actions.handlerAgentId,
+          availableTo: actions.availableTo,
+          isActive: actions.isActive,
+        })
+        .from(actions)
+        .where(and(eq(actions.workspaceId, workspaceId), eq(actions.isActive, true)))
+        .limit(AGENT_DETAIL_ACTION_LIMIT)),
     db
       .select({
         id: deliveries.id,

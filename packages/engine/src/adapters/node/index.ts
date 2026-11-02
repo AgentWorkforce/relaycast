@@ -4,6 +4,7 @@ import type { EngineDeps, EngineConfig } from '../../ports/index.js';
 import type { AuthProvider } from '../../ports/auth.js';
 import type { AdmissionHooks } from '../../ports/admission.js';
 import type { TelemetrySink } from '../../ports/telemetry.js';
+import { configureActionCatalog, MemoryActionCatalogStore } from '../../ports/actionCatalog.js';
 import { SqliteApiKeyAuthProvider } from '../../auth/index.js';
 import { NoopTelemetrySink } from '../../providers/noop-telemetry.js';
 import { getSqliteDb, runMigrations, type SqliteDbHandle } from './database.js';
@@ -186,9 +187,11 @@ export function createNodeRuntime(options: NodeRuntimeOptions): NodeRuntime {
     webhookQueue,
     auth,
     admission: options.admission,
+    actionCatalog: new MemoryActionCatalogStore(),
     telemetry,
     config,
   };
+  configureActionCatalog(db, deps.actionCatalog);
 
   realtime.setNodeCompletionDeps(deps);
   realtime.setAdmission(options.admission);

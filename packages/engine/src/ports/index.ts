@@ -1,5 +1,8 @@
 export type { NodeLivenessAuthority, NodeLivenessSnapshot } from './nodeLiveness.js';
 import type { NodeLivenessAuthority } from './nodeLiveness.js';
+export type { ActionCatalogStore, ActionCatalogSnapshot, ActionCatalogAction, ActionCatalogTrigger } from './actionCatalog.js';
+export { MemoryActionCatalogStore } from './actionCatalog.js';
+import type { ActionCatalogStore } from './actionCatalog.js';
 /**
  * The complete dependency contract for the Relaycast engine.
  *
@@ -94,6 +97,8 @@ export interface EnginePorts {
 export interface EngineProviders {
   /** Optional host-owned receipt lease; omitted preserves D1 TTL behavior. */
   nodeLiveness?: NodeLivenessAuthority;
+  /** Writer-advanced action catalog cache; omitted reads actions and triggers from the database. */
+  actionCatalog?: ActionCatalogStore;
   auth: AuthProvider;
   /** Host admission and metering hooks. Omitted: every request is admitted. */
   admission?: AdmissionHooks;

@@ -1,5 +1,7 @@
 export { configureNodeLiveness, inspectNodeLiveness } from './engine/nodeLiveness.js';
 export type { NodeLivenessAuthority, NodeLivenessSnapshot } from './ports/nodeLiveness.js';
+export { configureActionCatalog, MemoryActionCatalogStore } from './ports/actionCatalog.js';
+export type { ActionCatalogStore, ActionCatalogSnapshot, ActionCatalogAction, ActionCatalogTrigger } from './ports/actionCatalog.js';
 export const SERVER_VERSION = '0.1.0' as const;
 
 // The engine factory + the Hono Env type consumers extend.

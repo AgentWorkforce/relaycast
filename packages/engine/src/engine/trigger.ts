@@ -5,6 +5,7 @@ import { codedError } from '../lib/httpError.js';
 import type { NodeConnectionRegistry } from '../ports/realtime.js';
 import { generateId } from './snowflake.js';
 import { invokeAction } from './action.js';
+import { advancingActionCatalog, cachedActionCatalog } from './actionCatalog.js';
 
 type Db = ReturnType<typeof getDb>;
 type TriggerRow = typeof triggers.$inferSelect;
@@ -62,7 +63,7 @@ function isActionGeneratedMessage(message: TriggerMessageInput): boolean {
   );
 }
 
-function matchesTrigger(row: TriggerRow, message: TriggerMessageInput): boolean {
+function matchesTrigger(row: Pick<TriggerRow, 'channel' | 'mention' | 'pattern'>, message: TriggerMessageInput): boolean {
   const triggerChannel = normalizeChannelName(row.channel);
   if (triggerChannel && triggerChannel !== message.channel_name) return false;
   if (row.mention && (!message.mentions || message.mentions.length === 0)) return false;
@@ -76,7 +77,7 @@ function matchesTrigger(row: TriggerRow, message: TriggerMessageInput): boolean 
   return true;
 }
 
-function rateLimited(row: TriggerRow, now: number): boolean {
+function rateLimited(row: { lastTriggeredAt?: Date | null }, now: number): boolean {
   return !!row.lastTriggeredAt && now - row.lastTriggeredAt.getTime() < TRIGGER_RATE_LIMIT_MS;
 }
 
@@ -92,7 +93,7 @@ export async function createTrigger(
   },
 ) {
   validatePattern(data.pattern);
-  const [created] = await db
+  const [created] = await advancingActionCatalog(db, workspaceId, () => db
     .insert(triggers)
     .values({
       id: `trg_${generateId()}`,
@@ -103,7 +104,7 @@ export async function createTrigger(
       actionName: data.action_name,
       enabled: data.enabled ?? true,
     })
-    .returning();
+    .returning());
   return publicTrigger(created);
 }
 
@@ -137,19 +138,19 @@ export async function updateTrigger(
   if (data.action_name !== undefined) setClause.actionName = data.action_name;
   if (data.enabled !== undefined) setClause.enabled = data.enabled;
 
-  const [updated] = await db
+  const [updated] = await advancingActionCatalog(db, workspaceId, () => db
     .update(triggers)
     .set(setClause)
     .where(and(eq(triggers.workspaceId, workspaceId), eq(triggers.id, id)))
-    .returning();
+    .returning());
   return updated ? publicTrigger(updated) : null;
 }
 
 export async function deleteTrigger(db: Db, workspaceId: string, id: string) {
-  const deleted = await db
+  const deleted = await advancingActionCatalog(db, workspaceId, () => db
     .delete(triggers)
     .where(and(eq(triggers.workspaceId, workspaceId), eq(triggers.id, id)))
-    .returning({ id: triggers.id });
+    .returning({ id: triggers.id }));
   return deleted.length > 0;
 }
 
@@ -160,10 +161,15 @@ export async function fireMessageTriggers(args: {
   message: TriggerMessageInput;
 }) {
   if (isActionGeneratedMessage(args.message)) return [];
-  const rows = await args.db
-    .select()
-    .from(triggers)
-    .where(and(eq(triggers.workspaceId, args.workspaceId), eq(triggers.enabled, true)));
+  // The cached catalog carries no last-fire time; the claim below enforces the
+  // rate limit either way.
+  const catalog = await cachedActionCatalog(args.db, args.workspaceId);
+  const rows: Array<Pick<TriggerRow, 'id' | 'channel' | 'mention' | 'pattern' | 'actionName'> & { lastTriggeredAt?: Date | null }> = catalog
+    ? catalog.triggers
+    : await args.db
+      .select()
+      .from(triggers)
+      .where(and(eq(triggers.workspaceId, args.workspaceId), eq(triggers.enabled, true)));
 
   const now = Date.now();
   const cutoff = new Date(now - TRIGGER_RATE_LIMIT_MS);

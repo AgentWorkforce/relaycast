@@ -52,6 +52,7 @@ import {
   removeProvider,
   upsertProvider,
 } from './nodeProvider.js';
+import { advanceActionCatalog, advancingActionCatalog } from './actionCatalog.js';
 import { serializeNodeOp } from './nodeLock.js';
 import {
   ACTION_DISPATCH_TIMEOUT_MS,
@@ -953,7 +954,7 @@ export async function registerNode(
   }
 
   const capabilities = normalizeCapabilities(message.capabilities);
-  await runAtomic(db, async (tx) => {
+  await advancingActionCatalog(db, workspaceId, () => runAtomic(db, async (tx) => {
     await upsertProvider(tx, workspaceId, authenticatedNodeId, {
       name: provider.name,
       instanceId: provider.instance_id,
@@ -971,7 +972,7 @@ export async function registerNode(
       version: message.version,
       machineId: message.machine_id ?? null,
     });
-  });
+  }));
 
   const [updated] = await db
     .select()
@@ -1037,7 +1038,8 @@ export async function heartbeatNode(
   }
 
   let updated: NodeRow | undefined;
-  await runAtomic(db, async (tx) => {
+  let materialized = false;
+  const heartbeat = runAtomic(db, async (tx) => {
     const now = new Date();
     if (message.capabilities !== undefined) {
       const [existingProvider] = await tx
@@ -1105,6 +1107,7 @@ export async function heartbeatNode(
         )
         || !(await providerActionsMaterialized(tx, workspaceId, nodeId, providerName, actionCaps))
       ) {
+        materialized = true;
         await materializeProviderActions(tx, workspaceId, nodeId, providerName, caps);
       }
     } else {
@@ -1126,6 +1129,13 @@ export async function heartbeatNode(
       provenLiveAt: now,
     });
   });
+  // Only a re-materialization writes action rows; an unchanged beat leaves
+  // the catalog revision, and every reader's snapshot, in place.
+  try {
+    await heartbeat;
+  } finally {
+    if (materialized) await advanceActionCatalog(db, workspaceId);
+  }
 
   return updated ? publicNode(updated) : null;
 }
@@ -1389,7 +1399,7 @@ export async function deregisterProvider(
   providerName: string,
   deps?: InvocationCompletionDeps,
 ) {
-  await removeProvider(db, workspaceId, nodeId, providerName);
+  await advancingActionCatalog(db, workspaceId, () => removeProvider(db, workspaceId, nodeId, providerName));
   registry.detachProvider(workspaceId, nodeId, providerName);
   const routeLostAt = new Date();
   await db
@@ -2311,7 +2321,7 @@ export async function deleteNode(
   // the FKs have already erased.
   const nodeStillDeletable = exists(db.select({ id: nodes.id }).from(nodes).where(deletable));
   const lostAt = new Date();
-  const results = await runAtomicWrites(db, (w) => [
+  const results = await advancingActionCatalog(db, workspaceId, () => runAtomicWrites(db, (w) => [
     // Open work bound to the node or one of its actions has nothing left to
     // complete it. Runs first, while both references are still set. `running`
     // is an accepted task, which only its dispatching node may complete.
@@ -2357,7 +2367,7 @@ export async function deleteNode(
     // actually removed.
     w.delete(actions).where(and(hostedActions, nodeStillDeletable)).returning({ id: actions.id }),
     w.delete(nodes).where(deletable).returning({ id: nodes.id }),
-  ], { requireAtomic: true });
+  ], { requireAtomic: true }));
   const [failed, , removedActions, deleted] = results as [
     Array<typeof actionInvocations.$inferSelect>, unknown, Array<{ id: string }>, Array<{ id: string }>,
   ];

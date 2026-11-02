@@ -16,8 +16,9 @@ This project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 Packages without a separate changelog are covered by the cross-package notes below.
 
-## [Unreleased - Patch]
+## [Unreleased - Minor]
 
+- Node heartbeats, agent detail (`GET /v1/agent`, `GET /v1/agents/:name`) and message triggers read a workspace's actions and enabled triggers from a writer-advanced cache, once per change, instead of querying them on every request. Self-hosted engines cache in process; hosts plug in their own store.
 - A broker's periodic inventory sync no longer redispatches in-flight non-spawn actions to another node; it only reschedules spawns whose agents it no longer lists.
 
 ## [12.6.1] - 2026-11-02

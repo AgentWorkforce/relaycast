@@ -12,6 +12,7 @@ import type { FileStorage } from '../ports/files.js';
 import type { WorkspaceProvenanceRecord } from '../db/schema.js';
 import { resolveEffectiveMessageRetention } from './retention.js';
 import { reportEngineProgress, withEngineOperation } from '../lib/engineDiagnostics.js';
+import { advancingActionCatalog } from './actionCatalog.js';
 import {
   drainWorkspaceRows,
   exceedsAtomicDeleteSize,
@@ -756,7 +757,7 @@ async function deleteWorkspaceBatch(
   return withEngineOperation(
     'workspace.delete',
     workspaceIds.length === 1 ? workspaceIds[0] : undefined,
-    () => deleteWorkspaceBatchUnlabeled(db, storage, workspaceIds),
+    () => advancingActionCatalog(db, workspaceIds, () => deleteWorkspaceBatchUnlabeled(db, storage, workspaceIds)),
   );
 }
 
@@ -1054,7 +1055,7 @@ async function reapClassifiedWorkspace(
     requireDeletableStorage(storage);
     // A small workspace keeps the atomic delete; only a large one is drained.
     if (large ?? await exceedsAtomicDeleteSize(db, workspaceId)) {
-      const drained = await drainWorkspaceRows(db, workspaceId, options);
+      const drained = await advancingActionCatalog(db, workspaceId, () => drainWorkspaceRows(db, workspaceId, options));
       if (!drained.complete) return false;
     }
     const deleted = await deleteWorkspaceBatch(db, storage, [workspaceId]);

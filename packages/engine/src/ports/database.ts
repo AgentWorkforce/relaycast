@@ -1,4 +1,5 @@
 import { configureNodeLiveness, nodeLivenessAuthority } from './nodeLiveness.js';
+import { configureActionCatalog, actionCatalogStore } from './actionCatalog.js';
 import { inheritCredentials } from '../auth/credentials.js';
 import { WorkspaceDeliveryCapacityError } from '../engine/workspaceDeliveryPolicy.js';
 import type { BatchItem } from 'drizzle-orm/batch';
@@ -104,6 +105,7 @@ export interface BatchCapability {
 /** A transaction handle carries the bindings of the handle it was opened from. */
 function inheritHandleBindings(tx: EngineDb, db: EngineDb): void {
   configureNodeLiveness(tx, nodeLivenessAuthority(db));
+  configureActionCatalog(tx, actionCatalogStore(db));
   inheritCredentials(tx, db);
 }
 
