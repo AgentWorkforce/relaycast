@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import Database from 'better-sqlite3';
 import { makeNodeStack, createWorkspace, registerAgent, type TestStack } from './harness.js';
 
 /**
@@ -180,7 +181,7 @@ describe('inbox mention scope', () => {
     expect(ids.has(idOldestValid)).toBe(true);
   });
 
-  // Production D1 regression: with few or no mentions, the LIKE-only candidate
+  // Production D1 regression: with few or no mentions, a body-filter candidate
   // walk read the target's whole workspace history on every inbox call (avg
   // ~14k rows, up to 12s under load; ~20% of all D1 time over 7 days).
   it('drives mention candidates from messages_fts, not a workspace history walk', async () => {
@@ -218,7 +219,7 @@ describe('inbox mention scope', () => {
     }
     expect(inbox.mentions.map((m) => m.id)).toEqual([idValid]);
 
-    const mentionSql = statements.find((source) => source.includes('LIKE') && source.includes('"messages"."body"'));
+    const mentionSql = statements.find((source) => source.includes('instr(') && source.includes('"messages"."body"'));
     expect(mentionSql).toBeDefined();
     expect(mentionSql).toContain('messages_mention_fts');
     expect(mentionSql).toContain(`workspace_id : "${ws.workspaceId}"`);
@@ -274,7 +275,7 @@ describe('inbox mention scope', () => {
       sqlite.prepare = prepare;
     }
     expect(inbox.mentions.map((mention) => mention.id)).toEqual([idGlued]);
-    const mentionSql = statements.find((source) => source.includes('LIKE') && source.includes('"messages"."body"'));
+    const mentionSql = statements.find((source) => source.includes('instr(') && source.includes('"messages"."body"'));
     expect(mentionSql).toBeDefined();
     expect(mentionSql).not.toContain('messages_mention_fts');
   });
@@ -295,6 +296,34 @@ describe('inbox mention scope', () => {
     expect((await inboxOf(dashes.token)).mentions.map((m) => m.id)).toEqual([idDashes]);
   });
 
+  // D1 caps LIKE/GLOB patterns at 50 bytes ("LIKE or GLOB pattern too complex"),
+  // and a LIKE prefilter built from the agent name failed every inbox call of
+  // an agent with a long name. This connection is given the same cap.
+  it('finds mentions of a handle longer than D1 allows in a LIKE pattern', async () => {
+    const handle = 'orchestrator-review-lead-'.padEnd(64, 'x');
+    const ws = await createWorkspace(stack.app, 'inbox-long-handle');
+    const sender = await registerAgent(stack.app, ws.workspaceKey, 'sender');
+    const target = await registerAgent(stack.app, ws.workspaceKey, handle);
+    expect((await api(sender.token).post('/v1/channels', { name: 'live' })).status).toBe(201);
+    await joinOk(target.token, 'live');
+    const idMention = await send(sender.token, 'live', `@${handle} review this`);
+    await send(sender.token, 'live', `@${handle}-2 superstring`);
+
+    // Patterns within the cap keep SQLite's own LIKE semantics.
+    const reference = new Database(':memory:');
+    const likeOf = (pattern: string, value: string, escape?: string) => {
+      if (Buffer.byteLength(pattern) > 50) throw new Error('LIKE or GLOB pattern too complex');
+      return escape === undefined
+        ? reference.prepare('SELECT ? LIKE ? AS hit').pluck().get(value, pattern)
+        : reference.prepare('SELECT ? LIKE ? ESCAPE ? AS hit').pluck().get(value, pattern, escape);
+    };
+    const sqlite = stack.runtime.handle.sqlite;
+    sqlite.function('like', (pattern: string, value: string) => likeOf(pattern, value));
+    sqlite.function('like', (pattern: string, value: string, escape: string) => likeOf(pattern, value, escape));
+
+    expect((await inboxOf(target.token)).mentions.map((m) => m.id)).toEqual([idMention]);
+  });
+
   it('skips the mention scan for a name no canonical mention can match', async () => {
     const ws = await createWorkspace(stack.app, 'inbox-dotted');
     await registerAgent(stack.app, ws.workspaceKey, 'sender');
@@ -312,7 +341,7 @@ describe('inbox mention scope', () => {
     } finally {
       sqlite.prepare = prepare;
     }
-    expect(statements.some((source) => source.includes('LIKE') && source.includes('"messages"."body"'))).toBe(false);
+    expect(statements.some((source) => source.includes('instr(') && source.includes('"messages"."body"'))).toBe(false);
   });
 });
 
