@@ -24,7 +24,7 @@ Packages without a separate changelog are covered by the cross-package notes bel
 - A socket owner can mark checkpoint heartbeats, which skip the transition-state read and the drain.
 - Taking a node offline updates that node, its providers, its invocations and only the agents routed through it.
 - Presence fanout reads only reachable nodes' bindings.
-- `verify_ready` applies only to spawns: a non-spawn action whose input carries it is rescheduled on inventory sync instead of after the dispatch timeout.
+- A broker's periodic inventory sync no longer redispatches in-flight non-spawn actions to another node; it only reschedules spawns whose agents it no longer lists.
 
 ## [12.5.0] - 2026-11-01
 

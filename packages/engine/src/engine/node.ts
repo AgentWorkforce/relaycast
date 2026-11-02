@@ -59,7 +59,6 @@ import {
   detachInvocationsFromLostNode,
   dispatchCapacitySpawn,
   emitFailedInvocationEffects,
-  isSpawnInvocation,
   rescheduleInvocationsForLostNode,
   rescheduleNodeInvocation,
 } from './action.js';
@@ -2875,14 +2874,10 @@ export async function deregisterAgentViaNode(
   return updated ?? null;
 }
 
-/**
- * Inventory proves identity/presence, never a harness's ready state. Only a
- * spawn honors `verify_ready` (`dispatchSpawn`); on any other action it is an
- * ordinary input field.
- */
+/** Inventory proves identity/presence, never a harness's ready state. */
 const spawnReadinessSchema = z.object({ verify_ready: z.literal(true) }).passthrough();
-function requiresSpawnReadiness(invocation: { actionName: string; input: unknown }): boolean {
-  return isSpawnInvocation(invocation.actionName) && spawnReadinessSchema.safeParse(invocation.input).success;
+function requiresSpawnReadiness(input: unknown): boolean {
+  return spawnReadinessSchema.safeParse(input).success;
 }
 
 /**
@@ -3092,7 +3087,12 @@ export async function reconcileInventory(
     agent.invocation_id ? [agent.invocation_id] : []
   )));
 
-  const openInvocations = await db
+  // Inventory lists agents, so it is evidence only about the spawns that
+  // create them. Any other action dispatched to this provider (`task.run`,
+  // native-session delivery) is absent from every snapshot while it runs;
+  // its loss is recovered by provider disconnect and the dispatch-timeout
+  // sweep, never by inventory.
+  const openSpawns = await db
     .select({
       id: actionInvocations.id,
       workspaceId: actionInvocations.workspaceId,
@@ -3116,9 +3116,10 @@ export async function reconcileInventory(
       eq(actionInvocations.dispatchedNodeId, nodeId),
       eq(actionInvocations.dispatchedProvider, providerName),
       inArray(actionInvocations.status, ['pending', 'dispatched']),
+      or(eq(actionInvocations.actionName, 'spawn'), like(actionInvocations.actionName, 'spawn:%')),
     ));
-  const providerInvocationIds = new Set(openInvocations
-    .filter((invocation) => !requiresSpawnReadiness(invocation))
+  const providerInvocationIds = new Set(openSpawns
+    .filter((invocation) => !requiresSpawnReadiness(invocation.input))
     .map((invocation) => invocation.id));
 
   const reconciledAgentIds: string[] = [];
@@ -3326,11 +3327,11 @@ export async function reconcileInventory(
       }
     }
 
-    for (const invocation of openInvocations) {
+    for (const invocation of openSpawns) {
       // A live broker owns the bounded readiness wait and cleanup. A transient
       // empty inventory during launch/teardown must not redispatch this spawn.
       // Actual provider disconnect and invocation expiry retain their own recovery.
-      if (liveInvocationIds.has(invocation.id) || requiresSpawnReadiness(invocation)) continue;
+      if (liveInvocationIds.has(invocation.id) || requiresSpawnReadiness(invocation.input)) continue;
       try {
         if (await rescheduleNodeInvocation(db, registry, invocation)) {
           rescheduledInvocations++;
@@ -3358,7 +3359,7 @@ export async function reconcileInventory(
     reply: {
       rebound_agents: reconciledAgentIds.length,
       rejected_agents: rejectedInventoryErrors.length,
-      open_invocations: openInvocations.length,
+      open_invocations: openSpawns.length,
       completed_invocations: completedInvocations,
       rescheduled_invocations: rescheduledInvocations,
     },

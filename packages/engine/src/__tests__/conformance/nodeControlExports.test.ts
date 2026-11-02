@@ -141,19 +141,18 @@ describe('node-control provider-disconnect exports', () => {
   });
 
   it.each([
-    ['ping', 1],
-    ['spawn', 0],
-  ] as const)('inventory honors verify_ready only on spawn when rescheduling: %s', async (actionName, rescheduled) => {
-    const ws = await createWorkspace(stack.app, `inventory-readiness-scope-${actionName}`);
+    ['ping', {}, 0],
+    ['ping', { verify_ready: true }, 0],
+    ['spawn', { name: 'worker', cli: 'claude' }, 1],
+    ['spawn', { name: 'worker', cli: 'claude', verify_ready: true }, 0],
+  ] as const)('inventory reschedules only unverified spawns it no longer lists: %s %j', async (actionName, input, rescheduled) => {
+    const ws = await createWorkspace(stack.app, `inventory-scope-${actionName}-${rescheduled}-${Object.keys(input).length}`);
     const caller = await registerAgent(stack.app, ws.workspaceKey, 'caller');
     const attach = (nodeId: string, nodeName: string) => (actionName === 'spawn'
       ? attachProvider(ws.workspaceId, nodeId, nodeName, 'broker', 'spawn:claude', 0, 'broker-i1', 'capacity')
       : attachProvider(ws.workspaceId, nodeId, nodeName, 'broker', actionName));
     await enrollNode(ws, 'node-scope', 'scope');
     const provider = await attach('node-scope', 'scope');
-    const input = actionName === 'spawn'
-      ? { name: 'worker', cli: 'claude', verify_ready: true }
-      : { verify_ready: true };
     const response = await stack.app.request(`/v1/nodes/scope/actions/${actionName}/invoke`, {
       method: 'POST', headers: { 'content-type': 'application/json', authorization: `Bearer ${caller.token}` },
       body: JSON.stringify({ input }),

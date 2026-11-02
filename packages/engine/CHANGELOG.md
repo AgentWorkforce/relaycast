@@ -25,7 +25,7 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Fixed
 
-- `inventory.sync` defers only spawn invocations with `verify_ready: true` to the broker's readiness result. Any other action carrying a top-level `verify_ready` is completed or rescheduled on inventory like every other open invocation, instead of waiting for the dispatch-timeout sweep.
+- `inventory.sync` completes and reschedules only spawn invocations, the only ones an agent inventory describes. Other open invocations dispatched to the provider (`task.run`, native-session delivery) are no longer redispatched to another node by a snapshot that never lists them; provider disconnect and the dispatch-timeout sweep recover them. The reply's `open_invocations` counts open spawns.
 
 ## [12.5.0] - 2026-11-01
 
