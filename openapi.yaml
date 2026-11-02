@@ -5687,8 +5687,10 @@ paths:
       summary: List nodes
       description: >
         List delivery nodes in the workspace, optionally filtered by capability, name,
-        or liveness. `capability`, `name`, and `status` are evaluated in SQL, not
-        fetched in full and filtered afterward. Without `history`, the response is a
+        or liveness. `capability` and `name` are evaluated in SQL, not fetched in
+        full and filtered afterward. `status` is evaluated in SQL when no hosted
+        liveness authority is configured; with one, each candidate row is probed and
+        filtered by its probed status (see the `status` parameter). Without `history`, the response is a
         bare array (the legacy, unpaginated shape every existing caller already
         handles); `status=online` is the server-filtered live-Fleet path a default
         `fleet nodes` call should use, since it never reads or returns history no
