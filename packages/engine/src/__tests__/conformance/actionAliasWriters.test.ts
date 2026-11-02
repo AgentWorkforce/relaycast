@@ -1,13 +1,18 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { makeNodeStack, createWorkspace, registerAgent, FakeSocket, type TestStack } from './harness.js';
 import { deleteAction, registerAction } from '../../engine/action.js';
-import { deregisterProvider } from '../../engine/node.js';
+import { deregisterProvider, heartbeatNode } from '../../engine/node.js';
+import { drizzle } from 'drizzle-orm/better-sqlite3';
+import * as schema from '../../db/schema.js';
+import type { EngineDb } from '../../ports/database.js';
 
 /**
  * Every write that changes which row may claim an action name's
  * workspace-global alias settles the alias itself, in the same atomic unit:
  * a node heartbeat never re-reads action rows to repair them.
  */
+type Cap = { name: string; kind: 'action'; global?: boolean };
+
 describe('action alias writers', () => {
   let stack: TestStack;
   beforeEach(() => { stack = makeNodeStack({ ttlMs: 60_000 }); });
@@ -22,17 +27,21 @@ describe('action alias writers', () => {
     expect(res.status).toBe(201);
   }
 
-  /** Attach `nodeId`'s default provider and register `names` as its action capabilities. */
-  async function provide(workspaceId: string, nodeId: string, names: string[]) {
+  /** Attach `nodeId`'s `provider` and register `names` as its action capabilities. */
+  async function provide(workspaceId: string, nodeId: string, names: Array<string | Cap>, provider = 'default') {
     const handle = stack.runtime.realtime.attachNodeSocket(workspaceId, nodeId, new FakeSocket());
-    const register = (actionNames: string[]) => handle.handleMessage(JSON.stringify({
-      v: 1, id: `reg-${actionNames.join('-')}`, type: 'node.register', name: nodeId, node_id: nodeId,
-      provider: { name: 'default', instance_id: `${nodeId}-i1` },
-      capabilities: actionNames.map((name) => ({ name, kind: 'action' })),
-      max_agents: 4, tags: [], version: 'v1', resume_cursor: null,
+    const caps = (entries: Array<string | Cap>): Cap[] =>
+      entries.map((entry) => (typeof entry === 'string' ? { name: entry, kind: 'action' } : entry));
+    const register = (entries: Array<string | Cap>) => handle.handleMessage(JSON.stringify({
+      v: 1, id: `reg-${Math.random()}`, type: 'node.register', name: nodeId, node_id: nodeId,
+      provider: { name: provider, instance_id: `${nodeId}-${provider}` },
+      capabilities: caps(entries), max_agents: 4, tags: [], version: 'v1', resume_cursor: null,
+    }));
+    const beat = (entries: Array<string | Cap>) => handle.handleMessage(JSON.stringify({
+      v: 1, type: 'node.heartbeat', load: 0, active_agents: 0, handlers_live: true, capabilities: caps(entries),
     }));
     await register(names);
-    return { register };
+    return { register, beat };
   }
 
   function isGlobal(workspaceId: string, nodeId: string, name: string): number | undefined {
@@ -86,6 +95,39 @@ describe('action alias writers', () => {
     await provide(ws.workspaceId, 'node_b', ['etl']);
 
     await deregisterProvider(stack.runtime.handle.db, stack.runtime.realtime, ws.workspaceId, 'node_a', 'default');
+    expect(isGlobal(ws.workspaceId, 'node_b', 'etl')).toBe(1);
+  });
+
+  it('passes the alias to a default provider when its explicit owner stops claiming it', async () => {
+    const ws = await createWorkspace(stack.app, 'alias-explicit-release');
+    await enrollNode(ws.workspaceKey, 'node_a');
+    await enrollNode(ws.workspaceKey, 'node_b');
+    const a = await provide(ws.workspaceId, 'node_a', [{ name: 'etl', kind: 'action', global: true }], 'py');
+    await provide(ws.workspaceId, 'node_b', ['etl']);
+    expect([isGlobal(ws.workspaceId, 'node_a', 'etl'), isGlobal(ws.workspaceId, 'node_b', 'etl')]).toEqual([1, 0]);
+
+    await a.register([{ name: 'etl', kind: 'action', global: false }]);
+    expect([isGlobal(ws.workspaceId, 'node_a', 'etl'), isGlobal(ws.workspaceId, 'node_b', 'etl')]).toEqual([0, 1]);
+  });
+
+  it('retries a materialization that failed when the next heartbeat repeats the capabilities', async () => {
+    const ws = await createWorkspace(stack.app, 'alias-materialize-retry');
+    await enrollNode(ws.workspaceKey, 'node_a');
+    await enrollNode(ws.workspaceKey, 'node_b');
+    const etl: Cap = { name: 'etl', kind: 'action', global: true };
+    const a = await provide(ws.workspaceId, 'node_a', [etl], 'py');
+    // A handle without transactions, like D1: a failed write is not rolled back.
+    const d1Like = drizzle(stack.runtime.handle.sqlite, { schema }) as unknown as EngineDb;
+    const beat = () => heartbeatNode(d1Like, ws.workspaceId, 'node_b', 'py', {
+      type: 'node.heartbeat', load: 0, active_agents: 0, handlers_live: true, capabilities: [etl], max_agents: 4,
+    });
+
+    // node_a owns the explicit alias, so node_b's claim fails and writes no row.
+    await expect(beat()).rejects.toMatchObject({ code: 'action_name_conflict' });
+    expect(isGlobal(ws.workspaceId, 'node_b', 'etl')).toBeUndefined();
+
+    await a.register([]);
+    await beat();
     expect(isGlobal(ws.workspaceId, 'node_b', 'etl')).toBe(1);
   });
 

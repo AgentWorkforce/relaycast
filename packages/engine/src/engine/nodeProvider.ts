@@ -263,7 +263,10 @@ export async function materializeProviderActions(
   const pruned = await db.delete(actions).where(and(
     ...pruneConditions,
     keepNames.length > 0 ? notInArray(actions.name, keepNames) : sql`1 = 1`,
-  )).returning({ id: actions.id });
+  )).returning({ isGlobal: actions.isGlobal });
+  // A pruned or demoted row that held a global alias leaves the name to
+  // another node's default provider.
+  let releasedAlias = pruned.some((row) => row.isGlobal);
 
   const isDefault = providerName === DEFAULT_PROVIDER_NAME;
   for (const cap of actionCaps) {
@@ -320,6 +323,7 @@ export async function materializeProviderActions(
     }
 
     const wantQueue = cap.queue === true;
+    if (existing?.isGlobal && !wantGlobal) releasedAlias = true;
     if (existing) {
       await db
         .update(actions)
@@ -343,9 +347,7 @@ export async function materializeProviderActions(
       });
     }
   }
-  // A pruned row may have held a global alias another node's default
-  // provider can now claim.
-  if (pruned.length > 0) await claimOrphanedGlobalAliases(db, workspaceId);
+  if (releasedAlias) await claimOrphanedGlobalAliases(db, workspaceId);
 }
 
 /**

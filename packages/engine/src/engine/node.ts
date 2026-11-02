@@ -955,6 +955,10 @@ export async function registerNode(
 
   const capabilities = normalizeCapabilities(message.capabilities);
   await runAtomic(db, async (tx) => {
+    // Actions first: if materialization fails (D1 has no rollback), the
+    // provider's persisted capabilities still differ and its next heartbeat
+    // retries it.
+    await materializeProviderActions(tx, workspaceId, authenticatedNodeId, provider.name, capabilities);
     await upsertProvider(tx, workspaceId, authenticatedNodeId, {
       name: provider.name,
       instanceId: provider.instance_id,
@@ -963,7 +967,6 @@ export async function registerNode(
       version: message.version,
       handlersLive: capabilities.length > 0,
     });
-    await materializeProviderActions(tx, workspaceId, authenticatedNodeId, provider.name, capabilities);
     await tx
       .update(nodes)
       .set({ name: message.name, kind: 'ws', role: 'broker', deliveryAdapter: 'ws.node.v1', deliveryConfig: null, tags: brokerTagsPreservingServerOwned(tags) })
@@ -1061,6 +1064,23 @@ export async function heartbeatNode(
       const reportedLoad = message.load_reported === true && typeof message.load === 'number'
         ? message.load
         : undefined;
+      // Only action capabilities materialize into rows, so only a change to
+      // that subset re-runs the prune/upsert pass. Capacity entries feed
+      // placement: the broker's live-agent roster rides in one of them and
+      // changes on every spawn and exit, which must not rewrite action rows.
+      // The rows need no re-check: every other write that touches them keeps
+      // them in the state materialization would produce. It runs before the
+      // provider write, so if it fails (D1 has no rollback) the persisted
+      // capabilities still differ and the next frame retries it.
+      if (
+        existingProvider === undefined
+        || !sameCapabilities(
+          (existingProvider.capabilities ?? []).filter((cap) => capabilityKind(cap) === 'action'),
+          caps.filter((cap) => capabilityKind(cap) === 'action'),
+        )
+      ) {
+        await materializeProviderActions(tx, workspaceId, nodeId, providerName, caps);
+      }
       // One write carries both the roster refresh (capabilities/max_agents/
       // version) and the liveness signal (load/active_agents/handlers_live)
       // that upsertProvider + heartbeatProvider used to write separately.
@@ -1090,21 +1110,6 @@ export async function heartbeatNode(
           createdAt: now,
           ...providerWrite,
         });
-      }
-      // Only action capabilities materialize into rows, so only a change to
-      // that subset re-runs the prune/upsert pass. Capacity entries feed
-      // placement: the broker's live-agent roster rides in one of them and
-      // changes on every spawn and exit, which must not rewrite action rows.
-      // The rows need no re-check: every other write that touches them keeps
-      // them in the state materialization would produce.
-      if (
-        existingProvider === undefined
-        || !sameCapabilities(
-          (existingProvider.capabilities ?? []).filter((cap) => capabilityKind(cap) === 'action'),
-          caps.filter((cap) => capabilityKind(cap) === 'action'),
-        )
-      ) {
-        await materializeProviderActions(tx, workspaceId, nodeId, providerName, caps);
       }
     } else {
       await heartbeatProvider(tx, workspaceId, nodeId, providerName, {
