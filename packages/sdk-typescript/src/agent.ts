@@ -901,11 +901,16 @@ export class AgentClient {
    * List durable delivery items queued for this agent. Defaults to the
    * non-terminal queue (queued + delivered) so an offline consumer can replay
    * what it missed on reconnect. Each item carries the message payload.
+   *
+   * `waitMs` (0–25000) long-polls: an empty queue answers once a delivery
+   * arrives or the wait expires. A connected agent (`connect()`) receives
+   * deliveries over its socket and needs no polling at all.
    */
-  async deliveries(options?: { status?: DeliveryStatus; limit?: number }): Promise<DeliveryItem[]> {
+  async deliveries(options?: { status?: DeliveryStatus; limit?: number; waitMs?: number }): Promise<DeliveryItem[]> {
     const params: Record<string, string> = {};
     if (options?.status) params.status = options.status;
     if (options?.limit != null) params.limit = String(options.limit);
+    if (options?.waitMs != null) params.wait = String(options.waitMs);
     return this.client.get('/v1/deliveries', params);
   }
 

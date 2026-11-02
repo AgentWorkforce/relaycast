@@ -1,5 +1,8 @@
 export type { NodeLivenessAuthority, NodeLivenessSnapshot } from './nodeLiveness.js';
 import type { NodeLivenessAuthority } from './nodeLiveness.js';
+export type { DeliveryWaiters, DeliveryWaitArgs } from './deliveryWaiters.js';
+export { InProcessDeliveryWaiters, MAX_DELIVERY_WAIT_MS, DELIVERY_NOTIFY_MEMORY_MS } from './deliveryWaiters.js';
+import type { DeliveryWaiters } from './deliveryWaiters.js';
 /**
  * The complete dependency contract for the Relaycast engine.
  *
@@ -94,6 +97,11 @@ export interface EnginePorts {
 export interface EngineProviders {
   /** Optional host-owned receipt lease; omitted preserves D1 TTL behavior. */
   nodeLiveness?: NodeLivenessAuthority;
+  /**
+   * Parks `GET /v1/deliveries?wait=` until the agent's queue gains a row.
+   * Omitted: `wait` is accepted and the route answers at once.
+   */
+  deliveryWaiters?: DeliveryWaiters;
   auth: AuthProvider;
   /** Host admission and metering hooks. Omitted: every request is admitted. */
   admission?: AdmissionHooks;
