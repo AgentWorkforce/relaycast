@@ -18,7 +18,7 @@ Packages without a separate changelog are covered by the cross-package notes bel
 
 ## [Unreleased - Minor]
 
-- Node heartbeats, agent detail (`GET /v1/agent`, `GET /v1/agents/:name`) and message triggers read a workspace's actions and enabled triggers from a writer-advanced cache, once per change, instead of querying them on every request. Self-hosted engines cache in process; hosts plug in their own store.
+- Node heartbeats, agent detail and message triggers skip repeated `actions` and `triggers` reads while a workspace's catalog is unchanged; self-hosted engines cache in process.
 
 ## [12.6.2] - 2026-11-02
 

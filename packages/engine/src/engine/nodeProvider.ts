@@ -222,6 +222,7 @@ export async function providerActionsMaterialized(
 ): Promise<boolean> {
   const isDefault = providerName === DEFAULT_PROVIDER_NAME;
   const names = actionCaps.map((cap) => cap.name);
+  const nameSet = new Set(names);
   const catalog = await cachedActionCatalog(db, workspaceId);
   const rows = catalog
     ? catalog.actions.filter((row) => row.handlerNodeId === nodeId && row.handlerProvider === providerName)
@@ -250,7 +251,7 @@ export async function providerActionsMaterialized(
   let globalBlockedByName = new Set<string>();
   if (isDefault && actionCaps.length > 0) {
     const blockers = catalog
-      ? catalog.actions.filter((row) => names.includes(row.name) && (row.handlerNodeId === null || row.isGlobal))
+      ? catalog.actions.filter((row) => nameSet.has(row.name) && (row.handlerNodeId === null || row.isGlobal))
       : await db
         .select({ name: actions.name, handlerNodeId: actions.handlerNodeId })
         .from(actions)

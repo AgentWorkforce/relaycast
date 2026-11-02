@@ -11,11 +11,11 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Added
 
-- `ActionCatalogStore`, `MemoryActionCatalogStore` and `configureActionCatalog`, and `EngineProviders.actionCatalog`: a per-workspace cache of the `actions` rows and enabled `triggers` rows. The engine advances a workspace's revision after every write that can change them (action register and delete, provider materialize and deregister, node delete, trigger create, update and delete, agent retention, workspace delete), reads the rows at most once per revision, and drops a fill that raced an advance. A failed advance is retried once and then logged, never thrown, so a store whose calls can fail bounds a snapshot's age itself. Workspace delete calls the optional `forget`, which `MemoryActionCatalogStore` uses to release the workspace's entry. Bind the store to every database handle that writes those tables; a handle without one reads them directly. `createNodeRuntime` binds a `MemoryActionCatalogStore`.
+- `ActionCatalogStore`, `MemoryActionCatalogStore`, `configureActionCatalog` and `EngineProviders.actionCatalog`: a writer-advanced, per-workspace cache of `actions` and enabled `triggers` rows. Bind the store to every database handle that writes those tables; `createNodeRuntime` binds a `MemoryActionCatalogStore`.
 
 ### Changed
 
-- With a store bound, `node.heartbeat`'s materialization drift check, agent detail's `actions_provided` / `actions_available_to`, and message triggers read the cached catalog: a workspace with an unchanged catalog issues no `actions` or `triggers` statement on those paths. The drift check now heals changes the engine wrote; a row edited outside the engine is healed at the next re-registration or action write. A matching trigger's rate limit is enforced by its fire claim alone. A workspace with more than 1000 actions or enabled triggers is read directly.
+- With a store bound, `node.heartbeat`'s drift check, agent detail and message triggers skip their `actions` and `triggers` reads while the workspace's catalog is unchanged. The drift check heals changes the engine wrote; rows edited outside the engine heal at the next re-registration or action write.
 
 ## [12.6.2] - 2026-11-02
 
