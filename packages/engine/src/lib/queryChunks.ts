@@ -30,9 +30,13 @@ export async function queryInChunks<TValue, TRow>(
   query: (chunk: TValue[]) => PromiseLike<TRow[]> | TRow[],
   chunkSize = D1_SAFE_IN_QUERY_CHUNK_SIZE,
 ): Promise<TRow[]> {
+  if (!Number.isInteger(chunkSize) || chunkSize < 1) {
+    throw new RangeError('chunkSize must be a positive integer');
+  }
+
   const rows: TRow[] = [];
-  for (const chunk of chunkValues(values, chunkSize)) {
-    rows.push(...await query(chunk));
+  for (let index = 0; index < values.length; index += chunkSize) {
+    rows.push(...await query(values.slice(index, index + chunkSize)));
   }
   return rows;
 }

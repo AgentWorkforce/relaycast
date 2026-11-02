@@ -11,6 +11,7 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Fixed
 
+- The inbox mention lookup prefilters bodies with `instr(body, '@name')` instead of `LIKE`, so it stays within D1's 50-byte LIKE pattern cap for any agent name. Results are unchanged: `parseMessageMentions` is case-sensitive and needs the literal `@name`.
 - `reconcileInventory` deactivates missing agents' node bindings and offlines the agents with one statement pair per 90-id chunk, all in one atomic batch. A node that drops more agents than one D1 statement can bind no longer fails the sync with `too many SQL variables`.
 - `toErrorDetails` appends each `cause` message to `error_message`, so a Drizzle `Failed query: ...` log line carries the D1 reason (constraint, bind limit, overload).
 
