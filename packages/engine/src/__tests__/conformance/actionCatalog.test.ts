@@ -49,6 +49,7 @@ describe('MemoryActionCatalogStore', () => {
 describe('cachedActionCatalog', () => {
   it('answers from the database when the store fails', async () => {
     const stack = makeNodeStack({ ttlMs: 60_000 });
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
     try {
       const ws = await createWorkspace(stack.app, 'catalog-store-down');
       const handler = await registerAgent(stack.app, ws.workspaceKey, 'handler');
@@ -56,7 +57,6 @@ describe('cachedActionCatalog', () => {
       const db = drizzle(stack.runtime.handle.sqlite, { schema }) as unknown as EngineDb;
       const store = new MemoryActionCatalogStore();
       configureActionCatalog(db, store);
-      const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
 
       store.read = async () => { throw new Error('store unavailable'); };
       expect((await getAgentByName(db, ws.workspaceId, 'handler'))?.actions_provided)
@@ -68,8 +68,8 @@ describe('cachedActionCatalog', () => {
         .toEqual([expect.objectContaining({ name: 'etl' })]);
       expect(warn).toHaveBeenCalledWith('[actions] catalog read failed', expect.anything());
       expect(warn).toHaveBeenCalledWith('[actions] catalog fill failed', expect.anything());
-      warn.mockRestore();
     } finally {
+      warn.mockRestore();
       await stack.close();
     }
   });
@@ -83,10 +83,13 @@ describe('advancingActionCatalog', () => {
     store.advance = async () => { calls++; throw new Error('store unavailable'); };
     configureActionCatalog(db, store);
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
-    await expect(advancingActionCatalog(db, 'ws', async () => 'committed')).resolves.toBe('committed');
-    expect(calls).toBe(2);
-    expect(warn).toHaveBeenCalledWith('[actions] catalog advance failed', expect.objectContaining({ workspaceId: 'ws' }));
-    warn.mockRestore();
+    try {
+      await expect(advancingActionCatalog(db, 'ws', async () => 'committed')).resolves.toBe('committed');
+      expect(calls).toBe(2);
+      expect(warn).toHaveBeenCalledWith('[actions] catalog advance failed', expect.objectContaining({ workspaceId: 'ws' }));
+    } finally {
+      warn.mockRestore();
+    }
   });
 });
 

@@ -80,9 +80,11 @@ export async function cachedActionCatalog(db: EngineDb, workspaceId: string): Pr
   }
   if (held.snapshot?.shape === ACTION_CATALOG_SHAPE) return held.snapshot.oversize ? null : held.snapshot;
   const fresh = await readActionCatalog(db, workspaceId);
-  await store.fill(workspaceId, held.revision, fresh).catch((err: unknown) => {
+  try {
+    await store.fill(workspaceId, held.revision, fresh);
+  } catch (err) {
     console.warn('[actions] catalog fill failed', { workspaceId, err });
-  });
+  }
   return fresh.oversize ? null : fresh;
 }
 
