@@ -46,6 +46,35 @@ describe('MemoryActionCatalogStore', () => {
   });
 });
 
+describe('cachedActionCatalog', () => {
+  it('answers from the database when the store fails', async () => {
+    const stack = makeNodeStack({ ttlMs: 60_000 });
+    try {
+      const ws = await createWorkspace(stack.app, 'catalog-store-down');
+      const handler = await registerAgent(stack.app, ws.workspaceKey, 'handler');
+      await registerAction(stack.runtime.handle.db, ws.workspaceId, { name: 'etl', description: 'etl', handler_agent: handler.name });
+      const db = drizzle(stack.runtime.handle.sqlite, { schema }) as unknown as EngineDb;
+      const store = new MemoryActionCatalogStore();
+      configureActionCatalog(db, store);
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+      store.read = async () => { throw new Error('store unavailable'); };
+      expect((await getAgentByName(db, ws.workspaceId, 'handler'))?.actions_provided)
+        .toEqual([expect.objectContaining({ name: 'etl' })]);
+
+      store.read = MemoryActionCatalogStore.prototype.read.bind(store);
+      store.fill = async () => { throw new Error('store unavailable'); };
+      expect((await getAgentByName(db, ws.workspaceId, 'handler'))?.actions_provided)
+        .toEqual([expect.objectContaining({ name: 'etl' })]);
+      expect(warn).toHaveBeenCalledWith('[actions] catalog read failed', expect.anything());
+      expect(warn).toHaveBeenCalledWith('[actions] catalog fill failed', expect.anything());
+      warn.mockRestore();
+    } finally {
+      await stack.close();
+    }
+  });
+});
+
 describe('advancingActionCatalog', () => {
   it('returns the committed write when the store cannot advance', async () => {
     const db = {} as EngineDb;

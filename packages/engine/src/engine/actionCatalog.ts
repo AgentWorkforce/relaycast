@@ -64,15 +64,25 @@ async function readActionCatalog(db: EngineDb, workspaceId: string): Promise<Act
 /**
  * The workspace's actions and enabled triggers from the bound store, read from
  * the database at most once per catalog revision. `null` when the handle has
- * no store or the workspace is oversize: the caller runs its own query.
+ * no store, the store cannot be read, or the workspace is oversize: the caller
+ * runs its own query.
  */
 export async function cachedActionCatalog(db: EngineDb, workspaceId: string): Promise<ActionCatalog | null> {
   const store = actionCatalogStore(db);
   if (!store) return null;
-  const { revision, snapshot } = await store.read(workspaceId);
-  if (snapshot?.shape === ACTION_CATALOG_SHAPE) return snapshot.oversize ? null : snapshot;
+  let held: Awaited<ReturnType<typeof store.read>>;
+  try {
+    held = await store.read(workspaceId);
+  } catch (err) {
+    // The store is a cache: the caller's own query answers without it.
+    console.warn('[actions] catalog read failed', { workspaceId, err });
+    return null;
+  }
+  if (held.snapshot?.shape === ACTION_CATALOG_SHAPE) return held.snapshot.oversize ? null : held.snapshot;
   const fresh = await readActionCatalog(db, workspaceId);
-  await store.fill(workspaceId, revision, fresh);
+  await store.fill(workspaceId, held.revision, fresh).catch((err: unknown) => {
+    console.warn('[actions] catalog fill failed', { workspaceId, err });
+  });
   return fresh.oversize ? null : fresh;
 }
 
