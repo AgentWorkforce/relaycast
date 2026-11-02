@@ -16,7 +16,9 @@ This project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 Packages without a separate changelog are covered by the cross-package notes below.
 
-## [Unreleased - Patch]
+## [Unreleased]
+
+## [12.6.1] - 2026-11-02
 
 - Legacy credentials (`rk_live_`, `at_live_`, `nt_live_`, `ot_live_`) authenticate in one database query, including a key or agent token inside its rotation grace. Agent, node and observer tokens used to take two.
 
@@ -971,7 +973,8 @@ Packages without a separate changelog are covered by the cross-package notes bel
 
 Earlier releases are available on the [GitHub releases page](https://github.com/AgentWorkforce/relaycast/releases).
 
-[Unreleased]: https://github.com/AgentWorkforce/relaycast/compare/v12.6.0...HEAD
+[Unreleased]: https://github.com/AgentWorkforce/relaycast/compare/v12.6.1...HEAD
+[12.6.1]: https://github.com/AgentWorkforce/relaycast/compare/v12.6.0...v12.6.1
 [12.6.0]: https://github.com/AgentWorkforce/relaycast/compare/v12.5.0...v12.6.0
 [12.5.0]: https://github.com/AgentWorkforce/relaycast/compare/v12.4.0...v12.5.0
 [12.4.0]: https://github.com/AgentWorkforce/relaycast/compare/v12.3.0...v12.4.0
