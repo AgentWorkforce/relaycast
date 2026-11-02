@@ -223,6 +223,9 @@ export function createActorRuntime(options: ActorRuntimeOptions): ActorRuntime {
     nodeConnections: realtime,
     presence,
     rateLimiter: new InProcessRateLimiter(),
+    // No deliveryWaiters: a wait inside an actor call holds the mailbox, so
+    // the write that would wake it could never run. `wait` answers at once
+    // here; a host that long-polls parks outside the actor call.
     files,
     kv,
     webhookQueue,
