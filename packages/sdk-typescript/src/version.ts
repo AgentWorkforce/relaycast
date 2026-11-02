@@ -1,1 +1,1 @@
-export const SDK_VERSION = "12.5.0" as const;
+export const SDK_VERSION = "12.6.0" as const;

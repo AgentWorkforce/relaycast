@@ -16,7 +16,9 @@ This project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 Packages without a separate changelog are covered by the cross-package notes below.
 
-## [Unreleased - Minor]
+## [Unreleased]
+
+## [12.6.0] - 2026-11-01
 
 - A broker's changing live-agent roster no longer rewrites its action rows on every heartbeat.
 - A heartbeat writes the node aggregate in one statement and reads drain state in one statement.
@@ -968,7 +970,8 @@ Packages without a separate changelog are covered by the cross-package notes bel
 
 Earlier releases are available on the [GitHub releases page](https://github.com/AgentWorkforce/relaycast/releases).
 
-[Unreleased]: https://github.com/AgentWorkforce/relaycast/compare/v12.5.0...HEAD
+[Unreleased]: https://github.com/AgentWorkforce/relaycast/compare/v12.6.0...HEAD
+[12.6.0]: https://github.com/AgentWorkforce/relaycast/compare/v12.5.0...v12.6.0
 [12.5.0]: https://github.com/AgentWorkforce/relaycast/compare/v12.4.0...v12.5.0
 [12.4.0]: https://github.com/AgentWorkforce/relaycast/compare/v12.3.0...v12.4.0
 [12.3.0]: https://github.com/AgentWorkforce/relaycast/compare/v12.2.1...v12.3.0
