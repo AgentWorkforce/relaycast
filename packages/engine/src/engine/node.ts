@@ -3702,6 +3702,9 @@ function sendControl(socket: NodeSocketLike | undefined, payload: Record<string,
  * otherwise a connected node registers agents into a workspace being deleted.
  */
 /** Control frames still admitted after the workspace expires (see the gate below). */
+/** Frames that only settle work already dispatched to the socket; a superseded socket may still finish those. */
+const IN_FLIGHT_SETTLING_FRAMES: ReadonlySet<string> = new Set(['action.accept', 'action.result', 'delivery.ack']);
+
 const SETTLING_CONTROL_FRAMES: ReadonlySet<string> = new Set([
   'action.accept',
   'action.result',
@@ -3772,6 +3775,25 @@ export async function handleNodeControlMessage(args: HandleNodeControlMessageArg
   // check, the provider-row upsert, or the aggregate recompute.
   return serializeNodeOp(args.workspaceId, args.nodeId, async () => {
   try {
+    // Decided under the node lock: a frame queued on a socket that a
+    // reconnect's `node.register` has since superseded would act on the live
+    // socket's provider (its own binding is gone, and the fallback is the
+    // same `default`). Only frames that settle work already in flight pass.
+    if (
+      args.connectionId
+      && !IN_FLIGHT_SETTLING_FRAMES.has(message.type)
+      && args.registry.isConnectionSuperseded?.(args.connectionId)
+    ) {
+      sendControl(args.socket, {
+        v: 1,
+        id: requestId(message),
+        type: 'error',
+        ok: false,
+        code: 'connection_superseded',
+        message: 'A newer socket registered this provider; this socket is closed',
+      });
+      return;
+    }
     // A socket outlives its workspace's deletion, and every other frame writes
     // durable state (a heartbeat can insert provider and action rows). Only
     // frames that settle work already in flight or tear identity down pass.

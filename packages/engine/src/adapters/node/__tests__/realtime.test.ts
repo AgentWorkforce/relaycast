@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { and, eq } from 'drizzle-orm';
-import { nodes, workspaceEvents } from '../../../db/schema.js';
+import { agents, nodes, workspaceEvents } from '../../../db/schema.js';
 import {
   FakeSocket,
   attachDirectNodeSocket,
@@ -140,6 +140,58 @@ describe('InProcessRealtime direct node reconnect', () => {
 
     await second.handle.handleClose();
     await expectOfflineOnce();
+  });
+
+  it('refuses the frames a superseded socket still had queued, except those settling in-flight work', async () => {
+    const { ws, alice, nodeId, attach, invoke, expectOnline } = await setup();
+
+    const first = attach();
+    await first.handle.handleMessage(directRegisterFrame(alice, 'r1'));
+    const second = attach();
+    await second.handle.handleMessage(directRegisterFrame(alice, 'r2'));
+    expect(stack.runtime.realtime.isConnectionSuperseded(first.handle.connectionId)).toBe(true);
+    expect(stack.runtime.realtime.isConnectionSuperseded(second.handle.connectionId)).toBe(false);
+
+    // A deregister the old socket sent before it learned it was superseded
+    // would otherwise remove the provider the new socket now holds.
+    await first.handle.handleMessage(JSON.stringify({ v: 1, id: 'd1', type: 'node.deregister' }));
+    expect(first.sock.ofType('error')).toEqual([expect.objectContaining({ id: 'd1', code: 'connection_superseded' })]);
+    await first.handle.handleMessage(JSON.stringify({ v: 1, id: 'h1', type: 'node.heartbeat', active_agents: 1, handlers_live: false }));
+    expect(first.sock.ofType('error')).toHaveLength(2);
+    expect(stack.runtime.realtime.providerConnectionId(ws.workspaceId, nodeId, 'default')).toBe(second.handle.connectionId);
+    await expectOnline();
+    await invoke(second.sock, [first.sock]);
+
+    // Settling work already dispatched to it still passes (an unknown id is the engine's usual answer, not a refusal).
+    await first.handle.handleMessage(JSON.stringify({ v: 1, id: 'a1', type: 'action.accept', invocation_id: 'inv_missing' }));
+    expect(first.sock.ofType('error').find((frame) => frame.id === 'a1')?.code).not.toBe('connection_superseded');
+
+    await first.handle.handleClose();
+    expect(stack.runtime.realtime.isConnectionSuperseded(first.handle.connectionId)).toBe(false);
+    await expectOnline();
+  });
+
+  it("does not refresh the direct agent's liveness for a register the engine refused", async () => {
+    const { ws, alice, aliceStatus, attach } = await setup();
+    const db = stack.runtime.deps.db;
+    const first = attach();
+    await first.handle.handleMessage(directRegisterFrame(alice, 'r1'));
+    expect(await aliceStatus()).toBe('active');
+
+    // The agent lost liveness (as a sweep records it) while its socket stayed up.
+    await db.update(agents).set({ status: 'offline', statusBeforeLivenessLoss: 'active' })
+      .where(and(eq(agents.workspaceId, ws.workspaceId), eq(agents.id, alice.agentId)));
+    expect(await aliceStatus()).toBe('offline');
+
+    // A malformed re-register is answered with an error and certifies nothing.
+    await first.handle.handleMessage(JSON.stringify({ v: 1, id: 'bad', type: 'node.register' }));
+    expect(first.sock.ofType('error')).toEqual([expect.objectContaining({ code: 'invalid_message' })]);
+    expect(await aliceStatus()).toBe('offline');
+
+    // An accepted one does.
+    await first.handle.handleMessage(directRegisterFrame(alice, 'r2'));
+    expect(first.sock.ofType('reply').map((frame) => frame.id)).toEqual(['r1', 'r2']);
+    expect(await aliceStatus()).toBe('active');
   });
 
   it('still refuses an explicit different provider instance while the incumbent is live, and that close is real', async () => {

@@ -213,6 +213,10 @@ export class ActorRealtime implements RealtimeBus, ConnectionRegistry, NodeConne
     return this.inner.providerNameForConnection(connectionId);
   }
 
+  isConnectionSuperseded(connectionId: string): boolean {
+    return this.inner.isConnectionSuperseded(connectionId);
+  }
+
   providerAttachConflict(
     workspaceId: string,
     nodeId: string,

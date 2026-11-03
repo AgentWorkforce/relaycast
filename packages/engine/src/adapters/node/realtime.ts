@@ -67,6 +67,8 @@ interface NodeConn {
   /** Exact actions that negotiated authenticated caller provenance on this socket. */
   callerAwareActions?: ReadonlySet<string>;
   lastSeen: number;
+  /** Accepted `node.register` frames on this socket (each binds the provider). */
+  attaches: number;
 }
 
 /** See {@link InProcessRealtime.nodeConnectionState}. */
@@ -150,6 +152,8 @@ export class InProcessRealtime implements RealtimeBus, ConnectionRegistry, NodeC
   private readonly nodeConnIndex = new Map<string, Set<string>>();
   /** Per node, the connection id currently bound to each provider name. */
   private readonly providerIndex = new Map<string, Map<string, string>>();
+  /** Connections a reconnect's `node.register` superseded, until their socket's close is processed. */
+  private readonly supersededConnections = new Set<string>();
   /** Per-provider queued `action.invoke` frames (`workspace:node::provider`). */
   private readonly nodeQueues = new Map<string, QueuedNodeMessage[]>();
   /** Serializes drains per node so concurrent triggers never overlap. */
@@ -657,6 +661,11 @@ export class InProcessRealtime implements RealtimeBus, ConnectionRegistry, NodeC
     return this.providerConnId(this.nodeKey(workspaceId, nodeId), providerName);
   }
 
+  /** Whether a reconnect's `node.register` moved this connection's provider to a newer socket (its close may still be in flight). */
+  isConnectionSuperseded(connectionId: string): boolean {
+    return this.supersededConnections.has(connectionId);
+  }
+
   /**
    * The registry's state for one node connection, for a host that persists
    * it across its own restarts (the actor adapter). `deliveryReadyAgentIds`
@@ -746,6 +755,7 @@ export class InProcessRealtime implements RealtimeBus, ConnectionRegistry, NodeC
     if (existingConnId && existingConnId !== connectionId) {
       const superseded = this.nodeConnections.get(existingConnId);
       this.nodeConnections.delete(existingConnId);
+      this.supersededConnections.add(existingConnId);
       const conns = this.nodeConnIndex.get(nodeKey);
       if (conns) {
         conns.delete(existingConnId);
@@ -779,6 +789,7 @@ export class InProcessRealtime implements RealtimeBus, ConnectionRegistry, NodeC
       providers.delete(previousProviderName);
     }
     conn.providerName = providerName;
+    conn.attaches += 1;
     conn.instanceId = instanceId;
     conn.callerAwareActions = new Set(callerAwareActions);
     conn.lastSeen = Date.now();
@@ -949,6 +960,7 @@ export class InProcessRealtime implements RealtimeBus, ConnectionRegistry, NodeC
       workspaceId,
       nodeId,
       lastSeen: Date.now(),
+      attaches: 0,
     });
     let conns = this.nodeConnIndex.get(nodeKey);
     if (!conns) {
@@ -961,6 +973,7 @@ export class InProcessRealtime implements RealtimeBus, ConnectionRegistry, NodeC
       handleMessage: async (raw) => {
         const conn = this.nodeConnections.get(connectionId);
         if (conn) conn.lastSeen = Date.now();
+        const attachesBefore = conn?.attaches ?? 0;
         await handleNodeControlMessage({
           db: this.db,
           registry: this,
@@ -978,9 +991,11 @@ export class InProcessRealtime implements RealtimeBus, ConnectionRegistry, NodeC
         // teardown of the previous socket marked the agent offline with the
         // node, and the reconnect would otherwise leave it offline (and its
         // actions `handler_unavailable`) until the first heartbeat, ~30 s later.
-        const providerName = this.nodeConnections.get(connectionId)?.providerName;
-        if (providerName && nodeId.startsWith(IMPLICIT_DIRECT_NODE_ID_PREFIX) && frameType(raw) === 'node.register') {
-          await this.refreshDirectAgentLiveness(workspaceId, nodeId, providerName);
+        // Only an accepted register (one that bound the provider): a refused
+        // one answered an error and must not certify anything.
+        const after = this.nodeConnections.get(connectionId);
+        if (after?.providerName && after.attaches > attachesBefore && nodeId.startsWith(IMPLICIT_DIRECT_NODE_ID_PREFIX)) {
+          await this.refreshDirectAgentLiveness(workspaceId, nodeId, after.providerName);
         }
       },
       handleClose: async () => this.onNodeConnectionClose(connectionId),
@@ -1023,6 +1038,7 @@ export class InProcessRealtime implements RealtimeBus, ConnectionRegistry, NodeC
   }
 
   private async onNodeConnectionClose(connectionId: string): Promise<void> {
+    this.supersededConnections.delete(connectionId);
     const conn = this.nodeConnections.get(connectionId);
     if (!conn) return;
     this.nodeConnections.delete(connectionId);
