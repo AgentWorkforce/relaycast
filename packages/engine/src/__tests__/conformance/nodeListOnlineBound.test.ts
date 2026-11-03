@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { eq } from 'drizzle-orm';
 import { nodes } from '../../db/schema.js';
-import { listNodes, NODE_LIST_PROBE_BUDGET_MS, NODE_ONLINE_CANDIDATE_RECENCY_MS } from '../../engine/node.js';
+import { listNodes, NODE_ONLINE_CANDIDATE_RECENCY_MS } from '../../engine/node.js';
 import { configureNodeLiveness } from '../../engine/nodeLiveness.js';
 import { NODE_LIVENESS_TTL_MS } from '../../engine/placement.js';
 import { NODE_LIVENESS_CHECKPOINT_INTERVAL_MS, type NodeLivenessSnapshot } from '../../ports/nodeLiveness.js';
@@ -184,24 +184,6 @@ describe('GET /v1/nodes?status=online under a liveness authority', () => {
     expect(page.nodes.map(node => node.id)).toEqual(['nd_b', 'nd_c']);
   });
 
-  it('stops issuing probes once the time budget is spent and returns the matches decided so far', async () => {
-    seedRecentRows(20);
-    for (let i = 0; i < 20; i += 1) liveIds.add(`nd_recent_${String(i).padStart(3, '0')}`);
-    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
-    // The eighth probe is the last of the first pool round; the budget is
-    // spent by the time it answers, so none of the remaining twelve starts.
-    probeOverride = (nodeId) => {
-      if (inspected.length === 8) vi.setSystemTime(Date.now() + NODE_LIST_PROBE_BUDGET_MS);
-      return inspected.length > 8 ? new Promise<NodeLivenessSnapshot>(() => {}) : undefined;
-    };
-    const page = await listNodes(stack.runtime.deps.db, workspaceId, { status: 'online' });
-    expect(inspected.length).toBe(8);
-    expect(page.nodes.map(node => node.id)).toEqual(Array.from({ length: 8 }, (_, i) => `nd_recent_${String(i).padStart(3, '0')}`));
-    expect(warn).toHaveBeenCalledWith('[node.list] liveness probe budget spent; result truncated', expect.objectContaining({
-      workspaceId, candidates: 20, decided: 8, probed: 8, matched: 8,
-    }));
-    warn.mockRestore();
-  });
 
   it('applies limit to the authority-filtered result, not to the candidate rows', async () => {
     for (const id of ['nd_a', 'nd_b', 'nd_c', 'nd_d']) await checkpointedNode(id);

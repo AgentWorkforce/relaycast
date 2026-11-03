@@ -3388,8 +3388,7 @@ export interface ListNodesFilters {
    * `status` plus a fresh heartbeat within `NODE_LIVENESS_TTL_MS`, in SQL.
    * Under an authority: the authority's answer per node, with `online`
    * candidates bounded in SQL by {@link NODE_ONLINE_CANDIDATE_RECENCY_MS};
-   * `offline` rows outside that bound are offline without a probe. Probes
-   * stop after {@link NODE_LIST_PROBE_BUDGET_MS}, truncating the result.
+   * `offline` rows outside that bound are offline without a probe.
    * Omitted: no liveness selection (legacy behavior).
    */
   status?: 'online' | 'offline';
@@ -3514,15 +3513,6 @@ async function visibleActiveAgentCounts(
  * still report it online.
  */
 const NODE_CHECKPOINT_LANDING_SLACK_MS = 240_000;
-
-/**
- * Wall-clock budget for the authority probes behind one `status` listing.
- * Once it is spent no new probe starts; the probes in flight are awaited and
- * the matches found so far are returned, so a slow authority yields a
- * truncated (prefix-exact, `id`-ordered) list instead of a request timeout.
- * Truncation is logged.
- */
-export const NODE_LIST_PROBE_BUDGET_MS = 10_000;
 
 /**
  * How recent a node row's checkpoint must be for a liveness authority to be
@@ -4290,17 +4280,14 @@ export async function handleNodeControlMessage(args: HandleNodeControlMessageArg
 async function publicNodes(db: Db, rows: NodeRow[], now: number, status?: 'online' | 'offline', limit?: number) {
   if (!nodeLivenessAuthority(db)) return rows.map(row => publicNode(row, now));
   // At most eight probes in flight, issued in row order. Once `limit` rows
-  // match or the probe budget is spent, no new probe starts; every row before
-  // the last one taken has been decided, so the result is an exact prefix of
-  // the matches in row order. A `status=offline` row outside the online
+  // match, no new probe starts; every row before the last one taken has been
+  // decided, so the result is exactly the first matches in row order. A `status=offline` row outside the online
   // candidate bound cannot be reported online, so it is offline unprobed.
   const items: Array<ReturnType<typeof publicNode> | undefined> = new Array(rows.length);
-  const startedAt = Date.now();
   let next = 0;
   let matched = 0;
-  let probed = 0;
   const worker = async () => {
-    while (next < rows.length && (limit === undefined || matched < limit) && Date.now() - startedAt < NODE_LIST_PROBE_BUDGET_MS) {
+    while (next < rows.length && (limit === undefined || matched < limit)) {
       const index = next++;
       const row = rows[index];
       if (status === 'offline' && !isOnlineCandidate(row, now)) {
@@ -4308,7 +4295,6 @@ async function publicNodes(db: Db, rows: NodeRow[], now: number, status?: 'onlin
         matched += 1;
         continue;
       }
-      probed += 1;
       const snapshot = await inspectNodeLiveness(db, row.workspaceId, row.id);
       const live = !!snapshot && snapshotOnline(snapshot);
       const item = publicNode(row, now, live, snapshot?.status ?? 'unknown');
@@ -4324,11 +4310,6 @@ async function publicNodes(db: Db, rows: NodeRow[], now: number, status?: 'onlin
     }
   };
   await Promise.all(Array.from({ length: Math.min(8, rows.length) }, worker));
-  if (next < rows.length && (limit === undefined || matched < limit)) {
-    console.warn('[node.list] liveness probe budget spent; result truncated', {
-      workspaceId: rows[0].workspaceId, candidates: rows.length, decided: next, probed, matched, budget_ms: NODE_LIST_PROBE_BUDGET_MS,
-    });
-  }
   const result = items.filter((item): item is ReturnType<typeof publicNode> => item !== undefined);
   return limit === undefined ? result : result.slice(0, limit);
 }

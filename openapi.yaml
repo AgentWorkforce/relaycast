@@ -5722,7 +5722,7 @@ paths:
         - name: status
           in: query
           required: false
-          description: Selects on liveness. `online` is live nodes; `offline` is everything else. Without a hosted liveness authority the predicate runs in SQL. With one, candidates whose last durable checkpoint is recent enough for the authority to report them live are checked against it (`online` limits them in SQL; `offline` lists the rest unchecked), within a fixed time budget after which the list is truncated to the matches decided so far. Rows come back in `id` order.
+          description: Selects on liveness. `online` is live nodes; `offline` is everything else. Without a hosted liveness authority the predicate runs in SQL. With one, candidates whose last durable checkpoint is recent enough for the authority to report them live are checked against it (`online` limits them in SQL; `offline` lists the rest unchecked). Rows come back in `id` order.
           schema:
             type: string
             enum: [online, offline]
