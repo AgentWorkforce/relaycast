@@ -24,6 +24,13 @@ export const CLIENT_MAX_MESSAGE_BYTES = 1024 * 1024;
 const UPSTREAM_MAX_MESSAGE_BYTES = 16 * 1024 * 1024;
 /** Frames queued for a client that is not reading; past this it is closed as a slow consumer. */
 const MAX_CLIENT_BUFFERED_BYTES = 2 * UPSTREAM_MAX_MESSAGE_BYTES;
+/**
+ * Bytes a client may send before its upgrade is answered. A WebSocket client
+ * sends nothing until it has its 101, so anything here is already suspect;
+ * past this the connection is dropped rather than buffered while its actor
+ * is being asked.
+ */
+const MAX_EARLY_BYTES = 16 * 1024;
 const DEFAULT_PING_INTERVAL_MS = 30_000;
 const DEFAULT_CONNECT_TIMEOUT_MS = 10_000;
 /** A close reason is at most 123 bytes on the wire. */
@@ -187,6 +194,7 @@ export function createSocketBridge(ctx: GatewayContext, options: SocketBridgeOpt
      */
     onData: (chunk: Buffer) => void;
     early: Buffer[];
+    earlyBytes: number;
   }
   /** Upgrades between arrival and their answer, so a client that leaves or a shutdown can cancel them. */
   const pending = new Set<Pending>();
@@ -277,8 +285,19 @@ export function createSocketBridge(ctx: GatewayContext, options: SocketBridgeOpt
           entry.upstream?.terminate();
           socket.destroy();
         },
-        onData: (chunk) => { entry.early.push(chunk); },
+        onData: (chunk) => {
+          entry.earlyBytes += chunk.byteLength;
+          if (entry.earlyBytes > MAX_EARLY_BYTES) {
+            if (!settle(entry)) return;
+            ctx.logger.warn('socket.early_bytes', { path: url.pathname, workspace_id: credential?.workspaceId, request_id: requestId, bytes: entry.earlyBytes });
+            entry.upstream?.terminate();
+            socket.destroy();
+            return;
+          }
+          entry.early.push(chunk);
+        },
         early: [],
+        earlyBytes: 0,
       };
       pending.add(entry);
       socket.once('close', entry.onGone);

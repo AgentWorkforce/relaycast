@@ -1,3 +1,4 @@
+import { createConnection } from 'node:net';
 import { afterEach, describe, expect, it } from 'vitest';
 import WebSocket from 'ws';
 import { SOCKET_GRANT_HEADER, parseSocketGrant } from '../socketGrant.js';
@@ -162,6 +163,32 @@ describe('WebSocket bridge', () => {
     expect(sendableCloseCode(1005)).toBe(1000);
     expect(sendableCloseCode(1006)).toBe(1001);
     for (const code of [1004, 1015, 2000, 5000]) expect(sendableCloseCode(code)).toBe(1011);
+  });
+
+  it('drops a client that sends more than a few KiB before its upgrade is answered', async () => {
+    const slowGrant = (id: string): FakeWorkspace => ({
+      handle: async (request) => {
+        await new Promise((resolve) => setTimeout(resolve, 400));
+        return grantingWorkspace(id).handle(request);
+      },
+    });
+    harness = await startHarness({ workspace: slowGrant });
+    const port = Number(new URL(harness.baseUrl).port);
+    const token = await harness.credential();
+    const closed = new Promise<void>((resolve) => {
+      const raw = createConnection({ host: '127.0.0.1', port }, () => {
+        raw.write(`GET /v1/ws?token=${token} HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: Upgrade\r\nUpgrade: websocket\r\nSec-WebSocket-Version: 13\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n\r\n`);
+        // Bytes a real client would never send before its 101.
+        setTimeout(() => raw.write(Buffer.alloc(20 * 1024, 0x41)), 100);
+      });
+      raw.on('error', () => {});
+      raw.once('close', () => resolve());
+    });
+    await closed;
+    await new Promise((resolve) => setTimeout(resolve, 500));
+    expect(harness.controlPlane.findWebsocketCalls).toHaveLength(0);
+    expect(harness.controlPlane.sessions).toHaveLength(0);
+    expect(harness.logs.find((entry) => entry.event === 'socket.early_bytes')).toMatchObject({ path: '/v1/ws' });
   });
 
   it('opens no upstream for a client that left while its actor was being asked', async () => {
