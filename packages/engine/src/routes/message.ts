@@ -14,7 +14,7 @@ import { resolveMailboxConfig } from '../engine/mailboxConfig.js';
 import { resolveWorkspaceDeliveryPolicyFor } from '../engine/workspaceDeliveryPolicy.js';
 import { publishWorkspaceEvent } from './fanout.js';
 import { notifyDeliveryRejections, routeDeliveryOutcomes } from './deliveryRouting.js';
-import { buildMessageCreatedEventData } from '../engine/deliveryWire.js';
+import { buildMessageCreatedEventData, sentDeliveriesResponseFields } from '../engine/deliveryWire.js';
 import {
   getChannelObserverResource,
   getMessageObserverResource,
@@ -227,7 +227,12 @@ messageRoutes.post(
         );
       }
 
-      return jsonIdempotentOk(c, idempotent);
+      // The sender's handles on the per-recipient delivery rows (capped; see
+      // `sentDeliveriesResponseFields`). Replays carry the same rows.
+      return jsonIdempotentOk(c, {
+        ...idempotent,
+        data: { ...idempotent.data, ...sentDeliveriesResponseFields(idempotent.data._deliveries) },
+      });
     } catch (err: unknown) {
       return errorResponse(c, err);
     }

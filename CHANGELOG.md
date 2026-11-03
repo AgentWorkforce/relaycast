@@ -18,6 +18,8 @@ Packages without a separate changelog are covered by the cross-package notes bel
 
 ## [Unreleased - Minor]
 
+- A sender can follow its message. `POST /v1/dm` answers with `delivery: { id, status, expires_at } | null` and `POST /v1/channels/:name/messages` with `deliveries: [{ id, agent_id, status, expires_at }]` (first 50, plus `deliveries_truncated`). The sender then receives `delivery.delivered` when a row reaches the recipient's socket or push endpoint and the new `delivery.acked` when the recipient acks it (REST ack, node cumulative ack, or `http_push` `on_2xx` / `response`), each with the recipient's `agent_id` / `agent_name`, `status` and `at`. `GET /v1/messages/:id/deliveries` lists every recipient's delivery and read state (`read_at`) for a message the caller sent; a workspace key or an admitted observer reads any message. Recipient-side events are unchanged.
+- SDKs: TypeScript `agent.messageDeliveries(id)`, `relay.messages.deliveries(id)` and `on.deliveryAcked`. Rust and Swift SDKs do not yet wrap the new route or event.
 - `GET /v1/deliveries?wait=<ms>` long-polls (0–25000 ms): an empty answer waits until a matching delivery is created for the agent or the wait expires, and reads nothing while it waits.
 - SDKs pass `wait`: TypeScript `deliveries({ waitMs })`, Rust `wait_for_deliveries(opts, wait_ms)`, Swift `ListDeliveriesOptions(waitMs:)`.
 - The self-hosted server wakes waiters in process; other hosts supply a `DeliveryWaiters` provider, and an engine without one answers `wait` at once.

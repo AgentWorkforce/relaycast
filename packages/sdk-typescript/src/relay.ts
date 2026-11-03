@@ -123,8 +123,10 @@ import type {
   ActionFailedEvent,
   DeliveryAcceptedEvent,
   DeliveryDeliveredEvent,
+  DeliveryAckedEvent,
   DeliveryDeferredEvent,
   DeliveryFailedEvent,
+  MessageDeliveriesResponse,
   GroupDmReceivedEvent,
   WsReconnectingEvent,
   WsPermanentlyDisconnectedEvent,
@@ -445,6 +447,7 @@ export class RelayCast {
     actionDenied:    (handler: (e: ActionDeniedEvent) => void): (() => void)    => this.onEvent('action.denied', handler),
     deliveryAccepted:  (handler: (e: DeliveryAcceptedEvent) => void): (() => void)  => this.onEvent('delivery.accepted', handler),
     deliveryDelivered: (handler: (e: DeliveryDeliveredEvent) => void): (() => void) => this.onEvent('delivery.delivered', handler),
+    deliveryAcked:     (handler: (e: DeliveryAckedEvent) => void): (() => void)     => this.onEvent('delivery.acked', handler),
     deliveryDeferred:  (handler: (e: DeliveryDeferredEvent) => void): (() => void)  => this.onEvent('delivery.deferred', handler),
     deliveryFailed:    (handler: (e: DeliveryFailedEvent) => void): (() => void)    => this.onEvent('delivery.failed', handler),
     connected:    (handler: () => void): (() => void) => this.onEvent('open', handler as (e: never) => void),
@@ -847,6 +850,9 @@ export class RelayCast {
     },
     reactions: (id: string): Promise<ReactionGroup[]> =>
       this.client.get(`/v1/messages/${encodeURIComponent(id)}/reactions`),
+    /** Every recipient's delivery and read state for a message (`GET /v1/messages/{id}/deliveries`). */
+    deliveries: (id: string): Promise<MessageDeliveriesResponse> =>
+      this.client.get(`/v1/messages/${encodeURIComponent(id)}/deliveries`),
     bySessionRef: async (
       sessionRef: string,
       opts?: { limit?: number; after?: string },

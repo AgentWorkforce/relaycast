@@ -12,7 +12,7 @@ import { resolveMailboxConfig } from '../engine/mailboxConfig.js';
 import { resolveWorkspaceDeliveryPolicyFor } from '../engine/workspaceDeliveryPolicy.js';
 import { publishWorkspaceEvent } from './fanout.js';
 import { notifyDeliveryRejections, routeDeliveryOutcomes } from './deliveryRouting.js';
-import { buildDmReceivedEventData } from '../engine/deliveryWire.js';
+import { buildDmReceivedEventData, sentDmDeliveryReceipt } from '../engine/deliveryWire.js';
 import { runInBackground } from './background.js';
 import { sendWebhookEvent, shouldEnqueueWebhookEvent } from './webhookOutbox.js';
 import { emitServerEvent } from '../lib/serverTelemetry.js';
@@ -206,7 +206,18 @@ dmRoutes.post(
         trackDmSent(publicDmData);
       }
 
-      return jsonIdempotentOk(c, effectiveIdempotent);
+      // The sender's handle on the recipient's delivery row: `null` when no
+      // row was created (a replayed A2A acceptance, or a rejected delivery).
+      // Replays read `_delivery` back from the idempotency record, so a
+      // replayed response carries the same `delivery`.
+      const sentDelivery = effectiveIdempotent.data._delivery;
+      return jsonIdempotentOk(c, {
+        ...effectiveIdempotent,
+        data: {
+          ...effectiveIdempotent.data,
+          delivery: sentDelivery ? sentDmDeliveryReceipt(sentDelivery) : null,
+        },
+      });
     } catch (err: unknown) {
       return errorResponse(c, err);
     }

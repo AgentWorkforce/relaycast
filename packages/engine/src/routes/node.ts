@@ -354,6 +354,7 @@ nodeRoutes.post('/nodes/:name/agents', requireWorkspaceKey, rateLimit, async (c)
           c.get('engine').nodeConnections,
           c.get('workspace').id,
           move,
+          c.get('engine'),
         )),
       'bind delivery readiness+replay',
     );

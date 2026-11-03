@@ -466,6 +466,8 @@ describe('Type definitions', () => {
     for (const event of [
       { type: 'delivery.accepted', delivery_id: 'del_1', message_id: 'm_1', channel_id: 'c_1', reason: 'message' },
       { type: 'delivery.delivered', delivery_id: 'del_1', message_id: 'm_1' },
+      { type: 'delivery.delivered', delivery_id: 'del_1', message_id: 'm_1', agent_id: 'a_bob', agent_name: 'bob', status: 'delivered', at: '2026-06-01T00:00:01.000Z' },
+      { type: 'delivery.acked', delivery_id: 'del_1', message_id: 'm_1', agent_id: 'a_bob', agent_name: 'bob', status: 'acked', at: '2026-06-01T00:00:02.000Z' },
       { type: 'delivery.deferred', delivery_id: 'del_1', message_id: 'm_1', available_at: '2026-06-01T00:01:00.000Z' },
       { type: 'delivery.failed', delivery_id: 'del_1', message_id: 'm_1', error: 'boom', retryable: true },
       { type: 'delivery.failed', delivery_id: null, message_id: 'm_1', reason: 'depth_cap', retryable: false },

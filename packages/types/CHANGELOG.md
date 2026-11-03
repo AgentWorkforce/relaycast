@@ -11,6 +11,8 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Added
 
+- `DeliveryAckedEventSchema` (`delivery.acked`: `delivery_id`, `message_id`, recipient `agent_id` / `agent_name`, `status: 'acked'`, `at`), in `ServerEventSchema`, `WsClientEventSchema` and `SubscribableEventTypeSchema`. `DeliveryDeliveredEventSchema` gains optional sender-side `agent_id`, `agent_name`, `status`, `at`.
+- `SentDeliverySchema`, `MessageDeliveryReceiptSchema`, `MessageDeliveriesResponseSchema`; `SendDmResponseSchema.delivery` (`{ id, status, expires_at } | null`).
 - `ListDeliveriesQuerySchema.wait`: long-poll milliseconds, 0–25000. A blank value fails validation.
 
 ## [12.5.0] - 2026-11-01

@@ -23,8 +23,19 @@ import {
 import { queryInChunks } from '../lib/queryChunks.js';
 import { withEngineOperation } from '../lib/engineDiagnostics.js';
 import { advanceDmParticipantReadCursor } from './receipt.js';
+import { notifySenderDeliveryReceipts } from './deliveryReceipts.js';
+import type { EventDispatchEngine } from './eventDispatch.js';
 
 type Db = ReturnType<typeof getDb>;
+
+/**
+ * Optional engine ports a node replay uses to tell senders their rows were
+ * delivered (`delivery.delivered`). Without them the replay still delivers;
+ * only the sender-side notification is skipped.
+ */
+export type DeliveryReplayDeps = Pick<EventDispatchEngine, 'realtime' | 'nodeConnections'> & {
+  config?: EventDispatchEngine['config'];
+};
 
 type DeliveryRow = typeof deliveries.$inferSelect;
 // SQL-wrapped columns retain Drizzle's timestamp/boolean decoders when FROM
@@ -464,7 +475,7 @@ export async function ackDeliveriesUpToSeq(
   providerName: string,
   agentName: string,
   upToSeq: number,
-): Promise<{ agent_id: string; agent_name: string; up_to_seq: number; acked: number } | null> {
+): Promise<{ agent_id: string; agent_name: string; up_to_seq: number; acked: number; acked_delivery_ids: string[] } | null> {
   const [agent] = await db
     .select()
     .from(agents)
@@ -478,7 +489,7 @@ export async function ackDeliveriesUpToSeq(
   if (!agent) return null;
 
   if (upToSeq <= agent.deliveryAckSeq) {
-    return { agent_id: agent.id, agent_name: agent.name, up_to_seq: upToSeq, acked: 0 };
+    return { agent_id: agent.id, agent_name: agent.name, up_to_seq: upToSeq, acked: 0, acked_delivery_ids: [] };
   }
 
   const rows = await db
@@ -500,25 +511,35 @@ export async function ackDeliveriesUpToSeq(
   // last chunk, so a later chunk failing cannot skip rows still queued.
   if (pending.length === 0) {
     await ackRows(db, workspaceId, agent.id, [], upToSeq);
-    return { agent_id: agent.id, agent_name: agent.name, up_to_seq: upToSeq, acked: 0 };
+    return { agent_id: agent.id, agent_name: agent.name, up_to_seq: upToSeq, acked: 0, acked_delivery_ids: [] };
   }
-  let acked = 0;
+  const ackedDeliveryIds: string[] = [];
   for (let offset = 0; offset < pending.length; offset += DELIVERY_EXPIRY_BATCH_SIZE) {
     const chunk = pending.slice(offset, offset + DELIVERY_EXPIRY_BATCH_SIZE);
     const last = offset + chunk.length === pending.length;
     const updated = await ackRows(db, workspaceId, agent.id, chunk, last ? upToSeq : undefined);
-    acked += updated.length;
+    for (const row of updated) ackedDeliveryIds.push(row.id);
   }
-  return { agent_id: agent.id, agent_name: agent.name, up_to_seq: upToSeq, acked };
+  return {
+    agent_id: agent.id,
+    agent_name: agent.name,
+    up_to_seq: upToSeq,
+    acked: ackedDeliveryIds.length,
+    acked_delivery_ids: ackedDeliveryIds,
+  };
 }
 
-/** Mark still-queued rows delivered using bounded, explicit ID-index writes. */
+/**
+ * Mark still-queued rows delivered using bounded, explicit ID-index writes.
+ * Returns the ids that transitioned (`queued` -> `delivered`), so the caller
+ * can tell their senders.
+ */
 export async function markDeliveriesDelivered(
   db: Db,
   workspaceId: string,
   deliveryIds: string[],
-): Promise<number> {
-  let count = 0;
+): Promise<string[]> {
+  const delivered: string[] = [];
   const ids = [...new Set(deliveryIds)];
   const now = Math.floor(Date.now() / 1000);
   // Force primary-key writes too: a bounded replay read is not enough if its
@@ -534,9 +555,86 @@ export async function markDeliveriesDelivered(
         AND status = 'queued'
       RETURNING id
     `);
-    count += updated.length;
+    for (const row of updated) delivered.push(row.id);
   }
-  return count;
+  return delivered;
+}
+
+/** Most delivery rows `getMessageDeliveries` returns for one message. */
+export const MESSAGE_DELIVERIES_MAX = 500;
+
+/**
+ * The sender-side view of a message's deliveries: every recipient's row joined
+ * to that recipient's read receipt. One read, no IN list, capped at
+ * {@link MESSAGE_DELIVERIES_MAX} rows in creation order. Returns `null` when
+ * the message is not in the workspace; `sender_agent_id` lets the caller
+ * decide who may see the result.
+ */
+export async function getMessageDeliveries(
+  db: Db,
+  workspaceId: string,
+  messageId: string,
+): Promise<{
+  message_id: string;
+  sender_agent_id: string | null;
+  deliveries: Array<{
+    id: string;
+    agent_id: string;
+    agent_name: string;
+    status: DeliveryStatus;
+    created_at: string;
+    delivered_at: string | null;
+    acked_at: string | null;
+    dead_lettered_at: string | null;
+    error: string | null;
+    read_at: string | null;
+  }>;
+} | null> {
+  const [message] = await db
+    .select({ id: messages.id, agentId: messages.agentId })
+    .from(messages)
+    .where(and(eq(messages.id, messageId), eq(messages.workspaceId, workspaceId)));
+  if (!message) return null;
+
+  const rows = await db
+    .select({
+      id: deliveries.id,
+      agentId: deliveries.agentId,
+      agentName: agents.name,
+      status: deliveries.status,
+      createdAt: deliveries.createdAt,
+      deliveredAt: deliveries.deliveredAt,
+      ackedAt: deliveries.ackedAt,
+      deadLetteredAt: deliveries.deadLetteredAt,
+      error: deliveries.error,
+      readAt: readReceipts.readAt,
+    })
+    .from(deliveries)
+    .innerJoin(agents, eq(deliveries.agentId, agents.id))
+    .leftJoin(readReceipts, and(
+      eq(readReceipts.messageId, deliveries.messageId),
+      eq(readReceipts.agentId, deliveries.agentId),
+    ))
+    .where(and(eq(deliveries.workspaceId, workspaceId), eq(deliveries.messageId, messageId)))
+    .orderBy(asc(deliveries.createdAt), asc(deliveries.id))
+    .limit(MESSAGE_DELIVERIES_MAX);
+
+  return {
+    message_id: message.id,
+    sender_agent_id: message.agentId ?? null,
+    deliveries: rows.map((row) => ({
+      id: row.id,
+      agent_id: row.agentId,
+      agent_name: row.agentName,
+      status: row.status as DeliveryStatus,
+      created_at: toIso(row.createdAt) ?? new Date(0).toISOString(),
+      delivered_at: toIso(row.deliveredAt),
+      acked_at: toIso(row.ackedAt),
+      dead_lettered_at: toIso(row.deadLetteredAt),
+      error: row.error,
+      read_at: toIso(row.readAt),
+    })),
+  };
 }
 
 export interface DeliveryFailureNotice {
@@ -879,6 +977,7 @@ function fanoutRecordFromDeliveryRow(row: PendingDeliveryRow): DeliveryFanoutRec
     routeNodeRole: row.delivery.routeNodeRole,
     deliveryAdapter: row.delivery.deliveryAdapter,
     nextAttemptAt: row.delivery.nextAttemptAt,
+    expiresAt: row.delivery.expiresAt,
   };
 }
 
@@ -1104,6 +1203,7 @@ export interface NodeDeliveryReplayScope {
 
 type ReplayJob = {
   scope: NodeDeliveryReplayScope;
+  deps?: DeliveryReplayDeps;
   promise: Promise<number>;
   resolve: (count: number) => void;
   reject: (error: unknown) => void;
@@ -1113,13 +1213,16 @@ const replayFlights = new WeakMap<NodeConnectionRegistry, Map<string, ReplayFlig
 
 /** Serialize overlapping scopes at the socket owner, including a trailing replay
  * when readiness/cursors changed during an outstanding drain. This is local
- * replay coordination, not a global database admission semaphore. */
+ * replay coordination, not a global database admission semaphore.
+ * `deps` (realtime + node connections) lets the replay tell senders their
+ * rows were delivered; a coalesced job keeps the deps of its first caller. */
 export function deliverPendingToNode(
   db: Db,
   registry: NodeConnectionRegistry,
   workspaceId: string,
   nodeId: string,
   scope: NodeDeliveryReplayScope = {},
+  deps?: DeliveryReplayDeps,
 ): Promise<number> {
   let flights = replayFlights.get(registry);
   if (!flights) { flights = new Map(); replayFlights.set(registry, flights); }
@@ -1132,7 +1235,7 @@ export function deliverPendingToNode(
   let resolve!: ReplayJob['resolve'];
   let reject!: ReplayJob['reject'];
   const promise = new Promise<number>((done, fail) => { resolve = done; reject = fail; });
-  const job: ReplayJob = { scope: snapshot, promise, resolve, reject };
+  const job: ReplayJob = { scope: snapshot, deps, promise, resolve, reject };
   if (flight) {
     flight.pending.set(scopeKey, job);
     return promise;
@@ -1148,7 +1251,7 @@ export function deliverPendingToNode(
         // not-yet-started jobs coalesce, but each scope owns its own result.
         activeFlight.pending.delete(pendingKey);
         try {
-          pendingJob.resolve(await replayPendingToNode(db, registry, workspaceId, nodeId, pendingJob.scope));
+          pendingJob.resolve(await replayPendingToNode(db, registry, workspaceId, nodeId, pendingJob.scope, pendingJob.deps));
         } catch (error) {
           pendingJob.reject(error);
         }
@@ -1186,6 +1289,7 @@ async function replayPendingToNode(
   workspaceId: string,
   nodeId: string,
   scope: NodeDeliveryReplayScope = {},
+  deps?: DeliveryReplayDeps,
 ): Promise<number> {
   const wantedIds = scope.agentIds ? new Set(scope.agentIds) : undefined;
   if (wantedIds?.size === 0) return 0;
@@ -1312,8 +1416,20 @@ async function replayPendingToNode(
         if (!sent) { interrupted = true; break; }
         deliveredIds.push(row.delivery.id);
       }
-      await markDeliveriesDelivered(db, workspaceId, deliveredIds);
+      const transitioned = await markDeliveriesDelivered(db, workspaceId, deliveredIds);
       delivered += deliveredIds.length;
+      // One sender read per replay page, never per row; a notify failure
+      // must not interrupt the drain.
+      if (deps && transitioned.length > 0) {
+        await notifySenderDeliveryReceipts({ db, engine: deps }, workspaceId, transitioned, 'delivered')
+          .catch((err: unknown) => {
+            console.warn('[delivery.replay] sender delivered notify failed', {
+              workspace_id: workspaceId,
+              node_id: nodeId,
+              error: err instanceof Error ? err.message : String(err),
+            });
+          });
+      }
       if (interrupted) break;
     }
   }

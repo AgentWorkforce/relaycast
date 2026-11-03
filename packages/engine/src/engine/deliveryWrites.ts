@@ -37,6 +37,7 @@ export interface DeliveryFanoutRecord {
   routeNodeRole: string | null;
   deliveryAdapter: string | null;
   nextAttemptAt?: Date | null;
+  expiresAt?: Date | null;
 }
 
 export type DeliveryRejectionReason = 'depth_cap' | 'recipient_offline';
@@ -493,6 +494,7 @@ export async function fetchDeliveryFanoutRecords(
       routeNodeRole: deliveries.routeNodeRole,
       deliveryAdapter: deliveries.deliveryAdapter,
       nextAttemptAt: deliveries.nextAttemptAt,
+      expiresAt: deliveries.expiresAt,
     })
     .from(deliveries)
     .innerJoin(agents, eq(deliveries.agentId, agents.id))
@@ -514,6 +516,7 @@ export async function fetchDeliveryFanoutRecords(
     routeNodeRole: row.routeNodeRole,
     deliveryAdapter: row.deliveryAdapter,
     nextAttemptAt: row.nextAttemptAt,
+    expiresAt: row.expiresAt,
   }));
 }
 
