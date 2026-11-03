@@ -16,7 +16,7 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: "Image tag: the engine version in packages/engine/package.json (e.g. 12.6.2), or that version plus a build suffix (e.g. 12.6.2-actors.1) for an image built from unreleased source on this ref"
+        description: "Image tag: the engine version in packages/engine/package.json (e.g. 12.7.0), or that version plus a build suffix (e.g. 12.7.0-actors.1) for an image built from unreleased source on this ref"
         required: true
         type: string
       latest:

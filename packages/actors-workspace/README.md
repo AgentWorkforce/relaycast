@@ -141,7 +141,7 @@ spec:
       restartPolicy: Never
       containers:
         - name: deploy
-          image: ghcr.io/agentworkforce/relaycast-actors-deployer:12.6.2
+          image: ghcr.io/agentworkforce/relaycast-actors-deployer:12.7.0
           env:
             - name: DURABLE_ACTORS_CONTROL_PLANE_URL
               value: http://durable-actors.actors.svc:8080

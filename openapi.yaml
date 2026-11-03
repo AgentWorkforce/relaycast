@@ -2503,7 +2503,7 @@ paths:
   /agent:
     get:
       summary: Resolve authenticated agent
-      description: Resolve an agent token to that agent's identity, including channel memberships, callable/provided actions, and pending deliveries. Used by SDK reconnect flows.
+      description: Resolve an agent token to that agent's identity, including channel memberships and pending deliveries. Used by SDK reconnect flows. List actions with `GET /v1/actions`.
       tags:
         - Agents
       security:
@@ -5385,7 +5385,11 @@ paths:
                 $ref: '#/components/schemas/SuccessResponse'
     delete:
       summary: Delete action
-      description: Delete a registered action. Open invocations of the action are failed (`action_deleted`) and their callers receive `action.failed`.
+      description: >-
+        Delete an action registered through this API. Open invocations of the
+        deleted rows are failed (`action_deleted`) and their callers receive
+        `action.failed`. Actions a node provider offers are removed when the
+        provider stops advertising them.
       tags:
         - Actions
       security:
@@ -5400,6 +5404,18 @@ paths:
       responses:
         '204':
           description: Action deleted
+        '404':
+          description: '`action_not_found` — no action has this name'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '409':
+          description: '`action_provider_owned` — only node providers offer this action'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
 
   /actions/{name}/invoke:
     post:
@@ -5687,8 +5703,10 @@ paths:
       summary: List nodes
       description: >
         List delivery nodes in the workspace, optionally filtered by capability, name,
-        or liveness. `capability`, `name`, and `status` are evaluated in SQL, not
-        fetched in full and filtered afterward. Without `history`, the response is a
+        or liveness. `capability` and `name` are evaluated in SQL, not fetched in
+        full and filtered afterward. `status` is evaluated in SQL when no hosted
+        liveness authority is configured; with one, each candidate row is probed and
+        filtered by its probed status (see the `status` parameter). Without `history`, the response is a
         bare array (the legacy, unpaginated shape every existing caller already
         handles); `status=online` is the server-filtered live-Fleet path a default
         `fleet nodes` call should use, since it never reads or returns history no
@@ -5720,7 +5738,7 @@ paths:
         - name: status
           in: query
           required: false
-          description: Pushes a liveness predicate into SQL. `online` is fresh-heartbeat live nodes; `offline` is everything else.
+          description: Selects on liveness. `online` is live nodes; `offline` is everything else. Without a hosted liveness authority the predicate runs in SQL. With one, candidates whose last durable checkpoint is recent enough for the authority to report them live are checked against it (`online` limits them in SQL; `offline` lists the rest unchecked). Rows come back in `id` order.
           schema:
             type: string
             enum: [online, offline]
@@ -5739,7 +5757,7 @@ paths:
         - name: limit
           in: query
           required: false
-          description: Page size, clamped server-side to a fixed maximum. Only meaningful with `history=true`.
+          description: With `history=true`, page size, clamped server-side to a fixed maximum. Without `history`, caps a `status` selection at the first `limit` matching nodes in `id` order. Ignored with neither.
           schema:
             type: integer
             minimum: 1

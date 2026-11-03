@@ -3184,14 +3184,18 @@ describe('node adapter conformance', () => {
       const freshPromise = invoke();
       await frameSentPromise;
 
-      // Provider acceptance has already happened. Explicit deletion removes
-      // the registration, but cannot revoke that accepted generation; a keyed
-      // replay preserves its 201 and the route-owned result can still complete.
-      const deleted = await stack.app.request('/v1/actions/vanishing-action', {
-        method: 'DELETE',
-        headers: { authorization: `Bearer ${ws.workspaceKey}` },
-      });
-      expect(deleted.status).toBe(204);
+      // Provider acceptance has already happened. The provider dropping the
+      // capability removes the registration, but cannot revoke that accepted
+      // generation; a keyed replay preserves its 201 and the route-owned
+      // result can still complete.
+      await alpha.handle.handleMessage(JSON.stringify({
+        v: 1, type: 'node.heartbeat', load: 0, active_agents: 0, handlers_live: true, capabilities: [],
+      }));
+      const [remaining] = await stack.runtime.handle.db
+        .select({ id: actions.id })
+        .from(actions)
+        .where(and(eq(actions.workspaceId, ws.workspaceId), eq(actions.name, 'vanishing-action')));
+      expect(remaining).toBeUndefined();
 
       const replay = await invoke();
       expect(replay.status).toBe(201);

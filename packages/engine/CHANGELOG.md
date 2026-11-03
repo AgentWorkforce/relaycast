@@ -21,18 +21,19 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 - `@relaycast/engine/adapters/actor`: attached sockets are kept in the actor's `_actor_sockets` table (`ACTOR_SOCKETS_TABLE`, `ActorSocketTable`) and replayed on the next activation, so an actor's sleep costs its clients no reconnect.
 - `InProcessRealtime.attachNodeSocket` takes `{ connectionId, earlyDrain }`; `nodeConnectionState` / `restoreNodeConnectionState` / `providerConnectionId` expose a node connection's binding to hosts that persist it.
 - `ensureActorSchema(sql)` applies the engine migrations and the adapter's tables inside an actor call; read-only when current.
-- `GET /v1/deliveries` accepts `wait` (0–25000 ms); a blank `wait` is a 400.
-- On a host with a `DeliveryWaiters` provider, an empty `wait` list parks, issuing no statements, until a delivery is created for the agent, the wait expires or the client disconnects, then lists again with the same `status` and `limit`. A host without one answers `wait` at once.
-- A parked poll is notified only by a delivery's creation, not by a status change.
-- `DeliveryWaiters`, `InProcessDeliveryWaiters`, `MAX_DELIVERY_WAIT_MS`, `DELIVERY_NOTIFY_MEMORY_MS` and `EngineProviders.deliveryWaiters`: `routeDeliveryOutcomes` notifies the recipients of every created delivery concurrently with routing, so socket pushes never wait on it; the notify is abandoned after 2 s.
-- `createNodeRuntime` binds `InProcessDeliveryWaiters`; the workspace actor binds none.
 - `@relaycast/engine/gateway` exports `INTERNAL_CAPABILITIES`, the document `/internal/capabilities` serves.
 - `NodeConnectionRegistry.isConnectionSuperseded?(connectionId)`: true once a reconnect's `node.register` moved the connection's provider to a newer socket.
+- Socket grants are signed: `signSocketPrincipal` / `verifySocketPrincipal` / `canonicalSocketPrincipal` / `SOCKET_GRANT_MAX_AGE_MS` (also from `@relaycast/engine/gateway`); a principal gains `iat`, `nonce` and `sig`, and `onConnect` refuses one that is unsigned, tampered, older than 120 s or already attached (4401).
+- `deriveKeyedWorkspaceId(bootstrapSecret, idempotencyKey)` in `@relaycast/engine/gateway`: the workspace id a keyed create lands on, so a gateway routes its retry to the same actor.
+- `actorConfigFromEnv` reads `RELAYCAST_WORKSPACE_BOOTSTRAP_SECRET` verbatim, as `bin/serve.ts` does.
+- `NodeConnectionRegistry.isConnectionSuperseded?` is required of every registry that re-binds a provider to a newer connection; `handleNodeControlMessage` also takes `connectionSuperseded` and `supersededProviderName` per frame.
+- `INTERNAL_CAPABILITIES` and `WORKSPACE_KEY_MAX_GRACE_MS` live in `engine/internalCapabilities.ts`, a module without database imports.
 
 ### Changed
 
 - `createActorRuntime` runs no SQL in the actor's constructor: the schema is applied inside the first call and commits with it, so a failed `create` leaves no half-built actor; a wake with a current schema runs no DDL.
 - `/internal/workspaces/:id` and `/internal/workspaces/:id/api-key` answer 404 for another workspace's id on a single-workspace host (`config.workspaceId`), where `POST /internal/workspaces` is also a 404.
+- The workspace actor binds no `DeliveryWaiters`: `GET /v1/deliveries?wait` answers at once inside an actor (its host long-polls).
 
 ### Fixed
 
@@ -41,6 +42,33 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 - Frames a superseded node socket still had queued are answered `connection_superseded`, so a stale `node.deregister` no longer removes the new socket's binding and actions; frames settling in-flight work still pass.
 - A key push (`POST /internal/workspaces/:id/api-key`) that creates a workspace on a workspace actor keeps the pushed key's routing tag, so the workspace can mint credentials.
 - `actorMigrationsCurrent` compares recorded names with the plan instead of counting rows, which read as current with superseded files recorded and a newer one missing.
+- A keyed create's retry that reaches its actor after the gateway's keyring rotated keeps the workspace's original tag instead of answering 502.
+- A superseded node socket's settling frames (`action.result`) resolve to the provider the connection held, so the dispatched invocation settles.
+
+## [12.7.0] - 2026-11-03
+
+### Added
+
+- `GET /v1/deliveries` accepts `wait` (0–25000 ms). When the list is empty the request parks until a delivery is created for the agent, the wait expires or the client disconnects. A woken request lists again with the same `status` and `limit` and parks again for the rest of the wait if that is still empty. Only creation notifies: a poll filtered to `delivered`, `acked`, `failed` or `dead_lettered` is not woken by a transition into that status, only by a matching creation or the wait expiring. A blank `wait` is a 400. A parked request issues no statements.
+- `DeliveryWaiters`, `InProcessDeliveryWaiters`, `MAX_DELIVERY_WAIT_MS`, `DELIVERY_NOTIFY_MEMORY_MS` and `EngineProviders.deliveryWaiters`. `routeDeliveryOutcomes` notifies the recipients of every created delivery beside routing it: socket pushes never wait on the notify, which is awaited after routing for at most 2 s and logged on failure or timeout. A waiter whose empty read started before a notify landed resolves at once. `createNodeRuntime` binds `InProcessDeliveryWaiters` and answers parked waits when it closes. The workspace actor binds none: a wait inside an actor call would hold its mailbox, so `wait` answers at once there. A host without the port answers `wait` at once.
+
+### Removed
+
+- `actions_provided` and `actions_available_to` on agent detail (`getAgentByName`, `GET /v1/agent`, `GET /v1/agents/:name`), and the workspace `actions` read that built them.
+
+### Changed
+
+- `node.heartbeat` reads no action rows unless the provider's action capabilities changed. Registration and heartbeats materialize before persisting the new capabilities, so a failed materialization is retried by the next frame.
+- The writes that change which row may claim a workspace-global alias settle it in the same atomic unit. Registering an agent-hosted action demotes a default provider's alias of that name. Deleting an agent-hosted action, a provider pruning a global row or dropping `global`, deregistering a provider, and deleting a node promote the oldest default-provider row of each name left without a claimant (`claimOrphanedGlobalAliases`).
+- A row edited outside the engine is corrected the next time the provider registers or changes its action capabilities; a heartbeat with unchanged capabilities leaves it.
+- Agent retention keeps an agent that handles a registered action (`ownership_protected`).
+- `deleteAction` deletes only rows registered through the API (no `handler_provider`) and throws `409 action_provider_owned` when a node provider offers every row of the name; a provider removes its actions by no longer advertising them.
+
+### Fixed
+
+- `GET /v1/nodes?status=online` under a liveness authority checks only nodes with a recent heartbeat checkpoint, so it no longer times out in workspaces with many historical nodes. The checkpoint bound (`NODE_ONLINE_CANDIDATE_RECENCY_MS`) leaves four minutes for a checkpoint shed under database pressure to land, so a node heartbeating through a three-minute overload stays listed. `status=offline` lists rows past the bound without checking them.
+- `GET /v1/nodes` without `history` honors `limit` when `status` is set: rows are taken in `id` order and probing stops once `limit` nodes match. An observer's `active_agents` counts are read for the returned nodes only.
+- Node list liveness probes run as a pool of eight workers instead of lockstep batches of eight, so one slow probe no longer stalls the seven beside it.
 - The inbox mention lookup prefilters bodies with `instr(body, '@name')` instead of `LIKE`, so it stays within D1's 50-byte LIKE pattern cap for any agent name. Results are unchanged: `parseMessageMentions` is case-sensitive and needs the literal `@name`.
 - `reconcileInventory` deactivates missing agents' node bindings and offlines the agents with one statement pair per 90-id chunk, all in one atomic batch. A node that drops more agents than one D1 statement can bind no longer fails the sync with `too many SQL variables`.
 - `toErrorDetails` appends each `cause` message to `error_message`, so a Drizzle `Failed query: ...` log line carries the D1 reason (constraint, bind limit, overload).

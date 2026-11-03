@@ -158,14 +158,12 @@ describe('node control D1 statements per frame', () => {
         "brokerCheckpoint": [
           "select from "node_providers"",
           "update "node_providers"",
-          "select from "actions"",
           "update "nodes"",
         ],
         "changedBeat": [
           "select from "nodes"",
           "select from "node_providers"",
           "update "node_providers"",
-          "select from "actions"",
           "update "nodes"",
         ],
         "directBeat": [
@@ -201,11 +199,12 @@ describe('node control D1 statements per frame', () => {
           "select from "nodes"",
           "select from "nodes"",
           "select from "nodes"",
-          "select from "node_providers"",
-          "insert into "node_providers"",
           "delete from "actions"",
+          "update "actions"",
           "select from "actions"",
           "insert into "actions"",
+          "select from "node_providers"",
+          "insert into "node_providers"",
           "update "nodes"",
           "select from "node_providers"",
           "update "nodes"",
@@ -223,7 +222,6 @@ describe('node control D1 statements per frame', () => {
           "select from "nodes"",
           "select from "node_providers"",
           "update "node_providers"",
-          "select from "actions"",
           "update "nodes"",
         ],
       }
