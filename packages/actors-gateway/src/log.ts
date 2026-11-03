@@ -35,7 +35,8 @@ export function createLogger(options: LoggerOptions): Logger {
     const time = now().toISOString();
     if (options.format === 'json') {
       const defined = Object.fromEntries(Object.entries(fields).filter(([, value]) => value !== undefined));
-      write(JSON.stringify({ time, level, event, ...defined }));
+      // The envelope's own keys win over a caller field of the same name.
+      write(JSON.stringify({ ...defined, time, level, event }));
     } else {
       write(formatText(time, level, event, fields));
     }

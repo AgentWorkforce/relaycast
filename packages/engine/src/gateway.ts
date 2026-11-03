@@ -10,6 +10,7 @@ export { parseArCredential } from './auth/credentials.js';
 export type { CredentialKind } from './auth/credentials.js';
 export { createCredentialTagSigner, parseCredentialKeyring } from './auth/credentialTags.js';
 export type { CredentialKeyring, CredentialTagSigner, CredentialTagger } from './auth/credentialTags.js';
+export { INTERNAL_CAPABILITIES } from './engine/internalAdmin.js';
 export { signFileToken, verifyFileToken } from './lib/fileTokens.js';
 export type { FileTokenPayload } from './lib/fileTokens.js';
 export type { ActorHttpRequest, ActorHttpResponse } from './adapters/actor/http.js';

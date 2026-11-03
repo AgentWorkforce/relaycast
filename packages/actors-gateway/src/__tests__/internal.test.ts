@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { ConfigError, loadConfig } from '../config.js';
 import { INTERNAL_CAPABILITIES } from '../internal.js';
 import { jsonResponse, type FakeWorkspace } from './fakeControlPlane.js';
-import { INTERNAL_SECRET, WORKSPACE_ID, baseEnv, readJson, startHarness, type Harness } from './harness.js';
+import { INTERNAL_SECRET, WORKSPACE_ID, baseEnv, foreignCredential, readJson, startHarness, type Harness } from './harness.js';
 
 const adminWorkspace = (id: string): FakeWorkspace => ({
   create: (request, tag) => jsonResponse(201, { ok: true, data: { workspace_id: id, api_key: `key-for-${id}`, tag, body: JSON.parse(request.body ?? 'null') } }),
@@ -105,6 +105,32 @@ describe('internal admin API', () => {
     expect(pushed.status).toBe(200);
     expect((await readJson(pushed)).data).toMatchObject({ url: `${harness.baseUrl}/internal/workspaces/${WORKSPACE_ID}/api-key`, body: '{"key_generation":2}' });
     expect(harness.controlPlane.invocations.map((call) => [call.method, call.actorId])).toEqual([['handle', WORKSPACE_ID], ['handle', WORKSPACE_ID]]);
+  });
+
+  it('answers 400 for a workspace id segment whose percent-encoding is malformed', async () => {
+    harness = await startHarness({ workspace: adminWorkspace, env: { RELAYCAST_INTERNAL_SECRET: INTERNAL_SECRET } });
+    const response = await fetch(`${harness.baseUrl}/internal/workspaces/%ZZ`, { method: 'DELETE', headers: { authorization: `Bearer ${INTERNAL_SECRET}` } });
+    expect(response.status).toBe(400);
+    expect((await readJson(response)).error).toMatchObject({ code: 'invalid_request' });
+    expect(harness.controlPlane.invocations).toHaveLength(0);
+    expect(harness.logs.filter((entry) => entry.level === 'error')).toEqual([]);
+  });
+
+  it("refuses a pushed ar_ws_ key whose routing tag this deployment's keyring did not sign", async () => {
+    harness = await startHarness({ workspace: adminWorkspace, env: { RELAYCAST_INTERNAL_SECRET: INTERNAL_SECRET } });
+    const push = (api_key: string) => fetch(`${harness!.baseUrl}/internal/workspaces/${WORKSPACE_ID}/api-key`, {
+      method: 'POST',
+      headers: { authorization: `Bearer ${INTERNAL_SECRET}`, 'content-type': 'application/json' },
+      body: JSON.stringify({ api_key }),
+    });
+    const foreign = await push(await foreignCredential(WORKSPACE_ID, 'workspace'));
+    expect(foreign.status).toBe(400);
+    expect((await readJson(foreign)).error).toMatchObject({ code: 'invalid_request', message: expect.stringContaining('routing tag') });
+    expect(harness.controlPlane.invocations).toHaveLength(0);
+    // A key this keyring tagged goes through to the actor.
+    const own = await push(await harness.credential(WORKSPACE_ID, 'workspace'));
+    expect(own.status).toBe(200);
+    expect(harness.controlPlane.invocations.map((call) => [call.method, call.actorId])).toEqual([['handle', WORKSPACE_ID]]);
   });
 
   it('refuses workspace ids that are not snowflakes without spawning an actor', async () => {

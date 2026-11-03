@@ -106,11 +106,15 @@ function withTimeout(timeoutMs: number, signal: AbortSignal | undefined): AbortS
   return signal ? AbortSignal.any([signal, timeout]) : timeout;
 }
 
+/** The reply body as JSON; a body that is not JSON is a protocol error, one that could not be read is an unknown outcome. */
 async function jsonDocument(response: Response): Promise<unknown> {
   try {
     return await response.json();
   } catch (error) {
-    throw new ActorCallError('protocol', `control plane HTTP ${response.status} response was not JSON`, { cause: error });
+    if (error instanceof SyntaxError) {
+      throw new ActorCallError('protocol', `control plane HTTP ${response.status} response was not JSON`, { cause: error });
+    }
+    throw new ActorCallError('outcome_unknown', `control plane HTTP ${response.status} response body could not be read`, { cause: error });
   }
 }
 

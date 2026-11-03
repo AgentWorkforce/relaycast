@@ -78,9 +78,9 @@ export async function startHarness(options: HarnessOptions = {}): Promise<Harnes
 }
 
 /** A credential whose tag another keyring signed: well-formed, but not this deployment's. */
-export async function foreignCredential(workspaceId = WORKSPACE_ID): Promise<string> {
+export async function foreignCredential(workspaceId = WORKSPACE_ID, kind: CredentialKind = 'agent'): Promise<string> {
   const other = createCredentialTagSigner({ current: 'a', keys: { a: 'another-keyring-secret-0123456789' } });
-  return encodeArCredential({ kind: 'agent', workspaceId, tag: await other.tag(workspaceId), secret: new Uint8Array(32).fill(9) });
+  return encodeArCredential({ kind, workspaceId, tag: await other.tag(workspaceId), secret: new Uint8Array(32).fill(9) });
 }
 
 export async function readJson(response: Response): Promise<Record<string, unknown>> {

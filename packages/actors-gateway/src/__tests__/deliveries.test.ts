@@ -31,7 +31,8 @@ describe('GET /v1/deliveries with wait', () => {
     expect(((await readBody(response)).data as unknown[]).length).toBe(1);
     expect(urls).toHaveLength(3);
     expect(urls.every((url) => !new URL(url).searchParams.has('wait'))).toBe(true);
-    expect(new URL(urls[0]).searchParams.get('limit')).toBe('5');
+    // Every re-poll keeps the client's filter.
+    expect(urls.map((url) => new URL(url).searchParams.get('limit'))).toEqual(['5', '5', '5']);
     const elapsed = Date.now() - started;
     expect(elapsed).toBeGreaterThanOrEqual(1400);
     expect(elapsed).toBeLessThan(5000);
@@ -68,8 +69,9 @@ describe('GET /v1/deliveries with wait', () => {
     await waitFor(() => urls.length >= 1);
     controller.abort();
     await expect(request).rejects.toThrow();
-    await new Promise((resolve) => setTimeout(resolve, 1200));
-    expect(urls.length).toBeLessThanOrEqual(2);
+    // Two poll intervals later, no further poll was made.
+    await new Promise((resolve) => setTimeout(resolve, 1700));
+    expect(urls).toHaveLength(1);
   });
 });
 
