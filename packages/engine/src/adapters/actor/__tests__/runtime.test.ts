@@ -3,6 +3,7 @@ import { verifyFileToken } from '../../../lib/fileTokens.js';
 import { sha256Hex } from '../../../lib/crypto.js';
 import { createActorRuntime, nextMaintenanceAt } from '../index.js';
 import { SignedUrlFileStorage } from '../files.js';
+import type { ActorHttpRequest } from '../http.js';
 import { FAKE_FILE_SECRET, FakeAlarm, FakeWorkspaceActor, TEST_CREDENTIAL_TAGS, jsonRequest } from './fakeActor.js';
 
 const WORKSPACE_ID = '241764880589606912';
@@ -119,14 +120,31 @@ describe('workspace actor runtime', () => {
     // The gateway's keyring rotated: the retry of a keyed create reaches this
     // actor with the now-current tag. The create is not refused for it, the
     // workspace's tag stands, and credentials keep carrying it.
-    const retry = jsonRequest('POST', '/v1/workspaces', { name: 'again' });
-    const answered = await actor.create(retry, 'bAAAAAAAAAA');
-    expect(answered.status).not.toBe(502);
+    const again = jsonRequest('POST', '/v1/workspaces', { name: 'again' });
+    const refused = await actor.create(again, 'bAAAAAAAAAA');
+    expect(refused.status).toBe(409);
+    expect(JSON.parse(refused.body).error.code).toBe('workspace_exists');
     expect(actor.sql.exec('SELECT tag FROM _actor_credential_tag')).toEqual(original);
     const minted = await call<{ token: string }>(actor, 'POST', '/v1/agents', { name: 'carol' }, key);
     expect(minted.status).toBe(201);
     expect(minted.json.data.token).toContain(`_${original[0].tag}_`);
     expect(() => new FakeWorkspaceActor('ws_not_a_snowflake')).toThrow(/64-bit snowflake/);
+
+    // The keyed replay itself: the same keyed create, carrying the rotated
+    // tag, is answered with the original 201 body by the engine's record.
+    const keyed = new FakeWorkspaceActor('241764880589606914', { config: { workspaceBootstrapSecret: 'bootstrap-secret-0123456789abcdef' } });
+    const keyedCreate: ActorHttpRequest = {
+      method: 'POST',
+      url: 'https://armadillo.test/v1/workspaces',
+      headers: [['content-type', 'application/json'], ['idempotency-key', 'kkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkk']],
+      body: JSON.stringify({ name: 'keyed' }),
+    };
+    const created = await keyed.create(keyedCreate, 'aBBBBBBBBBB');
+    expect(created.status).toBe(201);
+    const replayed = await keyed.create(keyedCreate, 'bBBBBBBBBBB');
+    expect(replayed.status).toBe(200); // the engine's keyed replay: the recorded answer, revealed again
+    expect(JSON.parse(replayed.body).data).toEqual(JSON.parse(created.body).data);
+    expect(keyed.sql.exec('SELECT tag FROM _actor_credential_tag')).toEqual([{ tag: 'aBBBBBBBBBB' }]);
   });
 
   it('refuses a second workspace in the same actor', async () => {
