@@ -12,6 +12,8 @@ import { parseCredentialKeyring, type CredentialKeyring } from '@relaycast/engin
 export const CONFIG_EXIT_CODE = 64;
 /** Minimum RELAYCAST_INTERNAL_SECRET length (matches the engine). */
 export const MIN_INTERNAL_SECRET_LENGTH = 32;
+/** Minimum RELAYCAST_FILE_SIGNING_SECRET length (the actors enforce the same). */
+export const MIN_FILE_SIGNING_SECRET_LENGTH = 32;
 
 export type Env = Record<string, string | undefined>;
 
@@ -151,6 +153,9 @@ export function loadConfig(env: Env = process.env, readFile?: (path: string) => 
 
   const fileSigningSecret = secretFromEnv(env, 'RELAYCAST_FILE_SIGNING_SECRET', readFile);
   if (!fileSigningSecret) throw new ConfigError('missing_file_signing_secret', 'RELAYCAST_FILE_SIGNING_SECRET (or _FILE) is required.');
+  if (fileSigningSecret.length < MIN_FILE_SIGNING_SECRET_LENGTH) {
+    throw new ConfigError('weak_file_signing_secret', `RELAYCAST_FILE_SIGNING_SECRET must be at least ${MIN_FILE_SIGNING_SECRET_LENGTH} characters (openssl rand -hex 32).`);
+  }
 
   const keyringJson = secretFromEnv(env, 'RELAYCAST_CREDENTIAL_KEYRING', readFile);
   if (!keyringJson) throw new ConfigError('missing_credential_keyring', 'RELAYCAST_CREDENTIAL_KEYRING (or _FILE) is required.');

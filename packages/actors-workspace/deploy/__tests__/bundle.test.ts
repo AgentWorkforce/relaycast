@@ -61,12 +61,20 @@ describe("parseGeneration", () => {
     it("reads the client's decimal string as the control plane's i64", () => {
         expect(parseGeneration("1761000000000000")).toBe(1761000000000000)
         expect(parseGeneration(7)).toBe(7)
-        for (const bad of ["0", "-1", "abc", "1.5", "99999999999999999999", undefined]) expect(() => parseGeneration(bad)).toThrow("invalid object generation")
+        for (const bad of ["0", "-1", "abc", "1.5", "99999999999999999999", "0x10", "1e3", " 7 ", "+7", "007", undefined]) expect(() => parseGeneration(bad), String(bad)).toThrow("invalid object generation")
     })
 })
 
 describe("deployment requests", () => {
     const file = { path: "actors.mjs", object: `durable-actors/v3/artifacts/${UUID}/actors.mjs`, generation: 1761000000000000, sha256: sha256Base64Url(new Uint8Array()) }
+
+    it("requires exactly one of bundle or localSource", () => {
+        const base = { organizationId: "org", secretRefs: [] }
+        expect(DeploymentRequestSchema.safeParse(base).success).toBe(false)
+        expect(DeploymentRequestSchema.safeParse({ ...base, bundle: { bucket: "b", files: [file] }, localSource: { workingDirectory: "/src" } }).success).toBe(false)
+        expect(DeploymentRequestSchema.safeParse({ ...base, bundle: { bucket: "b", files: [file] } }).success).toBe(true)
+        expect(DeploymentRequestSchema.safeParse({ ...base, localSource: { workingDirectory: "/src" } }).success).toBe(true)
+    })
 
     it("builds the hosted body with only the fields RegisterDeploymentRequest accepts", () => {
         const request = bundleDeploymentRequest({ organizationId: "org", bucket: "bucket", files: [file], contract: { version: 1 }, secretRefs: ["env"] })

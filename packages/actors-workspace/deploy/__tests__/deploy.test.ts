@@ -13,7 +13,7 @@ interface Seen {
     body: unknown
 }
 
-type Reply = { status: number; body: unknown }
+type Reply = { status: number; body: unknown; raw?: string }
 
 /** A control plane that records every request and answers from a queue (the last reply repeats). */
 class FakeControlPlane {
@@ -31,7 +31,7 @@ class FakeControlPlane {
                 this.requests.push({ method: request.method!, url: request.url!, headers: request.headers, body: text ? JSON.parse(text) : undefined })
                 const reply = this.replies.length > 1 ? this.replies.shift()! : (this.replies[0] ?? { status: 200, body: { changed: true } })
                 response.writeHead(reply.status, { "content-type": "application/json" })
-                response.end(JSON.stringify(reply.body))
+                response.end(reply.raw ?? JSON.stringify(reply.body))
             })
         })
         await new Promise<void>((resolve) => this.server.listen(0, "127.0.0.1", resolve))
@@ -192,6 +192,13 @@ describe("deploy.ts", () => {
         expect(await invoke([])).toBe(0)
         expect(plane.requests.map((request) => request.method)).toEqual(["PUT", "PUT", "PUT"])
         expect(JSON.parse(out[0]!).changed).toBe(true)
+    })
+
+    it("does not retry a 2xx whose body is not JSON", async () => {
+        plane.replies.push({ status: 200, body: undefined, raw: "<html>not json</html>" })
+        expect(await invoke(["--status"])).toBe(1)
+        expect(plane.requests.map((request) => request.method)).toEqual(["GET"])
+        expect(err.at(-1)).toMatch(/^deploy: control plane 200 malformed_response: GET .* answered 2xx with a body that is not JSON$/)
     })
 
     it("gives up on a persistent 5xx and on an unreachable control plane", async () => {

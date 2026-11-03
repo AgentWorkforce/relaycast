@@ -90,6 +90,9 @@ describe('configuration', () => {
 
     const noFileSecret = refusal({ ...baseEnv(URL), RELAYCAST_FILE_SIGNING_SECRET: '' });
     expect(noFileSecret.code).toBe('missing_file_signing_secret');
+    const weakFileSecret = refusal(baseEnv(URL, { RELAYCAST_FILE_SIGNING_SECRET: 'dev-secret' }));
+    expect(weakFileSecret.code).toBe('weak_file_signing_secret');
+    expect(weakFileSecret.message).not.toContain('dev-secret');
     expect(refusal({ ...baseEnv(URL), RELAYCAST_CREDENTIAL_KEYRING: undefined }).code).toBe('missing_credential_keyring');
     const badRing = refusal(baseEnv(URL, { RELAYCAST_CREDENTIAL_KEYRING: JSON.stringify({ current: 'a', keys: { a: 'short' } }) }));
     expect(badRing.code).toBe('invalid_credential_keyring');

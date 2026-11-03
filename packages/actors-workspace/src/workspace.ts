@@ -27,16 +27,39 @@ export interface WorkspaceEnvConfig {
  */
 export function workspaceConfigFromEnv(env: Record<string, string | undefined>): WorkspaceEnvConfig {
     return {
-        publicUrl: requiredEnv(env, "RELAYCAST_PUBLIC_URL"),
-        fileSigningSecret: requiredEnv(env, "RELAYCAST_FILE_SIGNING_SECRET"),
+        publicUrl: httpOrigin("RELAYCAST_PUBLIC_URL", requiredEnv(env, "RELAYCAST_PUBLIC_URL")),
+        fileSigningSecret: requiredEnv(env, "RELAYCAST_FILE_SIGNING_SECRET", MIN_FILE_SIGNING_SECRET_LENGTH),
         engine: actorConfigFromEnv(env),
     }
 }
 
-function requiredEnv(env: Record<string, string | undefined>, name: string): string {
+/** The floor the gateway enforces on the same secret (`openssl rand -hex 32` gives 64). */
+export const MIN_FILE_SIGNING_SECRET_LENGTH = 32
+
+function requiredEnv(env: Record<string, string | undefined>, name: string, minLength = 1): string {
     const value = env[name]?.trim()
     if (!value) throw new Error(`${name} is not set`)
+    if (value.length < minLength) throw new Error(`${name} must be at least ${minLength} characters`)
     return value
+}
+
+/**
+ * An http(s) origin, normalized (`https://relay.example.com/` → no trailing
+ * slash). Signed file URLs are `<origin>/_relayfiles?token=…` and the gateway
+ * serves exactly that path, so a path, query, fragment or credentials in the
+ * value would make every file URL miss.
+ */
+function httpOrigin(name: string, value: string): string {
+    let url: URL
+    try {
+        url = new URL(value)
+    } catch {
+        throw new Error(`${name} must be an absolute http(s) URL`)
+    }
+    if (!/^https?:$/.test(url.protocol) || !url.hostname || url.username || url.password || url.pathname !== "/" || url.search || url.hash) {
+        throw new Error(`${name} must be an http(s) origin without credentials, path, query or fragment`)
+    }
+    return url.origin
 }
 
 /**
@@ -50,9 +73,10 @@ function requiredEnv(env: Record<string, string | undefined>, name: string): str
  *
  * durable-actors 0.14.6 saves each SQL write as it happens and keeps the
  * writes made before a thrown error, so each method body runs in
- * `this.db.transaction`: the call commits as a whole or rolls back as a
- * whole, and the engine's write groups nest inside it (a failed group rolls
- * back alone and the request goes on, as on the Node adapter). The
+ * `this.db.transaction`: a call that throws rolls back as a whole, and the
+ * engine's write groups nest inside it (a failed group rolls back alone and
+ * the request goes on, as on the Node adapter). A request the engine answers
+ * with an error status is a completed call and commits like any other. The
  * constructor only builds the runtime and runs no SQL: the engine schema is
  * applied inside the first call, so it commits once with that call (and a
  * failed `create` leaves no half-built actor), and a later activation only

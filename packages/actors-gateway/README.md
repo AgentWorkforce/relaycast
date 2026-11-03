@@ -195,13 +195,13 @@ Build the engine once at the repository root (`npm ci && npx turbo build
 
 ```sh
 # Actors: `durable-actors dev` on 127.0.0.1:7100, project id `local`
-RELAYCAST_PUBLIC_URL=http://127.0.0.1:8787 RELAYCAST_FILE_SIGNING_SECRET=dev-secret \
+RELAYCAST_PUBLIC_URL=http://127.0.0.1:8787 RELAYCAST_FILE_SIGNING_SECRET=dev-file-signing-secret-0123456789 \
   npm run dev -w @relaycast/actors-workspace
 
 # Gateway, in a second terminal
 npm run build -w @relaycast/actors-gateway
 DURABLE_ACTORS_CONTROL_PLANE_URL=http://127.0.0.1:7100 DURABLE_ACTORS_PROJECT_ID=local \
-RELAYCAST_FILE_SIGNING_SECRET=dev-secret \
+RELAYCAST_FILE_SIGNING_SECRET=dev-file-signing-secret-0123456789 \
 RELAYCAST_CREDENTIAL_KEYRING='{"current":"a","keys":{"a":"dev-credential-tag-secret"}}' \
 RELAYCAST_FILE_DIR=./files RELAYCAST_LOG_FORMAT=text \
   node packages/actors-gateway/dist/bin.js

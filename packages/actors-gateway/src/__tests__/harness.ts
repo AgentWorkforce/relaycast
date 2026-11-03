@@ -10,7 +10,7 @@ import { createGateway, type Gateway, type GatewayOptions } from '../server.js';
 import { startFakeControlPlane, type FakeControlPlane, type FakeControlPlaneOptions } from './fakeControlPlane.js';
 
 export const KEYRING = { current: 'a', keys: { a: 'test-credential-tag-secret-0123456789' } };
-export const FILE_SECRET = 'test-file-signing-secret';
+export const FILE_SECRET = 'test-file-signing-secret-0123456789';
 export const INTERNAL_SECRET = 'internal-secret-with-at-least-32-characters';
 export const WORKSPACE_ID = '241764880589606912';
 export const OTHER_WORKSPACE_ID = '241764880589606913';

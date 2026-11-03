@@ -42,6 +42,11 @@ describe("bundleConfigFromEnv", () => {
             "DURABLE_ACTORS_ORGANIZATION_ID and DURABLE_ACTORS_ARTIFACT_BUCKET are required"
         )
         expect(() => bundleConfigFromEnv({ ...BASE, DURABLE_ACTORS_CONTROL_PLANE_URL: "not a url" })).toThrow(/DURABLE_ACTORS_CONTROL_PLANE_URL/)
+        // An origin, as the gateway takes the same variable: the deployer appends the deployment path itself.
+        expect(() => bundleConfigFromEnv({ ...BASE, DURABLE_ACTORS_CONTROL_PLANE_URL: "https://actors.example.com/admin" })).toThrow(/DURABLE_ACTORS_CONTROL_PLANE_URL must be an http\(s\) origin/)
+        expect(() => bundleConfigFromEnv({ ...BASE, DURABLE_ACTORS_CONTROL_PLANE_URL: "https://actors.example.com/?x=1" })).toThrow(/DURABLE_ACTORS_CONTROL_PLANE_URL/)
+        expect(bundleConfigFromEnv({ ...BASE, DURABLE_ACTORS_CONTROL_PLANE_URL: "https://actors.example.com/" }).controlPlaneUrl).toBe("https://actors.example.com/")
+        expect(() => bundleConfigFromEnv({ ...BASE, DURABLE_ACTORS_SECRET_REFS: `ok,${"n".repeat(256)}` })).toThrow("at most 255 characters")
         expect(() => bundleConfigFromEnv({ ...BASE, DURABLE_ACTORS_ARTIFACT_BUCKET: "bucket/path" })).toThrow(/DURABLE_ACTORS_ARTIFACT_BUCKET/)
         expect(() => bundleConfigFromEnv({ ...BASE, DURABLE_ACTORS_ARTIFACT_PREFIX: "/abs/" })).toThrow(/DURABLE_ACTORS_ARTIFACT_PREFIX/)
         expect(() => bundleConfigFromEnv({ ...BASE, DURABLE_ACTORS_SECRET_REFS: Array(17).fill("s").join(",") })).toThrow("at most 16")
@@ -65,6 +70,8 @@ describe("localConfigFromEnv and connectionConfigFromEnv", () => {
             organizationId: "local",
         })
         expect(() => localConfigFromEnv({ ...BASE, DURABLE_ACTORS_SECRET_REFS: "x" })).toThrow("unavailable in local mode")
+        expect(localConfigFromEnv({ DURABLE_ACTORS_CONTROL_PLANE_URL: "http://127.0.0.1:7100", DURABLE_ACTORS_PROJECT_ID: "local", DURABLE_ACTORS_ORGANIZATION_ID: "local" }).organizationId).toBe("local")
+        expect(() => localConfigFromEnv({ DURABLE_ACTORS_CONTROL_PLANE_URL: "http://127.0.0.1:7100", DURABLE_ACTORS_PROJECT_ID: "local", DURABLE_ACTORS_ORGANIZATION_ID: "acme" })).toThrow('must be "local"')
         expect(connectionConfigFromEnv(BASE)).toEqual({ controlPlaneUrl: BASE.DURABLE_ACTORS_CONTROL_PLANE_URL, projectId: "relaycast", secret: "admin-key" })
         expect(() => connectionConfigFromEnv({ ...BASE, DURABLE_ACTORS_SECRET: undefined })).toThrow("DURABLE_ACTORS_SECRET is not set")
     })

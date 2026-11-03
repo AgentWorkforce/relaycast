@@ -53,7 +53,7 @@ export const DeploymentRequestSchema = z.strictObject({
     contract: z.record(z.string(), z.unknown()).optional(),
     localSource: LocalSourceSchema.optional(),
     secretRefs: SecretRefsSchema,
-})
+}).refine((request) => (request.bundle === undefined) !== (request.localSource === undefined), "exactly one of bundle or localSource is required")
 
 export type DeploymentRequest = z.infer<typeof DeploymentRequestSchema>
 export type BundleFile = z.infer<typeof BundleFileSchema>
@@ -105,9 +105,9 @@ export function planArtifact(files: readonly ArtifactFile[], prefix: string, dep
     return planned
 }
 
-/** A GCS generation is an int64 the control plane reads as a JSON number; the client reports it as a string. */
+/** A GCS generation is an int64 the control plane reads as a JSON number; the client reports it as a decimal string. */
 export function parseGeneration(generation: string | number | undefined): number {
-    const value = typeof generation === "string" ? Number(generation) : generation
+    const value = typeof generation === "string" ? (/^[1-9][0-9]*$/.test(generation) ? Number(generation) : NaN) : generation
     if (value === undefined || !Number.isSafeInteger(value) || value <= 0)
         throw new Error(`invalid object generation: ${String(generation)}`)
     return value

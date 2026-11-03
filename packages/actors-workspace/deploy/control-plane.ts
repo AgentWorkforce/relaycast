@@ -76,6 +76,7 @@ export class DeploymentClient {
         if (body !== undefined) headers["content-type"] = "application/json"
         const payload = body === undefined ? undefined : JSON.stringify(body)
         for (let attempt = 0; ; attempt++) {
+            let text: string
             try {
                 const response = await this.request(this.url(), {
                     method,
@@ -83,18 +84,27 @@ export class DeploymentClient {
                     body: payload,
                     signal: AbortSignal.timeout(timeoutMs),
                 })
-                const text = await response.text()
-                if (response.ok) return text ? JSON.parse(text) : {}
-                const error = errorFrom(response.status, text)
-                if (response.status < 500 || attempt >= this.retries) throw error
-            } catch (error) {
-                if (error instanceof ControlPlaneError) {
-                    if (error.status < 500 || attempt >= this.retries) throw error
-                } else if (attempt >= this.retries) {
-                    throw new ControlPlaneError(0, "unreachable", `${method} ${this.url()} failed: ${describe(error)}`)
+                text = await response.text()
+                if (!response.ok) {
+                    const error = errorFrom(response.status, text)
+                    if (response.status < 500 || attempt >= this.retries) throw error
+                    await this.delay(attempt + 1)
+                    continue
                 }
+            } catch (error) {
+                if (error instanceof ControlPlaneError) throw error
+                if (attempt >= this.retries) throw new ControlPlaneError(0, "unreachable", `${method} ${this.url()} failed: ${describe(error)}`)
+                await this.delay(attempt + 1)
+                continue
             }
-            await this.delay(attempt + 1)
+            // A 2xx is the request done: a body that is not JSON is reported
+            // as such, never retried (the mutation would run again).
+            if (!text) return {}
+            try {
+                return JSON.parse(text)
+            } catch {
+                throw new ControlPlaneError(200, "malformed_response", `${method} ${this.url()} answered 2xx with a body that is not JSON`)
+            }
         }
     }
 }

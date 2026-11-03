@@ -70,8 +70,18 @@ const unsetIfBlank = (value: unknown) => (typeof value === "string" && value.tri
 const optionalText = z.preprocess(unsetIfBlank, z.string().trim().optional())
 const component = z.string().trim().min(1).max(64)
 
+/** An http(s) origin: the deployer appends `/v1/projects/<id>/deployment`, and the gateway refuses anything else for the same variable. */
+const origin = z.string().trim().refine((value) => {
+    try {
+        const url = new URL(value)
+        return /^https?:$/.test(url.protocol) && !!url.hostname && !url.username && !url.password && url.pathname === "/" && !url.search && !url.hash
+    } catch {
+        return false
+    }
+}, "must be an http(s) origin without credentials, path, query or fragment")
+
 const EnvSchema = z.object({
-    DURABLE_ACTORS_CONTROL_PLANE_URL: z.preprocess(unsetIfBlank, z.url().trim()),
+    DURABLE_ACTORS_CONTROL_PLANE_URL: z.preprocess(unsetIfBlank, origin),
     DURABLE_ACTORS_PROJECT_ID: z.preprocess(unsetIfBlank, component),
     DURABLE_ACTORS_SECRET: z.preprocess(unsetIfBlank, z.string().refine((secret) => secret.trim() === secret, "has surrounding whitespace").optional()),
     DURABLE_ACTORS_ORGANIZATION_ID: z.preprocess(unsetIfBlank, component.optional()),
@@ -135,7 +145,10 @@ export function bundleConfigFromEnv(env: Record<string, string | undefined>): Bu
         .split(",")
         .map((name) => name.trim())
         .filter((name) => name !== "")
+    // The limits `SecretRefsSchema` enforces on the request, checked here so a
+    // bad value fails before anything is compiled or uploaded.
     if (secretRefs.length > 16) throw new ConfigError("DURABLE_ACTORS_SECRET_REFS allows at most 16 names")
+    if (secretRefs.some((name) => name.length > 255)) throw new ConfigError("DURABLE_ACTORS_SECRET_REFS names are at most 255 characters")
     if (new Set(secretRefs).size !== secretRefs.length) throw new ConfigError("DURABLE_ACTORS_SECRET_REFS repeats a name")
     return {
         ...connection(values),
@@ -150,5 +163,8 @@ export function bundleConfigFromEnv(env: Record<string, string | undefined>): Bu
 export function localConfigFromEnv(env: Record<string, string | undefined>): LocalConfig {
     const values = parseEnv(env, false)
     if (values.DURABLE_ACTORS_SECRET_REFS !== undefined) throw new ConfigError("DURABLE_ACTORS_SECRET_REFS is unavailable in local mode")
-    return { ...connection(values), organizationId: values.DURABLE_ACTORS_ORGANIZATION_ID ?? "local" }
+    // The dev control plane runs one organization, `local`; any other value would be refused at registration.
+    if (values.DURABLE_ACTORS_ORGANIZATION_ID !== undefined && values.DURABLE_ACTORS_ORGANIZATION_ID !== "local")
+        throw new ConfigError('DURABLE_ACTORS_ORGANIZATION_ID must be "local" (or unset) in local mode')
+    return { ...connection(values), organizationId: "local" }
 }

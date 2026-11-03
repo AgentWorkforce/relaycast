@@ -55,7 +55,7 @@ const GATEWAY_PORTS = [
 ];
 const CONTROL_PLANE_URL = `http://127.0.0.1:${CONTROL_PLANE_PORT}`;
 const GATEWAY_URLS = GATEWAY_PORTS.map((port) => `http://127.0.0.1:${port}`);
-const FILE_SIGNING_SECRET = process.env.RELAYCAST_E2E_FILE_SIGNING_SECRET ?? 'local-file-signing-secret';
+const FILE_SIGNING_SECRET = process.env.RELAYCAST_E2E_FILE_SIGNING_SECRET ?? 'local-file-signing-secret-0123456789';
 const CREDENTIAL_KEYRING =
   process.env.RELAYCAST_E2E_CREDENTIAL_KEYRING ?? '{"current":"a","keys":{"a":"local-credential-tag-secret"}}';
 const DURABLE_ACTORS_SECRET = process.env.DURABLE_ACTORS_SECRET?.trim() || undefined;
