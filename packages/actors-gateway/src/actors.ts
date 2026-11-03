@@ -22,6 +22,11 @@ import type { ActorHttpRequest, ActorHttpResponse } from '@relaycast/engine/gate
 
 export const ACTOR_NAME = 'Workspace';
 const DEFAULT_INVOKE_TIMEOUT_MS = 60_000;
+/**
+ * `create` activates a brand-new actor: on a production control plane that is a
+ * host claim plus the first schema commit, so it gets its own, longer budget.
+ */
+const DEFAULT_CREATE_TIMEOUT_MS = 180_000;
 const FIND_WEBSOCKET_TIMEOUT_MS = 15_000;
 const HEALTH_TIMEOUT_MS = 3_000;
 /** The control plane caps socket metadata at 16 KiB. */
@@ -61,7 +66,10 @@ export interface ActorClientOptions {
   secret?: string | undefined;
   homeRegion?: string | undefined;
   fetch?: typeof globalThis.fetch;
+  /** Budget for one `handle` call (RELAYCAST_ACTOR_INVOKE_TIMEOUT_MS). */
   invokeTimeoutMs?: number;
+  /** Budget for one `create` call (RELAYCAST_ACTOR_CREATE_TIMEOUT_MS). */
+  createTimeoutMs?: number;
 }
 
 const ActorHttpResponseSchema = z.object({
@@ -109,6 +117,7 @@ async function jsonDocument(response: Response): Promise<unknown> {
 export function createActorClient(options: ActorClientOptions): ActorClient {
   const fetchImpl = options.fetch ?? globalThis.fetch;
   const invokeTimeoutMs = options.invokeTimeoutMs ?? DEFAULT_INVOKE_TIMEOUT_MS;
+  const createTimeoutMs = options.createTimeoutMs ?? DEFAULT_CREATE_TIMEOUT_MS;
   const authHeaders: Record<string, string> = options.secret ? { authorization: `Bearer ${options.secret}` } : {};
 
   async function post(path: string, body: unknown, requestId: string, signal: AbortSignal): Promise<Response> {
@@ -156,7 +165,7 @@ export function createActorClient(options: ActorClientOptions): ActorClient {
   }
 
   async function invoke(actorId: string, method: 'create' | 'handle', args: unknown[], callOptions?: CallOptions): Promise<ActorHttpResponse> {
-    const signal = withTimeout(invokeTimeoutMs, callOptions?.signal);
+    const signal = withTimeout(method === 'create' ? createTimeoutMs : invokeTimeoutMs, callOptions?.signal);
     // A `not_executed` outcome means the host never ran the call; one retry, as the SDK does.
     let outcome = await invokeOnce(actorId, method, args, signal);
     if (outcome.type === 'not_executed') outcome = await invokeOnce(actorId, method, args, signal);

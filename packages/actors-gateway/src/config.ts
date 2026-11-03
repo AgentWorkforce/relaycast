@@ -42,6 +42,10 @@ export interface GatewayConfig {
   fileStore: FileStoreKind;
   fileDir: string;
   maxUploadBytes: number;
+  /** Budget for one actor `handle` call through the control plane. */
+  actorInvokeTimeoutMs: number;
+  /** Budget for one actor `create` call (a new actor's activation is included). */
+  actorCreateTimeoutMs: number;
   shutdownGraceMs: number;
   logFormat: 'json' | 'text';
   environment: string;
@@ -101,6 +105,8 @@ const EnvSchema = z.object({
   RELAYCAST_FILE_STORE: z.enum(['local', 'gcs', 's3']).default('local'),
   RELAYCAST_FILE_DIR: z.string().min(1).default('/data/files'),
   RELAYCAST_MAX_UPLOAD_BYTES: integer(1).default(64 * 1024 * 1024),
+  RELAYCAST_ACTOR_INVOKE_TIMEOUT_MS: integer(1_000).default(60_000),
+  RELAYCAST_ACTOR_CREATE_TIMEOUT_MS: integer(1_000).default(180_000),
   RELAYCAST_SHUTDOWN_GRACE_MS: integer(0).default(10_000),
   RELAYCAST_LOG_FORMAT: z.enum(['json', 'text']).default('json'),
   RELAYCAST_ENV: z.string().min(1).default('production'),
@@ -176,6 +182,8 @@ export function loadConfig(env: Env = process.env, readFile?: (path: string) => 
     fileStore: settings.RELAYCAST_FILE_STORE,
     fileDir: settings.RELAYCAST_FILE_DIR,
     maxUploadBytes: settings.RELAYCAST_MAX_UPLOAD_BYTES,
+    actorInvokeTimeoutMs: settings.RELAYCAST_ACTOR_INVOKE_TIMEOUT_MS,
+    actorCreateTimeoutMs: settings.RELAYCAST_ACTOR_CREATE_TIMEOUT_MS,
     shutdownGraceMs: settings.RELAYCAST_SHUTDOWN_GRACE_MS,
     logFormat: settings.RELAYCAST_LOG_FORMAT,
     environment: settings.RELAYCAST_ENV,

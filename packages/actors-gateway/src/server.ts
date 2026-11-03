@@ -57,6 +57,8 @@ export function createGateway(config: GatewayConfig, options: GatewayOptions = {
     projectId: config.projectId,
     secret: config.controlPlaneSecret,
     homeRegion: config.homeRegion,
+    invokeTimeoutMs: config.actorInvokeTimeoutMs,
+    createTimeoutMs: config.actorCreateTimeoutMs,
   });
   const files = options.fileStore ?? createFileStore({ kind: config.fileStore, fileDir: config.fileDir });
   const server = createServer();
