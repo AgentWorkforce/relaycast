@@ -18,6 +18,10 @@ Packages without a separate changelog are covered by the cross-package notes bel
 
 ## [Unreleased - Minor]
 
+- **Removed:** agent detail (`GET /v1/agent`, `GET /v1/agents/:name`) no longer returns `actions_provided` or `actions_available_to`. List actions with `GET /v1/actions`.
+- Node heartbeats no longer read action rows to check them; only a change to a provider's action capabilities rewrites them.
+- An action's workspace-global alias passes to another node's default provider as soon as its owner (an agent-hosted action, or another node's alias) is deleted or stops being offered.
+- `DELETE /v1/actions/:name` deletes only actions registered through the API; a name only node providers offer returns `409 action_provider_owned`.
 - `GET /v1/deliveries?wait=<ms>` long-polls (0–25000 ms): an empty answer waits until a matching delivery is created for the agent or the wait expires, and reads nothing while it waits.
 - SDKs pass `wait`: TypeScript `deliveries({ waitMs })`, Rust `wait_for_deliveries(opts, wait_ms)`, Swift `ListDeliveriesOptions(waitMs:)`.
 - The self-hosted server wakes waiters in process; other hosts supply a `DeliveryWaiters` provider, and an engine without one answers `wait` at once.
