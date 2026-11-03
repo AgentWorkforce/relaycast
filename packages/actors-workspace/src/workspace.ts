@@ -52,7 +52,11 @@ function requiredEnv(env: Record<string, string | undefined>, name: string): str
  * writes made before a thrown error, so each method body runs in
  * `this.db.transaction`: the call commits as a whole or rolls back as a
  * whole, and the engine's write groups nest inside it (a failed group rolls
- * back alone and the request goes on, as on the Node adapter).
+ * back alone and the request goes on, as on the Node adapter). The
+ * constructor only builds the runtime and runs no SQL: the engine schema is
+ * applied inside the first call, so it commits once with that call (and a
+ * failed `create` leaves no half-built actor), and a later activation only
+ * reads to confirm it.
  */
 export class Workspace extends Actor {
     @Ephemeral private runtime: ActorRuntime

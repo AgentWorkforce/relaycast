@@ -111,12 +111,23 @@ The smoke, with the unmodified TypeScript SDK:
   token id); the gateway opens an actor socket with that principal as metadata
   and bridges frames both ways. The actor re-checks the principal in
   `onConnect`, so a revoked observer token or a deleted node cannot attach.
+- **Sockets survive actor sleep.** The control plane holds actor sockets
+  open while the actor is stopped (idle for 10 s by default, a deploy, an
+  eviction). The actor keeps each socket's registry state (node, provider
+  binding, delivery readiness, observer token id) in its own `_actor_sockets`
+  table and rebuilds the registry from it on the next call, so a wake costs
+  no reconnects and no `node.status.*` events: deliveries, action invokes and
+  observer events continue on the same sockets. A socket the control plane
+  no longer holds when the actor wakes is torn down the way a disconnect is
+  (node offline, invocations rescheduled).
 - **Close codes.** durable-actors passes 1000 and 3000–4999 through; the
   engine's standard codes move to 4000 + their last three digits (1008 → 4008).
-  - `4012`: the actor restarted and lost its socket registry; the socket is
-    closed on the next call and the client reconnects. The engine also
-    rehydrates known sockets from the control plane, so a socket that survived
-    the restart is kept rather than closed.
+  - `4012 actor restarted`: reserved for a socket the actor cannot account
+    for, in memory or in `_actor_sockets` (a row lost with a rolled-back call,
+    or written before this release). The client reconnects and registers
+    again through the normal path. `/v1/ws` observers and raw `/v1/node/ws`
+    clients must still handle `4012` and `1012` by reconnecting; the
+    TypeScript SDK does.
   - `1012 gateway restarting`: a gateway replica received SIGTERM. Only the
     clients bridged through that replica are affected; sockets on other
     replicas, and the actor sockets at the control plane for them, stay up.
@@ -189,14 +200,18 @@ only the deployer holds the admin key. What the invoke key still trusts:
   so is credential upgrade from them; clients must use the `ar_` family.
 - **First call to a new workspace is slow**: `POST /v1/workspaces` cold-starts
   an actor and runs the engine migrations (about 9 s under `durable-actors
-  dev`); later calls on a warm actor take tens of milliseconds.
+  dev`). The schema is applied inside that call's transaction, so it commits
+  once with the workspace (not one persisted write per statement) and a
+  failed `create` leaves no half-built actor; a wake of an existing actor
+  only reads two rows to confirm the schema. Later calls on a warm actor take
+  tens of milliseconds.
 - **`gcs`/`s3` file stores are unit-tested against fakes only** on this branch;
   the first run against a real bucket is the integration test.
 - **`wait` is polled** at 750 ms granularity (above).
 - **No actor-restart drill locally**: `durable-actors dev` exposes no restart
-  API, so the proof restarts a gateway, not an actor; the 4012 path is covered
-  by the engine's actor-adapter unit tests (`npx vitest run src/adapters/actor`
-  in `packages/engine`).
+  API, so the proof restarts a gateway, not an actor; the registry rebuild
+  after a sleep and the 4012 path are covered by the engine's actor-adapter
+  unit tests (`npx vitest run src/adapters/actor` in `packages/engine`).
 - **Admin key on the gateway** (above).
 - The repository's `scripts/e2e.ts` and `scripts/e2e-actions.ts` partly assume
   legacy credentials (`scripts/action-wait-ws.ts` insists on `ot_live_`

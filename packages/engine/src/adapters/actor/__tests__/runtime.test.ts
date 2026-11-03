@@ -56,6 +56,44 @@ describe('workspace actor runtime', () => {
     expect(search.json.data.map((hit) => hit.text)).toContain('hello from a durable actor');
   });
 
+  it('applies the schema inside the first call and only reads it on later activations', async () => {
+    const actor = new FakeWorkspaceActor(WORKSPACE_ID);
+    // The constructor runs no SQL: nothing commits outside a call.
+    expect(actor.sql.log).toEqual([]);
+    const { key } = await workspaceWithAgents(actor);
+    const cold = actor.sql.log.filter((statement) => /^\s*(CREATE|ALTER|DROP|INSERT INTO _engine_migrations)/i.test(statement));
+    expect(cold.length).toBeGreaterThan(100);
+    expect(rows(actor, "SELECT COUNT(*) AS n FROM sqlite_master WHERE type = 'table' AND name = '_actor_sockets'")).toEqual([{ n: 1 }]);
+
+    // A later activation finds the schema current with two reads and no DDL.
+    const woken = actor.restart();
+    woken.sql.log.length = 0;
+    expect((await call(woken, 'GET', '/v1/agents', undefined, key)).status).toBe(200);
+    const schema = woken.sql.log.filter((statement) => /sqlite_master|_engine_migrations/.test(statement));
+    expect(schema).toEqual([
+      expect.stringMatching(/^SELECT name FROM sqlite_master WHERE type = 'table' AND name IN/),
+      'SELECT COUNT(*) AS count FROM _engine_migrations',
+    ]);
+    expect(woken.sql.log.filter((statement) => /^\s*(CREATE|ALTER|DROP)/i.test(statement))).toEqual([]);
+
+    // The rest of the activation skips the check.
+    woken.sql.log.length = 0;
+    expect((await call(woken, 'GET', '/v1/agents', undefined, key)).status).toBe(200);
+    expect(woken.sql.log.filter((statement) => /sqlite_master|_engine_migrations/.test(statement))).toEqual([]);
+  });
+
+  it('rolls the schema back with a failed first call, leaving no orphan', async () => {
+    const actor = new FakeWorkspaceActor(WORKSPACE_ID);
+    const request = jsonRequest('POST', '/v1/workspaces', { name: 'doomed' });
+    await expect(actor.sql.atomic(() => actor.sql.transaction(() => actor.runtime.create(request, 'not-a-tag'))))
+      .rejects.toThrow(/credential tag/);
+    expect(rows(actor, "SELECT name FROM sqlite_master WHERE type = 'table'")).toEqual([]);
+    // The next activation applies it again, nested in the call's transaction and the engine's write groups.
+    const again = actor.restart();
+    const { key } = await workspaceWithAgents(again);
+    expect(key).toMatch(/^ar_ws_/);
+  });
+
   it('accepts only ar_ credentials: legacy ones get 401 and there is no upgrade route', async () => {
     const actor = new FakeWorkspaceActor(WORKSPACE_ID);
     const { key, alice } = await workspaceWithAgents(actor);
@@ -405,6 +443,7 @@ describe('workspace actor runtime', () => {
         return new Response(null, { status: 204 });
       },
     });
+    await call(actor, 'POST', '/v1/workspaces', { name: 'blobs' });
     const { files } = actor.runtime.deps;
     const { uploadUrl } = await files.createUploadUrl({ storageKey: `${WORKSPACE_ID}/f1/a.txt`, contentType: 'text/plain', sizeBytes: 5 });
     const token = new URL(uploadUrl).searchParams.get('token');

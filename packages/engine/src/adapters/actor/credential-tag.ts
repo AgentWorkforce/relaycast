@@ -3,15 +3,18 @@ import type { ActorSql } from './database.js';
 const TABLE = '_actor_credential_tag';
 const TAG = /^[a-z][0-9A-Za-z]{10}$/;
 
+export const ACTOR_CREDENTIAL_TAG_TABLE = {
+  name: TABLE,
+  ddl: `CREATE TABLE IF NOT EXISTS ${TABLE} (id INTEGER PRIMARY KEY CHECK (id = 1), tag TEXT NOT NULL)`,
+} as const;
+
 /**
  * The routing tag of this actor's workspace. The gateway signs it for the
  * workspace id with its keyring and hands it to `create`; the actor never
- * holds the keyring.
+ * holds the keyring. The table is created with the actor schema.
  */
 export class ActorCredentialTag {
-  constructor(private readonly sql: ActorSql) {
-    sql.exec(`CREATE TABLE IF NOT EXISTS ${TABLE} (id INTEGER PRIMARY KEY CHECK (id = 1), tag TEXT NOT NULL)`);
-  }
+  constructor(private readonly sql: ActorSql) {}
 
   get(): string | undefined {
     const [row] = this.sql.exec(`SELECT tag FROM ${TABLE} WHERE id = 1`) as { tag: string }[];

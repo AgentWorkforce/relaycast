@@ -28,6 +28,8 @@ const ALLOWED_PRAGMA = /^\s*PRAGMA\s+(table_info|table_xinfo|index_info|index_xi
 export class FakeActorDatabase implements ActorSql {
   readonly raw = new Database(':memory:');
   statements = 0;
+  /** Every statement run through `exec` / `query`, in order. */
+  readonly log: string[] = [];
   private savepoints = 0;
 
   constructor() {
@@ -79,6 +81,7 @@ export class FakeActorDatabase implements ActorSql {
     if (RUNTIME_OWNED.test(sql)) throw new Error(`The actor runtime owns transactions: ${sql.slice(0, 40)}`);
     if (/^\s*PRAGMA\b/i.test(sql) && !ALLOWED_PRAGMA.test(sql)) throw new Error('PRAGMA not allowed');
     this.statements += 1;
+    this.log.push(sql);
     try {
       // better-sqlite3 refuses multi-statement strings in prepare(), like exec.
       return body(this.raw.prepare(sql));
@@ -240,15 +243,25 @@ export class FakeSocketSource implements ActorSocketSource {
   }
 }
 
+/** What an activation of the fake actor shares with the next one: its database, alarm and control-plane sockets. */
+export interface FakeActorState {
+  sql: FakeActorDatabase;
+  alarm: FakeAlarm;
+  sockets: FakeSocketSource;
+}
+
 /** A `Workspace` actor as `@relaycast/actors-workspace` defines it, over the fake runtime. */
 export class FakeWorkspaceActor {
-  readonly sql = new FakeActorDatabase();
-  readonly alarm = new FakeAlarm();
-  readonly sockets = new FakeSocketSource();
+  readonly sql: FakeActorDatabase;
+  readonly alarm: FakeAlarm;
+  readonly sockets: FakeSocketSource;
   readonly runtime: ActorRuntime;
   calls = 0;
 
-  constructor(readonly id: string, options: Partial<ActorRuntimeOptions> = {}) {
+  constructor(readonly id: string, private readonly options: Partial<ActorRuntimeOptions> = {}, state?: FakeActorState) {
+    this.sql = state?.sql ?? new FakeActorDatabase();
+    this.alarm = state?.alarm ?? new FakeAlarm();
+    this.sockets = state?.sockets ?? new FakeSocketSource();
     this.runtime = createActorRuntime({
       sql: this.sql,
       workspaceId: id,
@@ -262,10 +275,22 @@ export class FakeWorkspaceActor {
     });
   }
 
-  /** One actor call: a transaction, with the sockets reachable for its duration. */
+  /**
+   * The actor restarted (evicted, redeployed, stopped idle): a new runtime
+   * over the same database, with the control plane still holding the sockets.
+   */
+  restart(): FakeWorkspaceActor {
+    return new FakeWorkspaceActor(this.id, this.options, { sql: this.sql, alarm: this.alarm, sockets: this.sockets });
+  }
+
+  /**
+   * One actor call: the runtime's transaction with the method body in
+   * `db.transaction` as the `Workspace` actor wraps it, and the sockets
+   * reachable for its duration.
+   */
   private call<T>(work: () => Promise<T>): Promise<T> {
     this.calls += 1;
-    return this.sockets.during(() => this.sql.atomic(work));
+    return this.sockets.during(() => this.sql.atomic(() => this.sql.transaction(work)));
   }
 
   /**

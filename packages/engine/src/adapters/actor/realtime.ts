@@ -11,9 +11,12 @@
  * {@link ActorRealtime} composes {@link InProcessRealtime} (the registry
  * semantics: provider binding, delivery readiness, queued invokes, observer
  * filtering) and adapts each control-plane connection to an
- * {@link EngineSocket}. Every entry point first reconciles the registry with
- * the control plane ({@link ActorRealtime.rehydrate}), so a lost memory never
- * leaves the registry and the sockets disagreeing.
+ * {@link EngineSocket}. The registry state of every attached socket is also
+ * written to the actor's `_actor_sockets` table as it changes, and every
+ * entry point first reconciles the registry with the control plane
+ * ({@link ActorRealtime.rehydrate}): a socket the control plane still holds
+ * after the memory was lost is rebuilt from its row, so an actor's sleep
+ * costs no reconnects.
  */
 import type {
   ActionProviderAuthorization,
@@ -35,6 +38,8 @@ import { hasObserverScope } from '../../engine/observerToken.js';
 import { getWorkspaceExpiry } from '../../engine/workspace.js';
 import { isWorkspaceExpired } from '../../auth/workspaceExpiry.js';
 import { SocketPrincipalSchema, socketGrantResponse, type SocketPrincipal } from './socket-grant.js';
+import { ActorSocketTable, type ActorSocketRow } from './socket-table.js';
+import type { ActorSql } from './database.js';
 
 /**
  * The actor-side socket, structurally (the engine does not depend on
@@ -71,6 +76,8 @@ export interface ActorRealtimeOptions {
   /** The actor's workspace; sockets granted for another are refused. */
   workspaceId: string;
   sockets: ActorSocketSource;
+  /** The actor's database, for the `_actor_sockets` rows. */
+  sql: ActorSql;
   /**
    * Receives every promise the registries start without awaiting (the drain
    * after a node attaches). The runtime settles them before its call returns,
@@ -79,7 +86,11 @@ export interface ActorRealtimeOptions {
   background: (promise: Promise<unknown>) => void;
 }
 
-/** A socket closed because the actor's memory (and so its registry) was lost while the socket stayed open. */
+/**
+ * A socket the actor cannot account for: the control plane holds it but the
+ * registry has no record of it, in memory or in `_actor_sockets` (a row
+ * written before the table existed, or lost with a rolled-back call).
+ */
 export const ACTOR_RESTARTED_CLOSE_CODE = 4012;
 /** The socket's metadata is not a {@link SocketPrincipal} for this workspace. */
 export const INVALID_PRINCIPAL_CLOSE_CODE = 4400;
@@ -121,14 +132,23 @@ interface Attached {
 
 export class ActorRealtime implements RealtimeBus, ConnectionRegistry, NodeConnectionRegistry {
   private readonly inner: InProcessRealtime;
-  /** Connections the registry knows, by control-plane socket id. The only state kept across calls. */
+  /** The durable copy of the registry: one row per attached socket. */
+  private readonly table: ActorSocketTable;
+  /**
+   * Connections the registry knows, by control-plane socket id. Kept in
+   * memory for the activation and mirrored in {@link table}; a node
+   * connection's registry id is its socket id, so bindings survive a rebuild.
+   */
   private readonly attached = new Map<string, Attached>();
   /** The live socket objects of the running call, by id; replaced by every {@link rehydrate}. */
   private live = new Map<string, ActorSocketLike>();
+  /** Whether the rows written by an earlier activation were replayed into this one. */
+  private replayed = false;
 
   constructor(private readonly db: EngineDb, private readonly options: ActorRealtimeOptions) {
     this.inner = new InProcessRealtime(db);
     this.inner.setBackgroundScheduler(options.background);
+    this.table = new ActorSocketTable(options.sql);
   }
 
   /* ----------------------------- composition ---------------------------- */
@@ -203,6 +223,13 @@ export class ActorRealtime implements RealtimeBus, ConnectionRegistry, NodeConne
     return this.inner.providerAttachConflict(workspaceId, nodeId, providerName, instanceId, connectionId);
   }
 
+  /*
+   * The engine binds providers and readiness through these (a node
+   * connection's registry id is its socket id); `node.register` frames do
+   * the same on the inner registry directly. After each, the connection's
+   * state is copied to its row ({@link syncRow}).
+   */
+
   attachProvider(
     workspaceId: string,
     nodeId: string,
@@ -212,6 +239,7 @@ export class ActorRealtime implements RealtimeBus, ConnectionRegistry, NodeConne
     callerAwareActions?: readonly string[],
   ): void {
     this.inner.attachProvider(workspaceId, nodeId, providerName, instanceId, connectionId, callerAwareActions);
+    this.syncRow(connectionId);
   }
 
   setProviderDeliveryReadiness(
@@ -222,6 +250,7 @@ export class ActorRealtime implements RealtimeBus, ConnectionRegistry, NodeConne
     mode: 'immediate' | 'agent_scoped',
   ): void {
     this.inner.setProviderDeliveryReadiness(workspaceId, nodeId, providerName, connectionId, mode);
+    this.syncRow(connectionId ?? this.inner.providerConnectionId(workspaceId, nodeId, providerName));
   }
 
   providerDeliveryReadinessMode(
@@ -241,6 +270,7 @@ export class ActorRealtime implements RealtimeBus, ConnectionRegistry, NodeConne
     agentIds: readonly string[],
   ): void {
     this.inner.markProviderAgentsDeliveryReady(workspaceId, nodeId, providerName, connectionId, agentIds);
+    this.syncRow(connectionId ?? this.inner.providerConnectionId(workspaceId, nodeId, providerName));
   }
 
   isProviderAgentDeliveryReady(workspaceId: string, nodeId: string, providerName: string, agentId: string): boolean {
@@ -248,7 +278,16 @@ export class ActorRealtime implements RealtimeBus, ConnectionRegistry, NodeConne
   }
 
   detachProvider(workspaceId: string, nodeId: string, providerName: string): void {
+    const bound = this.inner.providerConnectionId(workspaceId, nodeId, providerName);
     this.inner.detachProvider(workspaceId, nodeId, providerName);
+    this.syncRow(bound);
+  }
+
+  /** Copy a node connection's registry state to its row; nothing to copy for a connection the registry dropped. */
+  private syncRow(socketId: string | undefined): void {
+    if (!socketId || !this.attached.has(socketId)) return;
+    const state = this.inner.nodeConnectionState(socketId);
+    if (state) this.table.sync(socketId, state);
   }
 
   /** Closes go through each connection's {@link EngineSocket}, so they reach the actor sockets. */
@@ -266,21 +305,19 @@ export class ActorRealtime implements RealtimeBus, ConnectionRegistry, NodeConne
    * Reconcile the registry with the control plane, once at the start of
    * every actor call.
    *
-   * A connection the control plane holds but the registry does not know
-   * means the actor's memory was lost (eviction, deploy, crash) while the
-   * socket survived. Its provider binding, delivery readiness and queued
-   * frames are gone, and nothing re-sends the `node.register` that built
-   * them, so the socket is closed with {@link ACTOR_RESTARTED_CLOSE_CODE}
-   * and the broker or observer reconnects and registers through the normal
-   * path. The alternative, rebuilding registry state from the socket's
-   * metadata, would attach an unbound connection whose readiness every
-   * identity still had to re-announce; a reconnect is the same cost without
-   * a second code path. The tradeoff: a restart costs every live socket one
-   * reconnect.
+   * On the first call of an activation the rows an earlier activation wrote
+   * are replayed: a socket the control plane still holds is re-attached
+   * under the same connection id with its provider binding, delivery
+   * readiness, caller-aware actions and liveness timestamp (an observer with
+   * its token re-read), so the sleep cost nothing. This is a memory rebuild,
+   * not a reconnect: nothing is sent, no node goes online or offline. A row
+   * whose socket the control plane no longer holds (an `onDisconnect` the
+   * actor was not woken for) runs the same teardown a disconnect does.
    *
-   * A connection the registry knows but the control plane no longer holds
-   * (an `onDisconnect` the actor was not woken for) is closed on the registry
-   * side, which runs the same teardown a disconnect does.
+   * A connection the control plane holds that neither the memory nor the
+   * table accounts for, or whose principal no longer validates, is closed
+   * ({@link ACTOR_RESTARTED_CLOSE_CODE}, {@link UNAUTHORIZED_CLOSE_CODE}) and
+   * the client reconnects through the normal path.
    *
    * `event` is the socket of the running lifecycle call, which the caller
    * handles itself: a connecting socket is attached after this, a
@@ -293,8 +330,37 @@ export class ActorRealtime implements RealtimeBus, ConnectionRegistry, NodeConne
     if (event) live.set(event.socket.id, event.socket);
     this.live = live;
 
+    if (!this.replayed) {
+      this.replayed = true;
+      for (const row of this.table.all()) {
+        if (this.attached.has(row.socketId)) continue;
+        if (event?.phase === 'connect' && row.socketId === event.socket.id) {
+          // The id of a socket that is only now connecting: a stale row.
+          this.table.delete(row.socketId);
+          continue;
+        }
+        if (!live.has(row.socketId)) {
+          // Gone from the control plane: rebuild it only to run its teardown.
+          const replayed = await this.replay(row, { earlyDrain: false });
+          if (!replayed) {
+            this.table.delete(row.socketId);
+            continue;
+          }
+          if (event?.phase === 'disconnect' && row.socketId === event.socket.id) continue;
+          await this.teardown(row.socketId);
+          continue;
+        }
+        await this.replayOrClose(row, live.get(row.socketId)!);
+      }
+    }
+
     for (const socket of connections) {
       if (this.attached.has(socket.id) || socket.id === event?.socket.id) continue;
+      const row = this.table.get(socket.id);
+      if (row) {
+        await this.replayOrClose(row, socket);
+        continue;
+      }
       live.delete(socket.id);
       try {
         socket.close(ACTOR_RESTARTED_CLOSE_CODE, 'actor restarted');
@@ -303,13 +369,76 @@ export class ActorRealtime implements RealtimeBus, ConnectionRegistry, NodeConne
       }
     }
 
-    for (const [id, conn] of [...this.attached]) {
+    for (const id of [...this.attached.keys()]) {
       // The disconnecting socket is torn down by onDisconnect itself.
       if (event?.phase === 'disconnect' && id === event.socket.id) continue;
       if (live.has(id)) continue;
-      this.attached.delete(id);
-      await conn.handle.handleClose();
+      await this.teardown(id);
     }
+  }
+
+  /** Re-attach a surviving socket from its row, or close it when its principal no longer validates. */
+  private async replayOrClose(row: ActorSocketRow, socket: ActorSocketLike): Promise<void> {
+    const replayed = await this.replay(row, { earlyDrain: true });
+    if (replayed) return;
+    this.table.delete(row.socketId);
+    this.live.delete(row.socketId);
+    try {
+      const code = row.workspaceId === this.options.workspaceId ? UNAUTHORIZED_CLOSE_CODE : INVALID_PRINCIPAL_CLOSE_CODE;
+      socket.close(code, 'socket principal no longer valid');
+    } catch {
+      // already closed
+    }
+  }
+
+  /**
+   * Rebuild one connection from its row: the same validation as
+   * {@link onConnect}, then the registry calls `node.register` made, on the
+   * inner registry directly so the row is not rewritten. False when the row
+   * is not for this workspace or its principal no longer authenticates.
+   */
+  private async replay(row: ActorSocketRow, options: { earlyDrain: boolean }): Promise<boolean> {
+    const workspaceId = this.options.workspaceId;
+    if (row.workspaceId !== workspaceId) return false;
+    const workspace = await getWorkspaceExpiry(this.db, workspaceId);
+    if (!workspace || isWorkspaceExpired(workspace)) return false;
+
+    if (row.kind === 'node') {
+      if (!row.nodeId) return false;
+      const node = await getNodeById(this.db, workspaceId, row.nodeId);
+      if (!node) return false;
+      const handle = this.inner.attachNodeSocket(workspaceId, row.nodeId, this.engineSocket(row.socketId), {
+        connectionId: row.socketId,
+        earlyDrain: options.earlyDrain,
+      });
+      this.inner.restoreNodeConnectionState(row.socketId, {
+        providerName: row.providerName ?? undefined,
+        instanceId: row.instanceId ?? undefined,
+        deliveryReadyAgentIds: row.deliveryMode === null ? undefined : row.deliveryMode === 'immediate' ? null : row.deliveryReady ?? [],
+        callerAwareActions: row.callerAwareActions,
+        lastSeen: row.lastSeen,
+      });
+      this.attached.set(row.socketId, { principal: { v: 1, kind: 'node', workspace_id: workspaceId, node_id: row.nodeId }, handle });
+      return true;
+    }
+
+    if (!row.observerTokenId) return false;
+    const token = await loadActiveObserverToken(this.db, workspaceId, row.observerTokenId);
+    if (!token || !hasObserverScope(token, 'stream:read')) return false;
+    const handle = this.inner.attachWorkspaceSocket(workspaceId, this.engineSocket(row.socketId), token);
+    this.attached.set(row.socketId, {
+      principal: { v: 1, kind: 'observer', workspace_id: workspaceId, observer_token_id: row.observerTokenId },
+      handle,
+    });
+    return true;
+  }
+
+  /** Close a connection on the registry side (the teardown a disconnect runs) and drop its row. */
+  private async teardown(socketId: string): Promise<void> {
+    const conn = this.attached.get(socketId);
+    this.attached.delete(socketId);
+    this.table.delete(socketId);
+    if (conn) await conn.handle.handleClose();
   }
 
   /**
@@ -319,6 +448,8 @@ export class ActorRealtime implements RealtimeBus, ConnectionRegistry, NodeConne
    */
   async onConnect(socket: ActorSocketLike): Promise<void> {
     await this.rehydrate({ socket, phase: 'connect' });
+    // A reused socket id: the earlier connection is gone.
+    if (this.attached.has(socket.id)) await this.teardown(socket.id);
     const parsed = SocketPrincipalSchema.safeParse(socket.metadata);
     if (!parsed.success) return reject(socket, INVALID_PRINCIPAL_CLOSE_CODE, 'invalid socket principal');
     const principal = parsed.data;
@@ -332,8 +463,11 @@ export class ActorRealtime implements RealtimeBus, ConnectionRegistry, NodeConne
       const node = await getNodeById(this.db, principal.workspace_id, principal.node_id);
       if (!node) return reject(socket, UNAUTHORIZED_CLOSE_CODE, 'unknown node');
       socket.setTags(connectionTag(socket.id), 'kind:node', `node:${principal.node_id}`);
-      const handle = this.inner.attachNodeSocket(principal.workspace_id, principal.node_id, this.engineSocket(socket.id));
+      const handle = this.inner.attachNodeSocket(principal.workspace_id, principal.node_id, this.engineSocket(socket.id), {
+        connectionId: socket.id,
+      });
       this.attached.set(socket.id, { principal, handle });
+      this.table.insert({ socketId: socket.id, kind: 'node', workspaceId: principal.workspace_id, nodeId: principal.node_id });
       return;
     }
 
@@ -342,25 +476,26 @@ export class ActorRealtime implements RealtimeBus, ConnectionRegistry, NodeConne
     socket.setTags(connectionTag(socket.id), 'kind:observer');
     const handle = this.inner.attachWorkspaceSocket(principal.workspace_id, this.engineSocket(socket.id), token);
     this.attached.set(socket.id, { principal, handle });
+    this.table.insert({ socketId: socket.id, kind: 'observer', workspaceId: principal.workspace_id, observerTokenId: principal.observer_token_id });
   }
 
   /** A JSON frame from the client; the registry reads it as the text the client sent. */
   async onMessage(socket: ActorSocketLike, message: unknown): Promise<void> {
     await this.rehydrate();
     const conn = this.attached.get(socket.id);
-    // Not attached: rehydrate closed it (actor restarted) or it was rejected.
+    // Not attached: rehydrate closed it (nothing accounts for it) or it was rejected.
     if (!conn) return;
     await conn.handle.handleMessage(JSON.stringify(message));
+    // The frame may have bound a provider or negotiated readiness, and
+    // refreshed the liveness timestamp arbitration reads.
+    if (conn.principal.kind === 'node') this.syncRow(socket.id);
   }
 
   async onDisconnect(socket: ActorSocketLike): Promise<void> {
     await this.rehydrate({ socket, phase: 'disconnect' });
-    const conn = this.attached.get(socket.id);
-    if (!conn) return;
-    this.attached.delete(socket.id);
     // Teardown may write to other sockets, never to the one that closed.
     this.live.delete(socket.id);
-    await conn.handle.handleClose();
+    await this.teardown(socket.id);
   }
 
   /** The control-plane socket ids the registry currently knows. */

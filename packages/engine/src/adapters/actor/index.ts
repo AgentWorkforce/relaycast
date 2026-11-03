@@ -23,16 +23,18 @@ import { ActorCredentialTag } from './credential-tag.js';
 import { fixedCredentialTagger } from '../../auth/credentialTags.js';
 import { restrictToArCredentials } from '../../auth/credentials.js';
 import { isArWorkspaceId } from '@relaycast/types';
-import { applyActorMigrations } from './migrations.js';
-import { ActorKeyValueStore, ensureActorKvTable } from './kv.js';
+import { ensureActorSchema } from './schema.js';
+import { ActorKeyValueStore } from './kv.js';
 import { ActorEventQueue } from './event-queue.js';
 import { SignedUrlFileStorage } from './files.js';
-import { ActorEphemeralOutbox, ensureActorOutboundTable } from './ephemeral-outbox.js';
+import { ActorEphemeralOutbox } from './ephemeral-outbox.js';
 import { isSafeExternalUrl } from '../../lib/ssrf.js';
 import { assertInternalSecretStrength } from '../../engine/internalAdmin.js';
 import { ActorRealtime, type ActorSocketLike, type ActorSocketSource } from './realtime.js';
 
 export type { ActorDatabase, ActorSql, SqliteValue } from './database.js';
+export { ensureActorSchema } from './schema.js';
+export { ACTOR_SOCKETS_TABLE, ActorSocketTable, type ActorSocketRow } from './socket-table.js';
 export type { ActorHttpRequest, ActorHttpResponse } from './http.js';
 export { actorConfigFromEnv, DEFAULT_ACTOR_MAX_UPLOAD_BYTES, type ActorEngineConfig } from './config.js';
 export { ConfigError } from '../../bin/secretEnv.js';
@@ -189,9 +191,15 @@ export function createActorRuntime(options: ActorRuntimeOptions): ActorRuntime {
   let stepGroups = 0;
   let stepFailures: { index: number; error: unknown }[] = [];
 
-  applyActorMigrations(sql);
-  ensureActorKvTable(sql);
-  ensureActorOutboundTable(sql);
+  // The schema is applied inside the first actor call, never here: the
+  // constructor's statements would each commit on their own (durable-actors
+  // 0.14.6), and a failed first call could not roll them back. Once a call
+  // has found the schema current (a read-only check), the activation skips it.
+  let schemaCurrent = false;
+  const ensureSchema = (): void => {
+    if (schemaCurrent) return;
+    schemaCurrent = ensureActorSchema(sql);
+  };
   const credentialTag = new ActorCredentialTag(sql);
 
   const db = createActorEngineDb(sql, {
@@ -240,6 +248,7 @@ export function createActorRuntime(options: ActorRuntimeOptions): ActorRuntime {
   const realtime = new ActorRealtime(db, {
     workspaceId: options.workspaceId,
     sockets: options.sockets ?? NO_SOCKETS,
+    sql,
     background: schedule,
   });
   const presence = new InProcessPresence(realtime, { db, sweepIntervalMs: 0 });
@@ -332,12 +341,12 @@ export function createActorRuntime(options: ActorRuntimeOptions): ActorRuntime {
   };
 
   /**
-   * One actor call: migrations, registry reconciliation with the control
+   * One actor call: the schema, registry reconciliation with the control
    * plane, the work, then its background work and the alarm. `rehydrate`
    * runs before the work so a request sees the sockets as they are.
    */
   const call = async <T>(work: () => Promise<T>): Promise<T> => {
-    applyActorMigrations(sql);
+    ensureSchema();
     await realtime.rehydrate();
     return finish(work);
   };
@@ -360,6 +369,7 @@ export function createActorRuntime(options: ActorRuntimeOptions): ActorRuntime {
       if (request.method !== 'POST' || pathname !== '/v1/workspaces') {
         throw new Error('create serves POST /v1/workspaces only');
       }
+      ensureSchema();
       credentialTag.set(tag);
       return this.handle(request);
     },
@@ -412,17 +422,17 @@ export function createActorRuntime(options: ActorRuntimeOptions): ActorRuntime {
     // The lifecycle hooks reconcile with the control plane themselves: the
     // event's socket is the one connection rehydrate must not act on.
     onConnect(socket) {
-      applyActorMigrations(sql);
+      ensureSchema();
       return finish(() => realtime.onConnect(socket));
     },
 
     onMessage(socket, message) {
-      applyActorMigrations(sql);
+      ensureSchema();
       return finish(() => realtime.onMessage(socket, message));
     },
 
     onDisconnect(socket) {
-      applyActorMigrations(sql);
+      ensureSchema();
       return finish(() => realtime.onDisconnect(socket));
     },
   };

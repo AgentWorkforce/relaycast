@@ -5,18 +5,18 @@ const TABLE = '_actor_outbound';
 const MAX_AGE_MS = 10 * 60_000;
 const DRAIN_BATCH = 100;
 
-export function ensureActorOutboundTable(sql: ActorSql): void {
-  sql.exec(
-    `CREATE TABLE IF NOT EXISTS ${TABLE} (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      created_at INTEGER NOT NULL,
-      method TEXT NOT NULL,
-      url TEXT NOT NULL,
-      headers TEXT NOT NULL,
-      body TEXT
-    )`,
-  );
-}
+/** The outbound queue table, created with the actor schema. */
+export const ACTOR_OUTBOUND_TABLE = {
+  name: TABLE,
+  ddl: `CREATE TABLE IF NOT EXISTS ${TABLE} (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    created_at INTEGER NOT NULL,
+    method TEXT NOT NULL,
+    url TEXT NOT NULL,
+    headers TEXT NOT NULL,
+    body TEXT
+  )`,
+} as const;
 
 /**
  * Best-effort ephemeral http_push events queued during a request. Rows are

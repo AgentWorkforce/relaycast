@@ -10,7 +10,7 @@ import type {
 } from '../../ports/realtime.js';
 import type { PresenceTracker } from '../../ports/presence.js';
 import type { ObserverToken } from '../../ports/auth.js';
-import { and, eq, gt, inArray, isNull, or, sql } from 'drizzle-orm';
+import { and, eq, exists, gt, inArray, isNull, ne, or, sql } from 'drizzle-orm';
 import { exclusiveClaimWrite, retryAfterAtMatches } from '../../engine/invocationClaim.js';
 import type { EngineDb } from '../../ports/database.js';
 import {
@@ -20,7 +20,8 @@ import {
   agents,
   observerTokens,
 } from '../../db/schema.js';
-import { handleNodeControlMessage, handleProviderDisconnect, markNodeOffline } from '../../engine/node.js';
+import { handleNodeControlMessage, handleProviderDisconnect, IMPLICIT_DIRECT_NODE_ID_PREFIX, markNodeOffline } from '../../engine/node.js';
+import { agentLivenessRefresh, RELEASED_AGENT_STATUS } from '../../engine/agent.js';
 import { serializeNodeOp } from '../../engine/nodeLock.js';
 import { DEFAULT_PROVIDER_NAME } from '../../engine/nodeProvider.js';
 import { providerAttachDecision } from '../../engine/placement.js';
@@ -68,6 +69,15 @@ interface NodeConn {
   lastSeen: number;
 }
 
+/** See {@link InProcessRealtime.nodeConnectionState}. */
+export interface NodeConnectionState {
+  readonly providerName?: string;
+  readonly instanceId?: string;
+  readonly deliveryReadyAgentIds: readonly string[] | null | undefined;
+  readonly callerAwareActions: readonly string[];
+  readonly lastSeen: number;
+}
+
 interface WorkspaceConn {
   socket: EngineSocket;
   observerToken?: ObserverToken;
@@ -82,6 +92,16 @@ interface WorkspaceConn {
  * events without forcing a DB read on every fanned-out event.
  */
 const OBSERVER_TOKEN_REVALIDATE_MS = 5_000;
+
+/** The `type` of a raw control frame, or undefined when it is not a JSON object. */
+function frameType(raw: string): string | undefined {
+  try {
+    const parsed: unknown = JSON.parse(raw);
+    return parsed && typeof parsed === 'object' ? (parsed as { type?: unknown }).type as string | undefined : undefined;
+  } catch {
+    return undefined;
+  }
+}
 
 interface QueuedNodeMessage {
   key: string;
@@ -632,6 +652,50 @@ export class InProcessRealtime implements RealtimeBus, ConnectionRegistry, NodeC
     return this.nodeConnections.get(connectionId)?.providerName;
   }
 
+  /** The connection currently bound to a node's provider. */
+  providerConnectionId(workspaceId: string, nodeId: string, providerName: string): string | undefined {
+    return this.providerConnId(this.nodeKey(workspaceId, nodeId), providerName);
+  }
+
+  /**
+   * The registry's state for one node connection, for a host that persists
+   * it across its own restarts (the actor adapter). `deliveryReadyAgentIds`
+   * is undefined before `node.register` negotiated a mode, null for
+   * immediate readiness, and the ready identities when agent-scoped.
+   */
+  nodeConnectionState(connectionId: string): NodeConnectionState | undefined {
+    const conn = this.nodeConnections.get(connectionId);
+    if (!conn) return undefined;
+    return {
+      providerName: conn.providerName,
+      instanceId: conn.instanceId,
+      deliveryReadyAgentIds: conn.deliveryReadyAgentIds instanceof Set ? [...conn.deliveryReadyAgentIds] : conn.deliveryReadyAgentIds,
+      callerAwareActions: conn.callerAwareActions ? [...conn.callerAwareActions] : [],
+      lastSeen: conn.lastSeen,
+    };
+  }
+
+  /**
+   * Re-apply a state {@link nodeConnectionState} returned to an attached
+   * connection: the provider binding and readiness `node.register` made, and
+   * the liveness timestamp as it was (a rebuild is not activity).
+   */
+  restoreNodeConnectionState(connectionId: string, state: NodeConnectionState): void {
+    const conn = this.nodeConnections.get(connectionId);
+    if (!conn) return;
+    const { workspaceId, nodeId } = conn;
+    if (state.providerName) {
+      this.attachProvider(workspaceId, nodeId, state.providerName, state.instanceId ?? '', connectionId, state.callerAwareActions);
+      if (state.deliveryReadyAgentIds !== undefined) {
+        this.setProviderDeliveryReadiness(workspaceId, nodeId, state.providerName, connectionId, state.deliveryReadyAgentIds === null ? 'immediate' : 'agent_scoped');
+      }
+      if (state.deliveryReadyAgentIds) {
+        this.markProviderAgentsDeliveryReady(workspaceId, nodeId, state.providerName, connectionId, state.deliveryReadyAgentIds);
+      }
+    }
+    conn.lastSeen = state.lastSeen;
+  }
+
   providerAttachConflict(
     workspaceId: string,
     nodeId: string,
@@ -862,9 +926,23 @@ export class InProcessRealtime implements RealtimeBus, ConnectionRegistry, NodeC
     };
   }
 
-  /** Register a live fleet node control socket; returns handlers the transport drives. */
-  attachNodeSocket(workspaceId: string, nodeId: string, socket: EngineSocket): SocketHandle {
-    const connectionId = `nconn_${++this.connectionSeq}`;
+  /**
+   * Register a live fleet node control socket; returns handlers the transport drives.
+   *
+   * `options.connectionId` names the connection instead of the next
+   * `nconn_N`: a host whose sockets outlive its memory (a durable actor)
+   * rebuilds the registry under the ids the provider bindings were made with
+   * (see {@link restoreNodeConnectionState}). `options.earlyDrain: false`
+   * skips the best-effort drain after attach (for a connection attached only
+   * to be torn down).
+   */
+  attachNodeSocket(
+    workspaceId: string,
+    nodeId: string,
+    socket: EngineSocket,
+    options: { connectionId?: string; earlyDrain?: boolean } = {},
+  ): SocketHandle {
+    const connectionId = options.connectionId ?? `nconn_${++this.connectionSeq}`;
     const nodeKey = this.nodeKey(workspaceId, nodeId);
     this.nodeConnections.set(connectionId, {
       socket,
@@ -883,7 +961,7 @@ export class InProcessRealtime implements RealtimeBus, ConnectionRegistry, NodeC
       handleMessage: async (raw) => {
         const conn = this.nodeConnections.get(connectionId);
         if (conn) conn.lastSeen = Date.now();
-        return handleNodeControlMessage({
+        await handleNodeControlMessage({
           db: this.db,
           registry: this,
           completionDeps: this.nodeCompletionDeps,
@@ -895,14 +973,53 @@ export class InProcessRealtime implements RealtimeBus, ConnectionRegistry, NodeC
           admitRegistration: createRegistrationAdmission({ db: this.db, admission: this.admission, workspace: workspaceId }),
           raw,
         });
+        // An accepted `node.register` on an implicit direct node certifies its
+        // bound agent's presence the way the node's heartbeat does: the
+        // teardown of the previous socket marked the agent offline with the
+        // node, and the reconnect would otherwise leave it offline (and its
+        // actions `handler_unavailable`) until the first heartbeat, ~30 s later.
+        const providerName = this.nodeConnections.get(connectionId)?.providerName;
+        if (providerName && nodeId.startsWith(IMPLICIT_DIRECT_NODE_ID_PREFIX) && frameType(raw) === 'node.register') {
+          await this.refreshDirectAgentLiveness(workspaceId, nodeId, providerName);
+        }
       },
       handleClose: async () => this.onNodeConnectionClose(connectionId),
     };
     // Best-effort early flush (covers non-spawn frames that need no capacity);
     // the authoritative drain fires after node.register and after heartbeat
     // liveness/capacity transitions once the node is dispatchable. See drainNode.
-    this.background(this.drainNode(workspaceId, nodeId));
+    if (options.earlyDrain !== false) this.background(this.drainNode(workspaceId, nodeId));
     return handle;
+  }
+
+  /**
+   * Renew the durable liveness of the one agent bound to an implicit direct
+   * node, as the node's heartbeat does (same conditional write: the active
+   * binding to this authenticated node, the bound provider, never a released
+   * identity). The presence port is left alone: a direct agent's presence
+   * rides its node's liveness, which the register just established.
+   */
+  private async refreshDirectAgentLiveness(workspaceId: string, nodeId: string, providerName: string): Promise<void> {
+    await serializeNodeOp(workspaceId, nodeId, async () => {
+      await this.db
+        .update(agents)
+        .set(agentLivenessRefresh())
+        .where(and(
+          eq(agents.id, nodeId.slice(IMPLICIT_DIRECT_NODE_ID_PREFIX.length)),
+          eq(agents.workspaceId, workspaceId),
+          eq(agents.locationNodeId, nodeId),
+          ne(agents.status, RELEASED_AGENT_STATUS),
+          eq(agents.providerName, providerName),
+          exists(this.db.select({ id: agentNodeBindings.id }).from(agentNodeBindings).where(and(
+            eq(agentNodeBindings.workspaceId, workspaceId),
+            eq(agentNodeBindings.agentId, agents.id),
+            eq(agentNodeBindings.nodeId, nodeId),
+            eq(agentNodeBindings.status, 'active'),
+          ))),
+        ));
+    }).catch((err) => {
+      console.error('[node.register] direct agent liveness refresh failed', { workspace_id: workspaceId, node_id: nodeId }, err);
+    });
   }
 
   private async onNodeConnectionClose(connectionId: string): Promise<void> {

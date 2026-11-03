@@ -180,7 +180,7 @@ describe('workspace actor realtime', () => {
     const { alice, key } = await workspaceWithAgents(actor);
     const node = await nodeGrant(actor, alice);
 
-    // (a) The socket survived an actor restart: the registry cannot know it.
+    // (a) A socket neither the memory nor the socket table accounts for.
     const orphan = actor.sockets.open(node.principal);
     expect((await call(actor, 'GET', '/v1/agents', undefined, key)).status).toBe(200);
     expect(orphan.closed).toEqual({ code: ACTOR_RESTARTED_CLOSE_CODE, reason: 'actor restarted' });
@@ -207,6 +207,154 @@ describe('workspace actor realtime', () => {
     await actor.disconnect(next);
     expect(actor.runtime.deps.nodeConnections.isNodeConnected(WORKSPACE_ID, node.node_id)).toBe(false);
     expect(rows(actor, 'SELECT status FROM nodes WHERE id = ?', node.node_id)).toEqual([{ status: 'offline' }]);
+    expect(actor.sockets.violations).toEqual([]);
+  });
+
+  it('keeps a direct agent online and invokable after its client reconnects into a warm actor', async () => {
+    const actor = new FakeWorkspaceActor(WORKSPACE_ID);
+    const { key, alice, bob } = await workspaceWithAgents(actor);
+    const node = await nodeGrant(actor, alice);
+    const agentStatus = async () => {
+      const list = await call<{ name: string; status: string }[]>(actor, 'GET', '/v1/agents', undefined, key);
+      expect(list.status).toBe(200);
+      return list.json.data.find((agent) => agent.name === 'alice')?.status;
+    };
+
+    // First connection: the SDK agent registers its direct node and publishes an action.
+    const first = await actor.connect(node.principal);
+    await actor.message(first, nodeRegister(node));
+    expect(first.ofType('reply').find((frame) => frame.id === 'r1')).toMatchObject({ ok: true });
+    expect((await call(actor, 'POST', '/v1/actions', { name: 'crm.lookup', description: 'Look someone up', handler_agent: 'alice' }, key)).status).toBe(201);
+    expect(await agentStatus()).toBe('active');
+    await actor.message(first, { v: 1, id: 'h1', type: 'node.heartbeat', active_agents: 1, handlers_live: false });
+
+    // The client reconnects: the control plane reports the old socket gone, then a new one.
+    // The old socket's teardown took the node and its agent offline.
+    await actor.disconnect(first);
+    expect(await agentStatus()).toBe('offline');
+    const second = await actor.connect(node.principal);
+    expect(second.rejected).toBeNull();
+    await actor.message(second, { ...nodeRegister(node), id: 'r2' });
+    expect(second.ofType('reply').find((frame) => frame.id === 'r2')).toMatchObject({ ok: true });
+
+    // node.register brought the node back, and the agent bound to it, without waiting for a heartbeat.
+    expect(actor.runtime.deps.nodeConnections.isNodeConnected(WORKSPACE_ID, node.node_id)).toBe(true);
+    expect(actor.runtime.deps.nodeConnections.isProviderConnected(WORKSPACE_ID, node.node_id, 'default')).toBe(true);
+    expect(rows(actor, 'SELECT status FROM nodes WHERE id = ?', node.node_id)).toEqual([{ status: 'online' }]);
+    expect(await agentStatus()).toBe('active');
+
+    const invoked = await call<{ status: string; invocation_id: string }>(actor, 'POST', '/v1/actions/crm.lookup/invoke', { input: { name: 'ada' } }, bob);
+    expect(invoked.status, JSON.stringify(invoked.json)).toBe(201);
+    expect(invoked.json.data.status).toBe('dispatched');
+    expect(second.ofType('action.invoke')).toEqual([expect.objectContaining({ action: 'crm.lookup', invocation_id: invoked.json.data.invocation_id })]);
+    expect(first.ofType('action.invoke')).toEqual([]);
+    expect(actor.sockets.violations).toEqual([]);
+  });
+
+  it('rebuilds the registry from the socket table when the actor restarts, closing nothing', async () => {
+    const actor = new FakeWorkspaceActor(WORKSPACE_ID);
+    const { key, alice, bob } = await workspaceWithAgents(actor);
+    const node = await nodeGrant(actor, alice);
+    const observer = await observerGrant(actor, key);
+    const statusEvents = () => rows(actor, "SELECT type FROM workspace_events WHERE type LIKE 'node.status.%' ORDER BY seq").map((row) => row.type);
+
+    const socket = await actor.connect(node.principal);
+    await actor.message(socket, nodeRegister(node));
+    const tap = await actor.connect(observer.principal);
+    expect(statusEvents()).toEqual(['node.status.online']);
+    expect(rows(actor, 'SELECT kind, node_id, provider_name, delivery_mode, delivery_ready, caller_aware_actions FROM _actor_sockets WHERE socket_id = ?', socket.id))
+      .toEqual([{ kind: 'node', node_id: node.node_id, provider_name: 'default', delivery_mode: 'immediate', delivery_ready: null, caller_aware_actions: '[]' }]);
+    expect(rows(actor, 'SELECT kind, observer_token_id FROM _actor_sockets WHERE socket_id = ?', tap.id))
+      .toEqual([{ kind: 'observer', observer_token_id: observer.id }]);
+
+    // The actor stopped idle; the control plane still holds both sockets.
+    const woken = actor.restart();
+    expect((await call(woken, 'POST', '/v1/dm', { to: 'alice', text: 'after the sleep' }, bob)).status).toBe(201);
+    expect(socket.closed).toBeNull();
+    expect(tap.closed).toBeNull();
+    const delivered = socket.ofType('deliver');
+    expect(delivered).toEqual([expect.objectContaining({ agent: 'alice', payload: expect.objectContaining({ type: 'dm.received' }) })]);
+    const registry = woken.runtime.deps.nodeConnections;
+    expect(registry.isNodeConnected(WORKSPACE_ID, node.node_id)).toBe(true);
+    expect(registry.isProviderConnected(WORKSPACE_ID, node.node_id, 'default')).toBe(true);
+    expect(registry.providerDeliveryReadinessMode?.(WORKSPACE_ID, node.node_id, 'default', socket.id)).toBe('immediate');
+    // A memory rebuild, not a reconnect: no presence flap.
+    expect(statusEvents()).toEqual(['node.status.online']);
+    expect(rows(actor, 'SELECT status FROM nodes WHERE id = ?', node.node_id)).toEqual([{ status: 'online' }]);
+
+    // The observer keeps its stream, and the rebuilt node connection handles frames.
+    expect((await call(woken, 'POST', '/v1/channels/general/messages', { text: 'seen after the sleep' }, alice)).status).toBe(201);
+    expect(tap.ofType('message.created')).toHaveLength(1);
+    await woken.message(socket, { v: 1, type: 'delivery.ack', agent: 'alice', up_to_seq: delivered[0].seq });
+    expect(rows(actor, 'SELECT status FROM deliveries WHERE id = ?', delivered[0].delivery_id as string)).toEqual([{ status: 'acked' }]);
+
+    // A disconnect after the rebuild tears down once.
+    await woken.disconnect(socket);
+    expect(registry.isNodeConnected(WORKSPACE_ID, node.node_id)).toBe(false);
+    expect(statusEvents()).toEqual(['node.status.online', 'node.status.offline']);
+    expect(rows(actor, 'SELECT socket_id FROM _actor_sockets')).toEqual([{ socket_id: tap.id }]);
+    expect(actor.sockets.violations).toEqual([]);
+  });
+
+  it('restores agent-scoped delivery readiness and the liveness timestamp across a restart', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    const actor = new FakeWorkspaceActor(WORKSPACE_ID);
+    const { key, alice, aliceId } = await workspaceWithAgents(actor);
+    const node = await nodeGrant(actor, alice);
+    const socket = await actor.connect(node.principal);
+    await actor.message(socket, nodeRegister(node));
+    const seenAt = Date.now();
+
+    // What a cursor-handshake register and the agent's `agent.register` leave in the registry.
+    const registry = actor.runtime.deps.nodeConnections;
+    await actor.sql.atomic(async () => {
+      registry.setProviderDeliveryReadiness?.(WORKSPACE_ID, node.node_id, 'default', socket.id, 'agent_scoped');
+      registry.markProviderAgentsDeliveryReady?.(WORKSPACE_ID, node.node_id, 'default', undefined, [aliceId]);
+    });
+    expect(rows(actor, 'SELECT delivery_ready, last_seen FROM _actor_sockets WHERE socket_id = ?', socket.id))
+      .toEqual([{ delivery_ready: JSON.stringify([aliceId]), last_seen: seenAt }]);
+
+    vi.setSystemTime(seenAt + 60_000);
+    const woken = actor.restart();
+    expect((await call(woken, 'GET', '/v1/agents', undefined, key)).status).toBe(200);
+    const rebuilt = woken.runtime.deps.nodeConnections;
+    expect(rebuilt.providerDeliveryReadinessMode?.(WORKSPACE_ID, node.node_id, 'default', socket.id)).toBe('agent_scoped');
+    expect(rebuilt.isProviderAgentDeliveryReady?.(WORKSPACE_ID, node.node_id, 'default', aliceId)).toBe(true);
+    expect(rebuilt.isProviderAgentDeliveryReady?.(WORKSPACE_ID, node.node_id, 'default', 'agent_other')).toBe(false);
+    // The restored timestamp is the one arbitration reads: a different instance registering now is a stale-incumbent takeover, not a duplicate.
+    expect(rebuilt.providerAttachConflict?.(WORKSPACE_ID, node.node_id, 'default', 'other-instance', 'another-conn')).toBeNull();
+    expect(socket.closed).toBeNull();
+  });
+
+  it('after a restart, still closes a socket without a row and tears down a row whose socket vanished, once', async () => {
+    const actor = new FakeWorkspaceActor(WORKSPACE_ID);
+    const { key, alice } = await workspaceWithAgents(actor);
+    const node = await nodeGrant(actor, alice);
+    const observer = await observerGrant(actor, key);
+    const statusEvents = () => rows(actor, "SELECT type FROM workspace_events WHERE type LIKE 'node.status.%' ORDER BY seq").map((row) => row.type);
+
+    const socket = await actor.connect(node.principal);
+    await actor.message(socket, nodeRegister(node));
+    const tap = await actor.connect(observer.principal);
+    // The control plane lost the node socket while the actor slept (no onDisconnect) ...
+    actor.sockets.drop(socket);
+    // ... holds one the actor never recorded ...
+    const orphan = actor.sockets.open(node.principal);
+    // ... and the observer's token was revoked meanwhile.
+    actor.sql.exec("UPDATE observer_tokens SET status = 'revoked' WHERE id = ?", observer.id);
+
+    const woken = actor.restart();
+    expect((await call(woken, 'GET', '/v1/agents', undefined, key)).status).toBe(200);
+    expect(orphan.closed).toEqual({ code: ACTOR_RESTARTED_CLOSE_CODE, reason: 'actor restarted' });
+    expect(tap.closed).toEqual({ code: UNAUTHORIZED_CLOSE_CODE, reason: 'socket principal no longer valid' });
+    expect(woken.runtime.deps.nodeConnections.isNodeConnected(WORKSPACE_ID, node.node_id)).toBe(false);
+    expect(rows(actor, 'SELECT status FROM nodes WHERE id = ?', node.node_id)).toEqual([{ status: 'offline' }]);
+    expect(statusEvents()).toEqual(['node.status.online', 'node.status.offline']);
+    expect(rows(actor, 'SELECT socket_id FROM _actor_sockets')).toEqual([]);
+
+    // Nothing is torn down twice.
+    expect((await call(woken, 'GET', '/v1/agents', undefined, key)).status).toBe(200);
+    expect(statusEvents()).toEqual(['node.status.online', 'node.status.offline']);
     expect(actor.sockets.violations).toEqual([]);
   });
 

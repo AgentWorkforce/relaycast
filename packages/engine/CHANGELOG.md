@@ -15,8 +15,13 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 - `actorConfigFromEnv(env)` reads the actor's engine config from the self-host variables and throws `ConfigError` on a bad value; `createActorRuntime` refuses a weak `internalSecret`.
 - `InProcessRealtime.setBackgroundScheduler` hands the adapter's fire-and-forget work (the early drain after `attachNodeSocket`) to the host; unset, it runs detached as before.
 - `loadActiveObserverToken(db, workspaceId, tokenId)` is exported from the node adapter.
+- `@relaycast/engine/adapters/actor`: the registry state of every attached socket is kept in the actor's `_actor_sockets` table (`ACTOR_SOCKETS_TABLE`, `ActorSocketTable`) and replayed on the next activation, so sockets survive the actor's sleep: a surviving node socket is re-attached under the same connection id with its provider binding, delivery readiness, caller-aware actions and liveness timestamp, an observer socket with its token re-read, and nothing is sent or marked online/offline. A socket the control plane dropped meanwhile runs the normal teardown; `4012 actor restarted` is reserved for a socket neither the memory nor the table accounts for.
+- `InProcessRealtime.attachNodeSocket` takes `{ connectionId, earlyDrain }`; `nodeConnectionState` / `restoreNodeConnectionState` / `providerConnectionId` expose a node connection's binding for hosts that persist it.
+- `ensureActorSchema(sql)` applies the engine migrations and the adapter's tables inside an actor call, read-only when the schema is current.
 
 ### Changed
+
+- `createActorRuntime` runs no SQL in the actor's constructor: the schema is applied inside the first call, so it commits once with that call (durable-actors 0.14.6 persists each statement outside `db.transaction` on its own) and a failed `create` rolls it back whole. A wake with a current schema reads `sqlite_master` and `_engine_migrations` once and runs no DDL.
 
 - `/internal/workspaces/:id` and `/internal/workspaces/:id/api-key` answer 404 for another workspace's id on a single-workspace host (`config.workspaceId`), where `POST /internal/workspaces` is also a 404.
 
@@ -25,6 +30,7 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Fixed
 
+- A direct agent's `node.register` after a reconnect brings the agent back online with its node, on both the actor and the Node registries. The previous socket's teardown had marked the agent offline, and only the next `node.heartbeat` (about 30 s later) restored it; until then `GET /v1/agents` listed it `offline` and invoking an action it handles answered `503 handler_unavailable`. On a durable actor that sleeps between calls the heartbeat never landed, so the agent stayed offline.
 - The inbox mention lookup prefilters bodies with `instr(body, '@name')` instead of `LIKE`, so it stays within D1's 50-byte LIKE pattern cap for any agent name. Results are unchanged: `parseMessageMentions` is case-sensitive and needs the literal `@name`.
 - `reconcileInventory` deactivates missing agents' node bindings and offlines the agents with one statement pair per 90-id chunk, all in one atomic batch. A node that drops more agents than one D1 statement can bind no longer fails the sync with `too many SQL variables`.
 - `toErrorDetails` appends each `cause` message to `error_message`, so a Drizzle `Failed query: ...` log line carries the D1 reason (constraint, bind limit, overload).
