@@ -1,6 +1,6 @@
 import { request } from 'node:http';
 import { afterEach, describe, expect, it } from 'vitest';
-import type { ActorHttpRequest } from '@relaycast/engine/gateway';
+import type { ActorHttpRequest, ActorHttpResponse } from '@relaycast/engine/gateway';
 import { jsonResponse, type FakeWorkspace } from './fakeControlPlane.js';
 import { WORKSPACE_ID, foreignCredential, readJson, startHarness, type Harness } from './harness.js';
 
@@ -142,6 +142,55 @@ describe('routing', () => {
     } as RequestInit);
     expect(streamed.status).toBe(413);
     expect((await readJson(streamed)).error).toMatchObject({ code: 'payload_too_large' });
+    expect(harness.controlPlane.invocations).toHaveLength(0);
+  });
+
+  it('routes a keyed create (Idempotency-Key) to one actor derived from the key, so a retry gets the same workspace', async () => {
+    // Each actor keeps its own idempotency record, as the engine does.
+    const created = new Map<string, ActorHttpResponse>();
+    const keyedWorkspace = (id: string): FakeWorkspace => ({
+      create: (request) => {
+        const key = Object.fromEntries(request.headers)['idempotency-key'];
+        const existing = created.get(id);
+        if (existing && key) return existing;
+        const response = jsonResponse(201, { ok: true, data: { workspace_id: id, api_key: `ar_ws_${id}_key`, key } });
+        created.set(id, response);
+        return response;
+      },
+      handle: () => jsonResponse(404, { ok: false, error: { code: 'not_found', message: 'no' } }),
+    });
+    harness = await startHarness({ workspace: keyedWorkspace, env: { RELAYCAST_WORKSPACE_BOOTSTRAP_SECRET: 'bootstrap-secret-0123456789abcdef' } });
+    const create = (key?: string) => fetch(`${harness!.baseUrl}/v1/workspaces`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', ...(key ? { 'idempotency-key': key } : {}) },
+      body: JSON.stringify({ name: 'team' }),
+    });
+    const key = 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa';
+    const first = await readJson(await create(key));
+    const retry = await readJson(await create(key));
+    expect(first.data).toEqual(retry.data);
+    expect((first.data as { workspace_id: string }).workspace_id).toMatch(/^[1-9][0-9]{0,18}$/);
+    const actors = harness.controlPlane.invocations.map((call) => call.actorId);
+    expect(actors).toHaveLength(2);
+    expect(actors[0]).toBe(actors[1]);
+    expect((harness.controlPlane.invocations[0].args[0] as ActorHttpRequest).headers).toContainEqual(['idempotency-key', key]);
+    // Another key is another actor; no key is a fresh snowflake every time.
+    const other = await readJson(await create('bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb'));
+    expect((other.data as { workspace_id: string }).workspace_id).not.toBe((first.data as { workspace_id: string }).workspace_id);
+    const plainA = await readJson(await create());
+    const plainB = await readJson(await create());
+    expect((plainA.data as { workspace_id: string }).workspace_id).not.toBe((plainB.data as { workspace_id: string }).workspace_id);
+  });
+
+  it('fails a keyed create closed when the deployment has no bootstrap secret, as the engine does', async () => {
+    harness = await startHarness({ workspace: echoWorkspace });
+    const response = await fetch(`${harness.baseUrl}/v1/workspaces`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', 'idempotency-key': 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa' },
+      body: JSON.stringify({ name: 'team' }),
+    });
+    expect(response.status).toBe(503);
+    expect((await readJson(response)).error).toMatchObject({ code: 'workspace_create_idempotency_unavailable' });
     expect(harness.controlPlane.invocations).toHaveLength(0);
   });
 

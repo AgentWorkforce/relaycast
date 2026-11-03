@@ -40,6 +40,12 @@ export interface GatewayConfig {
   credentialKeyring: CredentialKeyring;
   /** Enables `/internal/*`; the actors are configured with the same value. */
   internalSecret: string | undefined;
+  /**
+   * Derives the actor id of a keyed create (`Idempotency-Key` on
+   * `POST /v1/workspaces` or `POST /internal/workspaces`); the actors hold the
+   * same value. Unset: a keyed create fails closed (503), as on the engine.
+   */
+  workspaceBootstrapSecret: string | undefined;
   publicWorkspaceCreate: boolean;
   fileStore: FileStoreKind;
   fileDir: string;
@@ -57,10 +63,13 @@ export interface GatewayConfig {
  * `NAME`, or the contents of the file named by `NAME_FILE`; empty →
  * undefined. A directly set (non-empty) variable wins over its `_FILE`
  * variant. An unreadable `_FILE` is a configuration refusal, never a silent
- * fallback. Mirrors `secretFromEnv` in docker/entrypoint-core.mjs.
+ * fallback. Mirrors `secretFromEnv` in docker/entrypoint-core.mjs. With
+ * `exact` (a secret whose bytes feed a derivation) a direct value is used
+ * verbatim and a file loses only one trailing newline, as the engine does.
  */
-export function secretFromEnv(env: Env, name: string, readFile: (path: string) => string = (path) => readFileSync(path, 'utf8')): string | undefined {
-  const direct = env[name]?.trim();
+export function secretFromEnv(env: Env, name: string, readFile: (path: string) => string = (path) => readFileSync(path, 'utf8'), { exact = false }: { exact?: boolean } = {}): string | undefined {
+  const rawDirect = env[name];
+  const direct = exact ? rawDirect : rawDirect?.trim();
   if (direct) return direct;
   const file = env[`${name}_FILE`]?.trim();
   if (!file) return undefined;
@@ -71,7 +80,7 @@ export function secretFromEnv(env: Env, name: string, readFile: (path: string) =
     const code = (error as { code?: string } | null)?.code ?? 'read error';
     throw new ConfigError('unreadable_secret_file', `${name}_FILE points at an unreadable file (${code}).`);
   }
-  const cleaned = value.trim();
+  const cleaned = exact ? value.replace(/\r?\n$/, '') : value.trim();
   return cleaned ? cleaned : undefined;
 }
 
@@ -171,6 +180,8 @@ export function loadConfig(env: Env = process.env, readFile?: (path: string) => 
     throw new ConfigError('weak_internal_secret', `RELAYCAST_INTERNAL_SECRET must be at least ${MIN_INTERNAL_SECRET_LENGTH} characters (openssl rand -hex 32).`);
   }
 
+  const workspaceBootstrapSecret = secretFromEnv(env, 'RELAYCAST_WORKSPACE_BOOTSTRAP_SECRET', readFile, { exact: true });
+
   // DURABLE_ACTORS_API_KEY is the SDK's alias for DURABLE_ACTORS_SECRET.
   const controlPlaneSecret = secretFromEnv(env, 'DURABLE_ACTORS_SECRET', readFile) ?? secretFromEnv(env, 'DURABLE_ACTORS_API_KEY', readFile);
 
@@ -183,6 +194,7 @@ export function loadConfig(env: Env = process.env, readFile?: (path: string) => 
     fileSigningSecret,
     credentialKeyring,
     internalSecret,
+    workspaceBootstrapSecret,
     publicWorkspaceCreate: settings.RELAYCAST_PUBLIC_WORKSPACE_CREATE === 'true',
     fileStore: settings.RELAYCAST_FILE_STORE,
     fileDir: settings.RELAYCAST_FILE_DIR,

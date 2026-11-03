@@ -19,6 +19,7 @@ makes the actor fail at construction instead of serving with defaults.
 |---|---|---|
 | `RELAYCAST_PUBLIC_URL` | required | Public http(s) origin clients reach the gateway on; signed file URLs point at its `/_relayfiles`. Credentials, a path other than `/`, a query or a fragment are rejected, and the value is normalized to its origin (a trailing slash is dropped) |
 | `RELAYCAST_FILE_SIGNING_SECRET` | required | HMAC secret shared with the gateway, which serves `/_relayfiles`; at least 32 characters |
+| `RELAYCAST_WORKSPACE_BOOTSTRAP_SECRET` | unset | Enables anonymous keyed workspace creates (`Idempotency-Key`), as on the self-host server; verbatim, and the gateway must hold the same value |
 | `RELAYCAST_INTERNAL_SECRET` | unset | Enables `/internal/*`; trimmed, then at least 32 characters; the gateway (which also trims it) must hold the same value |
 | `RELAYCAST_MAX_UPLOAD_BYTES` | `67108864` | Largest upload the engine signs a URL for (positive integer) |
 | `RELAYCAST_MESSAGE_TTL_DAYS` | unset | Positive: prune messages after that many days; unset, `0` or negative: keep forever |

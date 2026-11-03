@@ -6,7 +6,7 @@
  */
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import { performance } from 'node:perf_hooks';
-import { ACTOR_FILE_ROUTE, generateWorkspaceId, parseArCredential, type ActorHttpRequest, type ActorHttpResponse } from '@relaycast/engine/gateway';
+import { ACTOR_FILE_ROUTE, parseArCredential, type ActorHttpRequest, type ActorHttpResponse } from '@relaycast/engine/gateway';
 import { ListDeliveriesQuerySchema } from '@relaycast/types';
 import { ActorCallError } from './actors.js';
 import type { GatewayContext } from './context.js';
@@ -27,6 +27,7 @@ import {
 } from './http.js';
 import { handleInternal } from './internal.js';
 import { errorText } from './log.js';
+import { chooseWorkspaceId } from './workspaceId.js';
 
 export const SERVICE_NAME = 'relaycast-actors-gateway';
 /** How long a readiness answer from the control plane is reused. */
@@ -141,8 +142,10 @@ export function createRequestHandler(ctx: GatewayContext, options: RequestHandle
       if (!ctx.config.publicWorkspaceCreate) return sendError(res, 404, 'not_found', 'Route not found');
       // Credentials carry a tag only this gateway's keyring signs, so a
       // credential naming a made-up workspace is refused here and never
-      // creates an actor.
-      const workspaceId = generateWorkspaceId();
+      // creates an actor. A keyed create lands on an id derived from the key.
+      const chosen = await chooseWorkspaceId(req, ctx.config.workspaceBootstrapSecret);
+      if ('error' in chosen) return sendError(res, chosen.error.status, chosen.error.code, chosen.error.message);
+      const workspaceId = chosen.workspaceId;
       setWorkspace(workspaceId);
       const tag = await ctx.credentialTags.tag(workspaceId);
       const body = await readBody(req, ctx.config.maxUploadBytes);

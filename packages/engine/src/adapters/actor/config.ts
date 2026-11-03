@@ -32,6 +32,12 @@ const ActorEnvSchema = z.object({
     z.string().trim().min(MIN_INTERNAL_SECRET_LENGTH, `must be at least ${MIN_INTERNAL_SECRET_LENGTH} characters`).optional(),
   ),
   RELAYCAST_ENV: z.preprocess(unsetIfBlank, z.string().trim().min(1).optional()),
+  /**
+   * Lets an anonymous `POST /v1/workspaces` with an `Idempotency-Key` be
+   * retried (the gateway derives the actor id from the same secret and key).
+   * Exact bytes, as `bin/serve.ts` reads it: they feed a derivation.
+   */
+  RELAYCAST_WORKSPACE_BOOTSTRAP_SECRET: z.preprocess(unsetIfBlank, z.string().optional()),
 });
 
 /**
@@ -56,6 +62,7 @@ export function actorConfigFromEnv(env: Record<string, string | undefined>): Act
     maxUploadBytes: values.RELAYCAST_MAX_UPLOAD_BYTES ?? DEFAULT_ACTOR_MAX_UPLOAD_BYTES,
     retention: { messageTtlDays: ttlDays !== undefined && ttlDays > 0 ? ttlDays : null },
     ...(values.RELAYCAST_INTERNAL_SECRET !== undefined ? { internalSecret: values.RELAYCAST_INTERNAL_SECRET } : {}),
+    ...(values.RELAYCAST_WORKSPACE_BOOTSTRAP_SECRET !== undefined ? { workspaceBootstrapSecret: values.RELAYCAST_WORKSPACE_BOOTSTRAP_SECRET } : {}),
     ...(values.RELAYCAST_RATE_LIMIT_PER_MINUTE !== undefined ? { rateLimitPerMinute: values.RELAYCAST_RATE_LIMIT_PER_MINUTE } : {}),
     ...(Object.keys(mailbox).length > 0 ? { mailbox } : {}),
   };

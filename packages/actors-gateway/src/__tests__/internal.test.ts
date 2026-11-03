@@ -77,6 +77,32 @@ describe('internal admin API', () => {
     expect(Object.fromEntries(synthesized.headers)['content-type']).toBe('application/json');
   });
 
+  it('routes a keyed internal create to the actor derived from its Idempotency-Key and forwards the key', async () => {
+    harness = await startHarness({ workspace: adminWorkspace, env: { RELAYCAST_INTERNAL_SECRET: INTERNAL_SECRET, RELAYCAST_WORKSPACE_BOOTSTRAP_SECRET: 'bootstrap-secret-0123456789abcdef' } });
+    const create = () => fetch(`${harness!.baseUrl}/internal/workspaces`, {
+      method: 'POST',
+      headers: { authorization: `Bearer ${INTERNAL_SECRET}`, 'content-type': 'application/json', 'idempotency-key': 'cccccccccccccccccccccccccccccccc' },
+      body: JSON.stringify({ name: 'team' }),
+    });
+    expect((await create()).status).toBe(201);
+    expect((await create()).status).toBe(201);
+    const [a, b] = harness.controlPlane.invocations;
+    expect(a.actorId).toBe(b.actorId);
+    expect((a.args[0] as { headers: [string, string][] }).headers).toContainEqual(['idempotency-key', 'cccccccccccccccccccccccccccccccc']);
+    const withoutSecret = await startHarness({ workspace: adminWorkspace, env: { RELAYCAST_INTERNAL_SECRET: INTERNAL_SECRET } });
+    try {
+      const refused = await fetch(`${withoutSecret.baseUrl}/internal/workspaces`, {
+        method: 'POST',
+        headers: { authorization: `Bearer ${INTERNAL_SECRET}`, 'content-type': 'application/json', 'idempotency-key': 'cccccccccccccccccccccccccccccccc' },
+        body: JSON.stringify({ name: 'team' }),
+      });
+      expect(refused.status).toBe(503);
+      expect(withoutSecret.controlPlane.invocations).toHaveLength(0);
+    } finally {
+      await withoutSecret.close();
+    }
+  });
+
   it('validates the create body', async () => {
     harness = await startHarness({ workspace: adminWorkspace, env: { RELAYCAST_INTERNAL_SECRET: INTERNAL_SECRET } });
     const headers = { authorization: `Bearer ${INTERNAL_SECRET}`, 'content-type': 'application/json' };

@@ -11,10 +11,11 @@
 import { createHash, timingSafeEqual } from 'node:crypto';
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import { z } from 'zod';
-import { INTERNAL_CAPABILITIES, generateWorkspaceId, parseArCredential } from '@relaycast/engine/gateway';
+import { INTERNAL_CAPABILITIES, parseArCredential } from '@relaycast/engine/gateway';
 import { WorkspaceMetadataSchema, isArWorkspaceId } from '@relaycast/types';
 import type { GatewayContext } from './context.js';
 import { REQUEST_ID_HEADER, bearerToken, readBody, sendActorResponse, sendError, sendJson, toActorRequest } from './http.js';
+import { IDEMPOTENCY_KEY_HEADER, chooseWorkspaceId } from './workspaceId.js';
 
 /** The engine's own capability document: the actors serve exactly these. */
 export { INTERNAL_CAPABILITIES };
@@ -89,20 +90,29 @@ export async function handleInternal(ctx: GatewayContext, { req, res, url, reque
     const parsed = createWorkspaceSchema.safeParse(json);
     if (!parsed.success) return sendError(res, 400, 'invalid_request', 'name is required (1-128 characters)');
     // The gateway mints the id and its routing tag, exactly as the public
-    // create does, and the actor creates the workspace from a synthesized
-    // `POST /v1/workspaces`; its 201 and body (the workspace and its key,
-    // revealed once) answer this call.
-    const workspaceId = generateWorkspaceId();
+    // create does (a keyed create derives the id from its `Idempotency-Key`,
+    // which travels to the actor), and the actor creates the workspace from
+    // a synthesized `POST /v1/workspaces`; its 201 and body (the workspace
+    // and its key, revealed once) answer this call.
+    const chosen = await chooseWorkspaceId(req, ctx.config.workspaceBootstrapSecret);
+    if ('error' in chosen) return sendError(res, chosen.error.status, chosen.error.code, chosen.error.message);
+    const workspaceId = chosen.workspaceId;
     setWorkspace(workspaceId);
     const tag = await ctx.credentialTags.tag(workspaceId);
     const body = JSON.stringify({
       name: parsed.data.name,
       ...(parsed.data.metadata === undefined ? {} : { metadata: parsed.data.metadata }),
     });
+    const idempotencyKey = req.headers[IDEMPOTENCY_KEY_HEADER];
     const response = await ctx.actors.create(workspaceId, {
       method: 'POST',
       url: `${url.origin}/v1/workspaces`,
-      headers: [['host', url.host], ['content-type', 'application/json'], [REQUEST_ID_HEADER, requestId]],
+      headers: [
+        ['host', url.host],
+        ['content-type', 'application/json'],
+        [REQUEST_ID_HEADER, requestId],
+        ...(typeof idempotencyKey === 'string' ? [[IDEMPOTENCY_KEY_HEADER, idempotencyKey] as [string, string]] : []),
+      ],
       body,
     }, tag, { signal });
     return sendActorResponse(res, response);

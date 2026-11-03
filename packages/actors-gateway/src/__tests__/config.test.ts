@@ -102,6 +102,12 @@ describe('configuration', () => {
     expect(weak.message).not.toContain('weak-secret');
   });
 
+  it('reads the workspace bootstrap secret verbatim (its bytes feed a derivation)', () => {
+    expect(loadConfig(baseEnv(URL)).workspaceBootstrapSecret).toBeUndefined();
+    expect(loadConfig(baseEnv(URL, { RELAYCAST_WORKSPACE_BOOTSTRAP_SECRET: ' exact bytes ' })).workspaceBootstrapSecret).toBe(' exact bytes ');
+    expect(loadConfig({ ...baseEnv(URL), RELAYCAST_WORKSPACE_BOOTSTRAP_SECRET_FILE: '/secrets/bootstrap' }, () => 'from-file\n').workspaceBootstrapSecret).toBe('from-file');
+  });
+
   it('reads secrets from _FILE variants and refuses unreadable files', () => {
     const files: Record<string, string> = { '/run/secrets/internal': `${'s'.repeat(40)}\n`, '/run/secrets/ring': JSON.stringify(KEYRING) };
     const readFile = (path: string): string => {
