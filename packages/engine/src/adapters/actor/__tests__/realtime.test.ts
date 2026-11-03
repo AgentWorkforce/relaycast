@@ -550,8 +550,7 @@ describe('workspace actor realtime', () => {
     // The registry gave the binding up (the frame stays queued for a retry) ...
     expect(actor.runtime.deps.nodeConnections.isProviderAttached?.(WORKSPACE_ID, node.node_id, 'default')).toBe(false);
     // The row followed, so a later activation does not replay the binding.
-    const row = rows(actor, 'SELECT provider_name FROM _actor_sockets WHERE socket_id = ?', socket.id) as { provider_name: string | null }[];
-    expect(row.length === 0 || row[0].provider_name === null).toBe(true);
+    expect(rows(actor, 'SELECT provider_name FROM _actor_sockets WHERE socket_id = ?', socket.id)).toEqual([{ provider_name: null }]);
   });
 
   it('maps engine close codes to ones durable-actors accepts', async () => {

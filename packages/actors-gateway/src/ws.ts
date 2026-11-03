@@ -107,6 +107,9 @@ export function createSocketBridge(ctx: GatewayContext, options: SocketBridgeOpt
   const pingIntervalMs = options.pingIntervalMs ?? DEFAULT_PING_INTERVAL_MS;
   const connectTimeoutMs = options.connectTimeoutMs ?? DEFAULT_CONNECT_TIMEOUT_MS;
   const maxBufferedBytes = options.maxBufferedBytes ?? MAX_CLIENT_BUFFERED_BYTES;
+  if (!Number.isFinite(maxBufferedBytes) || maxBufferedBytes < 0) {
+    throw new RangeError('maxBufferedBytes must be a finite non-negative number');
+  }
   const wss = new WebSocketServer({ noServer: true, maxPayload: CLIENT_MAX_MESSAGE_BYTES });
   const clients = new Set<WebSocket>();
 

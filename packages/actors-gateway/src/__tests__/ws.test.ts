@@ -2,7 +2,7 @@ import { createConnection } from 'node:net';
 import { afterEach, describe, expect, it } from 'vitest';
 import WebSocket from 'ws';
 import { SOCKET_GRANT_HEADER, parseSocketGrant } from '../socketGrant.js';
-import { sendableCloseCode } from '../ws.js';
+import { createSocketBridge, sendableCloseCode } from '../ws.js';
 import { jsonResponse, once, waitFor, type FakeWorkspace } from './fakeControlPlane.js';
 import { WORKSPACE_ID, foreignCredential, startHarness, type Harness } from './harness.js';
 
@@ -146,6 +146,12 @@ describe('WebSocket bridge', () => {
     harness = await startHarness({ workspace: grantingWorkspace });
     harness.controlPlane.failFindWebsocket = 503;
     expect(await upgradeStatus(`${harness.baseUrl.replace('http', 'ws')}/v1/ws?token=${await harness.credential()}`)).toBe(502);
+  });
+
+  it('refuses a buffered bound that would disable backpressure', () => {
+    for (const bad of [Number.NaN, Number.POSITIVE_INFINITY, -1]) {
+      expect(() => createSocketBridge({} as never, { maxBufferedBytes: bad })).toThrow(RangeError);
+    }
   });
 
   it('closes a client 1013 when the actor socket stops reading its frames', async () => {
