@@ -37,7 +37,7 @@ so the gateway does not depend on it; replies are validated with zod.
 | `DURABLE_ACTORS_PROJECT_ID` | required | Project id (`local` for the dev runtime) |
 | `DURABLE_ACTORS_SECRET` (alias `DURABLE_ACTORS_API_KEY`, or `_FILE`) | unset | Application credential sent as `Authorization: Bearer`; a local runtime needs none |
 | `DURABLE_ACTORS_HOME_REGION` | unset | Passed as `homeRegion` on every call |
-| `RELAYCAST_FILE_SIGNING_SECRET` (or `_FILE`) | required | HMAC secret shared with the actors, which sign `/_relayfiles` URLs |
+| `RELAYCAST_FILE_SIGNING_SECRET` (or `_FILE`) | required | HMAC secret shared with the actors, which sign `/_relayfiles` URLs; at least 32 characters |
 | `RELAYCAST_CREDENTIAL_KEYRING` (or `_FILE`) | required | `{"current":"a","keys":{"a":"<secret ≥16 chars>"}}`; signs new workspaces' tags, verifies every credential's tag. Rotate by adding a version and making it current; removing a version locks out its credentials |
 | `RELAYCAST_INTERNAL_SECRET` (or `_FILE`) | unset | Enables `/internal/*`; at least 32 characters, and the actors must be configured with the same value |
 | `RELAYCAST_PUBLIC_WORKSPACE_CREATE` | `true` | `false` hides `POST /v1/workspaces` behind a generic 404; any other value is refused |
@@ -157,8 +157,9 @@ mount it at once). Run more than one gateway only with an object store.
 Credentials are Application Default Credentials: Workload Identity on GKE,
 `GOOGLE_APPLICATION_CREDENTIALS` pointing at a service-account key, or the
 metadata server on GCE/Cloud Run. The identity needs
-`roles/storage.objectAdmin` on the bucket (or `roles/storage.objectCreator` +
-`roles/storage.objectViewer` plus `storage.objects.delete`). Uploads are
+`roles/storage.objectAdmin` on the bucket, or a custom role granting
+`storage.objects.create`, `storage.objects.get` and `storage.objects.delete`
+(the predefined creator/viewer roles lack delete). Uploads are
 simple (non-resumable): bodies are capped by `RELAYCAST_MAX_UPLOAD_BYTES` and
 already in memory when they reach the store, so a resumable session would only
 add a round trip. Reads stream from the object; `HEAD` reads its metadata;
@@ -176,9 +177,8 @@ delete ignores an object that is already gone.
 
 Credentials come from the SDK's default chain (`AWS_ACCESS_KEY_ID` /
 `AWS_SECRET_ACCESS_KEY`, shared config, IRSA/pod identity, instance role).
-The identity needs `s3:PutObject`, `s3:GetObject`, `s3:DeleteObject` and
-`s3:HeadObject` (that is, `s3:GetObject` covers `HEAD`) on
-`arn:aws:s3:::<bucket>/<prefix>/*`. Uploads send the signed size as
+The identity needs `s3:PutObject`, `s3:GetObject` and `s3:DeleteObject` on
+`arn:aws:s3:::<bucket>/<prefix>/*` (`s3:GetObject` also authorizes `HEAD`). Uploads send the signed size as
 `Content-Length`, so a body that does not add up is refused by the service.
 With an endpoint set, request/response checksums are only computed when an
 operation requires them, which keeps MinIO and R2 happy.

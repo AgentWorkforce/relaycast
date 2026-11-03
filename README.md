@@ -1470,7 +1470,7 @@ and verifies its tag with the keyring.
 actor, including the WebSocket lifecycle (`/v1/ws` and `/v1/node/ws` answer
 with a socket grant the gateway opens an actor socket with), and
 [`packages/actors-gateway`](packages/actors-gateway) the gateway in front of
-it; [`docs/self-hosting.md`](docs/self-hosting.md) has the deployment steps.
+it; [`docs/self-hosting-durable-actors.md`](docs/self-hosting-durable-actors.md) has the deployment steps.
 
 ## Engine Hooks
 

@@ -17,8 +17,8 @@ makes the actor fail at construction instead of serving with defaults.
 
 | Variable | Default | Meaning |
 |---|---|---|
-| `RELAYCAST_PUBLIC_URL` | required | Public origin clients reach the gateway on; signed file URLs point at its `/_relayfiles` |
-| `RELAYCAST_FILE_SIGNING_SECRET` | required | HMAC secret shared with the gateway, which serves `/_relayfiles` |
+| `RELAYCAST_PUBLIC_URL` | required | Public http(s) origin clients reach the gateway on (no path); signed file URLs point at its `/_relayfiles` |
+| `RELAYCAST_FILE_SIGNING_SECRET` | required | HMAC secret shared with the gateway, which serves `/_relayfiles`; at least 32 characters |
 | `RELAYCAST_INTERNAL_SECRET` | unset | Enables `/internal/*`; at least 32 characters, no surrounding whitespace, and the gateway must hold the same value |
 | `RELAYCAST_MAX_UPLOAD_BYTES` | `67108864` | Largest upload the engine signs a URL for (positive integer) |
 | `RELAYCAST_MESSAGE_TTL_DAYS` | unset | Positive: prune messages after that many days; unset, `0` or negative: keep forever |

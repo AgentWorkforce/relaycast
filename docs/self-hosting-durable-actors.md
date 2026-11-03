@@ -16,7 +16,7 @@ clients ──HTTP/WS──▶ gateway replicas (Node, stateless)
                       │  Bearer ar_<kind>_<wsid>_<tag>_… ▶ tag verified ──▶ Workspace[wsid].handle(request)
                       │  /v1/ws, /v1/node/ws ──────────▶ handle(upgrade probe) ─▶ socket grant ─▶ find-websocket
                       │                                   ─▶ bridged to the actor socket at the control plane
-                      │  /_relayfiles?token=… ──────────▶ file store (local dir, or gcs/s3 when implemented)
+                      │  /_relayfiles?token=… ──────────▶ file store (local dir, gcs or s3)
                       ▼
             durable-actors control plane ──▶ Workspace actors (engine on the actor's SQLite)
 ```
@@ -59,9 +59,13 @@ Values that must match across processes:
 - `RELAYCAST_PUBLIC_URL` (actor) must be the origin clients reach the gateways
   on; signed file URLs embed it.
 - `RELAYCAST_INTERNAL_SECRET`: actor and gateway, when `/internal/*` is enabled.
-- `DURABLE_ACTORS_CONTROL_PLANE_URL`, `DURABLE_ACTORS_PROJECT_ID`,
-  `DURABLE_ACTORS_SECRET`: gateway and deployer point at the same project with
-  the same credential (locally: `http://127.0.0.1:7100`, `local`, no secret).
+- `DURABLE_ACTORS_CONTROL_PLANE_URL` and `DURABLE_ACTORS_PROJECT_ID`: gateway
+  and deployer point at the same project (locally: `http://127.0.0.1:7100`,
+  `local`).
+- `DURABLE_ACTORS_SECRET`: each process its own key for that project. With the
+  invoke-only patch (see [Least-privilege credential](#least-privilege-credential))
+  the gateway gets the invoke key and the deployer the admin key; without it
+  both get the admin key (locally: no secret).
 - `RELAYCAST_CREDENTIAL_KEYRING`: identical on every gateway replica, or a
   credential minted through one replica is refused by another.
 - `RELAYCAST_FILE_STORE` / `RELAYCAST_FILE_DIR`: identical on every replica;
