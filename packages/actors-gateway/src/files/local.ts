@@ -4,6 +4,7 @@
  * gateway instance on persistent storage with this store, or pick an object
  * store (`RELAYCAST_FILE_STORE=gcs|s3`) for several.
  */
+import { randomUUID } from 'node:crypto';
 import { createReadStream, createWriteStream } from 'node:fs';
 import { mkdir, readFile, rename, rm, stat, writeFile } from 'node:fs/promises';
 import { dirname, resolve, sep } from 'node:path';
@@ -38,8 +39,9 @@ export class LocalFileStore implements FileStore {
     // The type goes first: a failed write leaves no bytes for HEAD to report.
     await writeFile(`${path}.type`, options.contentType);
     // Bytes land under a temporary name and move into place whole, so a
-    // reader never sees a partial object.
-    const partial = `${path}.part-${process.pid}-${Date.now()}`;
+    // reader never sees a partial object; the name is unique per call, so two
+    // uploads of one key (a client retry overlapping the first) never share it.
+    const partial = `${path}.part-${process.pid}-${randomUUID()}`;
     try {
       if (body instanceof Uint8Array) {
         await writeFile(partial, body);
@@ -64,7 +66,11 @@ export class LocalFileStore implements FileStore {
       if (isMissing(error)) return null;
       throw error;
     }
-    const contentType = await readFile(`${path}.type`, 'utf8').catch(() => DEFAULT_CONTENT_TYPE);
+    // Only a missing sidecar means "no recorded type"; any other read failure is the store failing.
+    const contentType = await readFile(`${path}.type`, 'utf8').catch((error: unknown) => {
+      if (isMissing(error)) return DEFAULT_CONTENT_TYPE;
+      throw error;
+    });
     return { stream: createReadStream(path), size, contentType: contentType || DEFAULT_CONTENT_TYPE };
   }
 

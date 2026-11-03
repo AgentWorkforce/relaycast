@@ -27,7 +27,7 @@ export interface FileStoreOptions {
 
 /** An object name prefix: slashes trimmed, segments non-empty and not `.`/`..`; empty means none. */
 const prefix = z.string().transform((value) => value.replace(/^\/+|\/+$/g, ''))
-  .refine((value) => !value.includes('\\') && value.split('/').every((segment) => segment !== '' && segment !== '.' && segment !== '..'), 'must be a path of non-empty segments without . or ..');
+  .refine((value) => value === '' || (!value.includes('\\') && value.split('/').every((segment) => segment !== '' && segment !== '.' && segment !== '..')), 'must be a path of non-empty segments without . or ..');
 
 const GcsEnvSchema = z.object({
   RELAYCAST_GCS_BUCKET: z.string({ error: 'is required when RELAYCAST_FILE_STORE=gcs' }).min(1),

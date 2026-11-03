@@ -12,7 +12,7 @@
  *
  * The SDK is imported on first use, never when another store is configured.
  */
-import type { Readable, Writable } from 'node:stream';
+import { Transform, type Readable, type Writable } from 'node:stream';
 import { pipeline } from 'node:stream/promises';
 import { objectName, type FileObject, type FilePutOptions, type FileStore } from './store.js';
 
@@ -45,8 +45,31 @@ export interface GcsFileStoreOptions {
   storage?: GcsStorageLike;
 }
 
+/**
+ * A missing object. The JSON API answers 404 for a missing bucket too ("The
+ * specified bucket does not exist"); that is the store failing, not the file
+ * being absent, so it propagates. (Checking the bucket with `exists()` would
+ * need `storage.buckets.get`, which `roles/storage.objectAdmin` lacks.)
+ */
 function isMissing(error: unknown): boolean {
-  return (error as { code?: unknown } | null)?.code === 404;
+  const e = error as { code?: unknown; message?: unknown } | null;
+  return e?.code === 404 && !(typeof e.message === 'string' && /bucket/i.test(e.message));
+}
+
+/** Pass bytes through, failing the pipeline as soon as they exceed `size` or end short of it. */
+function sized(size: number): Transform {
+  let received = 0;
+  return new Transform({
+    transform(chunk: Buffer, _encoding, callback) {
+      received += chunk.byteLength;
+      if (received > size) return callback(new Error(`body exceeds ${size} bytes`));
+      callback(null, chunk);
+    },
+    flush(callback) {
+      if (received !== size) return callback(new Error(`body is ${received} bytes, expected ${size}`));
+      callback();
+    },
+  });
 }
 
 export class GcsFileStore implements FileStore {
@@ -78,7 +101,7 @@ export class GcsFileStore implements FileStore {
       if (body.byteLength !== options.size) throw new Error(`body is ${body.byteLength} bytes, expected ${options.size}`);
       await file.save(body, upload);
     } else {
-      await pipeline(body, file.createWriteStream(upload));
+      await pipeline(body, sized(options.size), file.createWriteStream(upload));
     }
   }
 

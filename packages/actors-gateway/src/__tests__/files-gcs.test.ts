@@ -85,6 +85,29 @@ describe('GcsFileStore', () => {
     await expect(store.stat(KEY)).rejects.toThrow('forbidden');
     await expect(store.get(KEY)).rejects.toThrow('forbidden');
   });
+  it('reports a missing bucket as a failure, not a missing file', async () => {
+    const storage = {
+      bucket: () => ({
+        file: () => ({
+          async getMetadata(): Promise<never> { throw Object.assign(new Error('The specified bucket does not exist.'), { code: 404 }); },
+        } as never),
+      }),
+    };
+    const store = new GcsFileStore({ bucket: 'gone', storage });
+    await expect(store.get('ws/f/a')).rejects.toThrow(/bucket does not exist/);
+    await expect(store.stat('ws/f/a')).rejects.toThrow(/bucket does not exist/);
+  });
+
+  it('refuses a stream whose length differs from the signed size', async () => {
+    const fake = fakeGcsStorage();
+    const store = new GcsFileStore({ bucket: 'bkt', storage: fake.storage });
+    await expect(store.put('ws/f/short', Readable.from([Buffer.from('ab')]), { size: 3, contentType: 'text/plain' })).rejects.toThrow('body is 2 bytes, expected 3');
+    await expect(store.put('ws/f/long', Readable.from([Buffer.from('ab'), Buffer.from('cd')]), { size: 3, contentType: 'text/plain' })).rejects.toThrow('body exceeds 3 bytes');
+    expect(fake.objects.has('bkt/ws/f/short')).toBe(false);
+    expect(fake.objects.has('bkt/ws/f/long')).toBe(false);
+    await store.put('ws/f/exact', Readable.from([Buffer.from('abc')]), { size: 3, contentType: 'text/plain' });
+    expect(fake.objects.get('bkt/ws/f/exact')?.bytes.toString()).toBe('abc');
+  });
 });
 
 describe('createFileStore(gcs)', () => {
@@ -97,6 +120,8 @@ describe('createFileStore(gcs)', () => {
 
     const bare = createFileStore({ kind: 'gcs', fileDir: '/tmp/x', env: { RELAYCAST_GCS_BUCKET: 'bkt' } }) as GcsFileStore;
     expect(bare).toBeInstanceOf(GcsFileStore);
+    // A slash-only prefix is the documented "no prefix".
+    expect((createFileStore({ kind: 'gcs', fileDir: '/tmp/x', env: { RELAYCAST_GCS_BUCKET: 'bkt', RELAYCAST_GCS_PREFIX: '/' } }) as GcsFileStore).prefix).toBe('');
     expect(bare.bucket).toBe('bkt');
     expect(bare.prefix).toBe('');
     const prefixed = createFileStore({ kind: 'gcs', fileDir: '/tmp/x', env: { RELAYCAST_GCS_BUCKET: 'bkt', RELAYCAST_GCS_PREFIX: '/relay/files/' } }) as GcsFileStore;

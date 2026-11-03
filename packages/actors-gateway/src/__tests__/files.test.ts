@@ -1,4 +1,4 @@
-import { mkdtemp, readFile, rm, stat } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rm, stat } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
@@ -198,6 +198,32 @@ describe('LocalFileStore', () => {
     expect(await store.stat('ws/f/a.bin')).toEqual({ size: 3 });
     await expect(store.put('ws/f/b.bin', new Uint8Array([1]), { size: 2, contentType: 'text/plain' })).rejects.toThrow(/expected 2/);
     expect(await store.stat('ws/f/b.bin')).toBeNull();
+  });
+
+  it('propagates a sidecar that cannot be read, and only falls back for a missing one', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'relaycast-local-store-'));
+    try {
+      const store = new LocalFileStore(dir);
+      await store.put('ws/f/a', Buffer.from('abc'), { size: 3, contentType: 'text/plain' });
+      await rm(join(dir, 'ws', 'f', 'a.type'));
+      await mkdir(join(dir, 'ws', 'f', 'a.type'));
+      await expect(store.get('ws/f/a')).rejects.toThrow(/EISDIR/);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('keeps overlapping uploads of one key apart', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'relaycast-local-store-'));
+    try {
+      const store = new LocalFileStore(dir);
+      await Promise.all(Array.from({ length: 8 }, (_, i) => store.put('ws/f/a', Buffer.from(`body-${i}`), { size: 6, contentType: 'text/plain' })));
+      const object = await store.get('ws/f/a');
+      expect(object?.size).toBe(6);
+      expect((await readFile(join(dir, 'ws', 'f', 'a'), 'utf8'))).toMatch(/^body-[0-7]$/);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
   });
 
   it('is what the factory builds for local, while gcs/s3 need their bucket', () => {

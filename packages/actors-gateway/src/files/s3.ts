@@ -35,8 +35,15 @@ export interface S3FileStoreOptions {
 
 type Sdk = typeof import('@aws-sdk/client-s3');
 
+/**
+ * A missing object (`NoSuchKey` on GET, the bodiless `NotFound` on HEAD). A
+ * missing bucket is also a 404 but is the store failing, not the file being
+ * absent, so it propagates (a HEAD 404 carries no code and still reads as
+ * absent; GET and PUT surface the bucket).
+ */
 function isMissing(error: unknown): boolean {
   const e = error as { name?: unknown; $metadata?: { httpStatusCode?: unknown } } | null;
+  if (e?.name === 'NoSuchBucket') return false;
   return e?.name === 'NoSuchKey' || e?.name === 'NotFound' || e?.$metadata?.httpStatusCode === 404;
 }
 

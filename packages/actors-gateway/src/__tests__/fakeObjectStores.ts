@@ -3,7 +3,7 @@
  * `@aws-sdk/client-s3` the object stores use, with the SDKs' not-found
  * signalling (`code: 404` / `NoSuchKey` + `NotFound`).
  */
-import { PassThrough, Readable } from 'node:stream';
+import { PassThrough, Readable, Writable } from 'node:stream';
 import { DeleteObjectCommand, GetObjectCommand, HeadObjectCommand, PutObjectCommand, type S3Client } from '@aws-sdk/client-s3';
 import type { GcsFileLike, GcsStorageLike } from '../files/gcs.js';
 
@@ -39,9 +39,19 @@ export function fakeGcsStorage(): FakeObjects & { storage: GcsStorageLike } {
       },
       createWriteStream(options) {
         calls.push(`write ${id}`);
-        const sink = new PassThrough();
-        collect(sink).then((bytes) => objects.set(id, { bytes, contentType: options.contentType }));
-        return sink;
+        // The object exists once the stream finishes, as the SDK's does; a
+        // source that fails never reaches `final` and the uploader hears it from `pipeline`.
+        const chunks: Buffer[] = [];
+        return new Writable({
+          write(chunk: Buffer, _encoding, callback) {
+            chunks.push(Buffer.from(chunk));
+            callback();
+          },
+          final(callback) {
+            objects.set(id, { bytes: Buffer.concat(chunks), contentType: options.contentType });
+            callback();
+          },
+        });
       },
       createReadStream() {
         calls.push(`read ${id}`);
