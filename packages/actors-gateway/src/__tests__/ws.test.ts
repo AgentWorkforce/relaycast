@@ -148,6 +148,31 @@ describe('WebSocket bridge', () => {
     expect(await upgradeStatus(`${harness.baseUrl.replace('http', 'ws')}/v1/ws?token=${await harness.credential()}`)).toBe(502);
   });
 
+  it('closes a client 1013 when the actor socket stops reading its frames', async () => {
+    harness = await startHarness({ workspace: grantingWorkspace, gateway: { socket: { maxBufferedBytes: 256 * 1024 } } });
+    harness.controlPlane.onSession = () => {};
+    const client = await connect(`${harness.baseUrl.replace('http', 'ws')}/v1/ws?token=${await harness.credential()}`);
+    await waitFor(() => harness!.controlPlane.sessions.length === 1);
+    const session = harness.controlPlane.sessions[0];
+    (session as unknown as { _socket: { pause: () => void } })._socket.pause();
+    const closed = once<[number, Buffer]>(client, 'close');
+    // The kernel's loopback buffers take the first tens of MiB; past them the
+    // gateway's outgoing queue to the actor grows and the bound trips.
+    const frame = 'x'.repeat(512 * 1024);
+    let done = false;
+    void closed.then(() => { done = true; });
+    for (let i = 0; i < 256 && !done; i += 1) {
+      client.send(frame);
+      while (client.bufferedAmount > 4 * 1024 * 1024 && !done) await new Promise((resolve) => setTimeout(resolve, 5));
+    }
+    const [code, reason] = await closed;
+    expect(code).toBe(1013);
+    expect(reason.toString()).toBe('slow upstream');
+    // The close to the actor socket waits behind the queued frames; once the peer reads again it arrives.
+    (session as unknown as { _socket: { resume: () => void } })._socket.resume();
+    await waitFor(() => session.readyState === WebSocket.CLOSED);
+  }, 20_000);
+
   it('terminates a client that stops answering pings', async () => {
     harness = await startHarness({ workspace: grantingWorkspace, gateway: { socket: { pingIntervalMs: 100 } } });
     const client = await connect(`${harness.baseUrl.replace('http', 'ws')}/v1/ws?token=${await harness.credential()}`);

@@ -103,9 +103,16 @@ describe('configuration', () => {
   });
 
   it('carries the object-store settings it was given, not process.env', () => {
-    const config = loadConfig(baseEnv(URL, { RELAYCAST_FILE_STORE: 's3', RELAYCAST_S3_BUCKET: 'given', RELAYCAST_S3_ENDPOINT: 'http://minio:9000', RELAYCAST_GCS_PREFIX: 'p' }));
-    expect(config.fileStoreEnv).toEqual({ RELAYCAST_S3_BUCKET: 'given', RELAYCAST_S3_ENDPOINT: 'http://minio:9000', RELAYCAST_GCS_PREFIX: 'p' });
-    expect(loadConfig(baseEnv(URL)).fileStoreEnv).toEqual({});
+    const ambient = process.env.RELAYCAST_S3_BUCKET;
+    process.env.RELAYCAST_S3_BUCKET = 'ambient';
+    try {
+      const config = loadConfig(baseEnv(URL, { RELAYCAST_FILE_STORE: 's3', RELAYCAST_S3_BUCKET: 'given', RELAYCAST_S3_ENDPOINT: 'http://minio:9000', RELAYCAST_GCS_PREFIX: 'p' }));
+      expect(config.fileStoreEnv).toEqual({ RELAYCAST_S3_BUCKET: 'given', RELAYCAST_S3_ENDPOINT: 'http://minio:9000', RELAYCAST_GCS_PREFIX: 'p' });
+      expect(loadConfig(baseEnv(URL)).fileStoreEnv).toEqual({});
+    } finally {
+      if (ambient === undefined) delete process.env.RELAYCAST_S3_BUCKET;
+      else process.env.RELAYCAST_S3_BUCKET = ambient;
+    }
   });
 
   it('reads the workspace bootstrap secret verbatim (its bytes feed a derivation)', () => {

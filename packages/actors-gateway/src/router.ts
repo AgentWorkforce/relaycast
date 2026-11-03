@@ -165,7 +165,9 @@ export function createRequestHandler(ctx: GatewayContext, options: RequestHandle
           headers: [['host', url.host], ['authorization', `Bearer ${bearer}`], [REQUEST_ID_HEADER, requestId]],
           body: null,
         }, { signal });
-        if (probe.status !== 200) return sendError(res, 401, 'unauthorized', 'The owner credential was refused by its workspace');
+        if (probe.status === 401 || probe.status === 403) return sendError(res, 401, 'unauthorized', 'The owner credential was refused by its workspace');
+        // Anything else (429 with its retry headers, a 5xx) is the owner workspace's answer, passed on so the client can retry.
+        if (probe.status !== 200) return sendActorResponse(res, probe);
         request = { ...request, headers: request.headers.filter(([name]) => name !== 'authorization') };
       }
       let response = await ctx.actors.create(workspaceId, request, await ctx.credentialTags.tag(workspaceId), { signal });

@@ -148,6 +148,7 @@ describe('routing', () => {
   it('routes a keyed create (Idempotency-Key) to one actor derived from the key, so a retry gets the same workspace', async () => {
     // Each actor keeps its own idempotency record, as the engine does.
     const created = new Map<string, ActorHttpResponse>();
+    let busyOwner = false;
     const keyedWorkspace = (id: string): FakeWorkspace => ({
       create: (request) => {
         const key = Object.fromEntries(request.headers)['idempotency-key'];
@@ -157,10 +158,13 @@ describe('routing', () => {
         created.set(id, response);
         return response;
       },
-      // The owner's actor answers the owner probe (an authenticated read): OTHER_WORKSPACE_ID accepts its key, WORKSPACE_ID refuses.
-      handle: (request) => (new URL(request.url).pathname === '/v1/agents' && id === OTHER_WORKSPACE_ID && Object.fromEntries(request.headers).authorization?.startsWith('Bearer ar_ws_')
-        ? jsonResponse(200, { ok: true, data: [] })
-        : jsonResponse(401, { ok: false, error: { code: 'invalid_token', message: 'no' } })),
+      // The owner's actor answers the owner probe (an authenticated read): OTHER_WORKSPACE_ID accepts its key, WORKSPACE_ID refuses, and a busy owner answers 429.
+      handle: (request) => {
+        const bearer = Object.fromEntries(request.headers).authorization;
+        if (new URL(request.url).pathname !== '/v1/agents' || !bearer?.startsWith('Bearer ar_ws_')) return jsonResponse(401, { ok: false, error: { code: 'invalid_token', message: 'no' } });
+        if (id === OTHER_WORKSPACE_ID) return busyOwner ? jsonResponse(429, { ok: false, error: { code: 'rate_limited', message: 'later' } }, [['retry-after', '7']]) : jsonResponse(200, { ok: true, data: [] });
+        return jsonResponse(401, { ok: false, error: { code: 'invalid_token', message: 'no' } });
+      },
     });
     harness = await startHarness({ workspace: keyedWorkspace, env: { RELAYCAST_WORKSPACE_BOOTSTRAP_SECRET: 'bootstrap-secret-0123456789abcdef' } });
     const create = (key?: string) => fetch(`${harness!.baseUrl}/v1/workspaces`, {
@@ -199,6 +203,16 @@ describe('routing', () => {
     });
     expect(refused.status).toBe(401);
     expect(harness.controlPlane.invocations).toHaveLength(5);
+    // A temporary answer from the owner's workspace (429 with its retry header) is passed on, not turned into 401.
+    busyOwner = true;
+    const busy = await fetch(`${harness.baseUrl}/v1/workspaces`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', 'idempotency-key': key, authorization: `Bearer ${await harness.credential(OTHER_WORKSPACE_ID, 'workspace')}` },
+      body: JSON.stringify({ name: 'team' }),
+    });
+    expect(busy.status).toBe(429);
+    expect(busy.headers.get('retry-after')).toBe('7');
+    expect(harness.controlPlane.invocations).toHaveLength(6);
     // Another key is another actor; no key is a fresh snowflake every time.
     const other = await readJson(await create('bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb'));
     expect((other.data as { workspace_id: string }).workspace_id).not.toBe((first.data as { workspace_id: string }).workspace_id);
@@ -225,6 +239,18 @@ describe('routing', () => {
     expect(actors).toHaveLength(2);
     expect(actors[0]).not.toBe(actors[1]);
     expect((await readJson(response)).data).toEqual({ workspace_id: actors[1] });
+  });
+
+  it('retries a taken id once only: a second 409 is answered as is', async () => {
+    const alwaysTaken = (): FakeWorkspace => ({
+      create: () => jsonResponse(409, { ok: false, error: { code: 'workspace_exists', message: 'taken' } }),
+      handle: () => jsonResponse(404, { ok: false, error: { code: 'not_found', message: 'no' } }),
+    });
+    harness = await startHarness({ workspace: alwaysTaken });
+    const response = await fetch(`${harness.baseUrl}/v1/workspaces`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ name: 'team' }) });
+    expect(response.status).toBe(409);
+    expect((await readJson(response)).error).toMatchObject({ code: 'workspace_exists' });
+    expect(harness.controlPlane.invocations).toHaveLength(2);
   });
 
   it('fails a keyed create closed when the deployment has no bootstrap secret, as the engine does', async () => {

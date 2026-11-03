@@ -50,6 +50,8 @@ export interface SocketBridge {
 export interface SocketBridgeOptions {
   pingIntervalMs?: number;
   connectTimeoutMs?: number;
+  /** Bytes queued for a peer that is not reading before the client is closed 1013 (default twice the largest upstream frame). */
+  maxBufferedBytes?: number;
 }
 
 /** The token from `?token=` or `Authorization: Bearer`, as the engine's `queryOrBearerToken`. */
@@ -104,6 +106,7 @@ function jsonBody(body: string): string | undefined {
 export function createSocketBridge(ctx: GatewayContext, options: SocketBridgeOptions = {}): SocketBridge {
   const pingIntervalMs = options.pingIntervalMs ?? DEFAULT_PING_INTERVAL_MS;
   const connectTimeoutMs = options.connectTimeoutMs ?? DEFAULT_CONNECT_TIMEOUT_MS;
+  const maxBufferedBytes = options.maxBufferedBytes ?? MAX_CLIENT_BUFFERED_BYTES;
   const wss = new WebSocketServer({ noServer: true, maxPayload: CLIENT_MAX_MESSAGE_BYTES });
   const clients = new Set<WebSocket>();
 
@@ -141,7 +144,7 @@ export function createSocketBridge(ctx: GatewayContext, options: SocketBridgeOpt
       if (upstream.readyState !== WebSocket.OPEN) return;
       // The mirror of the client-side bound: an actor socket that stopped
       // reading must not let one client grow the outgoing queue without end.
-      if (upstream.bufferedAmount > MAX_CLIENT_BUFFERED_BYTES) {
+      if (upstream.bufferedAmount > maxBufferedBytes) {
         client.close(1013, 'slow upstream');
         return;
       }
@@ -151,7 +154,7 @@ export function createSocketBridge(ctx: GatewayContext, options: SocketBridgeOpt
       if (client.readyState !== WebSocket.OPEN) return;
       // The actor is not paused for a client that stopped reading; bound what
       // can pile up for one instead.
-      if (client.bufferedAmount > MAX_CLIENT_BUFFERED_BYTES) {
+      if (client.bufferedAmount > maxBufferedBytes) {
         client.close(1013, 'slow consumer');
         return;
       }

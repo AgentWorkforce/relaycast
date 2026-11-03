@@ -106,6 +106,30 @@ describe('internal admin API', () => {
     }
   });
 
+  it('retries an unkeyed internal create once under a fresh id when the minted one was taken', async () => {
+    let first: string | undefined;
+    const colliding = (id: string): FakeWorkspace => ({
+      create: () => {
+        first ??= id;
+        return id === first
+          ? jsonResponse(409, { ok: false, error: { code: 'workspace_exists', message: 'taken' } })
+          : jsonResponse(201, { ok: true, data: { workspace_id: id, api_key: `key-for-${id}` } });
+      },
+      handle: () => jsonResponse(404, { ok: false, error: { code: 'not_found', message: 'no' } }),
+    });
+    harness = await startHarness({ workspace: colliding, env: { RELAYCAST_INTERNAL_SECRET: INTERNAL_SECRET } });
+    const response = await fetch(`${harness.baseUrl}/internal/workspaces`, {
+      method: 'POST',
+      headers: { authorization: `Bearer ${INTERNAL_SECRET}`, 'content-type': 'application/json' },
+      body: JSON.stringify({ name: 'team' }),
+    });
+    expect(response.status).toBe(201);
+    const actors = harness.controlPlane.invocations.map((call) => call.actorId);
+    expect(actors).toHaveLength(2);
+    expect(actors[0]).not.toBe(actors[1]);
+    expect((await readJson(response)).data).toMatchObject({ workspace_id: actors[1] });
+  });
+
   it('validates the create body', async () => {
     harness = await startHarness({ workspace: adminWorkspace, env: { RELAYCAST_INTERNAL_SECRET: INTERNAL_SECRET } });
     const headers = { authorization: `Bearer ${INTERNAL_SECRET}`, 'content-type': 'application/json' };
