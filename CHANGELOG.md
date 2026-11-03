@@ -16,7 +16,9 @@ This project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 Packages without a separate changelog are covered by the cross-package notes below.
 
-## [Unreleased - Minor]
+## [Unreleased]
+
+## [12.7.0] - 2026-11-03
 
 - **Removed:** agent detail (`GET /v1/agent`, `GET /v1/agents/:name`) no longer returns `actions_provided` or `actions_available_to`. List actions with `GET /v1/actions`.
 - Node heartbeats no longer read action rows to check them; only a change to a provider's action capabilities rewrites them.
@@ -990,7 +992,8 @@ Packages without a separate changelog are covered by the cross-package notes bel
 
 Earlier releases are available on the [GitHub releases page](https://github.com/AgentWorkforce/relaycast/releases).
 
-[Unreleased]: https://github.com/AgentWorkforce/relaycast/compare/v12.6.2...HEAD
+[Unreleased]: https://github.com/AgentWorkforce/relaycast/compare/v12.7.0...HEAD
+[12.7.0]: https://github.com/AgentWorkforce/relaycast/compare/v12.6.2...v12.7.0
 [12.6.2]: https://github.com/AgentWorkforce/relaycast/compare/v12.6.1...v12.6.2
 [12.6.1]: https://github.com/AgentWorkforce/relaycast/compare/v12.6.0...v12.6.1
 [12.6.0]: https://github.com/AgentWorkforce/relaycast/compare/v12.5.0...v12.6.0
