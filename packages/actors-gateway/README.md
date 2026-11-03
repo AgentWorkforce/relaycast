@@ -107,8 +107,9 @@ prints one line and exits with code 64. Secret values are never logged.
 4. On the upstream's open the client's handshake completes and text frames
    flow both ways. Client frames are capped at 1 MiB; a binary frame closes
    the client with 1003. Close codes and reasons propagate in both directions
-   (codes the library cannot send, such as 1005/1006/1015, become 1011; 1012
-   from a control-plane restart passes through). The gateway pings clients
+   (1005 "no status" is sent as 1000 and 1006 "abnormal closure" as 1001;
+   other codes the library cannot send, such as 1004 and 1015, become 1011;
+   1012 from a control-plane restart passes through). The gateway pings clients
    every 30 s and terminates ones that stop answering. If the upstream cannot
    be opened, the client is closed with 1011.
 5. SIGTERM stops accepting, closes bridged clients with 1012 `gateway
@@ -178,7 +179,10 @@ delete ignores an object that is already gone.
 Credentials come from the SDK's default chain (`AWS_ACCESS_KEY_ID` /
 `AWS_SECRET_ACCESS_KEY`, shared config, IRSA/pod identity, instance role).
 The identity needs `s3:PutObject`, `s3:GetObject` and `s3:DeleteObject` on
-`arn:aws:s3:::<bucket>/<prefix>/*` (`s3:GetObject` also authorizes `HEAD`). Uploads send the signed size as
+`arn:aws:s3:::<bucket>/<prefix>/*` (`s3:GetObject` also authorizes `HEAD`),
+and `s3:ListBucket` on `arn:aws:s3:::<bucket>`: without it S3 answers a read
+of a missing key with 403 instead of 404, so a deleted file reads as a storage
+error rather than not found. Uploads send the signed size as
 `Content-Length`, so a body that does not add up is refused by the service.
 With an endpoint set, request/response checksums are only computed when an
 operation requires them, which keeps MinIO and R2 happy.
