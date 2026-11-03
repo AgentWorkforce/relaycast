@@ -30,13 +30,22 @@ export function requestIdFor(req: IncomingMessage): string {
   return value && REQUEST_ID.test(value) ? value : randomUUID();
 }
 
-/** The absolute URL the client used, honouring `x-forwarded-proto` from a TLS-terminating proxy. */
-export function requestUrl(req: IncomingMessage, fallbackHost: string): URL {
+/**
+ * The absolute URL the client used, honouring `x-forwarded-proto` from a
+ * TLS-terminating proxy; undefined when the `Host` header is one `URL`
+ * refuses (Node's parser accepts more than the URL grammar, e.g. `x:bad`),
+ * which callers answer with 400 rather than let escape the listener.
+ */
+export function requestUrl(req: IncomingMessage, fallbackHost: string): URL | undefined {
   const forwarded = req.headers['x-forwarded-proto'];
   const proto = (Array.isArray(forwarded) ? forwarded[0] : forwarded)?.split(',')[0]?.trim();
   const scheme = proto === 'https' || proto === 'http' ? proto : (req.socket as { encrypted?: boolean }).encrypted ? 'https' : 'http';
   const host = req.headers.host ?? fallbackHost;
-  return new URL(req.url ?? '/', `${scheme}://${host}`);
+  try {
+    return new URL(req.url ?? '/', `${scheme}://${host}`);
+  } catch {
+    return undefined;
+  }
 }
 
 /** The request headers as `[name, value]` pairs, without hop-by-hop ones. */
@@ -64,22 +73,27 @@ export class BodyTooLarge extends Error {
 
 /**
  * The whole request body, or a {@link BodyTooLarge} rejection as soon as it
- * runs past `limit` bytes (reading stops there and the connection is dropped).
+ * runs past `limit` bytes: before any read when `content-length` says so,
+ * else at the first chunk past the limit. The request is left intact
+ * (reading just stops) so the caller can still answer; it sends that answer
+ * with `connection: close` and Node drops the connection after it.
  */
 export async function readBody(req: IncomingMessage, limit: number): Promise<Buffer> {
+  const declared = req.headers['content-length'];
+  if (declared !== undefined && Number(declared) > limit) throw new BodyTooLarge(limit);
   const chunks: Buffer[] = [];
   let length = 0;
-  for await (const chunk of req) {
+  for await (const chunk of req.iterator({ destroyOnReturn: false })) {
     const buffer = chunk as Buffer;
     length += buffer.byteLength;
-    if (length > limit) {
-      req.destroy();
-      throw new BodyTooLarge(limit);
-    }
+    if (length > limit) throw new BodyTooLarge(limit);
     chunks.push(buffer);
   }
   return Buffer.concat(chunks, length);
 }
+
+/** Headers for an error answered before the request body was read: the connection is not reused. */
+export const CLOSE_AFTER: Readonly<Record<string, string>> = { connection: 'close' };
 
 export function toActorRequest(req: IncomingMessage, url: URL, body: Buffer | null, requestId: string): ActorHttpRequest {
   const headers = requestHeaders(req).filter(([name]) => name !== REQUEST_ID_HEADER);
@@ -112,12 +126,17 @@ export function sendEmpty(res: ServerResponse, status: number, headers: Record<s
   res.end();
 }
 
-/** Write an actor's response to the client; the body's byte length replaces any `content-length` the actor set. */
+/**
+ * Write an actor's response to the client; the body's byte length replaces
+ * any `content-length` the actor set, and the gateway's CORS headers stand in
+ * for the engine's identical ones (two `access-control-allow-origin` values
+ * would make a browser refuse the response).
+ */
 export function sendActorResponse(res: ServerResponse, response: ActorHttpResponse, extraHeaders: Record<string, string> = {}): void {
   const headers: Record<string, string | string[]> = { ...CORS_HEADERS };
   for (const [name, value] of response.headers) {
     const key = name.toLowerCase();
-    if (HOP_BY_HOP.has(key) || key === 'content-length') continue;
+    if (HOP_BY_HOP.has(key) || key === 'content-length' || Object.hasOwn(CORS_HEADERS, key)) continue;
     const existing = headers[key];
     headers[key] = existing === undefined ? value : [...(Array.isArray(existing) ? existing : [existing]), value];
   }

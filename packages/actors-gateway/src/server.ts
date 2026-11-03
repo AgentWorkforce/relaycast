@@ -11,7 +11,7 @@ import type { GatewayConfig } from './config.js';
 import type { GatewayContext } from './context.js';
 import { createFileStore } from './files/index.js';
 import type { FileStore } from './files/store.js';
-import { createLogger, type Logger } from './log.js';
+import { createLogger, errorText, type Logger } from './log.js';
 import { createRequestHandler } from './router.js';
 import { createSocketBridge, type SocketBridgeOptions } from './ws.js';
 
@@ -89,7 +89,13 @@ export function createGateway(config: GatewayConfig, options: GatewayOptions = {
       socket.destroy();
       return;
     }
-    bridge.handleUpgrade(req, socket, head);
+    // A synchronous throw here would leave the listener and take the process down.
+    try {
+      bridge.handleUpgrade(req, socket, head);
+    } catch (error) {
+      logger.error('socket.upgrade_failed', { error: errorText(error) });
+      socket.destroy();
+    }
   });
   // A client that resets mid-request must not take the process down.
   server.on('clientError', (error, socket) => {

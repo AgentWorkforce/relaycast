@@ -1,3 +1,4 @@
+import { request } from 'node:http';
 import { afterEach, describe, expect, it } from 'vitest';
 import type { ActorHttpRequest } from '@relaycast/engine/gateway';
 import { jsonResponse, type FakeWorkspace } from './fakeControlPlane.js';
@@ -126,17 +127,61 @@ describe('routing', () => {
 
   it('caps request bodies at RELAYCAST_MAX_UPLOAD_BYTES', async () => {
     harness = await startHarness({ workspace: echoWorkspace, env: { RELAYCAST_MAX_UPLOAD_BYTES: '16' } });
-    const response = await fetch(`${harness.baseUrl}/v1/channels`, {
+    const token = await harness.credential();
+    // Declared up front: refused before a byte is read.
+    const declared = await fetch(`${harness.baseUrl}/v1/channels`, { method: 'POST', headers: { authorization: `Bearer ${token}` }, body: 'x'.repeat(17) });
+    expect(declared.status).toBe(413);
+    expect(declared.headers.get('connection')).toBe('close');
+    expect((await readJson(declared)).error).toMatchObject({ code: 'payload_too_large' });
+    // Streamed without a length: refused at the first chunk past the cap, and the answer still arrives.
+    const streamed = await fetch(`${harness.baseUrl}/v1/channels`, {
       method: 'POST',
-      headers: { authorization: `Bearer ${await harness.credential()}` },
-      body: 'x'.repeat(17),
-    }).catch(() => undefined);
-    // The gateway answers 413 and drops the connection; a client may see either.
-    if (response) {
-      expect(response.status).toBe(413);
-      expect((await readJson(response)).error).toMatchObject({ code: 'payload_too_large' });
-    }
+      headers: { authorization: `Bearer ${token}`, 'content-type': 'text/plain' },
+      body: new ReadableStream({ start(controller) { controller.enqueue(new TextEncoder().encode('x'.repeat(40))); controller.close(); } }),
+      duplex: 'half',
+    } as RequestInit);
+    expect(streamed.status).toBe(413);
+    expect((await readJson(streamed)).error).toMatchObject({ code: 'payload_too_large' });
     expect(harness.controlPlane.invocations).toHaveLength(0);
+  });
+
+  it('answers 400 for a Host header the URL parser refuses, on requests and upgrades alike', async () => {
+    harness = await startHarness({ workspace: echoWorkspace });
+    const port = Number(new URL(harness.baseUrl).port);
+    const raw = (headers: Record<string, string>) => new Promise<{ status: number; body: string }>((resolve, reject) => {
+      const req = request({ host: '127.0.0.1', port, path: '/v1/channels', method: 'GET', setHost: false, headers }, (res) => {
+        const chunks: Buffer[] = [];
+        res.on('data', (chunk: Buffer) => chunks.push(chunk));
+        res.on('end', () => resolve({ status: res.statusCode ?? 0, body: Buffer.concat(chunks).toString('utf8') }));
+      });
+      req.on('error', reject);
+      req.end();
+    });
+    const plain = await raw({ host: 'x:bad', authorization: `Bearer ${await harness.credential()}` });
+    expect(plain.status).toBe(400);
+    expect(JSON.parse(plain.body)).toMatchObject({ ok: false, error: { code: 'invalid_request' } });
+    const upgrade = await raw({ host: 'x:bad', connection: 'Upgrade', upgrade: 'websocket', 'sec-websocket-version': '13', 'sec-websocket-key': 'dGhlIHNhbXBsZSBub25jZQ==' });
+    expect(upgrade.status).toBe(400);
+    // The gateway is still serving.
+    expect((await fetch(`${harness.baseUrl}/healthz`)).status).toBe(200);
+    expect(harness.controlPlane.invocations).toHaveLength(0);
+  });
+
+  it("sends the gateway's CORS headers once, even when the actor's response carries the engine's copy", async () => {
+    const corsWorkspace = (id: string): FakeWorkspace => ({
+      handle: () => jsonResponse(200, { ok: true, data: { workspace_id: id } }, [
+        ['access-control-allow-origin', '*'],
+        ['access-control-expose-headers', 'X-Request-Id'],
+        ['x-custom', 'a'],
+        ['x-custom', 'b'],
+      ]),
+    });
+    harness = await startHarness({ workspace: corsWorkspace });
+    const response = await fetch(`${harness.baseUrl}/v1/channels`, { headers: { authorization: `Bearer ${await harness.credential()}` } });
+    expect(response.status).toBe(200);
+    expect(response.headers.get('access-control-allow-origin')).toBe('*');
+    expect(response.headers.get('access-control-expose-headers')).toBe('X-Request-Id');
+    expect(response.headers.get('x-custom')).toBe('a, b');
   });
 
   it('answers 502 workspace_unavailable when the actor call fails, without leaking the control plane', async () => {

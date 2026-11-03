@@ -43,7 +43,7 @@ so the gateway does not depend on it; replies are validated with zod.
 | `RELAYCAST_PUBLIC_WORKSPACE_CREATE` | `true` | `false` hides `POST /v1/workspaces` behind a generic 404; any other value is refused |
 | `RELAYCAST_FILE_STORE` | `local` | `local`, `gcs` or `s3`; the object stores read `RELAYCAST_GCS_*` / `RELAYCAST_S3_*` (see [File store](#file-store)) |
 | `RELAYCAST_FILE_DIR` | `/data/files` | Where the `local` store keeps bytes (`<key>` plus a `<key>.type` sidecar) |
-| `RELAYCAST_MAX_UPLOAD_BYTES` | `67108864` | Largest request body the gateway reads (413 `payload_too_large` beyond it) |
+| `RELAYCAST_MAX_UPLOAD_BYTES` | `67108864` | Largest request body the gateway reads, including a signed `/_relayfiles` upload (413 `payload_too_large` beyond it, with `connection: close`) |
 | `RELAYCAST_ACTOR_INVOKE_TIMEOUT_MS` | `60000` | Budget for one actor `handle` call through the control plane (502 `workspace_unavailable` beyond it) |
 | `RELAYCAST_ACTOR_CREATE_TIMEOUT_MS` | `180000` | Budget for one actor `create` call; it includes a new actor's first activation, which on a production control plane is a host claim plus the schema commit |
 | `RELAYCAST_SHUTDOWN_GRACE_MS` | `10000` | How long SIGTERM waits for in-flight requests |

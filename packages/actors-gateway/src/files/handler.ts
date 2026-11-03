@@ -9,7 +9,7 @@
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import { pipeline } from 'node:stream/promises';
 import { OBJECT_SIZE_HEADER, verifyFileToken } from '@relaycast/engine/gateway';
-import { BodyTooLarge, readBody } from '../http.js';
+import { BodyTooLarge, CLOSE_AFTER, readBody } from '../http.js';
 import type { Logger } from '../log.js';
 import { errorText } from '../log.js';
 import { InvalidStorageKeyError, type FileStore } from './store.js';
@@ -23,19 +23,23 @@ const FILE_CORS_HEADERS: Readonly<Record<string, string>> = {
   'access-control-max-age': '86400',
 };
 
-// Content types a browser may execute script in when rendered inline.
-const ACTIVE_CONTENT_TYPE = /^\s*(text\/html|application\/xhtml\+xml|image\/svg\+xml|text\/xml|application\/xml|[a-z]+\/[a-z0-9.+-]*(javascript|ecmascript))\b/i;
+// Content types a browser may run script from when rendered inline: HTML,
+// any XML (an XHTML or SVG document can hide under any `+xml` type), script
+// types, and PDF (viewers run embedded JavaScript and active forms).
+const ACTIVE_CONTENT_TYPE = /^\s*(text\/html|text\/xml|application\/xml|application\/pdf|[a-z]+\/[a-z0-9.+-]*(\+xml|javascript|ecmascript))\b/i;
 
 export interface FileRouteContext {
   store: FileStore;
   /** HMAC secret shared with the actors. */
   secret: string;
+  /** `RELAYCAST_MAX_UPLOAD_BYTES`: a signed size past it is refused before any byte is read. */
+  maxUploadBytes: number;
   logger: Logger;
 }
 
-function fileError(res: ServerResponse, status: number, code: string, message: string): void {
+function fileError(res: ServerResponse, status: number, code: string, message: string, headers: Readonly<Record<string, string>> = {}): void {
   const body = Buffer.from(JSON.stringify({ ok: false, error: { code, message } }));
-  res.writeHead(status, { ...FILE_CORS_HEADERS, 'content-type': 'application/json', 'content-length': String(body.byteLength) });
+  res.writeHead(status, { ...FILE_CORS_HEADERS, ...headers, 'content-type': 'application/json', 'content-length': String(body.byteLength) });
   res.end(body);
 }
 
@@ -58,19 +62,24 @@ export async function serveFile(req: IncomingMessage, res: ServerResponse, url: 
       // The token binds the size and content type the engine registered: refuse
       // a wrong declared length before reading, and stop reading a body as soon
       // as it runs past the signed size.
+      // Refusals before (or while) the body is read close the connection
+      // rather than leave an unread upload on it.
+      if (payload.size! > ctx.maxUploadBytes) {
+        return fileError(res, 413, 'payload_too_large', `Uploads are capped at ${ctx.maxUploadBytes} bytes on this gateway`, CLOSE_AFTER);
+      }
       const contentType = header(req, 'content-type');
       if (contentType !== payload.type) {
-        return fileError(res, 400, 'content_type_mismatch', 'Content-Type does not match the upload');
+        return fileError(res, 400, 'content_type_mismatch', 'Content-Type does not match the upload', CLOSE_AFTER);
       }
       const declared = header(req, 'content-length');
       if (declared !== undefined && Number(declared) !== payload.size) {
-        return fileError(res, 400, 'size_mismatch', 'Body size does not match the upload');
+        return fileError(res, 400, 'size_mismatch', 'Body size does not match the upload', CLOSE_AFTER);
       }
       let bytes: Buffer;
       try {
         bytes = await readBody(req, payload.size!);
       } catch (error) {
-        if (error instanceof BodyTooLarge) return fileError(res, 400, 'size_mismatch', 'Body size does not match the upload');
+        if (error instanceof BodyTooLarge) return fileError(res, 400, 'size_mismatch', 'Body size does not match the upload', CLOSE_AFTER);
         throw error;
       }
       if (bytes.byteLength !== payload.size) {

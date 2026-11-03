@@ -13,6 +13,7 @@ import type { GatewayContext } from './context.js';
 import { serveFile } from './files/handler.js';
 import {
   BodyTooLarge,
+  CLOSE_AFTER,
   REQUEST_ID_HEADER,
   bearerToken,
   readBody,
@@ -121,7 +122,9 @@ export function createRequestHandler(ctx: GatewayContext, options: RequestHandle
 
   async function route(req: IncomingMessage, res: ServerResponse, url: URL, requestId: string, signal: AbortSignal, setWorkspace: (id: string) => void): Promise<void> {
     const path = url.pathname;
-    if (path === ACTOR_FILE_ROUTE) return serveFile(req, res, url, { store: ctx.files, secret: ctx.config.fileSigningSecret, logger: ctx.logger });
+    if (path === ACTOR_FILE_ROUTE) {
+      return serveFile(req, res, url, { store: ctx.files, secret: ctx.config.fileSigningSecret, maxUploadBytes: ctx.config.maxUploadBytes, logger: ctx.logger });
+    }
     if (req.method === 'OPTIONS') return sendPreflight(req, res);
     if (path === '/health' || path === '/healthz') return sendJson(res, 200, { ok: true, service: SERVICE_NAME });
     if (path === '/readyz') {
@@ -176,7 +179,7 @@ export function createRequestHandler(ctx: GatewayContext, options: RequestHandle
       options.onEnd?.(res);
       ctx.logger.info('http.request', {
         method: req.method,
-        path: url.pathname,
+        path: url?.pathname ?? req.url,
         status: res.headersSent ? res.statusCode : 0,
         ms: Math.round((performance.now() - started) * 10) / 10,
         request_id: requestId,
@@ -185,7 +188,11 @@ export function createRequestHandler(ctx: GatewayContext, options: RequestHandle
     });
 
     if (options.closing()) {
-      sendError(res, 503, 'shutting_down', 'The gateway is restarting; retry', { connection: 'close' });
+      sendError(res, 503, 'shutting_down', 'The gateway is restarting; retry', CLOSE_AFTER);
+      return;
+    }
+    if (!url) {
+      sendError(res, 400, 'invalid_request', 'Invalid Host header', CLOSE_AFTER);
       return;
     }
 
@@ -195,7 +202,7 @@ export function createRequestHandler(ctx: GatewayContext, options: RequestHandle
         return;
       }
       if (error instanceof BodyTooLarge) {
-        return sendError(res, 413, 'payload_too_large', `Request body exceeds ${error.limit} bytes`);
+        return sendError(res, 413, 'payload_too_large', `Request body exceeds ${error.limit} bytes`, CLOSE_AFTER);
       }
       if (error instanceof ActorCallError) {
         if (error.code === 'aborted') return res.destroy();

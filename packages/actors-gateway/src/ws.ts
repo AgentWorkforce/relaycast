@@ -198,6 +198,7 @@ export function createSocketBridge(ctx: GatewayContext, options: SocketBridgeOpt
       socket.on('error', () => {});
       const requestId = requestIdFor(req);
       const url = requestUrl(req, ctx.fallbackHost());
+      if (!url) return rejectUpgrade(socket, 400, JSON.stringify({ ok: false, error: { code: 'invalid_request', message: 'Invalid Host header' } }));
       if (!SOCKET_PATHS.has(url.pathname)) return rejectUpgrade(socket, 426);
       const token = queryOrBearerToken(req, url);
       if (!token) return rejectUpgrade(socket, 401, JSON.stringify({ ok: false, error: { code: 'unauthorized', message: 'Missing token' } }));

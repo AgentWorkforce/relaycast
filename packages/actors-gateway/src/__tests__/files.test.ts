@@ -110,6 +110,30 @@ describe.each(STORES)('/_relayfiles with the %s store', (kind, fileStore) => {
     expect((await fetch(await signed({ key: KEY, op: 'stat' }), { method: 'HEAD' })).status).toBe(404);
   });
 
+  it('sandboxes every type a browser could run script from, including +xml and PDF', async () => {
+    harness = await startHarness();
+    const types = ['application/atom+xml', 'application/rss+xml', 'image/svg+xml', 'application/pdf', 'text/javascript', 'application/xml; charset=utf-8'];
+    for (const [index, type] of types.entries()) {
+      const key = `${WORKSPACE_ID}/f${index}/doc`;
+      const put = await fetch(await signed({ key, op: 'put', size: BYTES.byteLength, type }), { method: 'PUT', headers: { 'content-type': type }, body: BYTES });
+      expect(put.status).toBe(200);
+      const get = await fetch(await signed({ key, op: 'get' }));
+      expect(get.status).toBe(200);
+      expect(get.headers.get('content-security-policy'), type).toBe('sandbox');
+    }
+  });
+
+  it("refuses a signed size past the gateway's upload cap before reading the body", async () => {
+    harness = await startHarness({ env: { RELAYCAST_MAX_UPLOAD_BYTES: '16' } });
+    const put = await fetch(await signed({ key: KEY, op: 'put', size: 17, type: 'text/plain' }), { method: 'PUT', headers: { 'content-type': 'text/plain' }, body: 'x'.repeat(17) });
+    expect(put.status).toBe(413);
+    expect(put.headers.get('connection')).toBe('close');
+    expect((await readJson(put)).error).toMatchObject({ code: 'payload_too_large' });
+    expect(await harness.gateway.socketCount).toBe(0);
+    const within = await fetch(await signed({ key: KEY, op: 'put', size: 16, type: 'text/plain' }), { method: 'PUT', headers: { 'content-type': 'text/plain' }, body: 'x'.repeat(16) });
+    expect(within.status).toBe(200);
+  });
+
   it('refuses bad, expired or foreign tokens and token/method mismatches', async () => {
     harness = await startHarness();
     const forged = await fetch(`${harness.baseUrl}${ACTOR_FILE_ROUTE}?token=abc.def`);
