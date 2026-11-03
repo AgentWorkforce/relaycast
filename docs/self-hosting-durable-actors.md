@@ -59,10 +59,8 @@ Values that must match across processes:
 - `RELAYCAST_PUBLIC_URL` (actor) must be the origin clients reach the gateways
   on; signed file URLs embed it.
 - `RELAYCAST_INTERNAL_SECRET`: actor and gateway, when `/internal/*` is enabled.
-- `RELAYCAST_WORKSPACE_BOOTSTRAP_SECRET` (optional): actor and gateway, verbatim.
-  The gateway derives a keyed create's workspace id from it so a retry reaches
-  the same actor, where the engine's keyed-create record answers; without it a
-  create with an `Idempotency-Key` is refused 503.
+- `RELAYCAST_WORKSPACE_BOOTSTRAP_SECRET` (optional): actor and gateway, verbatim;
+  keyed creates depend on it (the gateway README has the behaviour).
 - `DURABLE_ACTORS_CONTROL_PLANE_URL` and `DURABLE_ACTORS_PROJECT_ID`: gateway
   and deployer point at the same project (locally: `http://127.0.0.1:7100`,
   `local`).

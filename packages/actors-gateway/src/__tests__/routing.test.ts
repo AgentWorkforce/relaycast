@@ -1,8 +1,8 @@
 import { request } from 'node:http';
 import { afterEach, describe, expect, it } from 'vitest';
-import type { ActorHttpRequest, ActorHttpResponse } from '@relaycast/engine/gateway';
+import { deriveKeyedWorkspaceId, type ActorHttpRequest, type ActorHttpResponse } from '@relaycast/engine/gateway';
 import { jsonResponse, type FakeWorkspace } from './fakeControlPlane.js';
-import { WORKSPACE_ID, foreignCredential, readJson, startHarness, type Harness } from './harness.js';
+import { OTHER_WORKSPACE_ID, WORKSPACE_ID, foreignCredential, readJson, startHarness, type Harness } from './harness.js';
 
 const echoWorkspace = (id: string): FakeWorkspace => ({
   create: (request, tag) => jsonResponse(201, { ok: true, data: { workspace_id: id, tag, body: request.body, url: request.url } }),
@@ -174,6 +174,16 @@ describe('routing', () => {
     expect(actors).toHaveLength(2);
     expect(actors[0]).toBe(actors[1]);
     expect((harness.controlPlane.invocations[0].args[0] as ActorHttpRequest).headers).toContainEqual(['idempotency-key', key]);
+    expect(actors[0]).toBe(await deriveKeyedWorkspaceId('bootstrap-secret-0123456789abcdef', key));
+    // An owner-scoped keyed create derives per owner, as the engine scopes its record.
+    const owned = await fetch(`${harness.baseUrl}/v1/workspaces`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', 'idempotency-key': key, authorization: `Bearer ${await harness.credential(OTHER_WORKSPACE_ID, 'workspace')}` },
+      body: JSON.stringify({ name: 'team' }),
+    });
+    expect(owned.status).toBe(201);
+    expect(harness.controlPlane.invocations[2].actorId).toBe(await deriveKeyedWorkspaceId('bootstrap-secret-0123456789abcdef', key, OTHER_WORKSPACE_ID));
+    expect(harness.controlPlane.invocations[2].actorId).not.toBe(actors[0]);
     // Another key is another actor; no key is a fresh snowflake every time.
     const other = await readJson(await create('bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb'));
     expect((other.data as { workspace_id: string }).workspace_id).not.toBe((first.data as { workspace_id: string }).workspace_id);

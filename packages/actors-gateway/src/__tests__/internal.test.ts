@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it } from 'vitest';
+import { deriveKeyedWorkspaceId } from '@relaycast/engine/gateway';
 import { ConfigError, loadConfig } from '../config.js';
 import { INTERNAL_CAPABILITIES } from '../internal.js';
 import { jsonResponse, type FakeWorkspace } from './fakeControlPlane.js';
@@ -88,6 +89,8 @@ describe('internal admin API', () => {
     expect((await create()).status).toBe(201);
     const [a, b] = harness.controlPlane.invocations;
     expect(a.actorId).toBe(b.actorId);
+    // The internal bearer is not an owner credential: the anonymous derivation.
+    expect(a.actorId).toBe(await deriveKeyedWorkspaceId('bootstrap-secret-0123456789abcdef', 'cccccccccccccccccccccccccccccccc'));
     expect((a.args[0] as { headers: [string, string][] }).headers).toContainEqual(['idempotency-key', 'cccccccccccccccccccccccccccccccc']);
     const withoutSecret = await startHarness({ workspace: adminWorkspace, env: { RELAYCAST_INTERNAL_SECRET: INTERNAL_SECRET } });
     try {

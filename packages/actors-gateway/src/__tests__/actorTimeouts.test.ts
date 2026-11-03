@@ -33,4 +33,32 @@ describe('actor call budgets', () => {
     await expect(client.handle('1', REQUEST)).rejects.toMatchObject({ code: 'outcome_unknown' } satisfies Partial<ActorCallError>);
     await expect(client.create('1', REQUEST, 'tag')).resolves.toEqual(RESPONSE);
   });
+
+  it('reports a reply body lost to the client leaving as aborted, and to the timeout as outcome_unknown', async () => {
+    // Headers arrive at once; the body errors when the request signal fires.
+    const bodyFailsOnAbort: typeof globalThis.fetch = async (_url, init) => {
+      const signal = init?.signal as AbortSignal;
+      const body = new ReadableStream<Uint8Array>({
+        start(controller) {
+          controller.enqueue(new TextEncoder().encode('{"outcome":'));
+          signal.addEventListener('abort', () => controller.error(new Error('body read failed')), { once: true });
+        },
+      });
+      return new Response(body, { status: 200, headers: { 'content-type': 'application/json' } });
+    };
+    const request = { method: 'GET', url: 'https://x/v1/agents', headers: [] as [string, string][], body: null };
+    const client = createActorClient({ controlPlaneUrl: 'http://127.0.0.1:1', projectId: 'p', fetch: bodyFailsOnAbort, invokeTimeoutMs: 100 });
+    const controller = new AbortController();
+    const gone = client.handle('1', request, { signal: controller.signal });
+    setTimeout(() => controller.abort(), 20);
+    await expect(gone).rejects.toMatchObject({ name: 'ActorCallError', code: 'aborted' });
+    await expect(client.handle('1', request)).rejects.toMatchObject({ name: 'ActorCallError', code: 'outcome_unknown' });
+  });
+
+  it('maps a 401/403 to unauthenticated before reading the body', async () => {
+    const refusing: typeof globalThis.fetch = async () => new Response('<html>denied</html>', { status: 403, headers: { 'content-type': 'text/html' } });
+    const client = createActorClient({ controlPlaneUrl: 'http://127.0.0.1:1', projectId: 'p', fetch: refusing });
+    await expect(client.handle('1', { method: 'GET', url: 'https://x/v1/agents', headers: [], body: null })).rejects.toMatchObject({ code: 'unauthenticated' });
+    await expect(client.findWebsocket('1', {})).rejects.toMatchObject({ code: 'unauthenticated' });
+  });
 });

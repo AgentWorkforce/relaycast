@@ -203,7 +203,8 @@ describe('WebSocket bridge', () => {
     await new Promise((resolve) => setTimeout(resolve, 500));
     expect(harness.controlPlane.findWebsocketCalls).toHaveLength(0);
     expect(harness.controlPlane.sessions).toHaveLength(0);
-    expect(harness.logs.filter((entry) => entry.event === 'socket.early_bytes')).toHaveLength(2);
+    expect(harness.logs.filter((entry) => entry.event === 'socket.early_bytes')).toMatchObject([{ path: '/v1/ws' }, { path: '/v1/ws' }]);
+    expect(JSON.stringify(harness.logs)).not.toContain('token=');
   });
 
   it('opens no upstream for a client that left while its actor was being asked', async () => {
