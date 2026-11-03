@@ -152,7 +152,7 @@ export class FakeActorSocket implements ActorSocketLike {
     this.source.connections.delete(this.id);
   }
 
-  reject(code = 1008, reason = 'connection rejected'): void {
+  reject(code = 4008, reason = 'connection rejected'): void {
     this.source.touch('reject');
     if (this.state !== 'connecting') throw new Error('only a connecting actor socket can be rejected');
     assertActorClose(code, reason);

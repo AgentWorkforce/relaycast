@@ -6,12 +6,19 @@ import { ACTOR_MIGRATIONS, ACTOR_MIGRATION_SUPERSESSIONS } from './migrations.ge
 export const ACTOR_MIGRATIONS_TABLE = '_engine_migrations';
 const statementsByFile = new Map(ACTOR_MIGRATIONS);
 const files = [...statementsByFile.keys()];
-const required = planMigrations(files, new Set(), ACTOR_MIGRATION_SUPERSESSIONS).length;
 
-/** Whether every bundled migration is recorded: one indexed count. The tracking table must exist. */
+function recorded(sql: ActorSql): Set<string> {
+  return new Set((sql.exec(`SELECT name FROM ${ACTOR_MIGRATIONS_TABLE}`) as { name: string }[]).map((row) => row.name));
+}
+
+/**
+ * Whether nothing is left to apply: the recorded names against the plan, in
+ * one read of the tracking table. (A count would read as current while a
+ * database that recorded superseded files still lacks a newer one.) The
+ * tracking table must exist.
+ */
 export function actorMigrationsCurrent(sql: ActorSql): boolean {
-  const [{ count }] = sql.exec(`SELECT COUNT(*) AS count FROM ${ACTOR_MIGRATIONS_TABLE}`) as { count: number }[];
-  return count >= required;
+  return planMigrations(files, recorded(sql), ACTOR_MIGRATION_SUPERSESSIONS).length === 0;
 }
 
 /**
@@ -25,11 +32,8 @@ export function applyActorMigrations(sql: ActorSql, options: { trackingTableExis
   if (!options.trackingTableExists) {
     sql.exec(`CREATE TABLE IF NOT EXISTS ${ACTOR_MIGRATIONS_TABLE} (name TEXT PRIMARY KEY, applied_at INTEGER NOT NULL)`);
   }
-  const done = new Set(
-    (sql.exec(`SELECT name FROM ${ACTOR_MIGRATIONS_TABLE}`) as { name: string }[]).map((row) => row.name),
-  );
   const applied: string[] = [];
-  for (const file of planMigrations(files, done, ACTOR_MIGRATION_SUPERSESSIONS)) {
+  for (const file of planMigrations(files, recorded(sql), ACTOR_MIGRATION_SUPERSESSIONS)) {
     for (const statement of statementsByFile.get(file)!) sql.exec(statement);
     sql.exec(`INSERT INTO ${ACTOR_MIGRATIONS_TABLE} (name, applied_at) VALUES (?, ?)`, file, Math.floor(Date.now() / 1000));
     applied.push(file);

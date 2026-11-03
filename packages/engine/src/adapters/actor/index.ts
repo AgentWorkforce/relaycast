@@ -21,6 +21,7 @@ import { reapExpiredWorkspaces } from '../../engine/workspace.js';
 import { createActorEngineDb, type ActorDatabase, type ActorSql } from './database.js';
 import { ActorCredentialTag } from './credential-tag.js';
 import { fixedCredentialTagger } from '../../auth/credentialTags.js';
+import { parseArCredential } from '../../auth/credentials.js';
 import { restrictToArCredentials } from '../../auth/credentials.js';
 import { isArWorkspaceId } from '@relaycast/types';
 import { ensureActorSchema } from './schema.js';
@@ -343,12 +344,17 @@ export function createActorRuntime(options: ActorRuntimeOptions): ActorRuntime {
   /**
    * One actor call: the schema, registry reconciliation with the control
    * plane, the work, then its background work and the alarm. `rehydrate`
-   * runs before the work so a request sees the sockets as they are.
+   * runs before the work so a request sees the sockets as they are, and
+   * inside `finish` so a failed reconciliation still settles the drains it
+   * scheduled and re-arms the alarm (else maintenance would wait for the
+   * next call).
    */
   const call = async <T>(work: () => Promise<T>): Promise<T> => {
     ensureSchema();
-    await realtime.rehydrate();
-    return finish(work);
+    return finish(async () => {
+      await realtime.rehydrate();
+      return work();
+    });
   };
 
   const finish = async <T>(work: () => Promise<T>): Promise<T> => {
@@ -359,6 +365,26 @@ export function createActorRuntime(options: ActorRuntimeOptions): ActorRuntime {
       const next = nextMaintenanceAt(sql);
       if (next !== null) requestMaintenance(next);
     }
+  };
+
+  /**
+   * A key push that created this workspace (`POST /internal/workspaces/:id/api-key`
+   * with an `ar_ws_` key, answered 201) is the one create that does not go
+   * through `create`: the pushed key's routing tag is the workspace's tag,
+   * or the actor could mint no credential afterwards. The gateway admits
+   * only tags its keyring signed to this route.
+   */
+  const keepPushedTag = (request: ActorHttpRequest, status: number): void => {
+    if (status !== 201 || request.method !== 'POST' || credentialTag.get() !== undefined) return;
+    if (new URL(request.url).pathname !== `/internal/workspaces/${options.workspaceId}/api-key`) return;
+    let apiKey: unknown;
+    try {
+      apiKey = (JSON.parse(request.body ?? 'null') as { api_key?: unknown } | null)?.api_key;
+    } catch {
+      return;
+    }
+    const key = typeof apiKey === 'string' ? parseArCredential(apiKey) : undefined;
+    if (key?.kind === 'workspace' && key.workspaceId === options.workspaceId) credentialTag.set(key.tag);
   };
 
   return {
@@ -391,6 +417,7 @@ export function createActorRuntime(options: ActorRuntimeOptions): ActorRuntime {
           executionCtx,
         );
         const body = await response.text();
+        keepPushedTag(request, response.status);
         return { status: response.status, headers: [...response.headers], body };
       });
     },

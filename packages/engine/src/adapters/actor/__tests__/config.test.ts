@@ -1,4 +1,6 @@
 import { describe, expect, it } from 'vitest';
+import { encodeArCredential } from '@relaycast/types';
+import { createCredentialTagSigner } from '../../../auth/credentialTags.js';
 import { ConfigError, DEFAULT_ACTOR_MAX_UPLOAD_BYTES, actorConfigFromEnv } from '../index.js';
 import { FakeWorkspaceActor, jsonRequest } from './fakeActor.js';
 
@@ -42,7 +44,9 @@ describe('actorConfigFromEnv', () => {
     expect(() => actorConfigFromEnv({ RELAYCAST_MAX_UPLOAD_BYTES: '0' })).toThrow(/RELAYCAST_MAX_UPLOAD_BYTES/);
     expect(() => actorConfigFromEnv({ RELAYCAST_MAILBOX_DEPTH_CAP: '1.5' })).toThrow(/RELAYCAST_MAILBOX_DEPTH_CAP/);
     expect(() => actorConfigFromEnv({ RELAYCAST_INTERNAL_SECRET: 'short' })).toThrow(/RELAYCAST_INTERNAL_SECRET: must be at least 32/);
-    expect(() => actorConfigFromEnv({ RELAYCAST_INTERNAL_SECRET: ` ${INTERNAL_SECRET} ` })).toThrow(/whitespace/);
+    // Read as the self-host server reads it: trimmed, and blank is unset.
+    expect(actorConfigFromEnv({ RELAYCAST_INTERNAL_SECRET: ` ${INTERNAL_SECRET} ` }).internalSecret).toBe(INTERNAL_SECRET);
+    expect(actorConfigFromEnv({ RELAYCAST_INTERNAL_SECRET: '   ' }).internalSecret).toBeUndefined();
     expect(() => actorConfigFromEnv({ RELAYCAST_MAX_UPLOAD_BYTES: 'x', RELAYCAST_RATE_LIMIT_PER_MINUTE: '-1' }))
       .toThrow(/RELAYCAST_MAX_UPLOAD_BYTES.*RELAYCAST_RATE_LIMIT_PER_MINUTE/);
   });
@@ -52,6 +56,22 @@ describe('internal admin routes inside a workspace actor', () => {
   const internal = (method: string, path: string, body?: unknown) => ({
     ...jsonRequest(method, path, body),
     headers: [['content-type', 'application/json'], ['authorization', `Bearer ${INTERNAL_SECRET}`]] as [string, string][],
+  });
+
+  it('keeps the routing tag of an ar_ws_ key whose push created the workspace, so it can mint credentials', async () => {
+    const actor = new FakeWorkspaceActor(WORKSPACE_ID, { config: { internalSecret: INTERNAL_SECRET } });
+    const signer = createCredentialTagSigner({ current: 'a', keys: { a: 'test-credential-tag-secret-0123456789' } });
+    const apiKey = encodeArCredential({ kind: 'workspace', workspaceId: WORKSPACE_ID, tag: await signer.tag(WORKSPACE_ID), secret: new Uint8Array(32).fill(5) });
+    const pushed = await actor.handle(internal('POST', `/internal/workspaces/${WORKSPACE_ID}/api-key`, { api_key: apiKey }));
+    expect(pushed.status).toBe(201);
+    // The pushed key authenticates, and the workspace can mint an agent token under the same tag.
+    const agent = await actor.handle(jsonRequest('POST', '/v1/agents', { name: 'alice' }, apiKey));
+    expect(agent.status).toBe(201);
+    expect(JSON.parse(agent.body).data.token).toMatch(new RegExp(`^ar_ag_[0-9A-Za-z]+_${await signer.tag(WORKSPACE_ID)}_`));
+    // A rotation afterwards keeps the tag.
+    const rotated = await actor.handle(internal('POST', `/internal/workspaces/${WORKSPACE_ID}/api-key`, {}));
+    expect(rotated.status).toBe(200);
+    expect(JSON.parse(rotated.body).data.api_key).toContain(`_${await signer.tag(WORKSPACE_ID)}_`);
   });
 
   it('serves only this actor\'s workspace', async () => {

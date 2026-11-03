@@ -450,6 +450,46 @@ describe('workspace actor realtime', () => {
     expect(actor.sockets.violations).toEqual([]);
   });
 
+  it('restores surviving sockets before tearing down vanished ones, so a live provider keeps its node online', async () => {
+    const actor = new FakeWorkspaceActor(WORKSPACE_ID);
+    const { key } = await workspaceWithAgents(actor);
+    const statusEvents = () => rows(actor, "SELECT type FROM workspace_events WHERE type LIKE 'node.status.%' ORDER BY seq").map((row) => row.type);
+    const providerRows = () => rows(actor, 'SELECT name, status FROM node_providers WHERE node_id = ? ORDER BY name', 'broker-1');
+
+    // A broker node serving two providers, each on its own socket.
+    const enrolled = await call<{ token: string }>(actor, 'POST', '/v1/nodes', { node_id: 'broker-1', name: 'broker-1', capabilities: [] }, key);
+    expect(enrolled.status).toBe(201);
+    const granted = await actor.handle(upgradeRequest('/v1/node/ws', enrolled.json.data.token));
+    expect(isSocketGrant(granted)).toBe(true);
+    const principal = SocketGrantSchema.parse(JSON.parse(granted.body)).data.metadata;
+    const register = (id: string, provider: string) => ({
+      v: 1, id, type: 'node.register', node_id: 'broker-1', name: 'broker-1', capabilities: [], max_agents: 4, tags: [], version: 'actor-test/1',
+      provider: { name: provider, instance_id: `${provider}-1` },
+    });
+    const alpha = await actor.connect(principal);
+    await actor.message(alpha, register('ra', 'alpha'));
+    const beta = await actor.connect(principal);
+    await actor.message(beta, register('rb', 'beta'));
+    expect(providerRows()).toEqual([{ name: 'alpha', status: 'online' }, { name: 'beta', status: 'online' }]);
+    expect(rows(actor, 'SELECT status FROM nodes WHERE id = ?', 'broker-1')).toEqual([{ status: 'online' }]);
+
+    // The control plane lost alpha's socket while the actor slept; beta's survived.
+    actor.sockets.drop(alpha);
+    const woken = actor.restart();
+    expect((await call(woken, 'GET', '/v1/agents', undefined, key)).status).toBe(200);
+    const registry = woken.runtime.deps.nodeConnections;
+    expect(registry.isProviderAttached?.(WORKSPACE_ID, 'broker-1', 'beta')).toBe(true);
+    expect(registry.isProviderAttached?.(WORKSPACE_ID, 'broker-1', 'alpha')).toBe(false);
+    expect(registry.isNodeConnected(WORKSPACE_ID, 'broker-1')).toBe(true);
+    // alpha's teardown ran after beta was back: alpha went offline, the node did not.
+    expect(providerRows()).toEqual([{ name: 'alpha', status: 'offline' }, { name: 'beta', status: 'online' }]);
+    expect(rows(actor, 'SELECT status FROM nodes WHERE id = ?', 'broker-1')).toEqual([{ status: 'online' }]);
+    expect(statusEvents()).toEqual(['node.status.online']);
+    expect(rows(actor, 'SELECT socket_id FROM _actor_sockets')).toEqual([{ socket_id: beta.id }]);
+    expect(beta.closed).toBeNull();
+    expect(actor.sockets.violations).toEqual([]);
+  });
+
   it('maps engine close codes to ones durable-actors accepts', async () => {
     expect(toActorCloseCode(undefined)).toBe(1000);
     expect(toActorCloseCode(1000)).toBe(1000);
@@ -460,6 +500,11 @@ describe('workspace actor realtime', () => {
     expect(toActorCloseCode(2500)).toBe(4000);
     expect(toActorCloseReason(undefined)).toBe('');
     expect(toActorCloseReason('x'.repeat(200))).toHaveLength(123);
+    // Cut on a code point: 30 four-byte characters fit, and no lone surrogate is left behind.
+    const emoji = toActorCloseReason('\u{1F600}'.repeat(40));
+    expect([...emoji]).toHaveLength(30);
+    expect(Buffer.byteLength(emoji)).toBe(120);
+    expect(emoji.endsWith('\u{1F600}')).toBe(true);
     const accented = toActorCloseReason('é'.repeat(100));
     expect(Buffer.byteLength(accented)).toBeLessThanOrEqual(123);
     expect(accented).toMatch(/^é+$/);

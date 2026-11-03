@@ -112,12 +112,12 @@ export function toActorCloseCode(code: number | undefined): number {
   return 4000;
 }
 
-/** A close reason within the 123-byte limit, cut on a character boundary. */
+/** A close reason within the 123-byte limit, cut on a code point boundary (never inside a surrogate pair). */
 export function toActorCloseReason(reason: string | undefined): string {
-  let value = reason ?? '';
   const encoder = new TextEncoder();
-  while (encoder.encode(value).byteLength > MAX_CLOSE_REASON_BYTES) value = value.slice(0, -1);
-  return value;
+  const points = [...(reason ?? '')];
+  while (encoder.encode(points.join('')).byteLength > MAX_CLOSE_REASON_BYTES) points.pop();
+  return points.join('');
 }
 
 /** Tags the actor sets on a connection in `onConnect`, for `broadcast` targeting and inspection. */
@@ -330,7 +330,10 @@ export class ActorRealtime implements RealtimeBus, ConnectionRegistry, NodeConne
    * its token re-read), so the sleep cost nothing. This is a memory rebuild,
    * not a reconnect: nothing is sent, no node goes online or offline. A row
    * whose socket the control plane no longer holds (an `onDisconnect` the
-   * actor was not woken for) runs the same teardown a disconnect does.
+   * actor was not woken for) runs the same teardown a disconnect does, after
+   * every surviving socket is back, so the teardown sees the node's live
+   * connections and does not take it offline under them; one whose provider
+   * a surviving socket already holds was superseded and is only forgotten.
    *
    * A connection the control plane holds that neither the memory nor the
    * table accounts for, or whose principal no longer validates, is closed
@@ -350,6 +353,7 @@ export class ActorRealtime implements RealtimeBus, ConnectionRegistry, NodeConne
 
     if (!this.replayed) {
       this.replayed = true;
+      const vanished: ActorSocketRow[] = [];
       for (const row of this.table.all()) {
         if (this.attached.has(row.socketId)) continue;
         if (event?.phase === 'connect' && row.socketId === event.socket.id) {
@@ -358,17 +362,28 @@ export class ActorRealtime implements RealtimeBus, ConnectionRegistry, NodeConne
           continue;
         }
         if (!live.has(row.socketId)) {
-          // Gone from the control plane: rebuild it only to run its teardown.
-          const replayed = await this.replay(row, { earlyDrain: false });
-          if (!replayed) {
-            this.table.delete(row.socketId);
-            continue;
-          }
-          if (event?.phase === 'disconnect' && row.socketId === event.socket.id) continue;
-          await this.teardown(row.socketId);
+          vanished.push(row);
           continue;
         }
         await this.replayOrClose(row, live.get(row.socketId)!);
+      }
+      for (const row of vanished) {
+        if (event?.phase === 'disconnect' && row.socketId === event.socket.id) continue;
+        // Its provider is held by a socket that survived: this one was
+        // superseded (a reconnect the actor did not stay awake for), and
+        // rebuilding it would take the binding back from the live socket.
+        if (row.kind === 'node' && row.nodeId && row.providerName
+          && this.inner.providerConnectionId(row.workspaceId, row.nodeId, row.providerName) !== undefined) {
+          this.table.delete(row.socketId);
+          continue;
+        }
+        // Gone from the control plane: rebuild it only to run its teardown.
+        const replayed = await this.replay(row, { earlyDrain: false });
+        if (!replayed) {
+          this.table.delete(row.socketId);
+          continue;
+        }
+        await this.teardown(row.socketId);
       }
     }
 

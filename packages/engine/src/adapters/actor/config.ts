@@ -26,13 +26,10 @@ const ActorEnvSchema = z.object({
   RELAYCAST_MAILBOX_TTL_MS: positiveNumber,
   RELAYCAST_MAILBOX_DEPTH_CAP: positiveInt,
   RELAYCAST_RATE_LIMIT_PER_MINUTE: positiveInt,
-  /** Enables `/internal/*`; at least 32 characters, no surrounding whitespace. */
+  /** Enables `/internal/*`; at least 32 characters once trimmed, blank is unset (as `bin/serve.ts` reads it). */
   RELAYCAST_INTERNAL_SECRET: z.preprocess(
-    (value) => (value === '' ? undefined : value),
-    z.string()
-      .min(MIN_INTERNAL_SECRET_LENGTH, `must be at least ${MIN_INTERNAL_SECRET_LENGTH} characters`)
-      .refine((secret) => secret === secret.trim(), 'must not have leading or trailing whitespace')
-      .optional(),
+    unsetIfBlank,
+    z.string().trim().min(MIN_INTERNAL_SECRET_LENGTH, `must be at least ${MIN_INTERNAL_SECRET_LENGTH} characters`).optional(),
   ),
   RELAYCAST_ENV: z.preprocess(unsetIfBlank, z.string().trim().min(1).optional()),
 });

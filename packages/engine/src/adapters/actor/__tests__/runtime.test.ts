@@ -72,7 +72,7 @@ describe('workspace actor runtime', () => {
     const schema = woken.sql.log.filter((statement) => /sqlite_master|_engine_migrations/.test(statement));
     expect(schema).toEqual([
       expect.stringMatching(/^SELECT name FROM sqlite_master WHERE type = 'table' AND name IN/),
-      'SELECT COUNT(*) AS count FROM _engine_migrations',
+      'SELECT name FROM _engine_migrations',
     ]);
     expect(woken.sql.log.filter((statement) => /^\s*(CREATE|ALTER|DROP)/i.test(statement))).toEqual([]);
 

@@ -1,10 +1,17 @@
 import { readdirSync, readFileSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 
 const srcRoot = fileURLToPath(new URL('..', import.meta.url));
-const IMPORTS_TERSE = /from\s+['"](durable-actors|terse-sdk)(\/[^'"]*)?['"]|import\(\s*['"](durable-actors|terse-sdk)/;
+const IMPORTS_TERSE = /from\s+['"](durable-actors|terse-sdk)(\/[^'"]*)?['"]|import\(\s*['"](durable-actors|terse-sdk)|require\(\s*['"](durable-actors|terse-sdk)/;
+
+// Resolution fails for these in this module graph, whatever a sibling
+// workspace hoisted into node_modules: an entry point that reached either
+// package, directly or through a dependency, could not load below.
+for (const name of ['durable-actors', 'terse-sdk']) {
+  vi.doMock(name, () => { throw new Error(`${name} must not be loaded by the engine`); });
+}
 
 function sources(dir: string): string[] {
   return readdirSync(dir).flatMap((name) => {
@@ -31,10 +38,9 @@ describe('engine without durable-actors', () => {
     }
   });
 
-  // durable-actors is resolvable here only because a sibling workspace
-  // (`@relaycast/actors-workspace`) hoists it into the monorepo's node_modules;
-  // the source scan and manifest checks above are what keep it out of the engine.
-  it('loads every entry point without importing durable-actors', async () => {
+  it('loads every entry point while durable-actors and terse-sdk are unresolvable', async () => {
+    // (vitest reports a throwing factory with its own wording.)
+    await expect(import('durable-actors')).rejects.toThrow();
     for (const entry of ['../index.js', '../ports/index.js', '../adapters/node/index.js', '../gateway.js', '../adapters/actor/index.js']) {
       await expect(import(entry)).resolves.toBeDefined();
     }
