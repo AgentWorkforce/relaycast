@@ -94,6 +94,30 @@ interface ActionCallerSnapshot {
 }
 
 /**
+ * Load the current, still-active observer token row by id, mirroring the
+ * active/expiry checks the auth provider applies at connect time. Returns
+ * `undefined` when the token has been revoked, has expired, or no longer
+ * exists, so callers can fail closed.
+ */
+export async function loadActiveObserverToken(
+  db: EngineDb,
+  workspaceId: string,
+  tokenId: string,
+): Promise<ObserverToken | undefined> {
+  const now = new Date();
+  const [row] = await db
+    .select()
+    .from(observerTokens)
+    .where(and(
+      eq(observerTokens.workspaceId, workspaceId),
+      eq(observerTokens.id, tokenId),
+      eq(observerTokens.status, 'active'),
+      or(isNull(observerTokens.expiresAt), gt(observerTokens.expiresAt, now)),
+    ));
+  return row;
+}
+
+/**
  * Single-process, in-memory implementation of the workspace observer stream and
  * node-control stream. Agent runtime traffic is intentionally node-only:
  * direct agents and broker-hosted agents both connect through `/v1/node/ws`.
@@ -130,6 +154,23 @@ export class InProcessRealtime implements RealtimeBus, ConnectionRegistry, NodeC
   /** Admit `agent.register` frames through the host's admission hooks. */
   setAdmission(admission: AdmissionHooks | undefined): void {
     this.admission = admission;
+  }
+
+  /**
+   * Receive every fire-and-forget promise the adapter starts (the early drain
+   * after {@link attachNodeSocket}). A host whose sockets are usable only
+   * while its call runs (a durable actor) awaits them before returning;
+   * unset, they run detached as on the Node server.
+   */
+  setBackgroundScheduler(schedule: ((promise: Promise<unknown>) => void) | undefined): void {
+    this.scheduleBackground = schedule;
+  }
+
+  private scheduleBackground: ((promise: Promise<unknown>) => void) | undefined;
+
+  private background(promise: Promise<unknown>): void {
+    if (this.scheduleBackground) this.scheduleBackground(promise);
+    else void promise;
   }
 
   private nodeKey(workspaceId: string, nodeId: string): string {
@@ -193,7 +234,7 @@ export class InProcessRealtime implements RealtimeBus, ConnectionRegistry, NodeC
       // authoritative forever.
       if (conn.observerToken && (conn.observerCheckedAt === undefined || now - conn.observerCheckedAt >= OBSERVER_TOKEN_REVALIDATE_MS)) {
         try {
-          const fresh = await this.loadActiveObserverToken(args.workspaceId, conn.observerToken.id);
+          const fresh = await loadActiveObserverToken(this.db, args.workspaceId, conn.observerToken.id);
           if (!fresh) {
             set.delete(conn);
             try {
@@ -217,29 +258,6 @@ export class InProcessRealtime implements RealtimeBus, ConnectionRegistry, NodeC
         // Socket may have closed between enumeration and send.
       }
     }
-  }
-
-  /**
-   * Load the current, still-active observer token row by id, mirroring the
-   * active/expiry checks the auth provider applies at connect time. Returns
-   * `undefined` when the token has been revoked, has expired, or no longer
-   * exists, so callers can fail closed.
-   */
-  private async loadActiveObserverToken(
-    workspaceId: string,
-    tokenId: string,
-  ): Promise<ObserverToken | undefined> {
-    const now = new Date();
-    const [row] = await this.db
-      .select()
-      .from(observerTokens)
-      .where(and(
-        eq(observerTokens.workspaceId, workspaceId),
-        eq(observerTokens.id, tokenId),
-        eq(observerTokens.status, 'active'),
-        or(isNull(observerTokens.expiresAt), gt(observerTokens.expiresAt, now)),
-      ));
-    return row;
   }
 
   /* ------------------------- ConnectionRegistry ------------------------ */
@@ -883,7 +901,7 @@ export class InProcessRealtime implements RealtimeBus, ConnectionRegistry, NodeC
     // Best-effort early flush (covers non-spawn frames that need no capacity);
     // the authoritative drain fires after node.register and after heartbeat
     // liveness/capacity transitions once the node is dispatchable. See drainNode.
-    void this.drainNode(workspaceId, nodeId);
+    this.background(this.drainNode(workspaceId, nodeId));
     return handle;
   }
 

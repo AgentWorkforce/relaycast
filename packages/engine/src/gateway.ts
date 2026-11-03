@@ -14,6 +14,14 @@ export { signFileToken, verifyFileToken } from './lib/fileTokens.js';
 export type { FileTokenPayload } from './lib/fileTokens.js';
 export type { ActorHttpRequest, ActorHttpResponse } from './adapters/actor/http.js';
 export { ACTOR_FILE_ROUTE, OBJECT_SIZE_HEADER } from './adapters/actor/files.js';
+export {
+  SOCKET_GRANT_HEADER,
+  SocketGrantSchema,
+  SocketPrincipalSchema,
+  isSocketGrant,
+  type SocketGrant,
+  type SocketPrincipal,
+} from './adapters/actor/socket-grant.js';
 
 /** A new workspace id: a snowflake, as every relaycast deployment uses. */
 export function generateWorkspaceId(): string {

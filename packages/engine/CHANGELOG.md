@@ -11,6 +11,15 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Added
 
+- `@relaycast/engine/adapters/actor`: `ActorRealtime` composes `InProcessRealtime` over a durable actor's sockets. `ConnectionRegistry.upgrade` / `NodeConnectionRegistry.upgradeNode` answer a socket grant (`SOCKET_GRANT_HEADER`, `SocketPrincipalSchema`, `SocketGrantSchema`, `isSocketGrant`, also exported from `@relaycast/engine/gateway`) instead of a 101; the runtime gains `onConnect` / `onMessage` / `onDisconnect` and a `sockets` option (`getConnections` / `broadcast`). Every entry point reconciles the registry with the control plane first: unknown sockets are closed `4012 actor restarted`, vanished ones torn down. Engine close codes map to durable-actors' range (`toActorCloseCode`: 1008 → 4008, 1012 → 4012).
+- `actorConfigFromEnv(env)` reads the actor's engine config from the self-host variables and throws `ConfigError` on a bad value; `createActorRuntime` refuses a weak `internalSecret`.
+- `InProcessRealtime.setBackgroundScheduler` hands the adapter's fire-and-forget work (the early drain after `attachNodeSocket`) to the host; unset, it runs detached as before.
+- `loadActiveObserverToken(db, workspaceId, tokenId)` is exported from the node adapter.
+
+### Changed
+
+- `/internal/workspaces/:id` and `/internal/workspaces/:id/api-key` answer 404 for another workspace's id on a single-workspace host (`config.workspaceId`), where `POST /internal/workspaces` is also a 404.
+
 - `GET /v1/deliveries` accepts `wait` (0–25000 ms). When the list is empty the request parks until a delivery is created for the agent, the wait expires or the client disconnects. A woken request lists again with the same `status` and `limit` and parks again for the rest of the wait if that is still empty. Only creation notifies: a poll filtered to `delivered`, `acked`, `failed` or `dead_lettered` is not woken by a transition into that status, only by a matching creation or the wait expiring. A blank `wait` is a 400. A parked request issues no statements.
 - `DeliveryWaiters`, `InProcessDeliveryWaiters`, `MAX_DELIVERY_WAIT_MS`, `DELIVERY_NOTIFY_MEMORY_MS` and `EngineProviders.deliveryWaiters`. `routeDeliveryOutcomes` notifies the recipients of every created delivery beside routing it: socket pushes never wait on the notify, which is awaited after routing for at most 2 s and logged on failure or timeout. A waiter whose empty read started before a notify landed resolves at once. `createNodeRuntime` binds `InProcessDeliveryWaiters` and answers parked waits when it closes. The workspace actor binds none: a wait inside an actor call would hold its mailbox, so `wait` answers at once there. A host without the port answers `wait` at once.
 

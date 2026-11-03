@@ -1,5 +1,12 @@
 import Database from 'better-sqlite3';
-import { createActorRuntime, type ActorRuntime, type ActorRuntimeOptions } from '../index.js';
+import {
+  createActorRuntime,
+  type ActorBroadcastOptionsLike,
+  type ActorRuntime,
+  type ActorRuntimeOptions,
+  type ActorSocketLike,
+  type ActorSocketSource,
+} from '../index.js';
 import { SQLITE_CONSTRAINT_CODES, type ActorSql, type SqliteValue } from '../database.js';
 import type { ActorHttpRequest, ActorHttpResponse } from '../http.js';
 import { createCredentialTagSigner } from '../../../auth/credentialTags.js';
@@ -105,10 +112,139 @@ export class FakeAlarm {
   set(timestampMs: number): void { this.at = timestampMs; }
 }
 
-/** A `Workspace` actor as the example and armadillo define it, over the fake runtime. */
+function assertActorClose(code: number, reason: string): void {
+  if (!Number.isInteger(code) || !(code === 1000 || (code >= 3000 && code <= 4999))) {
+    throw new Error(`socket close code must be 1000 or between 3000 and 4999, got ${code}`);
+  }
+  if (Buffer.byteLength(reason) > 123) throw new Error('socket close reason must not exceed 123 bytes');
+}
+
+/**
+ * A control-plane socket as durable-actors 0.14.6 presents it to the actor:
+ * JSON in and out, `reject` only while connecting, close codes 1000 or
+ * 3000–4999, at most 10 tags.
+ */
+export class FakeActorSocket implements ActorSocketLike {
+  tags: readonly string[] = [];
+  state: 'connecting' | 'open' | 'closed' = 'connecting';
+  /** Frames the client received. */
+  readonly sent: Record<string, unknown>[] = [];
+  closed: { code: number; reason: string } | null = null;
+  rejected: { code: number; reason: string } | null = null;
+
+  constructor(readonly id: string, readonly metadata: unknown, private readonly source: FakeSocketSource) {}
+
+  send(message: unknown): void {
+    this.source.touch('send');
+    if (this.state === 'closed') throw new Error('cannot send on a closed actor socket');
+    this.sent.push(message as Record<string, unknown>);
+  }
+
+  close(code = 1000, reason = ''): void {
+    this.source.touch('close');
+    assertActorClose(code, reason);
+    if (this.state === 'closed') return;
+    this.state = 'closed';
+    this.closed = { code, reason };
+    this.source.connections.delete(this.id);
+  }
+
+  reject(code = 1008, reason = 'connection rejected'): void {
+    this.source.touch('reject');
+    if (this.state !== 'connecting') throw new Error('only a connecting actor socket can be rejected');
+    assertActorClose(code, reason);
+    this.state = 'closed';
+    this.rejected = { code, reason };
+    this.source.connections.delete(this.id);
+  }
+
+  setTags(...tags: string[]): void {
+    this.source.touch('setTags');
+    const unique = [...new Set(tags)];
+    if (unique.length > 10 || unique.some((tag) => tag.length === 0 || tag.length > 256)) {
+      throw new Error('socket tags must be at most 10 of 1-256 characters');
+    }
+    this.tags = unique;
+  }
+
+  /** Frames of a given `type`. */
+  ofType(type: string): Record<string, unknown>[] {
+    return this.sent.filter((frame) => frame.type === type);
+  }
+}
+
+/**
+ * The control plane's view of an actor's sockets. Like the runtime, it
+ * answers `getConnections` / `broadcast` only while an actor call runs
+ * (`during`); any socket use outside one is recorded in `violations`.
+ */
+export class FakeSocketSource implements ActorSocketSource {
+  readonly connections = new Map<string, FakeActorSocket>();
+  active = false;
+  /** Socket operations attempted outside an actor call. */
+  readonly violations: string[] = [];
+  private seq = 0;
+
+  touch(operation: string): void {
+    if (!this.active) this.violations.push(operation);
+  }
+
+  async getConnections(tag?: string): Promise<readonly ActorSocketLike[]> {
+    this.touch('getConnections');
+    if (!this.active) throw new Error('actor connections are available only during an actor invocation');
+    return [...this.connections.values()].filter((socket) => tag === undefined || socket.tags.includes(tag));
+  }
+
+  broadcast(message: unknown, options: ActorBroadcastOptionsLike = {}): void {
+    this.touch('broadcast');
+    if (!this.active) throw new Error('actor connections are available only during an actor invocation');
+    const except = new Set((Array.isArray(options.except) ? options.except : options.except ? [options.except] : [])
+      .map((socket: Pick<ActorSocketLike, 'id'>) => socket.id));
+    const tags = options.tags ?? [];
+    for (const socket of this.connections.values()) {
+      if (except.has(socket.id)) continue;
+      const matches = options.tagMatch === 'any'
+        ? tags.some((tag) => socket.tags.includes(tag))
+        : tags.every((tag) => socket.tags.includes(tag));
+      if (matches) socket.send(message);
+    }
+  }
+
+  /** A connection the gateway opened with `metadata`; the actor has not been told yet. */
+  connecting(metadata: unknown): FakeActorSocket {
+    const socket = new FakeActorSocket(`sock_${++this.seq}`, metadata, this);
+    this.connections.set(socket.id, socket);
+    return socket;
+  }
+
+  /** A connection the control plane holds open that the actor never saw (its memory was lost). */
+  open(metadata: unknown): FakeActorSocket {
+    const socket = this.connecting(metadata);
+    socket.state = 'open';
+    return socket;
+  }
+
+  /** The control plane lost a socket without waking the actor for `onDisconnect`. */
+  drop(socket: FakeActorSocket): void {
+    this.connections.delete(socket.id);
+    socket.state = 'closed';
+  }
+
+  async during<T>(work: () => Promise<T>): Promise<T> {
+    this.active = true;
+    try {
+      return await work();
+    } finally {
+      this.active = false;
+    }
+  }
+}
+
+/** A `Workspace` actor as `@relaycast/actors-workspace` defines it, over the fake runtime. */
 export class FakeWorkspaceActor {
   readonly sql = new FakeActorDatabase();
   readonly alarm = new FakeAlarm();
+  readonly sockets = new FakeSocketSource();
   readonly runtime: ActorRuntime;
   calls = 0;
 
@@ -120,32 +256,57 @@ export class FakeWorkspaceActor {
       fileSigningSecret: 'file-secret',
       outboundFetch: () => Promise.reject(new Error('no network in tests')),
       alarm: this.alarm,
+      sockets: this.sockets,
       ...options,
       config: { environment: 'test', ...options.config },
     });
   }
 
+  /** One actor call: a transaction, with the sockets reachable for its duration. */
+  private call<T>(work: () => Promise<T>): Promise<T> {
+    this.calls += 1;
+    return this.sockets.during(() => this.sql.atomic(work));
+  }
+
   /**
-   * One actor call, routed as the example gateway does: `POST /v1/workspaces`
+   * One actor call, routed as the gateway does: `POST /v1/workspaces`
    * goes to `create` with the tag the gateway's keyring signs for this id.
    */
   async handle(request: ActorHttpRequest): Promise<ActorHttpResponse> {
-    this.calls += 1;
     if (request.method === 'POST' && new URL(request.url).pathname === '/v1/workspaces') {
       const tag = await TEST_CREDENTIAL_TAGS.tag(this.id);
-      return this.sql.atomic(() => this.runtime.create(request, tag));
+      return this.call(() => this.runtime.create(request, tag));
     }
-    return this.sql.atomic(() => this.runtime.handle(request));
+    return this.call(() => this.runtime.handle(request));
   }
 
   /** `onAlarm`: the firing alarm reads as set during the call and is consumed after it unless re-armed. */
   async maintain(): Promise<void> {
     const firing = this.alarm.at;
     try {
-      await this.sql.atomic(() => this.runtime.maintain());
+      await this.call(() => this.runtime.maintain());
     } finally {
       if (this.alarm.at === firing) this.alarm.at = null;
     }
+  }
+
+  /** `onConnect` for a socket the gateway opened with `metadata` (a grant's principal). */
+  async connect(metadata: unknown): Promise<FakeActorSocket> {
+    const socket = this.sockets.connecting(metadata);
+    await this.call(() => this.runtime.onConnect(socket));
+    if (socket.state === 'connecting') socket.state = 'open';
+    return socket;
+  }
+
+  /** `onMessage`: a JSON frame the client sent. */
+  message(socket: FakeActorSocket, message: unknown): Promise<void> {
+    return this.call(() => this.runtime.onMessage(socket, message));
+  }
+
+  /** `onDisconnect`: the control plane has already dropped the socket. */
+  disconnect(socket: FakeActorSocket): Promise<void> {
+    this.sockets.drop(socket);
+    return this.call(() => this.runtime.onDisconnect(socket));
   }
 }
 

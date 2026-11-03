@@ -1,0 +1,22 @@
+{
+  "name": "@relaycast/actors-workspace",
+  "version": "12.6.2",
+  "private": true,
+  "description": "The relaycast Workspace actor: one workspace per TerseAI durable actor, served by the engine's actor adapter",
+  "type": "module",
+  "scripts": {
+    "dev": "durable-actors dev",
+    "check": "tsc --noEmit",
+    "lint": "eslint src/",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@relaycast/engine": "12.6.2",
+    "durable-actors": "0.14.6"
+  },
+  "devDependencies": {
+    "@types/node": "^25.2.1",
+    "typescript": "^5.9.3",
+    "vitest": "^4.0.18"
+  }
+}
