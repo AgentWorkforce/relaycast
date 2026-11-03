@@ -9,7 +9,7 @@
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import { pipeline } from 'node:stream/promises';
 import { OBJECT_SIZE_HEADER, verifyFileToken } from '@relaycast/engine/gateway';
-import { BodyTooLarge, CLOSE_AFTER, readBody } from '../http.js';
+import { BodyTooLarge, CLOSE_AFTER, readBody, sendError } from '../http.js';
 import type { Logger } from '../log.js';
 import { errorText } from '../log.js';
 import { InvalidStorageKeyError, type FileStore } from './store.js';
@@ -37,10 +37,9 @@ export interface FileRouteContext {
   logger: Logger;
 }
 
+/** The engine's error envelope with the file route's CORS set. */
 function fileError(res: ServerResponse, status: number, code: string, message: string, headers: Readonly<Record<string, string>> = {}): void {
-  const body = Buffer.from(JSON.stringify({ ok: false, error: { code, message } }));
-  res.writeHead(status, { ...FILE_CORS_HEADERS, ...headers, 'content-type': 'application/json', 'content-length': String(body.byteLength) });
-  res.end(body);
+  sendError(res, status, code, message, { ...FILE_CORS_HEADERS, ...headers });
 }
 
 function header(req: IncomingMessage, name: string): string | undefined {

@@ -34,3 +34,9 @@
 !packages/actors-workspace/src/**
 !packages/actors-workspace/deploy/
 !packages/actors-workspace/deploy/**
+# Never part of a build context, whatever the allowlist above re-includes.
+**/node_modules
+**/.turbo
+**/.durable-actors
+**/terse.config.json
+**/.env

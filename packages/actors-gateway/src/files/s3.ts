@@ -125,8 +125,14 @@ export class S3FileStore implements FileStore {
       if (typeof head.ContentLength !== 'number') throw new Error('S3 returned an object without a Content-Length');
       return { size: head.ContentLength };
     } catch (error) {
-      if (isMissing(error)) return null;
-      throw error;
+      if (!isMissing(error)) throw error;
+      // A HEAD 404 has no body, so a missing bucket looks like a missing
+      // object; tell them apart before reporting absence (which would make
+      // the engine ask the client to upload again).
+      await client.send(new sdk.HeadBucketCommand({ Bucket: this.bucket })).catch((cause: unknown) => {
+        throw new Error(`S3 bucket ${this.bucket} is not reachable: ${cause instanceof Error ? cause.message : String(cause)}`, { cause });
+      });
+      return null;
     }
   }
 

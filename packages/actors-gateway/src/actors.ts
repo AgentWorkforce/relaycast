@@ -106,16 +106,25 @@ function withTimeout(timeoutMs: number, signal: AbortSignal | undefined): AbortS
   return signal ? AbortSignal.any([signal, timeout]) : timeout;
 }
 
-/** The reply body as JSON; a body that is not JSON is a protocol error, one that could not be read is an unknown outcome. */
-async function jsonDocument(response: Response): Promise<unknown> {
+/**
+ * The reply body as JSON. Not JSON is a protocol error; a body that could not
+ * be read is an unknown outcome, unless the client went away (the same
+ * `aborted` the request path reports).
+ */
+async function jsonDocument(response: Response, signal: AbortSignal): Promise<unknown> {
   try {
     return await response.json();
   } catch (error) {
     if (error instanceof SyntaxError) {
       throw new ActorCallError('protocol', `control plane HTTP ${response.status} response was not JSON`, { cause: error });
     }
+    if (signal.aborted && !isTimeout(signal)) throw new ActorCallError('aborted', 'the client went away', { cause: error });
     throw new ActorCallError('outcome_unknown', `control plane HTTP ${response.status} response body could not be read`, { cause: error });
   }
+}
+
+function isTimeout(signal: AbortSignal): boolean {
+  return signal.reason instanceof DOMException && signal.reason.name === 'TimeoutError';
 }
 
 export function createActorClient(options: ActorClientOptions): ActorClient {
@@ -134,7 +143,7 @@ export function createActorClient(options: ActorClientOptions): ActorClient {
         signal,
       });
     } catch (error) {
-      if (signal.aborted && !(signal.reason instanceof DOMException && signal.reason.name === 'TimeoutError')) {
+      if (signal.aborted && !isTimeout(signal)) {
         throw new ActorCallError('aborted', 'the client went away', { cause: error });
       }
       const cause = (error as { cause?: { code?: string } } | null)?.cause;
@@ -161,7 +170,7 @@ export function createActorClient(options: ActorClientOptions): ActorClient {
       args,
       ...(options.homeRegion ? { homeRegion: options.homeRegion } : {}),
     }, requestId, signal);
-    const document = await jsonDocument(response);
+    const document = await jsonDocument(response, signal);
     if (!response.ok) throw failure(response, document);
     const parsed = InvokeReplySchema.safeParse(document);
     if (!parsed.success) throw new ActorCallError('protocol', 'control plane reply carried no valid outcome');
@@ -198,11 +207,12 @@ export function createActorClient(options: ActorClientOptions): ActorClient {
         throw new ActorCallError('invalid_metadata', 'socket metadata must be JSON of at most 16 KiB');
       }
       const requestId = randomUUID();
+      const signal = withTimeout(FIND_WEBSOCKET_TIMEOUT_MS, undefined);
       const response = await post(`${actorPath(options.projectId, workspaceId)}/find-websocket`, {
         metadata,
         ...(options.homeRegion ? { homeRegion: options.homeRegion } : {}),
-      }, requestId, withTimeout(FIND_WEBSOCKET_TIMEOUT_MS, undefined));
-      const document = await jsonDocument(response);
+      }, requestId, signal);
+      const document = await jsonDocument(response, signal);
       if (!response.ok) throw failure(response, document);
       const grant = SocketGrantSchema.safeParse(document);
       if (!grant.success) throw new ActorCallError('protocol', 'control plane returned an invalid socket grant');

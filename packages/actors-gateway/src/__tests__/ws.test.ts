@@ -187,10 +187,23 @@ describe('WebSocket bridge', () => {
       raw.once('close', () => resolve());
     });
     await closed;
+    // The same bytes in one write with the handshake (they arrive as the upgrade's `head`).
+    const closedAtOnce = new Promise<void>((resolve) => {
+      const raw = createConnection({ host: '127.0.0.1', port }, () => {
+        raw.write(Buffer.concat([
+          Buffer.from(`GET /v1/ws?token=${token} HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: Upgrade\r\nUpgrade: websocket\r\nSec-WebSocket-Version: 13\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n\r\n`),
+          Buffer.alloc(20 * 1024, 0x41),
+        ]));
+      });
+      raw.resume(); // the 400 must be consumed for the client to see its close
+      raw.on('error', () => {});
+      raw.once('close', () => resolve());
+    });
+    await closedAtOnce;
     await new Promise((resolve) => setTimeout(resolve, 500));
     expect(harness.controlPlane.findWebsocketCalls).toHaveLength(0);
     expect(harness.controlPlane.sessions).toHaveLength(0);
-    expect(harness.logs.find((entry) => entry.event === 'socket.early_bytes')).toMatchObject({ path: '/v1/ws' });
+    expect(harness.logs.filter((entry) => entry.event === 'socket.early_bytes')).toHaveLength(2);
   });
 
   it('opens no upstream for a client that left while its actor was being asked', async () => {

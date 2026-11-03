@@ -269,11 +269,16 @@ export function createSocketBridge(ctx: GatewayContext, options: SocketBridgeOpt
       if (closing) return rejectUpgrade(socket, 503, shuttingDown);
       const requestId = requestIdFor(req);
       const url = requestUrl(req, ctx.fallbackHost());
-      if (!url) return rejectUpgrade(socket, 400, JSON.stringify({ ok: false, error: { code: 'invalid_request', message: 'Invalid Host header' } }));
+      if (!url) return rejectUpgrade(socket, 400, JSON.stringify({ ok: false, error: { code: 'invalid_request', message: 'Invalid request target or Host header' } }));
       if (!SOCKET_PATHS.has(url.pathname)) return rejectUpgrade(socket, 426);
       const token = queryOrBearerToken(req, url);
       if (!token) return rejectUpgrade(socket, 401, JSON.stringify({ ok: false, error: { code: 'unauthorized', message: 'Missing token' } }));
       const credential = parseArCredential(token);
+      // Bytes that arrived with the handshake count too.
+      if (head.byteLength > MAX_EARLY_BYTES) {
+        ctx.logger.warn('socket.early_bytes', { path: url.pathname, workspace_id: credential?.workspaceId, request_id: requestId, bytes: head.byteLength });
+        return rejectUpgrade(socket, 400, JSON.stringify({ ok: false, error: { code: 'invalid_request', message: 'Unexpected data before the WebSocket handshake' } }));
+      }
       const entry: Pending = {
         socket,
         settled: false,
@@ -297,7 +302,7 @@ export function createSocketBridge(ctx: GatewayContext, options: SocketBridgeOpt
           entry.early.push(chunk);
         },
         early: [],
-        earlyBytes: 0,
+        earlyBytes: head.byteLength,
       };
       pending.add(entry);
       socket.once('close', entry.onGone);
@@ -309,7 +314,8 @@ export function createSocketBridge(ctx: GatewayContext, options: SocketBridgeOpt
           rejectUpgrade(socket, 401, JSON.stringify({ ok: false, error: { code: 'unauthorized', message: 'An ar_ credential issued by this deployment is required' } }));
           return;
         }
-        await bridge(entry, req, head, url, requestId, credential.workspaceId);
+        // The client may have left during the credential check: then no probe.
+        if (!entry.settled) await bridge(entry, req, head, url, requestId, credential.workspaceId);
       })().catch((error: unknown) => {
         if (!settle(entry)) return;
         const status = error instanceof ActorCallError ? 502 : 500;

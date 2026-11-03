@@ -32,9 +32,10 @@ export function requestIdFor(req: IncomingMessage): string {
 
 /**
  * The absolute URL the client used, honouring `x-forwarded-proto` from a
- * TLS-terminating proxy; undefined when the `Host` header is one `URL`
- * refuses (Node's parser accepts more than the URL grammar, e.g. `x:bad`),
- * which callers answer with 400 rather than let escape the listener.
+ * TLS-terminating proxy; undefined when the request target or the `Host`
+ * header is one `URL` refuses (Node's parser accepts more than the URL
+ * grammar, e.g. `x:bad` or `//[`), which callers answer with 400 rather than
+ * let escape the listener.
  */
 export function requestUrl(req: IncomingMessage, fallbackHost: string): URL | undefined {
   const forwarded = req.headers['x-forwarded-proto'];
@@ -92,7 +93,7 @@ export async function readBody(req: IncomingMessage, limit: number): Promise<Buf
   return Buffer.concat(chunks, length);
 }
 
-/** Headers for an error answered before the request body was read: the connection is not reused. */
+/** Headers for an error answered before the request body is fully read: the connection is not reused. */
 export const CLOSE_AFTER: Readonly<Record<string, string>> = { connection: 'close' };
 
 export function toActorRequest(req: IncomingMessage, url: URL, body: Buffer | null, requestId: string): ActorHttpRequest {

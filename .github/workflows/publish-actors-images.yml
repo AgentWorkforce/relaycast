@@ -42,6 +42,8 @@ jobs:
       - uses: actions/checkout@v4
         with:
           persist-credentials: false
+          # The release tags, so `latest` can be tied to the released commit.
+          fetch-tags: true
 
       - uses: docker/setup-qemu-action@v3
       - uses: docker/setup-buildx-action@v3
@@ -87,8 +89,19 @@ jobs:
               exit 1
               ;;
           esac
-          # :latest names released source: a suffixed tag (unreleased source) never moves it.
+          # :latest names released source: only an unsuffixed tag built from the
+          # commit the release tag v<version> points at may move it (an unreleased
+          # branch can carry the last released version in package.json).
           if [ "$LATEST" = "true" ] && [ "$suffixed" = "false" ]; then
+            released="$(git rev-parse -q --verify "refs/tags/v${version}^{commit}" || true)"
+            if [ -z "$released" ]; then
+              echo "latest requested but no release tag v${version} exists" >&2
+              exit 1
+            fi
+            if [ "$released" != "$GITHUB_SHA" ]; then
+              echo "latest requested but $GITHUB_SHA is not the v${version} release commit ($released)" >&2
+              exit 1
+            fi
             echo "latest=true" >> "$GITHUB_OUTPUT"
           else
             echo "latest=false" >> "$GITHUB_OUTPUT"

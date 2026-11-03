@@ -4,7 +4,7 @@
  * signalling (`code: 404` / `NoSuchKey` + `NotFound`).
  */
 import { PassThrough, Readable, Writable } from 'node:stream';
-import { DeleteObjectCommand, GetObjectCommand, HeadObjectCommand, PutObjectCommand, type S3Client } from '@aws-sdk/client-s3';
+import { DeleteObjectCommand, GetObjectCommand, HeadBucketCommand, HeadObjectCommand, PutObjectCommand, type S3Client } from '@aws-sdk/client-s3';
 import type { GcsFileLike, GcsStorageLike } from '../files/gcs.js';
 
 export interface StoredObject {
@@ -78,9 +78,11 @@ export function fakeGcsStorage(): FakeObjects & { storage: GcsStorageLike } {
   return { objects, calls, storage: { bucket: (bucket) => ({ file: (name) => file(bucket, name) }) } };
 }
 
-export function fakeS3Client(): FakeObjects & { client: Pick<S3Client, 'send'> } {
+export function fakeS3Client(): FakeObjects & { client: Pick<S3Client, 'send'>; missingBuckets: Set<string> } {
   const objects = new Map<string, StoredObject>();
   const calls: string[] = [];
+  /** Buckets `HeadBucket` answers 404 for. */
+  const missingBuckets = new Set<string>();
   const missing = (name: 'NoSuchKey' | 'NotFound') => Object.assign(new Error(name), { name, $metadata: { httpStatusCode: 404 } });
   const send = async (command: unknown): Promise<unknown> => {
     if (command instanceof PutObjectCommand) {
@@ -99,6 +101,11 @@ export function fakeS3Client(): FakeObjects & { client: Pick<S3Client, 'send'> }
       if (!object) throw missing('NoSuchKey');
       return { Body: Readable.from([object.bytes]), ContentLength: object.bytes.byteLength, ContentType: object.contentType };
     }
+    if (command instanceof HeadBucketCommand) {
+      calls.push(`headBucket ${command.input.Bucket}`);
+      if (missingBuckets.has(command.input.Bucket ?? '')) throw missing('NotFound');
+      return {};
+    }
     if (command instanceof HeadObjectCommand) {
       const id = `${command.input.Bucket}/${command.input.Key}`;
       calls.push(`head ${id}`);
@@ -114,5 +121,5 @@ export function fakeS3Client(): FakeObjects & { client: Pick<S3Client, 'send'> }
     }
     throw new Error(`fake S3 client cannot answer ${(command as { constructor: { name: string } }).constructor.name}`);
   };
-  return { objects, calls, client: { send: send as S3Client['send'] } };
+  return { objects, calls, client: { send: send as S3Client['send'] }, missingBuckets };
 }

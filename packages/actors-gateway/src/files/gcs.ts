@@ -53,7 +53,8 @@ export interface GcsFileStoreOptions {
  */
 function isMissing(error: unknown): boolean {
   const e = error as { code?: unknown; message?: unknown } | null;
-  return e?.code === 404 && !(typeof e.message === 'string' && /bucket/i.test(e.message));
+  // The object's own 404 reads "No such object: <bucket>/<name>", whose names may contain anything; only the bucket wording is matched.
+  return e?.code === 404 && !(typeof e.message === 'string' && /specified bucket does not exist/i.test(e.message));
 }
 
 /** Pass bytes through, failing the pipeline as soon as they exceed `size` or end short of it. */

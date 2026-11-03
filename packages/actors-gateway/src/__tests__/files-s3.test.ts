@@ -88,6 +88,15 @@ describe('S3FileStore', () => {
     await expect(store.get(KEY)).rejects.toThrow('AccessDenied');
     await expect(store.delete(KEY)).rejects.toThrow('AccessDenied');
   });
+  it('tells a missing bucket from a missing object on a HEAD 404 before answering null', async () => {
+    const fake = fakeS3Client();
+    const store = new S3FileStore({ bucket: 'bkt', region: 'us-east-1', forcePathStyle: false, client: fake.client });
+    expect(await store.stat('ws/f/absent')).toBeNull();
+    expect(fake.calls).toContain('headBucket bkt');
+    fake.missingBuckets.add('bkt');
+    await expect(store.stat('ws/f/absent')).rejects.toThrow('S3 bucket bkt is not reachable');
+  });
+
   it('reports a missing bucket as a failure, not a missing file', async () => {
     const noBucket = Object.assign(new Error('The specified bucket does not exist'), { name: 'NoSuchBucket', $metadata: { httpStatusCode: 404 } });
     const store = new S3FileStore({ bucket: 'gone', region: 'us-east-1', forcePathStyle: false, client: { send: (async () => { throw noBucket; }) as S3ClientLike['send'] } });

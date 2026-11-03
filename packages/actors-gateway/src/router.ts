@@ -182,7 +182,8 @@ export function createRequestHandler(ctx: GatewayContext, options: RequestHandle
       options.onEnd?.(res);
       ctx.logger.info('http.request', {
         method: req.method,
-        path: url?.pathname ?? req.url,
+        // Never the query: `/_relayfiles?token=` and `?token=` carry credentials.
+        path: url?.pathname ?? req.url?.split('?')[0],
         status: res.headersSent ? res.statusCode : 0,
         ms: Math.round((performance.now() - started) * 10) / 10,
         request_id: requestId,
@@ -195,7 +196,7 @@ export function createRequestHandler(ctx: GatewayContext, options: RequestHandle
       return;
     }
     if (!url) {
-      sendError(res, 400, 'invalid_request', 'Invalid Host header', CLOSE_AFTER);
+      sendError(res, 400, 'invalid_request', 'Invalid request target or Host header', CLOSE_AFTER);
       return;
     }
 
