@@ -47,10 +47,16 @@ jobs:
           persist-credentials: false
           fetch-depth: 0
 
-      # A customer image must be built from a reviewed commit on main.
+      # A customer image must be built from a reviewed commit on main, and be
+      # dispatched from main: the attestation records the dispatch ref, and
+      # the verify command in the summary pins --source-ref refs/heads/main.
       - name: Verify the source commit is reviewed on main
         run: |
           set -euo pipefail
+          if [ "${GITHUB_REF}" != "refs/heads/main" ]; then
+            echo "Refusing to publish from ${GITHUB_REF}: dispatch this workflow from main" >&2
+            exit 1
+          fi
           git fetch --no-tags origin main
           if ! git merge-base --is-ancestor "$(git rev-parse "${GITHUB_SHA}^{commit}")" origin/main; then
             echo "Refusing to publish ${GITHUB_SHA}: it is not on main" >&2
