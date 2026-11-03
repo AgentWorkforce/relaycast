@@ -534,6 +534,26 @@ describe('workspace actor realtime', () => {
     expect(actor.sockets.violations).toEqual([]);
   });
 
+  it("follows the registry when a write to a current socket fails: the row no longer binds the provider", async () => {
+    const actor = new FakeWorkspaceActor(WORKSPACE_ID);
+    const { key, alice, bob } = await workspaceWithAgents(actor);
+    const node = await nodeGrant(actor, alice);
+    const socket = await actor.connect(node.principal);
+    await actor.message(socket, nodeRegister(node));
+    expect((await call(actor, 'POST', '/v1/actions', { name: 'crm.lookup', description: 'Look someone up', handler_agent: 'alice' }, key)).status).toBe(201);
+    expect(rows(actor, 'SELECT provider_name FROM _actor_sockets WHERE socket_id = ?', socket.id)).toEqual([{ provider_name: 'default' }]);
+
+    // The control plane still lists the socket, but a write to it fails.
+    socket.state = 'closed';
+    const invoked = await call<{ status: string }>(actor, 'POST', '/v1/actions/crm.lookup/invoke', { input: { name: 'ada' } }, bob);
+    expect(invoked.status).toBe(201);
+    // The registry gave the binding up (the frame stays queued for a retry) ...
+    expect(actor.runtime.deps.nodeConnections.isProviderAttached?.(WORKSPACE_ID, node.node_id, 'default')).toBe(false);
+    // The row followed, so a later activation does not replay the binding.
+    const row = rows(actor, 'SELECT provider_name FROM _actor_sockets WHERE socket_id = ?', socket.id) as { provider_name: string | null }[];
+    expect(row.length === 0 || row[0].provider_name === null).toBe(true);
+  });
+
   it('maps engine close codes to ones durable-actors accepts', async () => {
     expect(toActorCloseCode(undefined)).toBe(1000);
     expect(toActorCloseCode(1000)).toBe(1000);

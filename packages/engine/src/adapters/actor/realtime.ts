@@ -195,22 +195,48 @@ export class ActorRealtime implements RealtimeBus, ConnectionRegistry, NodeConne
     return socketGrantResponse(await signSocketPrincipal(this.options.grantSecret, { v: 1, kind: 'node', workspace_id: args.workspaceId, node_id: args.nodeId }));
   }
 
-  sendToNode(workspaceId: string, nodeId: string, message: FleetRelaycastToBrokerMessage): Promise<boolean> {
-    return this.inner.sendToNode(workspaceId, nodeId, message);
+  /*
+   * A write the socket refuses makes the registry detach the provider (and
+   * keep the frame queued); the connection's row follows ({@link syncRow}),
+   * or the next activation would replay a binding the registry gave up.
+   */
+
+  async sendToNode(workspaceId: string, nodeId: string, message: FleetRelaycastToBrokerMessage): Promise<boolean> {
+    const before = this.nodeConnectionIds(workspaceId, nodeId);
+    const sent = await this.inner.sendToNode(workspaceId, nodeId, message);
+    this.syncRows(before);
+    return sent;
   }
 
-  sendToProvider(workspaceId: string, nodeId: string, providerName: string, message: FleetRelaycastToBrokerMessage): Promise<boolean> {
-    return this.inner.sendToProvider(workspaceId, nodeId, providerName, message);
+  async sendToProvider(workspaceId: string, nodeId: string, providerName: string, message: FleetRelaycastToBrokerMessage): Promise<boolean> {
+    const bound = this.inner.providerConnectionId(workspaceId, nodeId, providerName);
+    const sent = await this.inner.sendToProvider(workspaceId, nodeId, providerName, message);
+    this.syncRows(bound === undefined ? [] : [bound]);
+    return sent;
   }
 
-  sendAuthorizedActionToProvider(
+  async sendAuthorizedActionToProvider(
     workspaceId: string,
     nodeId: string,
     providerName: string,
     message: Extract<FleetRelaycastToBrokerMessage, { type: 'action.invoke' }>,
     authorization: ActionProviderAuthorization,
   ): Promise<boolean> {
-    return this.inner.sendAuthorizedActionToProvider(workspaceId, nodeId, providerName, message, authorization);
+    const bound = this.inner.providerConnectionId(workspaceId, nodeId, providerName);
+    const sent = await this.inner.sendAuthorizedActionToProvider(workspaceId, nodeId, providerName, message, authorization);
+    this.syncRows(bound === undefined ? [] : [bound]);
+    return sent;
+  }
+
+  /** The attached node connections of `nodeId` (this actor's rows for it). */
+  private nodeConnectionIds(workspaceId: string, nodeId: string): string[] {
+    return [...this.attached].filter(([, conn]) => conn.principal.kind === 'node' && conn.principal.workspace_id === workspaceId && conn.principal.node_id === nodeId).map(([id]) => id);
+  }
+
+  /** After a write: connections the registry dropped are forgotten, the others' rows follow their state. */
+  private syncRows(connectionIds: readonly string[]): void {
+    this.forgetDropped();
+    for (const id of connectionIds) this.syncRow(id);
   }
 
   isNodeConnected(workspaceId: string, nodeId: string): boolean {
