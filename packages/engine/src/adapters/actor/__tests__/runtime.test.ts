@@ -112,6 +112,11 @@ describe('workspace actor runtime', () => {
     expect(new Headers(ok.headers).get('deprecation')).toBeNull();
   });
 
+  it('refuses a file-signing secret shorter than 32 characters at construction', () => {
+    expect(() => new FakeWorkspaceActor(WORKSPACE_ID, { fileSigningSecret: 'x'.repeat(31) })).toThrow(/fileSigningSecret must be at least 32 characters/);
+    expect(() => new FakeWorkspaceActor(WORKSPACE_ID, { fileSigningSecret: 'x'.repeat(32) })).not.toThrow();
+  });
+
   it('keeps the credential tag its gateway handed over at create, also when a keyed replay carries a rotated one', async () => {
     const actor = new FakeWorkspaceActor(WORKSPACE_ID);
     const { key } = await workspaceWithAgents(actor);

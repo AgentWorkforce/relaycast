@@ -170,8 +170,12 @@ export function createActorClient(options: ActorClientOptions): ActorClient {
       args,
       ...(options.homeRegion ? { homeRegion: options.homeRegion } : {}),
     }, requestId, signal);
-    // A refused credential needs no body (a proxy's 401 is rarely JSON).
-    if (response.status === 401 || response.status === 403) throw failure(response, undefined);
+    // A refused credential needs no body (a proxy's 401 is rarely JSON); the
+    // body is still released so the socket goes back to the pool.
+    if (response.status === 401 || response.status === 403) {
+      await response.body?.cancel().catch(() => undefined);
+      throw failure(response, undefined);
+    }
     const document = await jsonDocument(response, signal);
     if (!response.ok) throw failure(response, document);
     const parsed = InvokeReplySchema.safeParse(document);
@@ -214,7 +218,10 @@ export function createActorClient(options: ActorClientOptions): ActorClient {
         metadata,
         ...(options.homeRegion ? { homeRegion: options.homeRegion } : {}),
       }, requestId, signal);
-      if (response.status === 401 || response.status === 403) throw failure(response, undefined);
+      if (response.status === 401 || response.status === 403) {
+        await response.body?.cancel().catch(() => undefined);
+        throw failure(response, undefined);
+      }
       const document = await jsonDocument(response, signal);
       if (!response.ok) throw failure(response, document);
       const grant = SocketGrantSchema.safeParse(document);

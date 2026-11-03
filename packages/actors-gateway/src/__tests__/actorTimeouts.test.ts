@@ -55,8 +55,8 @@ describe('actor call budgets', () => {
     await expect(client.handle('1', request)).rejects.toMatchObject({ name: 'ActorCallError', code: 'outcome_unknown' });
   });
 
-  it('maps a 401/403 to unauthenticated before reading the body', async () => {
-    const refusing: typeof globalThis.fetch = async () => new Response('<html>denied</html>', { status: 403, headers: { 'content-type': 'text/html' } });
+  it.each([401, 403])('maps a %i to unauthenticated before reading the body', async (status) => {
+    const refusing: typeof globalThis.fetch = async () => new Response('<html>denied</html>', { status, headers: { 'content-type': 'text/html' } });
     const client = createActorClient({ controlPlaneUrl: 'http://127.0.0.1:1', projectId: 'p', fetch: refusing });
     await expect(client.handle('1', { method: 'GET', url: 'https://x/v1/agents', headers: [], body: null })).rejects.toMatchObject({ code: 'unauthenticated' });
     await expect(client.findWebsocket('1', {})).rejects.toMatchObject({ code: 'unauthenticated' });

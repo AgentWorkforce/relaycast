@@ -47,7 +47,7 @@ describe('actorConfigFromEnv', () => {
     // Read as the self-host server reads it: trimmed, and blank is unset.
     expect(actorConfigFromEnv({ RELAYCAST_INTERNAL_SECRET: ` ${INTERNAL_SECRET} ` }).internalSecret).toBe(INTERNAL_SECRET);
     expect(actorConfigFromEnv({ RELAYCAST_INTERNAL_SECRET: '   ' }).internalSecret).toBeUndefined();
-    // The bootstrap secret's bytes feed a derivation: verbatim, blank is unset.
+    // The bootstrap secret's bytes feed a derivation: verbatim; only an empty value is unset.
     expect(actorConfigFromEnv({ RELAYCAST_WORKSPACE_BOOTSTRAP_SECRET: ' exact bytes ' }).workspaceBootstrapSecret).toBe(' exact bytes ');
     expect(actorConfigFromEnv({ RELAYCAST_WORKSPACE_BOOTSTRAP_SECRET: '  ' }).workspaceBootstrapSecret).toBe('  ');
     expect(actorConfigFromEnv({ RELAYCAST_WORKSPACE_BOOTSTRAP_SECRET: '' }).workspaceBootstrapSecret).toBeUndefined();

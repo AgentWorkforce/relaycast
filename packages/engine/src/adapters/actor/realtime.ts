@@ -591,8 +591,12 @@ export class ActorRealtime implements RealtimeBus, ConnectionRegistry, NodeConne
         try {
           if (socket) socket.send(value);
           else this.options.sockets.broadcast(value, { tags: [connectionTag(socketId)] });
-        } catch {
-          // The control plane closed it meanwhile (a superseded socket answering its last frame).
+        } catch (error) {
+          // A superseded socket the control plane closed meanwhile cannot take
+          // its last reply, and nothing depends on it. A failed write to a
+          // current connection stays an error: the registry's recovery path
+          // (detach, keep the frame queued) must see it.
+          if (!this.superseded.has(socketId)) throw error;
         }
       },
       close: (code, reason) => {
