@@ -108,6 +108,14 @@ export interface HandleNodeControlMessageArgs {
    */
   workspaceDeadline?: WorkspaceDeadlineHolder;
   /**
+   * Read inside the serialized callback: true when a reconnect's
+   * `node.register` superseded this frame's connection, even if that
+   * connection's close has since been processed (the registry's own
+   * `isConnectionSuperseded` forgets a closed connection). Either source
+   * refuses the frame.
+   */
+  connectionSuperseded?: () => boolean;
+  /**
    * Set by a socket owner that verified this `node.heartbeat` is identical to
    * the last heartbeat the engine accepted on this connection, in the same
    * liveness generation, under `role`: a durable checkpoint of unchanged
@@ -3782,7 +3790,7 @@ export async function handleNodeControlMessage(args: HandleNodeControlMessageArg
     if (
       args.connectionId
       && !IN_FLIGHT_SETTLING_FRAMES.has(message.type)
-      && args.registry.isConnectionSuperseded?.(args.connectionId)
+      && (args.connectionSuperseded?.() || args.registry.isConnectionSuperseded?.(args.connectionId))
     ) {
       sendControl(args.socket, {
         v: 1,

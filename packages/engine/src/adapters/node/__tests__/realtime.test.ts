@@ -168,6 +168,11 @@ describe('InProcessRealtime direct node reconnect', () => {
 
     await first.handle.handleClose();
     expect(stack.runtime.realtime.isConnectionSuperseded(first.handle.connectionId)).toBe(false);
+    // A frame of the old socket that reaches the node lock only after its
+    // close was processed is still refused: the state travels with the handle.
+    await first.handle.handleMessage(JSON.stringify({ v: 1, id: 'd2', type: 'node.deregister' }));
+    expect(first.sock.ofType('error').find((frame) => frame.id === 'd2')?.code).toBe('connection_superseded');
+    expect(stack.runtime.realtime.providerConnectionId(ws.workspaceId, nodeId, 'default')).toBe(second.handle.connectionId);
     await expectOnline();
   });
 

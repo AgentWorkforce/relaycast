@@ -69,6 +69,13 @@ interface NodeConn {
   lastSeen: number;
   /** Accepted `node.register` frames on this socket (each binds the provider). */
   attaches: number;
+  /**
+   * Set when a reconnect's `node.register` moved this connection's provider
+   * to a newer socket. Lives on the object the socket's handle holds, so a
+   * frame that reaches the node lock after this connection's close was
+   * processed still knows (the registry forgets the connection at close).
+   */
+  superseded: boolean;
 }
 
 /** See {@link InProcessRealtime.nodeConnectionState}. */
@@ -752,6 +759,7 @@ export class InProcessRealtime implements RealtimeBus, ConnectionRegistry, NodeC
         if (conns.size === 0) this.nodeConnIndex.delete(nodeKey);
       }
       if (superseded) {
+        superseded.superseded = true;
         superseded.providerName = undefined;
         try {
           superseded.socket.close(1000, 'superseded');
@@ -945,13 +953,15 @@ export class InProcessRealtime implements RealtimeBus, ConnectionRegistry, NodeC
   ): SocketHandle {
     const connectionId = options.connectionId ?? `nconn_${++this.connectionSeq}`;
     const nodeKey = this.nodeKey(workspaceId, nodeId);
-    this.nodeConnections.set(connectionId, {
+    const conn: NodeConn = {
       socket,
       workspaceId,
       nodeId,
       lastSeen: Date.now(),
       attaches: 0,
-    });
+      superseded: false,
+    };
+    this.nodeConnections.set(connectionId, conn);
     let conns = this.nodeConnIndex.get(nodeKey);
     if (!conns) {
       conns = new Set();
@@ -961,9 +971,8 @@ export class InProcessRealtime implements RealtimeBus, ConnectionRegistry, NodeC
     const handle: SocketHandle = {
       connectionId,
       handleMessage: async (raw) => {
-        const conn = this.nodeConnections.get(connectionId);
-        if (conn) conn.lastSeen = Date.now();
-        const attachesBefore = conn?.attaches ?? 0;
+        conn.lastSeen = Date.now();
+        const attachesBefore = conn.attaches;
         await handleNodeControlMessage({
           db: this.db,
           registry: this,
@@ -973,6 +982,9 @@ export class InProcessRealtime implements RealtimeBus, ConnectionRegistry, NodeC
           nodeId,
           socket,
           connectionId,
+          // Read under the node lock from the handle's own connection object:
+          // outlives the registry's marker, which goes with the close.
+          connectionSuperseded: () => conn.superseded,
           admitRegistration: createRegistrationAdmission({ db: this.db, admission: this.admission, workspace: workspaceId }),
           raw,
         });
