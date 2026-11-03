@@ -35,9 +35,10 @@ const ActorEnvSchema = z.object({
   /**
    * Lets an anonymous `POST /v1/workspaces` with an `Idempotency-Key` be
    * retried (the gateway derives the actor id from the same secret and key).
-   * Exact bytes, as `bin/serve.ts` reads it: they feed a derivation.
+   * Exact bytes, as `bin/serve.ts` and the gateway read it (only an empty
+   * value is unset): they feed a derivation.
    */
-  RELAYCAST_WORKSPACE_BOOTSTRAP_SECRET: z.preprocess(unsetIfBlank, z.string().optional()),
+  RELAYCAST_WORKSPACE_BOOTSTRAP_SECRET: z.preprocess((value) => (value === '' ? undefined : value), z.string().optional()),
 });
 
 /**

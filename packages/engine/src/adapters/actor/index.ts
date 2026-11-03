@@ -31,7 +31,11 @@ import { SignedUrlFileStorage } from './files.js';
 import { ActorEphemeralOutbox } from './ephemeral-outbox.js';
 import { isSafeExternalUrl } from '../../lib/ssrf.js';
 import { assertInternalSecretStrength } from '../../engine/internalAdmin.js';
+import { ConfigError } from '../../bin/secretEnv.js';
 import { ActorRealtime, type ActorSocketLike, type ActorSocketSource } from './realtime.js';
+
+/** Minimum `fileSigningSecret` length: it signs file URLs and socket grants (the gateway enforces the same). */
+export const MIN_FILE_SIGNING_SECRET_LENGTH = 32;
 
 export type { ActorDatabase, ActorSql, SqliteValue } from './database.js';
 export { ensureActorSchema } from './schema.js';
@@ -174,6 +178,9 @@ export function createActorRuntime(options: ActorRuntimeOptions): ActorRuntime {
   }
   // A weak admin secret is refused at construction, as the self-host server does.
   assertInternalSecretStrength(options.config?.internalSecret);
+  if (options.fileSigningSecret.length < MIN_FILE_SIGNING_SECRET_LENGTH) {
+    throw new ConfigError(`fileSigningSecret must be at least ${MIN_FILE_SIGNING_SECRET_LENGTH} characters: it signs file URLs and socket grants`);
+  }
   let maintaining = false;
   // Work started without being awaited during the running call (engine
   // `waitUntil`, the registry's early node drain). It is settled before the

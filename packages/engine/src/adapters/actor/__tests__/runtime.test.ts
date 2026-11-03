@@ -3,7 +3,7 @@ import { verifyFileToken } from '../../../lib/fileTokens.js';
 import { sha256Hex } from '../../../lib/crypto.js';
 import { createActorRuntime, nextMaintenanceAt } from '../index.js';
 import { SignedUrlFileStorage } from '../files.js';
-import { FakeAlarm, FakeWorkspaceActor, TEST_CREDENTIAL_TAGS, jsonRequest } from './fakeActor.js';
+import { FAKE_FILE_SECRET, FakeAlarm, FakeWorkspaceActor, TEST_CREDENTIAL_TAGS, jsonRequest } from './fakeActor.js';
 
 const WORKSPACE_ID = '241764880589606912';
 
@@ -321,7 +321,7 @@ describe('workspace actor runtime', () => {
       sql: { exec: () => [] } as never,
       workspaceId: WORKSPACE_ID,
       baseUrl: 'https://armadillo.test',
-      fileSigningSecret: 'file-secret',
+      fileSigningSecret: 'file-secret-of-at-least-32-characters',
       outboundFetch: fetch,
       alarm: new FakeAlarm(),
     })).toThrow('the relaycast actor adapter requires durable-actors >= 0.14.5');
@@ -457,7 +457,7 @@ describe('workspace actor runtime', () => {
     const { files } = actor.runtime.deps;
     const { uploadUrl } = await files.createUploadUrl({ storageKey: `${WORKSPACE_ID}/f1/a.txt`, contentType: 'text/plain', sizeBytes: 5 });
     const token = new URL(uploadUrl).searchParams.get('token');
-    expect(await verifyFileToken('file-secret', token)).toMatchObject({ op: 'put', size: 5, type: 'text/plain' });
+    expect(await verifyFileToken(FAKE_FILE_SECRET, token)).toMatchObject({ op: 'put', size: 5, type: 'text/plain' });
 
     await expect(files.deleteObjects!({ storageKeys: [`${WORKSPACE_ID}/f1/a.txt`] })).rejects.toThrow(/deferred/);
     expect(requests).toEqual([]);
@@ -465,7 +465,7 @@ describe('workspace actor runtime', () => {
     await actor.maintain();
     expect(requests.map((request) => request.method)).toEqual(['DELETE']);
     const deleteToken = new URL(requests[0].url).searchParams.get('token');
-    expect(await verifyFileToken('file-secret', deleteToken)).toMatchObject({ op: 'delete', key: `${WORKSPACE_ID}/f1/a.txt` });
+    expect(await verifyFileToken(FAKE_FILE_SECRET, deleteToken)).toMatchObject({ op: 'delete', key: `${WORKSPACE_ID}/f1/a.txt` });
   });
 
   it('defers outbound HTTP to maintenance and arms the alarm', async () => {

@@ -13,7 +13,7 @@ import { createCredentialTagSigner } from '../../../auth/credentialTags.js';
 import { SocketPrincipalSchema, signSocketPrincipal } from '../socket-grant.js';
 
 /** The file-signing secret the fake runtime signs grants with. */
-export const FAKE_FILE_SECRET = 'file-secret';
+export const FAKE_FILE_SECRET = 'file-secret-of-at-least-32-characters';
 
 /** The keyring the fake gateway signs workspace tags with. */
 export const TEST_CREDENTIAL_TAGS = createCredentialTagSigner({ current: 'a', keys: { a: 'actor-test-tag-secret' } });

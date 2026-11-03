@@ -144,6 +144,13 @@ export class ActorRealtime implements RealtimeBus, ConnectionRegistry, NodeConne
   private readonly attached = new Map<string, Attached>();
   /** The live socket objects of the running call, by id; replaced by every {@link rehydrate}. */
   private live = new Map<string, ActorSocketLike>();
+  /**
+   * Node connections a reconnect's `node.register` superseded, kept (in
+   * memory, while the control plane still holds the socket) so a frame
+   * already on its way still reaches the registry, which refuses all but
+   * those settling work dispatched to it.
+   */
+  private readonly superseded = new Map<string, Attached>();
   /** Whether the rows written by an earlier activation were replayed into this one. */
   private replayed = false;
   /**
@@ -270,6 +277,7 @@ export class ActorRealtime implements RealtimeBus, ConnectionRegistry, NodeConne
       if (conn.principal.kind !== 'node' || this.inner.nodeConnectionState(socketId)) continue;
       this.attached.delete(socketId);
       this.table.delete(socketId);
+      this.superseded.set(socketId, conn);
     }
   }
 
@@ -421,6 +429,9 @@ export class ActorRealtime implements RealtimeBus, ConnectionRegistry, NodeConne
       if (live.has(id)) continue;
       await this.teardown(id);
     }
+    for (const id of [...this.superseded.keys()]) {
+      if (!live.has(id)) this.superseded.delete(id);
+    }
   }
 
   /** Re-attach a surviving socket from its row, or close it when its principal no longer validates. */
@@ -485,6 +496,7 @@ export class ActorRealtime implements RealtimeBus, ConnectionRegistry, NodeConne
   private async teardown(socketId: string): Promise<void> {
     const conn = this.attached.get(socketId);
     this.attached.delete(socketId);
+    this.superseded.delete(socketId);
     this.table.delete(socketId);
     if (conn) await conn.handle.handleClose();
   }
@@ -539,7 +551,9 @@ export class ActorRealtime implements RealtimeBus, ConnectionRegistry, NodeConne
   /** A JSON frame from the client; the registry reads it as the text the client sent. */
   async onMessage(socket: ActorSocketLike, message: unknown): Promise<void> {
     await this.rehydrate();
-    const conn = this.attached.get(socket.id);
+    // A superseded socket's frame still reaches the registry, which refuses
+    // all but the ones settling work dispatched to it.
+    const conn = this.attached.get(socket.id) ?? this.superseded.get(socket.id);
     // Not attached: rehydrate closed it (nothing accounts for it) or it was rejected.
     if (!conn) return;
     await conn.handle.handleMessage(JSON.stringify(message));
@@ -574,8 +588,12 @@ export class ActorRealtime implements RealtimeBus, ConnectionRegistry, NodeConne
       send: (data) => {
         const value: unknown = JSON.parse(data);
         const socket = this.live.get(socketId);
-        if (socket) socket.send(value);
-        else this.options.sockets.broadcast(value, { tags: [connectionTag(socketId)] });
+        try {
+          if (socket) socket.send(value);
+          else this.options.sockets.broadcast(value, { tags: [connectionTag(socketId)] });
+        } catch {
+          // The control plane closed it meanwhile (a superseded socket answering its last frame).
+        }
       },
       close: (code, reason) => {
         // A close needs the socket object; one the running call cannot see

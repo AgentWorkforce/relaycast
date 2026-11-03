@@ -49,7 +49,8 @@ describe('actorConfigFromEnv', () => {
     expect(actorConfigFromEnv({ RELAYCAST_INTERNAL_SECRET: '   ' }).internalSecret).toBeUndefined();
     // The bootstrap secret's bytes feed a derivation: verbatim, blank is unset.
     expect(actorConfigFromEnv({ RELAYCAST_WORKSPACE_BOOTSTRAP_SECRET: ' exact bytes ' }).workspaceBootstrapSecret).toBe(' exact bytes ');
-    expect(actorConfigFromEnv({ RELAYCAST_WORKSPACE_BOOTSTRAP_SECRET: '  ' }).workspaceBootstrapSecret).toBeUndefined();
+    expect(actorConfigFromEnv({ RELAYCAST_WORKSPACE_BOOTSTRAP_SECRET: '  ' }).workspaceBootstrapSecret).toBe('  ');
+    expect(actorConfigFromEnv({ RELAYCAST_WORKSPACE_BOOTSTRAP_SECRET: '' }).workspaceBootstrapSecret).toBeUndefined();
     expect(() => actorConfigFromEnv({ RELAYCAST_MAX_UPLOAD_BYTES: 'x', RELAYCAST_RATE_LIMIT_PER_MINUTE: '-1' }))
       .toThrow(/RELAYCAST_MAX_UPLOAD_BYTES.*RELAYCAST_RATE_LIMIT_PER_MINUTE/);
   });
@@ -84,6 +85,8 @@ describe('internal admin routes inside a workspace actor', () => {
 
     const capabilities = await actor.handle(internal('GET', '/internal/capabilities'));
     expect(capabilities.status).toBe(200);
+    // The actor creates no workspaces (its gateway does), so it does not advertise `create`.
+    expect(JSON.parse(capabilities.body).data.workspace_admin).toMatchObject({ create: false, delete: true, server_minted_key: true });
 
     // The gateway picks the actor for a new workspace; the actor does not create others.
     const create = await actor.handle(internal('POST', '/internal/workspaces', { name: 'another' }));

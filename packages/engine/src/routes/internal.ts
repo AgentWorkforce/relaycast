@@ -70,8 +70,12 @@ function foreignWorkspace(c: Context<AppEnv>, workspaceId: string): boolean {
   return own !== undefined && own !== workspaceId;
 }
 
-// GET /internal/capabilities — non-mutating capability advertisement.
-internalRoutes.get('/capabilities', (c) => jsonOk(c, INTERNAL_CAPABILITIES));
+// GET /internal/capabilities — non-mutating capability advertisement. A
+// single-workspace host creates no workspaces (its gateway does), so it does
+// not advertise `create`.
+internalRoutes.get('/capabilities', (c) => jsonOk(c, singleWorkspaceId(c) === undefined
+  ? INTERNAL_CAPABILITIES
+  : { ...INTERNAL_CAPABILITIES, workspace_admin: { ...INTERNAL_CAPABILITIES.workspace_admin, create: false } }));
 
 const createWorkspaceSchema = z.object({
   name: z.string().trim().min(1).max(128),

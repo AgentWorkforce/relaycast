@@ -39,14 +39,19 @@ const MAX_KEYED_WORKSPACE_ID = (1n << 63n) - 1n;
 
 /**
  * The workspace id a keyed create (`Idempotency-Key`) lands on: derived from
- * the deployment's bootstrap secret and the key, so a retry reaches the same
- * actor and its own idempotency record answers it. A positive 63-bit value,
- * which is a valid snowflake for `ar_` credentials (`isArWorkspaceId`).
+ * the deployment's bootstrap secret, the key and the creating owner (the
+ * workspace of the `ar_ws_` credential an owner-scoped create presents;
+ * anonymous otherwise, matching the engine's per-owner idempotency scope),
+ * so a retry reaches the same actor and its own idempotency record answers
+ * it. A positive 63-bit value, which is a valid snowflake for `ar_`
+ * credentials (`isArWorkspaceId`). A different secret derives different ids:
+ * a retry after the secret changed is a new create.
  */
-export async function deriveKeyedWorkspaceId(bootstrapSecret: string, idempotencyKey: string): Promise<string> {
+export async function deriveKeyedWorkspaceId(bootstrapSecret: string, idempotencyKey: string, ownerWorkspaceId?: string): Promise<string> {
   const encoder = new TextEncoder();
   const key = await crypto.subtle.importKey('raw', encoder.encode(bootstrapSecret), { name: 'HMAC', hash: 'SHA-256' }, false, ['sign']);
-  const mac = new Uint8Array(await crypto.subtle.sign('HMAC', key, encoder.encode(`relaycast:workspace-id:v1:${idempotencyKey}`)));
+  const scope = ownerWorkspaceId === undefined ? 'anonymous' : `owner:${ownerWorkspaceId}`;
+  const mac = new Uint8Array(await crypto.subtle.sign('HMAC', key, encoder.encode(`relaycast:workspace-id:v1:${scope}:${idempotencyKey}`)));
   let value = 0n;
   for (const byte of mac.subarray(0, 8)) value = (value << 8n) | BigInt(byte);
   value &= MAX_KEYED_WORKSPACE_ID;
