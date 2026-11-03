@@ -110,6 +110,21 @@ export interface HandleNodeControlMessageArgs {
    */
   workspaceDeadline?: WorkspaceDeadlineHolder;
   /**
+   * Read inside the serialized callback: true when a reconnect's
+   * `node.register` superseded this frame's connection, even if that
+   * connection's close has since been processed (the registry's own
+   * `isConnectionSuperseded` forgets a closed connection). Either source
+   * refuses the frame.
+   */
+  connectionSuperseded?: () => boolean;
+  /**
+   * The provider the connection held before a reconnect superseded it. A
+   * settling frame it still sends (`action.result` for work dispatched to
+   * it) resolves to this provider, which the invocation row names, rather
+   * than to the cleared binding's `default` fallback.
+   */
+  supersededProviderName?: string;
+  /**
    * Set by a socket owner that verified this `node.heartbeat` is identical to
    * the last heartbeat the engine accepted on this connection, in the same
    * liveness generation, under `role`: a durable checkpoint of unchanged
@@ -134,9 +149,18 @@ export interface WorkspaceDeadlineHolder {
 
 function resolveProviderIdentity(
   message: { provider?: FleetProviderIdentity },
+  nodeId: string,
   connectionId: string | undefined,
 ): FleetProviderIdentity {
   if (message.provider) return message.provider;
+  // An implicit direct node is one agent's own delivery host, reached by one
+  // client with that agent's credential; it never names a provider instance.
+  // Its identity is the node itself, stable across sockets, so the attach
+  // arbitration reads a reconnect as the same instance (the new socket
+  // supersedes the old one) rather than a live duplicate. The connection id
+  // would make every reconnect a conflict whenever the old socket's close
+  // reaches the server after the new socket's register.
+  if (nodeId.startsWith(IMPLICIT_DIRECT_NODE_ID_PREFIX)) return { name: DEFAULT_PROVIDER_NAME, instance_id: nodeId };
   return { name: DEFAULT_PROVIDER_NAME, instance_id: connectionId ?? generateId() };
 }
 
@@ -1345,11 +1369,21 @@ export async function handleProviderDisconnect(
   providerName: string,
   hasRemainingConnections: boolean,
   deps?: InvocationCompletionDeps,
+  options: {
+    /**
+     * Read under the node lock, right before the first write: true when a
+     * newer connection re-bound the provider while this teardown waited
+     * its turn (a reconnect whose register was queued ahead of the old
+     * socket's close). The close is then stale and nothing is written.
+     */
+    superseded?: () => boolean;
+  } = {},
 ) {
   // Serialized with node-control operations so a teardown can't race a
   // concurrent register's provider upsert / aggregate recompute (or, on
   // better-sqlite3, deadlock its isolated transaction).
   return serializeNodeOp(workspaceId, nodeId, async () => {
+    if (options.superseded?.()) return;
     if (!hasRemainingConnections) {
       await markNodeOffline(db, registry, workspaceId, nodeId, { deps, reason: 'disconnected' });
       return;
@@ -3746,6 +3780,9 @@ function sendControl(socket: NodeSocketLike | undefined, payload: Record<string,
  * otherwise a connected node registers agents into a workspace being deleted.
  */
 /** Control frames still admitted after the workspace expires (see the gate below). */
+/** Frames that only settle work already dispatched to the socket; a superseded socket may still finish those. */
+const IN_FLIGHT_SETTLING_FRAMES: ReadonlySet<string> = new Set(['action.accept', 'action.result', 'delivery.ack']);
+
 const SETTLING_CONTROL_FRAMES: ReadonlySet<string> = new Set([
   'action.accept',
   'action.result',
@@ -3802,7 +3839,7 @@ export async function handleNodeControlMessage(args: HandleNodeControlMessageArg
   // connection's provider binding synchronously, and a lookup inside the callback
   // would then fall back to `default` and act on the wrong provider.
   const boundProviderName = args.connectionId
-    ? args.registry.providerNameForConnection?.(args.connectionId)
+    ? (args.registry.providerNameForConnection?.(args.connectionId) ?? args.supersededProviderName)
     : undefined;
   // The connection's registered identity is authoritative — a provider can't act
   // on another provider by putting a different name in the frame. The frame's
@@ -3816,6 +3853,25 @@ export async function handleNodeControlMessage(args: HandleNodeControlMessageArg
   // check, the provider-row upsert, or the aggregate recompute.
   return serializeNodeOp(args.workspaceId, args.nodeId, async () => {
   try {
+    // Decided under the node lock: a frame queued on a socket that a
+    // reconnect's `node.register` has since superseded would act on the live
+    // socket's provider (its own binding is gone, and the fallback is the
+    // same `default`). Only frames that settle work already in flight pass.
+    if (
+      args.connectionId
+      && !IN_FLIGHT_SETTLING_FRAMES.has(message.type)
+      && (args.connectionSuperseded?.() || args.registry.isConnectionSuperseded?.(args.connectionId))
+    ) {
+      sendControl(args.socket, {
+        v: 1,
+        id: requestId(message),
+        type: 'error',
+        ok: false,
+        code: 'connection_superseded',
+        message: 'A newer socket registered this provider; this socket is closed',
+      });
+      return;
+    }
     // A socket outlives its workspace's deletion, and every other frame writes
     // durable state (a heartbeat can insert provider and action rows). Only
     // frames that settle work already in flight or tear identity down pass.
@@ -3831,7 +3887,7 @@ export async function handleNodeControlMessage(args: HandleNodeControlMessageArg
     }
     switch (message.type) {
       case 'node.register': {
-        const provider = resolveProviderIdentity(message, args.connectionId);
+        const provider = resolveProviderIdentity(message, args.nodeId, args.connectionId);
         if (args.connectionId && args.registry.providerAttachConflict) {
           const conflict = args.registry.providerAttachConflict(
             args.workspaceId,

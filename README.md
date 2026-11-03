@@ -1469,8 +1469,11 @@ and verifies its tag with the keyring.
   `parseCredentialKeyring`), workspace ids (`generateWorkspaceId`, plain
   snowflakes), and signed file URLs.
 
-[`examples/terse`](examples/terse) is a complete deployment: the `Workspace`
-actor, a small Bun gateway, local and hosted steps, and an end-to-end check.
+[`packages/actors-workspace`](packages/actors-workspace) is the `Workspace`
+actor, including the WebSocket lifecycle (`/v1/ws` and `/v1/node/ws` answer
+with a socket grant the gateway opens an actor socket with), and
+[`packages/actors-gateway`](packages/actors-gateway) the gateway in front of
+it; [`docs/self-hosting-durable-actors.md`](docs/self-hosting-durable-actors.md) has the deployment steps.
 
 ## Engine Hooks
 

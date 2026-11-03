@@ -3,12 +3,11 @@ import type { ActorSql } from './database.js';
 
 const TABLE = '_actor_kv';
 
-/** Create the KV table. Idempotent; runs with the actor's migrations. */
-export function ensureActorKvTable(sql: ActorSql): void {
-  sql.exec(
-    `CREATE TABLE IF NOT EXISTS ${TABLE} (key TEXT PRIMARY KEY, value TEXT NOT NULL, expires_at INTEGER)`,
-  );
-}
+/** The KV table, created with the actor schema. */
+export const ACTOR_KV_TABLE = {
+  name: TABLE,
+  ddl: `CREATE TABLE IF NOT EXISTS ${TABLE} (key TEXT PRIMARY KEY, value TEXT NOT NULL, expires_at INTEGER)`,
+} as const;
 
 /**
  * Key/value store in the actor's own SQLite. Idempotency records and locks

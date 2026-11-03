@@ -7,7 +7,6 @@ import { issueCredential } from '../auth/credentials.js';
 import { codedError } from '../lib/httpError.js';
 import { runAtomicWrites } from '../ports/database.js';
 import { generateId } from './snowflake.js';
-import { WORKSPACE_KEY_MAX_GRACE_MS } from './tokenRotate.js';
 
 type Db = ReturnType<typeof getDb>;
 
@@ -26,21 +25,7 @@ type Db = ReturnType<typeof getDb>;
  * POST /internal/workspaces/:id/api-key may omit `api_key` to have the engine
  * mint the replacement.
  */
-export const INTERNAL_CAPABILITIES = {
-  workspace_key_push: {
-    generation_cas: true,
-    generation_required_once_fenced: true,
-    grace_ms: true,
-    max_grace_ms: WORKSPACE_KEY_MAX_GRACE_MS,
-    revocation_markers: true,
-    previous_key_slot: true,
-  },
-  workspace_admin: {
-    create: true,
-    delete: true,
-    server_minted_key: true,
-  },
-} as const;
+export { INTERNAL_CAPABILITIES } from './internalCapabilities.js';
 
 // The self-host engine is a single process. Keep a per-database deletion
 // fence so a key push already in flight cannot recreate a workspace after an

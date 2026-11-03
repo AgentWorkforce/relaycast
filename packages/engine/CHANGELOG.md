@@ -7,7 +7,43 @@ See the [root changelog](../../CHANGELOG.md) for cross-package release highlight
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [Unreleased - Minor]
+
+### Added
+
+- `@relaycast/engine/adapters/actor`: `ActorRealtime` runs the engine's realtime over a durable actor's sockets; `upgrade` / `upgradeNode` answer a socket grant instead of a 101.
+- `SOCKET_GRANT_HEADER`, `SocketPrincipalSchema`, `SocketGrantSchema` and `isSocketGrant` describe that grant, exported from the actor adapter and `@relaycast/engine/gateway`.
+- The actor runtime gains `onConnect` / `onMessage` / `onDisconnect` and a `sockets` option; a socket the actor cannot restore is closed `4012 actor restarted`.
+- `toActorCloseCode` maps engine close codes into durable-actors' range (1008 → 4008, 1012 → 4012).
+- `actorConfigFromEnv(env)` reads the actor's engine config from the self-host variables and throws `ConfigError` on a bad value; like `bin/serve.ts`, it trims `RELAYCAST_INTERNAL_SECRET` and treats blank as unset.
+- `InProcessRealtime.setBackgroundScheduler` hands the adapter's fire-and-forget work to the host; unset, it runs detached as before.
+- `loadActiveObserverToken(db, workspaceId, tokenId)` is exported from the node adapter.
+- `@relaycast/engine/adapters/actor`: attached sockets are kept in the actor's `_actor_sockets` table (`ACTOR_SOCKETS_TABLE`, `ActorSocketTable`) and replayed on the next activation, so an actor's sleep costs its clients no reconnect.
+- `InProcessRealtime.attachNodeSocket` takes `{ connectionId, earlyDrain }`; `nodeConnectionState` / `restoreNodeConnectionState` / `providerConnectionId` expose a node connection's binding to hosts that persist it.
+- `ensureActorSchema(sql)` applies the engine migrations and the adapter's tables inside an actor call; read-only when current.
+- `@relaycast/engine/gateway` exports `INTERNAL_CAPABILITIES`, the document `/internal/capabilities` serves.
+- `NodeConnectionRegistry.isConnectionSuperseded?(connectionId)`: true once a reconnect's `node.register` moved the connection's provider to a newer socket.
+- Socket grants are signed: `signSocketPrincipal` / `verifySocketPrincipal` / `canonicalSocketPrincipal` / `SOCKET_GRANT_MAX_AGE_MS` (also from `@relaycast/engine/gateway`); a principal gains `iat`, `nonce` and `sig`, and `onConnect` refuses one that is unsigned, tampered, older than 120 s or already attached (4401).
+- `deriveKeyedWorkspaceId(bootstrapSecret, idempotencyKey)` in `@relaycast/engine/gateway`: the workspace id a keyed create lands on, so a gateway routes its retry to the same actor.
+- `actorConfigFromEnv` reads `RELAYCAST_WORKSPACE_BOOTSTRAP_SECRET` verbatim, as `bin/serve.ts` does.
+- `NodeConnectionRegistry.isConnectionSuperseded?` is required of every registry that re-binds a provider to a newer connection; `handleNodeControlMessage` also takes `connectionSuperseded` and `supersededProviderName` per frame.
+- `INTERNAL_CAPABILITIES` and `WORKSPACE_KEY_MAX_GRACE_MS` live in `engine/internalCapabilities.ts`, a module without database imports.
+
+### Changed
+
+- `createActorRuntime` runs no SQL in the actor's constructor: the schema is applied inside the first call and commits with it, so a failed `create` leaves no half-built actor; a wake with a current schema runs no DDL.
+- `/internal/workspaces/:id` and `/internal/workspaces/:id/api-key` answer 404 for another workspace's id on a single-workspace host (`config.workspaceId`), where `POST /internal/workspaces` is also a 404.
+- The workspace actor binds no `DeliveryWaiters`: `GET /v1/deliveries?wait` answers at once inside an actor (its host long-polls).
+
+### Fixed
+
+- A direct agent whose client reconnects before the server notices the old socket stays online: the new socket supersedes the old one instead of being refused `provider_instance_conflict`, on the Node self-host and the workspace actor.
+- After such a reconnect the agent's actions are invokable at once, instead of answering 503 `handler_unavailable` until the next heartbeat.
+- Frames a superseded node socket still had queued are answered `connection_superseded`, so a stale `node.deregister` no longer removes the new socket's binding and actions; frames settling in-flight work still pass.
+- A key push (`POST /internal/workspaces/:id/api-key`) that creates a workspace on a workspace actor keeps the pushed key's routing tag, so the workspace can mint credentials.
+- `actorMigrationsCurrent` compares recorded names with the plan instead of counting rows, which read as current with superseded files recorded and a newer one missing.
+- A keyed create's retry that reaches its actor after the gateway's keyring rotated keeps the workspace's original tag instead of answering 502.
+- A superseded node socket's settling frames (`action.result`) resolve to the provider the connection held, so the dispatched invocation settles.
 
 ## [12.7.0] - 2026-11-03
 

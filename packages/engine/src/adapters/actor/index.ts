@@ -5,7 +5,6 @@ import type { AuthProvider } from '../../ports/auth.js';
 import type { TelemetrySink } from '../../ports/telemetry.js';
 import { SqliteApiKeyAuthProvider } from '../../auth/index.js';
 import { NoopTelemetrySink } from '../../providers/noop-telemetry.js';
-import { InProcessRealtime } from '../node/realtime.js';
 import { InProcessPresence } from '../node/presence.js';
 import { InProcessRateLimiter } from '../node/rate-limit.js';
 import { createDeliveryMaintenanceRunner } from '../node/delivery-maintenance.js';
@@ -22,17 +21,48 @@ import { reapExpiredWorkspaces } from '../../engine/workspace.js';
 import { createActorEngineDb, type ActorDatabase, type ActorSql } from './database.js';
 import { ActorCredentialTag } from './credential-tag.js';
 import { fixedCredentialTagger } from '../../auth/credentialTags.js';
+import { parseArCredential } from '../../auth/credentials.js';
 import { restrictToArCredentials } from '../../auth/credentials.js';
 import { isArWorkspaceId } from '@relaycast/types';
-import { applyActorMigrations } from './migrations.js';
-import { ActorKeyValueStore, ensureActorKvTable } from './kv.js';
+import { ensureActorSchema } from './schema.js';
+import { ActorKeyValueStore } from './kv.js';
 import { ActorEventQueue } from './event-queue.js';
 import { SignedUrlFileStorage } from './files.js';
-import { ActorEphemeralOutbox, ensureActorOutboundTable } from './ephemeral-outbox.js';
+import { ActorEphemeralOutbox } from './ephemeral-outbox.js';
 import { isSafeExternalUrl } from '../../lib/ssrf.js';
+import { assertInternalSecretStrength } from '../../engine/internalAdmin.js';
+import { ConfigError } from '../../bin/secretEnv.js';
+import { ActorRealtime, type ActorSocketLike, type ActorSocketSource } from './realtime.js';
+
+/** Minimum `fileSigningSecret` length: it signs file URLs and socket grants (the gateway enforces the same). */
+export const MIN_FILE_SIGNING_SECRET_LENGTH = 32;
 
 export type { ActorDatabase, ActorSql, SqliteValue } from './database.js';
+export { ensureActorSchema } from './schema.js';
+export { ACTOR_SOCKETS_TABLE, ActorSocketTable, type ActorSocketRow } from './socket-table.js';
 export type { ActorHttpRequest, ActorHttpResponse } from './http.js';
+export { actorConfigFromEnv, DEFAULT_ACTOR_MAX_UPLOAD_BYTES, type ActorEngineConfig } from './config.js';
+export { ConfigError } from '../../bin/secretEnv.js';
+export {
+  ActorRealtime,
+  ACTOR_RESTARTED_CLOSE_CODE,
+  INVALID_PRINCIPAL_CLOSE_CODE,
+  UNAUTHORIZED_CLOSE_CODE,
+  connectionTag,
+  toActorCloseCode,
+  toActorCloseReason,
+  type ActorBroadcastOptionsLike,
+  type ActorSocketLike,
+  type ActorSocketSource,
+} from './realtime.js';
+export {
+  SOCKET_GRANT_HEADER,
+  SocketGrantSchema,
+  SocketPrincipalSchema,
+  isSocketGrant,
+  type SocketGrant,
+  type SocketPrincipal,
+} from './socket-grant.js';
 import type { ActorHttpRequest, ActorHttpResponse } from './http.js';
 
 /** Liveness sweeps for connected nodes run on the self-host sweep cadence. */
@@ -63,6 +93,14 @@ export interface ActorRuntimeOptions {
    * when outbound work is queued, never pushing an earlier pending alarm back.
    */
   alarm: { get(): number | null; set(timestampMs: number): void };
+  /**
+   * The actor's sockets, bound to `this.getConnections` / `this.broadcast`.
+   * They answer only while an actor call runs; the runtime touches them
+   * inside its own calls and settles its background work before returning.
+   * Absent, the actor serves no sockets: upgrades still answer with a grant,
+   * but nothing connects.
+   */
+  sockets?: ActorSocketSource;
   /**
    * Total time one maintenance pass may spend deleting blobs through the
    * gateway; the rest wait for the next pass. Positive; default 15s.
@@ -106,7 +144,22 @@ export interface ActorRuntime {
    * rest of the pass commits.
    */
   maintain(): Promise<void>;
+  /**
+   * A socket the gateway opened with the grant an upgrade answered. Its
+   * metadata is the grant's principal; a stale or foreign one is rejected
+   * (4400 malformed, 4401 no longer authenticates).
+   */
+  onConnect(socket: ActorSocketLike): Promise<void>;
+  /** A JSON frame from a connected node or observer. */
+  onMessage(socket: ActorSocketLike, message: unknown): Promise<void>;
+  onDisconnect(socket: ActorSocketLike): Promise<void>;
 }
+
+/** No sockets: the runtime of an actor that is never connected to. */
+const NO_SOCKETS: ActorSocketSource = {
+  getConnections: async () => [],
+  broadcast() {},
+};
 
 class ExternalIoOutsideMaintenance extends Error {
   constructor() {
@@ -123,14 +176,38 @@ export function createActorRuntime(options: ActorRuntimeOptions): ActorRuntime {
   if (!isArWorkspaceId(options.workspaceId)) {
     throw new Error(`Workspace actor id ${JSON.stringify(options.workspaceId)} must be a 64-bit snowflake`);
   }
+  // A weak admin secret is refused at construction, as the self-host server does.
+  assertInternalSecretStrength(options.config?.internalSecret);
+  if (options.fileSigningSecret.length < MIN_FILE_SIGNING_SECRET_LENGTH) {
+    throw new ConfigError(`fileSigningSecret must be at least ${MIN_FILE_SIGNING_SECRET_LENGTH} characters: it signs file URLs and socket grants`);
+  }
   let maintaining = false;
+  // Work started without being awaited during the running call (engine
+  // `waitUntil`, the registry's early node drain). It is settled before the
+  // call returns, so it commits with the call and the sockets it writes to
+  // are still reachable.
+  const background: Promise<unknown>[] = [];
+  const schedule = (promise: Promise<unknown>): void => { background.push(promise); };
+  const settleBackground = async (): Promise<void> => {
+    // Background work can schedule more background work; settle all of it.
+    for (let settled = 0; settled < background.length; settled = background.length) {
+      await Promise.allSettled(background.slice(settled));
+    }
+    background.length = 0;
+  };
   // Write groups of the running maintenance step: how many opened, and the failures.
   let stepGroups = 0;
   let stepFailures: { index: number; error: unknown }[] = [];
 
-  applyActorMigrations(sql);
-  ensureActorKvTable(sql);
-  ensureActorOutboundTable(sql);
+  // The schema is applied inside the first actor call, never here: the
+  // constructor's statements would each commit on their own (durable-actors
+  // 0.14.6), and a failed first call could not roll them back. Once a call
+  // has found the schema current (a read-only check), the activation skips it.
+  let schemaCurrent = false;
+  const ensureSchema = (): void => {
+    if (schemaCurrent) return;
+    schemaCurrent = ensureActorSchema(sql);
+  };
   const credentialTag = new ActorCredentialTag(sql);
 
   const db = createActorEngineDb(sql, {
@@ -176,7 +253,13 @@ export function createActorRuntime(options: ActorRuntimeOptions): ActorRuntime {
   };
 
   const telemetry = safeTelemetrySink(options.telemetry ?? new NoopTelemetrySink());
-  const realtime = new InProcessRealtime(db);
+  const realtime = new ActorRealtime(db, {
+    workspaceId: options.workspaceId,
+    grantSecret: options.fileSigningSecret,
+    sockets: options.sockets ?? NO_SOCKETS,
+    sql,
+    background: schedule,
+  });
   const presence = new InProcessPresence(realtime, { db, sweepIntervalMs: 0 });
   realtime.setPresenceTracker(presence);
   const kv = new ActorKeyValueStore(sql);
@@ -266,6 +349,60 @@ export function createActorRuntime(options: ActorRuntimeOptions): ActorRuntime {
     for (const failure of stepFailures) alert(step, failure.index, failure.error);
   };
 
+  /**
+   * One actor call: the schema, registry reconciliation with the control
+   * plane, the work, then its background work and the alarm. `rehydrate`
+   * runs before the work so a request sees the sockets as they are, and
+   * inside `finish` so a failed reconciliation still settles the drains it
+   * scheduled and re-arms the alarm (else maintenance would wait for the
+   * next call).
+   */
+  const call = async <T>(work: () => Promise<T>): Promise<T> => {
+    ensureSchema();
+    return finish(async () => {
+      await realtime.rehydrate();
+      return work();
+    });
+  };
+
+  const finish = async <T>(work: () => Promise<T>): Promise<T> => {
+    try {
+      return await work();
+    } finally {
+      await settleBackground();
+      const next = nextMaintenanceAt(sql);
+      if (next !== null) requestMaintenance(next);
+    }
+  };
+
+  /**
+   * A key push that created this workspace (`POST /internal/workspaces/:id/api-key`
+   * with an `ar_ws_` key, answered 201) is the one create that does not go
+   * through `create`: the pushed key's routing tag is the workspace's tag,
+   * or the actor could mint no credential afterwards. The gateway admits
+   * only tags its keyring signed to this route.
+   */
+  const keepPushedTag = (request: ActorHttpRequest, status: number): void => {
+    if (status !== 201 || request.method !== 'POST' || credentialTag.get() !== undefined) return;
+    const match = /^\/internal\/workspaces\/([^/]+)\/api-key$/.exec(new URL(request.url).pathname);
+    if (!match) return;
+    let pushedTo: string;
+    try {
+      pushedTo = decodeURIComponent(match[1]);
+    } catch {
+      return;
+    }
+    if (pushedTo !== options.workspaceId) return;
+    let apiKey: unknown;
+    try {
+      apiKey = (JSON.parse(request.body ?? 'null') as { api_key?: unknown } | null)?.api_key;
+    } catch {
+      return;
+    }
+    const key = typeof apiKey === 'string' ? parseArCredential(apiKey) : undefined;
+    if (key?.kind === 'workspace' && key.workspaceId === options.workspaceId) credentialTag.set(key.tag);
+  };
+
   return {
     deps,
 
@@ -274,61 +411,76 @@ export function createActorRuntime(options: ActorRuntimeOptions): ActorRuntime {
       if (request.method !== 'POST' || pathname !== '/v1/workspaces') {
         throw new Error('create serves POST /v1/workspaces only');
       }
-      credentialTag.set(tag);
+      ensureSchema();
+      // A keyed create's retry reaches the actor that already created the
+      // workspace, possibly after a keyring rotation, with the now-current
+      // tag: the workspace's tag never changes (its key version stays in the
+      // keyring), so an existing one stands and the replay is answered.
+      if (credentialTag.get() === undefined) credentialTag.set(tag);
       return this.handle(request);
     },
 
-    async handle(request) {
-      applyActorMigrations(sql);
-      const background: Promise<unknown>[] = [];
-      const executionCtx = {
-        waitUntil: (promise: Promise<unknown>) => { background.push(promise); },
-        passThroughOnException() {},
-        props: {},
-      };
-      const response = await app.fetch(
-        new Request(request.url, {
-          method: request.method,
-          headers: request.headers,
-          body: request.body,
-        }),
-        {},
-        executionCtx,
-      );
-      const body = await response.text();
-      // Background work can schedule more background work; settle all of it
-      // so it commits (or rolls back) with this call.
-      for (let settled = 0; settled < background.length; settled = background.length) {
-        await Promise.allSettled(background.slice(settled));
-      }
-      const next = nextMaintenanceAt(sql);
-      if (next !== null) requestMaintenance(next);
-      return { status: response.status, headers: [...response.headers], body };
+    handle(request) {
+      return call(async () => {
+        const executionCtx = {
+          waitUntil: schedule,
+          passThroughOnException() {},
+          props: {},
+        };
+        const response = await app.fetch(
+          new Request(request.url, {
+            method: request.method,
+            headers: request.headers,
+            body: request.body,
+          }),
+          {},
+          executionCtx,
+        );
+        const body = await response.text();
+        keepPushedTag(request, response.status);
+        return { status: response.status, headers: [...response.headers], body };
+      });
     },
 
-    async maintain() {
-      applyActorMigrations(sql);
-      maintaining = true;
-      blobDeadline = Date.now() + blobDeleteBudgetMs;
-      try {
-        const steps: [string, () => Promise<unknown>][] = [
-          ['kv_expiry', async () => kv.prune()],
-          ['presence', () => presence.sweep()],
-          ['stale_agents', () => sweepStaleAgents(db)],
-          ['offline_nodes', () => sweepOfflineNodes(db, realtime, deps)],
-          ['invocations', () => sweepTimedOutInvocations(db, realtime, { completionDeps: deps })],
-          ['workspace_expiry', () => reapExpiredWorkspaces(db, files)],
-          ['deliveries', () => runDeliveryMaintenance()],
-          ['a2a_egress', () => sweepPendingA2aEgress(db, undefined, outboundFetch)],
-          ['webhooks', () => webhookQueue.drain()],
-          ['ephemeral_events', () => ephemeralOutbox.drain()],
-        ];
-        for (const [step, work] of steps) await runStep(step, work);
-      } finally {
-        maintaining = false;
-      }
-      const next = nextMaintenanceAt(sql);
-      if (next !== null) requestMaintenance(next);
+    maintain() {
+      return call(async () => {
+        maintaining = true;
+        blobDeadline = Date.now() + blobDeleteBudgetMs;
+        try {
+          const steps: [string, () => Promise<unknown>][] = [
+            ['kv_expiry', async () => kv.prune()],
+            ['presence', () => presence.sweep()],
+            ['stale_agents', () => sweepStaleAgents(db)],
+            ['offline_nodes', () => sweepOfflineNodes(db, realtime, deps)],
+            ['invocations', () => sweepTimedOutInvocations(db, realtime, { completionDeps: deps })],
+            ['workspace_expiry', () => reapExpiredWorkspaces(db, files)],
+            ['deliveries', () => runDeliveryMaintenance()],
+            ['a2a_egress', () => sweepPendingA2aEgress(db, undefined, outboundFetch)],
+            ['webhooks', () => webhookQueue.drain()],
+            ['ephemeral_events', () => ephemeralOutbox.drain()],
+          ];
+          for (const [step, work] of steps) await runStep(step, work);
+        } finally {
+          maintaining = false;
+        }
+      });
+    },
+
+    // The lifecycle hooks reconcile with the control plane themselves: the
+    // event's socket is the one connection rehydrate must not act on.
+    onConnect(socket) {
+      ensureSchema();
+      return finish(() => realtime.onConnect(socket));
+    },
+
+    onMessage(socket, message) {
+      ensureSchema();
+      return finish(() => realtime.onMessage(socket, message));
+    },
+
+    onDisconnect(socket) {
+      ensureSchema();
+      return finish(() => realtime.onDisconnect(socket));
     },
   };
 }

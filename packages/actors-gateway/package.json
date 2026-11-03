@@ -1,0 +1,45 @@
+{
+  "name": "@relaycast/actors-gateway",
+  "version": "12.7.0",
+  "private": true,
+  "type": "module",
+  "description": "Node gateway in front of relaycast Workspace actors on durable-actors: routes by ar_ credential, bridges WebSockets, long-polls deliveries and serves signed file URLs.",
+  "main": "dist/server.js",
+  "types": "dist/server.d.ts",
+  "bin": {
+    "relaycast-actors-gateway": "dist/bin.js"
+  },
+  "exports": {
+    ".": {
+      "types": "./dist/server.d.ts",
+      "import": "./dist/server.js"
+    },
+    "./bin": {
+      "import": "./dist/bin.js"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsc",
+    "typecheck": "tsc --noEmit -p tsconfig.typecheck.json",
+    "test": "vitest run",
+    "lint": "eslint src/",
+    "e2e:local": "tsx e2e/local.ts"
+  },
+  "dependencies": {
+    "@aws-sdk/client-s3": "^3.984.0",
+    "@google-cloud/storage": "^8.4.0",
+    "@relaycast/engine": "12.7.0",
+    "@relaycast/types": "12.7.0",
+    "ws": "^8.18.0",
+    "zod": "^4.3.6"
+  },
+  "devDependencies": {
+    "@types/node": "^20.19.0",
+    "@types/ws": "^8.5.13",
+    "typescript": "^5.9.3",
+    "vitest": "^4.0.18"
+  }
+}

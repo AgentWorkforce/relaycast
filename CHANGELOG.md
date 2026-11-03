@@ -16,7 +16,14 @@ This project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 Packages without a separate changelog are covered by the cross-package notes below.
 
-## [Unreleased]
+## [Unreleased - Minor]
+
+- The workspace actor (`@relaycast/engine/adapters/actor`) serves realtime: `GET /v1/ws` and `GET /v1/node/ws` answer an authenticated upgrade with a socket grant (`x-relaycast-socket-grant: 1`, body `{ ok: true, data: { metadata } }`) that the gateway opens an actor socket with, and the actor's `onConnect` / `onMessage` / `onDisconnect` drive the engine's node and observer streams. A socket that outlived the actor's memory is closed with `4012 actor restarted` so its client reconnects.
+- The workspace actor reads `RELAYCAST_MAX_UPLOAD_BYTES`, `RELAYCAST_MESSAGE_TTL_DAYS`, `RELAYCAST_MAILBOX_TTL_MS`, `RELAYCAST_MAILBOX_DEPTH_CAP`, `RELAYCAST_RATE_LIMIT_PER_MINUTE`, `RELAYCAST_INTERNAL_SECRET` and `RELAYCAST_ENV` with the self-host server's semantics (`actorConfigFromEnv`). Inside an actor, `/internal/workspaces/:id` routes serve that actor's workspace only (another id is a 404) and `POST /internal/workspaces` is not served.
+- The Terse example moved: the `Workspace` actor is `packages/actors-workspace` (durable-actors 0.14.6) and the gateway `packages/actors-gateway`; `examples/terse` only points there.
+- Self-hosting on durable-actors (experimental; `docs/self-hosting-durable-actors.md`): `packages/actors-gateway` is a stateless Node gateway in front of the `Workspace` actors, and `packages/actors-workspace/deploy` compiles the actor and registers it with a self-hosted control plane. Both ship as images.
+- The gateway routes `ar_` credentials to their workspace actor, bridges `/v1/ws` and `/v1/node/ws` to actor sockets, long-polls `GET /v1/deliveries?wait` outside the actor, and serves the internal admin API behind `RELAYCAST_INTERNAL_SECRET`, with `/healthz`, `/readyz`, structured logs and graceful shutdown.
+- Signed `/_relayfiles` URLs are served from a `local` directory or a `gcs` / `s3` bucket (`RELAYCAST_FILE_STORE`). The object stores let several gateway replicas share files.
 
 ## [12.7.0] - 2026-11-03
 

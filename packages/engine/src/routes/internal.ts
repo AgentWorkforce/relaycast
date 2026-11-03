@@ -1,6 +1,6 @@
 import { isArWorkspaceId, parseCredential } from '@relaycast/types';
 import { AR_WORKSPACE_ID_REQUIRED, acceptsOnlyAr, credentialFormat } from '../auth/credentials.js';
-import { Hono } from 'hono';
+import { Hono, type Context } from 'hono';
 import { createMiddleware } from 'hono/factory';
 import { z } from 'zod';
 import { WorkspaceMetadataSchema } from '@relaycast/types';
@@ -54,8 +54,28 @@ const requireInternalSecret = createMiddleware<AppEnv>(async (c, next) => {
 
 internalRoutes.use('*', requireInternalSecret);
 
-// GET /internal/capabilities — non-mutating capability advertisement.
-internalRoutes.get('/capabilities', (c) => jsonOk(c, INTERNAL_CAPABILITIES));
+/**
+ * A single-workspace host (`config.workspaceId`: one workspace per durable
+ * actor) holds exactly that workspace. Its control plane creates workspaces
+ * by picking the actor, so `POST /internal/workspaces` is not served here,
+ * and a workspace-scoped route naming another id is a 404 rather than an
+ * action on a workspace this host never held.
+ */
+function singleWorkspaceId(c: Context<AppEnv>): string | undefined {
+  return c.get('engine').config.workspaceId;
+}
+
+function foreignWorkspace(c: Context<AppEnv>, workspaceId: string): boolean {
+  const own = singleWorkspaceId(c);
+  return own !== undefined && own !== workspaceId;
+}
+
+// GET /internal/capabilities — non-mutating capability advertisement. A
+// single-workspace host creates no workspaces (its gateway does), so it does
+// not advertise `create`.
+internalRoutes.get('/capabilities', (c) => jsonOk(c, singleWorkspaceId(c) === undefined
+  ? INTERNAL_CAPABILITIES
+  : { ...INTERNAL_CAPABILITIES, workspace_admin: { ...INTERNAL_CAPABILITIES.workspace_admin, create: false } }));
 
 const createWorkspaceSchema = z.object({
   name: z.string().trim().min(1).max(128),
@@ -66,6 +86,7 @@ const createWorkspaceSchema = z.object({
 // Self-host extension; the hosted control plane creates workspaces implicitly
 // through the upsert on /internal/workspaces/:id/api-key.
 internalRoutes.post('/workspaces', async (c) => {
+  if (singleWorkspaceId(c) !== undefined) return jsonNotFound(c, 'not_found', 'Route not found');
   try {
     const parsed = await parseJsonBody(c, createWorkspaceSchema, 'name is required (1-128 characters)');
     if (!parsed.ok) return parsed.response;
@@ -92,6 +113,7 @@ internalRoutes.delete('/workspaces/:id', async (c) => {
   if (!WORKSPACE_ID_PATTERN.test(workspaceId)) {
     return jsonError(c, 'invalid_request', 'Invalid workspace id', 400);
   }
+  if (foreignWorkspace(c, workspaceId)) return jsonNotFound(c, 'not_found', 'Workspace not found');
   const fence = beginInternalWorkspaceDeletion(c.get('db'), workspaceId);
   try {
     await workspaceEngine.deleteWorkspace(c.get('db'), c.get('engine').files, workspaceId);
@@ -136,6 +158,7 @@ internalRoutes.post('/workspaces/:id/api-key', async (c) => {
     if (!WORKSPACE_ID_PATTERN.test(workspaceId)) {
       return jsonError(c, 'invalid_request', 'Invalid workspace id', 400);
     }
+    if (foreignWorkspace(c, workspaceId)) return jsonNotFound(c, 'not_found', 'Workspace not found');
     // A deployment that mints ar_ credentials carries the workspace in each
     // one as a 64-bit snowflake, so it registers no other ids.
     if (credentialFormat(c.get('db')) === 'ar' && !isArWorkspaceId(workspaceId)) {

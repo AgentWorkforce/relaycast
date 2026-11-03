@@ -3,7 +3,7 @@ import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import { sql } from 'drizzle-orm';
 import { createActorEngineDb } from '../database.js';
-import { applyActorMigrations } from '../migrations.js';
+import { ACTOR_MIGRATIONS_TABLE, actorMigrationsCurrent, applyActorMigrations } from '../migrations.js';
 import { FakeActorDatabase } from './fakeActor.js';
 import { channels, messages, workspaces } from '../../../db/schema.js';
 import { desc, eq } from 'drizzle-orm';
@@ -119,6 +119,22 @@ describe('bundled actor migrations', () => {
     const before = fake.statements;
     expect(applyActorMigrations(fake).applied).toEqual([]);
     expect(fake.statements - before).toBe(2);
+  });
+
+  it('are current by name, not by count', () => {
+    const fake = new FakeActorDatabase();
+    const { applied } = applyActorMigrations(fake);
+    expect(actorMigrationsCurrent(fake)).toBe(true);
+    // A database that recorded the two superseded files and lacks the newest
+    // one has more rows than the plan needs, and is not current.
+    const newest = applied[applied.length - 1];
+    fake.exec(`DELETE FROM ${ACTOR_MIGRATIONS_TABLE} WHERE name = ?`, newest);
+    for (const superseded of ['0048_bounded_maintenance.sql', '0049_redrive_review_hardening.sql']) {
+      fake.exec(`INSERT OR IGNORE INTO ${ACTOR_MIGRATIONS_TABLE} (name, applied_at) VALUES (?, 0)`, superseded);
+    }
+    expect(actorMigrationsCurrent(fake)).toBe(false);
+    expect(applyActorMigrations(fake, { trackingTableExists: true }).applied).toEqual([newest]);
+    expect(actorMigrationsCurrent(fake)).toBe(true);
   });
 });
 
