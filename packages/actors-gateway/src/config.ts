@@ -49,6 +49,8 @@ export interface GatewayConfig {
   publicWorkspaceCreate: boolean;
   fileStore: FileStoreKind;
   fileDir: string;
+  /** The `RELAYCAST_GCS_*` / `RELAYCAST_S3_*` settings as given, for the store factory (never `process.env` behind the caller's back). */
+  fileStoreEnv: Env;
   maxUploadBytes: number;
   /** Budget for one actor `handle` call through the control plane. */
   actorInvokeTimeoutMs: number;
@@ -198,6 +200,7 @@ export function loadConfig(env: Env = process.env, readFile?: (path: string) => 
     publicWorkspaceCreate: settings.RELAYCAST_PUBLIC_WORKSPACE_CREATE === 'true',
     fileStore: settings.RELAYCAST_FILE_STORE,
     fileDir: settings.RELAYCAST_FILE_DIR,
+    fileStoreEnv: Object.fromEntries(Object.entries(env).filter(([name]) => name.startsWith('RELAYCAST_GCS_') || name.startsWith('RELAYCAST_S3_'))),
     maxUploadBytes: settings.RELAYCAST_MAX_UPLOAD_BYTES,
     actorInvokeTimeoutMs: settings.RELAYCAST_ACTOR_INVOKE_TIMEOUT_MS,
     actorCreateTimeoutMs: settings.RELAYCAST_ACTOR_CREATE_TIMEOUT_MS,

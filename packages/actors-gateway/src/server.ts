@@ -60,7 +60,7 @@ export function createGateway(config: GatewayConfig, options: GatewayOptions = {
     invokeTimeoutMs: config.actorInvokeTimeoutMs,
     createTimeoutMs: config.actorCreateTimeoutMs,
   });
-  const files = options.fileStore ?? createFileStore({ kind: config.fileStore, fileDir: config.fileDir });
+  const files = options.fileStore ?? createFileStore({ kind: config.fileStore, fileDir: config.fileDir, env: config.fileStoreEnv });
   const server = createServer();
   const ctx: GatewayContext = {
     config,

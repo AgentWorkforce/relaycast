@@ -22,7 +22,7 @@ import { parseSocketGrant } from './socketGrant.js';
 /** Largest frame a client may send upstream. */
 export const CLIENT_MAX_MESSAGE_BYTES = 1024 * 1024;
 const UPSTREAM_MAX_MESSAGE_BYTES = 16 * 1024 * 1024;
-/** Frames queued for a client that is not reading; past this it is closed as a slow consumer. */
+/** Frames queued for a peer that is not reading (either direction); past this the client is closed 1013. */
 const MAX_CLIENT_BUFFERED_BYTES = 2 * UPSTREAM_MAX_MESSAGE_BYTES;
 /**
  * Bytes a client may send before its upgrade is answered. A WebSocket client
@@ -138,7 +138,14 @@ export function createSocketBridge(ctx: GatewayContext, options: SocketBridgeOpt
         client.close(1003, 'text frames only');
         return;
       }
-      if (upstream.readyState === WebSocket.OPEN) upstream.send(data.toString());
+      if (upstream.readyState !== WebSocket.OPEN) return;
+      // The mirror of the client-side bound: an actor socket that stopped
+      // reading must not let one client grow the outgoing queue without end.
+      if (upstream.bufferedAmount > MAX_CLIENT_BUFFERED_BYTES) {
+        client.close(1013, 'slow upstream');
+        return;
+      }
+      upstream.send(data.toString());
     });
     upstream.on('message', (data) => {
       if (client.readyState !== WebSocket.OPEN) return;

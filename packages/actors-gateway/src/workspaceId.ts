@@ -14,18 +14,33 @@ import { bearerToken } from './http.js';
 export const IDEMPOTENCY_KEY_HEADER = 'idempotency-key';
 
 export type WorkspaceIdChoice =
-  | { workspaceId: string }
+  | { workspaceId: string; keyed: boolean }
   | { error: { status: number; code: string; message: string } };
+
+/**
+ * Whether an unkeyed create's answer means its fresh id was already taken:
+ * every replica mints snowflakes with a worker id of its own (10 bits of a
+ * random UUID), so two can meet in one millisecond. Such a create is retried
+ * once under another id; a keyed one is answered as is (that id is the key's).
+ */
+export function isWorkspaceIdTaken(response: { status: number; body: string }): boolean {
+  if (response.status !== 409) return false;
+  try {
+    return (JSON.parse(response.body) as { error?: { code?: unknown } }).error?.code === 'workspace_exists';
+  } catch {
+    return false;
+  }
+}
 
 export async function chooseWorkspaceId(req: IncomingMessage, bootstrapSecret: string | undefined): Promise<WorkspaceIdChoice> {
   const presented = req.headers[IDEMPOTENCY_KEY_HEADER];
   const key = (Array.isArray(presented) ? presented[0] : presented)?.trim();
   // Absent or blank: the actor answers a blank key with the engine's 400 and creates nothing.
-  if (!key) return { workspaceId: generateWorkspaceId() };
+  if (!key) return { workspaceId: generateWorkspaceId(), keyed: false };
   if (!bootstrapSecret) {
     return { error: { status: 503, code: 'workspace_create_idempotency_unavailable', message: 'Anonymous workspace create idempotency is not configured on this deployment' } };
   }
   const bearer = bearerToken(req);
   const owner = bearer ? parseArCredential(bearer) : undefined;
-  return { workspaceId: await deriveKeyedWorkspaceId(bootstrapSecret, key, owner?.kind === 'workspace' ? owner.workspaceId : undefined) };
+  return { workspaceId: await deriveKeyedWorkspaceId(bootstrapSecret, key, owner?.kind === 'workspace' ? owner.workspaceId : undefined), keyed: true };
 }

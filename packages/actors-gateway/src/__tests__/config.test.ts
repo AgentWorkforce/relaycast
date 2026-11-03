@@ -102,6 +102,12 @@ describe('configuration', () => {
     expect(weak.message).not.toContain('weak-secret');
   });
 
+  it('carries the object-store settings it was given, not process.env', () => {
+    const config = loadConfig(baseEnv(URL, { RELAYCAST_FILE_STORE: 's3', RELAYCAST_S3_BUCKET: 'given', RELAYCAST_S3_ENDPOINT: 'http://minio:9000', RELAYCAST_GCS_PREFIX: 'p' }));
+    expect(config.fileStoreEnv).toEqual({ RELAYCAST_S3_BUCKET: 'given', RELAYCAST_S3_ENDPOINT: 'http://minio:9000', RELAYCAST_GCS_PREFIX: 'p' });
+    expect(loadConfig(baseEnv(URL)).fileStoreEnv).toEqual({});
+  });
+
   it('reads the workspace bootstrap secret verbatim (its bytes feed a derivation)', () => {
     expect(loadConfig(baseEnv(URL)).workspaceBootstrapSecret).toBeUndefined();
     expect(loadConfig(baseEnv(URL, { RELAYCAST_WORKSPACE_BOOTSTRAP_SECRET: ' exact bytes ' })).workspaceBootstrapSecret).toBe(' exact bytes ');

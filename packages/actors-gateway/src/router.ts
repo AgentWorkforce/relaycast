@@ -6,7 +6,7 @@
  */
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import { performance } from 'node:perf_hooks';
-import { ACTOR_FILE_ROUTE, parseArCredential, type ActorHttpRequest, type ActorHttpResponse } from '@relaycast/engine/gateway';
+import { ACTOR_FILE_ROUTE, generateWorkspaceId, parseArCredential, type ActorHttpRequest, type ActorHttpResponse } from '@relaycast/engine/gateway';
 import { ListDeliveriesQuerySchema } from '@relaycast/types';
 import { ActorCallError } from './actors.js';
 import type { GatewayContext } from './context.js';
@@ -27,7 +27,7 @@ import {
 } from './http.js';
 import { handleInternal } from './internal.js';
 import { errorText } from './log.js';
-import { chooseWorkspaceId } from './workspaceId.js';
+import { chooseWorkspaceId, isWorkspaceIdTaken } from './workspaceId.js';
 
 export const SERVICE_NAME = 'relaycast-actors-gateway';
 /** How long a readiness answer from the control plane is reused. */
@@ -147,9 +147,34 @@ export function createRequestHandler(ctx: GatewayContext, options: RequestHandle
       if ('error' in chosen) return sendError(res, chosen.error.status, chosen.error.code, chosen.error.message);
       const workspaceId = chosen.workspaceId;
       setWorkspace(workspaceId);
-      const tag = await ctx.credentialTags.tag(workspaceId);
       const body = await readBody(req, ctx.config.maxUploadBytes);
-      const response = await ctx.actors.create(workspaceId, toActorRequest(req, url, body, requestId), tag, { signal });
+      let request = toActorRequest(req, url, body, requestId);
+      const bearer = bearerToken(req);
+      const owner = chosen.keyed && bearer ? parseArCredential(bearer) : undefined;
+      if (owner?.kind === 'workspace') {
+        // An owner-keyed create: the owner's key lives in the owner's actor,
+        // which the child actor cannot consult. Authenticate it there, then
+        // forward the create without the bearer; the owner is already in the
+        // derived id, so the child's keyed-create record is the owner's.
+        if (!(await ctx.credentialTags.verify(bearer!))) {
+          return sendError(res, 401, 'unauthorized', 'An ar_ credential issued by this deployment is required');
+        }
+        const probe = await ctx.actors.handle(owner.workspaceId, {
+          method: 'GET',
+          url: `${url.origin}/v1/agents?limit=1`,
+          headers: [['host', url.host], ['authorization', `Bearer ${bearer}`], [REQUEST_ID_HEADER, requestId]],
+          body: null,
+        }, { signal });
+        if (probe.status !== 200) return sendError(res, 401, 'unauthorized', 'The owner credential was refused by its workspace');
+        request = { ...request, headers: request.headers.filter(([name]) => name !== 'authorization') };
+      }
+      let response = await ctx.actors.create(workspaceId, request, await ctx.credentialTags.tag(workspaceId), { signal });
+      if (!chosen.keyed && isWorkspaceIdTaken(response)) {
+        // Two replicas minted the same snowflake in one millisecond: once more under a fresh one.
+        const again = generateWorkspaceId();
+        setWorkspace(again);
+        response = await ctx.actors.create(again, request, await ctx.credentialTags.tag(again), { signal });
+      }
       return sendActorResponse(res, response);
     }
 

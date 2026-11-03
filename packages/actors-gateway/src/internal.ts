@@ -11,11 +11,11 @@
 import { createHash, timingSafeEqual } from 'node:crypto';
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import { z } from 'zod';
-import { INTERNAL_CAPABILITIES, parseArCredential } from '@relaycast/engine/gateway';
+import { INTERNAL_CAPABILITIES, generateWorkspaceId, parseArCredential } from '@relaycast/engine/gateway';
 import { WorkspaceMetadataSchema, isArWorkspaceId } from '@relaycast/types';
 import type { GatewayContext } from './context.js';
 import { REQUEST_ID_HEADER, bearerToken, readBody, sendActorResponse, sendError, sendJson, toActorRequest } from './http.js';
-import { IDEMPOTENCY_KEY_HEADER, chooseWorkspaceId } from './workspaceId.js';
+import { IDEMPOTENCY_KEY_HEADER, chooseWorkspaceId, isWorkspaceIdTaken } from './workspaceId.js';
 
 /** The engine's own capability document: the actors serve exactly these. */
 export { INTERNAL_CAPABILITIES };
@@ -96,15 +96,14 @@ export async function handleInternal(ctx: GatewayContext, { req, res, url, reque
     // and its key, revealed once) answer this call.
     const chosen = await chooseWorkspaceId(req, ctx.config.workspaceBootstrapSecret);
     if ('error' in chosen) return sendError(res, chosen.error.status, chosen.error.code, chosen.error.message);
-    const workspaceId = chosen.workspaceId;
+    let workspaceId = chosen.workspaceId;
     setWorkspace(workspaceId);
-    const tag = await ctx.credentialTags.tag(workspaceId);
     const body = JSON.stringify({
       name: parsed.data.name,
       ...(parsed.data.metadata === undefined ? {} : { metadata: parsed.data.metadata }),
     });
     const idempotencyKey = req.headers[IDEMPOTENCY_KEY_HEADER];
-    const response = await ctx.actors.create(workspaceId, {
+    const request = {
       method: 'POST',
       url: `${url.origin}/v1/workspaces`,
       headers: [
@@ -112,9 +111,16 @@ export async function handleInternal(ctx: GatewayContext, { req, res, url, reque
         ['content-type', 'application/json'],
         [REQUEST_ID_HEADER, requestId],
         ...(typeof idempotencyKey === 'string' ? [[IDEMPOTENCY_KEY_HEADER, idempotencyKey] as [string, string]] : []),
-      ],
+      ] as [string, string][],
       body,
-    }, tag, { signal });
+    };
+    let response = await ctx.actors.create(workspaceId, request, await ctx.credentialTags.tag(workspaceId), { signal });
+    if (!chosen.keyed && isWorkspaceIdTaken(response)) {
+      // Two replicas minted the same snowflake in one millisecond: once more under a fresh one.
+      workspaceId = generateWorkspaceId();
+      setWorkspace(workspaceId);
+      response = await ctx.actors.create(workspaceId, request, await ctx.credentialTags.tag(workspaceId), { signal });
+    }
     return sendActorResponse(res, response);
   }
 

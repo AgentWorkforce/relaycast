@@ -153,11 +153,14 @@ describe('routing', () => {
         const key = Object.fromEntries(request.headers)['idempotency-key'];
         const existing = created.get(id);
         if (existing && key) return existing;
-        const response = jsonResponse(201, { ok: true, data: { workspace_id: id, api_key: `ar_ws_${id}_key`, key } });
+        const response = jsonResponse(201, { ok: true, data: { workspace_id: id, api_key: `ar_ws_${id}_key`, key, bearer: Object.fromEntries(request.headers).authorization ?? null } });
         created.set(id, response);
         return response;
       },
-      handle: () => jsonResponse(404, { ok: false, error: { code: 'not_found', message: 'no' } }),
+      // The owner's actor answers the owner probe (an authenticated read): OTHER_WORKSPACE_ID accepts its key, WORKSPACE_ID refuses.
+      handle: (request) => (new URL(request.url).pathname === '/v1/agents' && id === OTHER_WORKSPACE_ID && Object.fromEntries(request.headers).authorization?.startsWith('Bearer ar_ws_')
+        ? jsonResponse(200, { ok: true, data: [] })
+        : jsonResponse(401, { ok: false, error: { code: 'invalid_token', message: 'no' } })),
     });
     harness = await startHarness({ workspace: keyedWorkspace, env: { RELAYCAST_WORKSPACE_BOOTSTRAP_SECRET: 'bootstrap-secret-0123456789abcdef' } });
     const create = (key?: string) => fetch(`${harness!.baseUrl}/v1/workspaces`, {
@@ -182,14 +185,46 @@ describe('routing', () => {
       body: JSON.stringify({ name: 'team' }),
     });
     expect(owned.status).toBe(201);
-    expect(harness.controlPlane.invocations[2].actorId).toBe(await deriveKeyedWorkspaceId('bootstrap-secret-0123456789abcdef', key, OTHER_WORKSPACE_ID));
-    expect(harness.controlPlane.invocations[2].actorId).not.toBe(actors[0]);
+    // The owner was authenticated through its own actor, and the child's create carries no bearer (the owner is in the derived id).
+    const [ownerProbe, ownedCreate] = harness.controlPlane.invocations.slice(2);
+    expect([ownerProbe.method, ownerProbe.actorId]).toEqual(['handle', OTHER_WORKSPACE_ID]);
+    expect(ownedCreate.actorId).toBe(await deriveKeyedWorkspaceId('bootstrap-secret-0123456789abcdef', key, OTHER_WORKSPACE_ID));
+    expect(ownedCreate.actorId).not.toBe(actors[0]);
+    expect((await readJson(owned)).data).toMatchObject({ bearer: null });
+    // An owner key its workspace refuses never reaches a child actor.
+    const refused = await fetch(`${harness.baseUrl}/v1/workspaces`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', 'idempotency-key': key, authorization: `Bearer ${await harness.credential(WORKSPACE_ID, 'workspace')}` },
+      body: JSON.stringify({ name: 'team' }),
+    });
+    expect(refused.status).toBe(401);
+    expect(harness.controlPlane.invocations).toHaveLength(5);
     // Another key is another actor; no key is a fresh snowflake every time.
     const other = await readJson(await create('bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb'));
     expect((other.data as { workspace_id: string }).workspace_id).not.toBe((first.data as { workspace_id: string }).workspace_id);
     const plainA = await readJson(await create());
     const plainB = await readJson(await create());
     expect((plainA.data as { workspace_id: string }).workspace_id).not.toBe((plainB.data as { workspace_id: string }).workspace_id);
+  });
+
+  it('retries an unkeyed create once under a fresh id when two replicas minted the same snowflake', async () => {
+    let first: string | undefined;
+    const collidingWorkspace = (id: string): FakeWorkspace => ({
+      create: () => {
+        first ??= id;
+        return id === first
+          ? jsonResponse(409, { ok: false, error: { code: 'workspace_exists', message: 'taken' } })
+          : jsonResponse(201, { ok: true, data: { workspace_id: id } });
+      },
+      handle: () => jsonResponse(404, { ok: false, error: { code: 'not_found', message: 'no' } }),
+    });
+    harness = await startHarness({ workspace: collidingWorkspace });
+    const response = await fetch(`${harness.baseUrl}/v1/workspaces`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ name: 'team' }) });
+    expect(response.status).toBe(201);
+    const actors = harness.controlPlane.invocations.map((call) => call.actorId);
+    expect(actors).toHaveLength(2);
+    expect(actors[0]).not.toBe(actors[1]);
+    expect((await readJson(response)).data).toEqual({ workspace_id: actors[1] });
   });
 
   it('fails a keyed create closed when the deployment has no bootstrap secret, as the engine does', async () => {
