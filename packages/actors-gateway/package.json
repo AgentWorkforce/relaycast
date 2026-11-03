@@ -25,7 +25,8 @@
     "build": "tsc",
     "typecheck": "tsc --noEmit -p tsconfig.typecheck.json",
     "test": "vitest run",
-    "lint": "eslint src/"
+    "lint": "eslint src/",
+    "e2e:local": "tsx e2e/local.ts"
   },
   "dependencies": {
     "@aws-sdk/client-s3": "^3.984.0",
