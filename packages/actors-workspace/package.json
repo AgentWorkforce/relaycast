@@ -6,13 +6,16 @@
   "type": "module",
   "scripts": {
     "dev": "durable-actors dev",
+    "deploy": "bun deploy/deploy.ts",
     "check": "tsc --noEmit",
-    "lint": "eslint src/",
+    "lint": "eslint src/ deploy/",
     "test": "vitest run"
   },
   "dependencies": {
+    "@google-cloud/storage": "^8.4.0",
     "@relaycast/engine": "12.6.2",
-    "durable-actors": "0.14.6"
+    "durable-actors": "0.14.6",
+    "zod": "^4.6.7"
   },
   "devDependencies": {
     "@types/node": "^25.2.1",

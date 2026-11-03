@@ -1,0 +1,71 @@
+import { describe, expect, it } from "vitest"
+import { ConfigError, bundleConfigFromEnv, connectionConfigFromEnv, localConfigFromEnv, parseOptions } from "../config.ts"
+
+const BASE = {
+    DURABLE_ACTORS_CONTROL_PLANE_URL: "https://actors.example.com",
+    DURABLE_ACTORS_SECRET: "admin-key",
+    DURABLE_ACTORS_PROJECT_ID: "relaycast",
+    DURABLE_ACTORS_ORGANIZATION_ID: "acme",
+    DURABLE_ACTORS_ARTIFACT_BUCKET: "acme-actors",
+}
+
+describe("parseOptions", () => {
+    it("picks one command and the dry-run flag", () => {
+        expect(parseOptions([])).toEqual({ command: "deploy", dryRun: false })
+        expect(parseOptions(["--dry-run"])).toEqual({ command: "deploy", dryRun: true })
+        expect(parseOptions(["--local", "--dry-run"])).toEqual({ command: "local", dryRun: true })
+        expect(parseOptions(["--status"])).toEqual({ command: "status", dryRun: false })
+        expect(() => parseOptions(["--status", "--delete"])).toThrow(ConfigError)
+        expect(() => parseOptions(["--delete", "--dry-run"])).toThrow("does not apply")
+        expect(() => parseOptions(["--bogus"])).toThrow("unknown argument --bogus")
+    })
+})
+
+describe("bundleConfigFromEnv", () => {
+    it("reads the bundle settings with defaults and parses the secret refs", () => {
+        expect(bundleConfigFromEnv({ ...BASE, DURABLE_ACTORS_SECRET_REFS: " relaycast-env, relaycast-internal ,, " })).toEqual({
+            controlPlaneUrl: "https://actors.example.com",
+            projectId: "relaycast",
+            secret: "admin-key",
+            organizationId: "acme",
+            bucket: "acme-actors",
+            secretRefs: ["relaycast-env", "relaycast-internal"],
+            artifactPrefix: "durable-actors/v3/artifacts",
+        })
+        expect(bundleConfigFromEnv({ ...BASE, DURABLE_ACTORS_ARTIFACT_PREFIX: "custom/artifacts" }).artifactPrefix).toBe("custom/artifacts")
+    })
+
+    it("names the missing or invalid variable without echoing values", () => {
+        const withoutSecret = { ...BASE, DURABLE_ACTORS_SECRET: "" }
+        expect(() => bundleConfigFromEnv(withoutSecret)).toThrow("DURABLE_ACTORS_SECRET is not set")
+        expect(() => bundleConfigFromEnv({ ...BASE, DURABLE_ACTORS_ORGANIZATION_ID: undefined, DURABLE_ACTORS_ARTIFACT_BUCKET: undefined })).toThrow(
+            "DURABLE_ACTORS_ORGANIZATION_ID and DURABLE_ACTORS_ARTIFACT_BUCKET are required"
+        )
+        expect(() => bundleConfigFromEnv({ ...BASE, DURABLE_ACTORS_CONTROL_PLANE_URL: "not a url" })).toThrow(/DURABLE_ACTORS_CONTROL_PLANE_URL/)
+        expect(() => bundleConfigFromEnv({ ...BASE, DURABLE_ACTORS_ARTIFACT_BUCKET: "bucket/path" })).toThrow(/DURABLE_ACTORS_ARTIFACT_BUCKET/)
+        expect(() => bundleConfigFromEnv({ ...BASE, DURABLE_ACTORS_ARTIFACT_PREFIX: "/abs/" })).toThrow(/DURABLE_ACTORS_ARTIFACT_PREFIX/)
+        expect(() => bundleConfigFromEnv({ ...BASE, DURABLE_ACTORS_SECRET_REFS: Array(17).fill("s").join(",") })).toThrow("at most 16")
+        expect(() => bundleConfigFromEnv({ ...BASE, DURABLE_ACTORS_SECRET_REFS: "a,a" })).toThrow("repeats a name")
+        try {
+            bundleConfigFromEnv({ ...BASE, DURABLE_ACTORS_SECRET: " padded " })
+            expect.unreachable()
+        } catch (error) {
+            expect(String(error)).toContain("DURABLE_ACTORS_SECRET")
+            expect(String(error)).not.toContain("padded")
+        }
+    })
+})
+
+describe("localConfigFromEnv and connectionConfigFromEnv", () => {
+    it("needs no admin key locally and defaults the organization to local", () => {
+        expect(localConfigFromEnv({ DURABLE_ACTORS_CONTROL_PLANE_URL: "http://127.0.0.1:7100", DURABLE_ACTORS_PROJECT_ID: "local" })).toEqual({
+            controlPlaneUrl: "http://127.0.0.1:7100",
+            projectId: "local",
+            secret: undefined,
+            organizationId: "local",
+        })
+        expect(() => localConfigFromEnv({ ...BASE, DURABLE_ACTORS_SECRET_REFS: "x" })).toThrow("unavailable in local mode")
+        expect(connectionConfigFromEnv(BASE)).toEqual({ controlPlaneUrl: BASE.DURABLE_ACTORS_CONTROL_PLANE_URL, projectId: "relaycast", secret: "admin-key" })
+        expect(() => connectionConfigFromEnv({ ...BASE, DURABLE_ACTORS_SECRET: undefined })).toThrow("DURABLE_ACTORS_SECRET is not set")
+    })
+})

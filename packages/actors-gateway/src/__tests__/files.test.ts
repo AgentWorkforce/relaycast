@@ -3,10 +3,13 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { ACTOR_FILE_ROUTE, OBJECT_SIZE_HEADER, signFileToken, type FileTokenPayload } from '@relaycast/engine/gateway';
+import { GcsFileStore } from '../files/gcs.js';
 import { LocalFileStore } from '../files/local.js';
-import { InvalidStorageKeyError } from '../files/store.js';
+import { S3FileStore } from '../files/s3.js';
+import { InvalidStorageKeyError, type FileStore } from '../files/store.js';
 import { createFileStore } from '../files/index.js';
-import { FILE_SECRET, WORKSPACE_ID, readJson, startHarness, type Harness } from './harness.js';
+import { fakeGcsStorage, fakeS3Client } from './fakeObjectStores.js';
+import { FILE_SECRET, WORKSPACE_ID, readJson, startHarness as startFileHarness, type Harness, type HarnessOptions } from './harness.js';
 
 const KEY = `${WORKSPACE_ID}/f1/report.html`;
 const BYTES = Buffer.from('<html><script>alert(1)</script></html>');
@@ -22,7 +25,18 @@ async function signed(payload: Omit<FileTokenPayload, 'exp'> & { exp?: number },
   return `${harness!.baseUrl}${ACTOR_FILE_ROUTE}?token=${token}`;
 }
 
-describe('/_relayfiles with the local store', () => {
+// The handler contract holds for every store: `local` on disk, and the object
+// stores against in-memory fakes of their SDKs (`undefined` lets the harness
+// build the local store from its config).
+const STORES: [string, () => FileStore | undefined][] = [
+  ['local', () => undefined],
+  ['gcs', () => new GcsFileStore({ bucket: 'bkt', prefix: 'relay', storage: fakeGcsStorage().storage })],
+  ['s3', () => new S3FileStore({ bucket: 'bkt', prefix: 'relay', region: 'us-east-1', forcePathStyle: false, client: fakeS3Client().client })],
+];
+
+describe.each(STORES)('/_relayfiles with the %s store', (kind, fileStore) => {
+  const startHarness = (options: HarnessOptions = {}) => startFileHarness({ ...options, gateway: { fileStore: fileStore(), ...options.gateway } });
+
   it('stores an upload that matches its signed size and type, then serves, stats and deletes it', async () => {
     harness = await startHarness();
     const putUrl = await signed({ key: KEY, op: 'put', size: BYTES.byteLength, type: 'text/html' });
@@ -30,7 +44,7 @@ describe('/_relayfiles with the local store', () => {
     expect(put.status).toBe(200);
     expect(await readJson(put)).toEqual({ ok: true });
     expect(put.headers.get('access-control-allow-methods')).toBe('GET, PUT, OPTIONS');
-    expect(await readFile(join(harness.fileDir, WORKSPACE_ID, 'f1', 'report.html.type'), 'utf8')).toBe('text/html');
+    if (kind === 'local') expect(await readFile(join(harness.fileDir, WORKSPACE_ID, 'f1', 'report.html.type'), 'utf8')).toBe('text/html');
 
     const get = await fetch(await signed({ key: KEY, op: 'get' }));
     expect(get.status).toBe(200);
@@ -53,7 +67,7 @@ describe('/_relayfiles with the local store', () => {
     expect((await readJson(missing)).error).toMatchObject({ code: 'not_found' });
     // Already gone is success.
     expect((await fetch(await signed({ key: KEY, op: 'delete' }), { method: 'DELETE' })).status).toBe(204);
-    await expect(stat(join(harness.fileDir, WORKSPACE_ID, 'f1', 'report.html.type'))).rejects.toThrow();
+    if (kind === 'local') await expect(stat(join(harness.fileDir, WORKSPACE_ID, 'f1', 'report.html.type'))).rejects.toThrow();
   });
 
   it('serves inactive content without a sandbox and with the stored type', async () => {
@@ -115,8 +129,11 @@ describe('/_relayfiles with the local store', () => {
     expect(preflight.headers.get('access-control-allow-headers')).toBe('content-type');
   });
 
+});
+
+describe('/_relayfiles with a failing store', () => {
   it('answers 500 delete_failed when the store cannot delete', async () => {
-    harness = await startHarness({
+    harness = await startFileHarness({
       gateway: {
         fileStore: {
           put: async () => {},
@@ -159,9 +176,9 @@ describe('LocalFileStore', () => {
     expect(await store.stat('ws/f/b.bin')).toBeNull();
   });
 
-  it('is the only store the factory builds for now', () => {
-    expect(createFileStore({ kind: 'local', fileDir: '/tmp/x' })).toBeInstanceOf(LocalFileStore);
-    expect(() => createFileStore({ kind: 'gcs', fileDir: '/tmp/x' })).toThrow(/not implemented yet/);
-    expect(() => createFileStore({ kind: 's3', fileDir: '/tmp/x' })).toThrow(/not implemented yet/);
+  it('is what the factory builds for local, while gcs/s3 need their bucket', () => {
+    expect(createFileStore({ kind: 'local', fileDir: '/tmp/x', env: {} })).toBeInstanceOf(LocalFileStore);
+    expect(() => createFileStore({ kind: 'gcs', fileDir: '/tmp/x', env: {} })).toThrow(/RELAYCAST_GCS_BUCKET is required/);
+    expect(() => createFileStore({ kind: 's3', fileDir: '/tmp/x', env: {} })).toThrow(/RELAYCAST_S3_BUCKET is required/);
   });
 });

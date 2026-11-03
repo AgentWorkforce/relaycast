@@ -26,8 +26,9 @@ let gateway: ReturnType<typeof createGateway>;
 try {
   gateway = createGateway(config, { logger });
 } catch (error) {
-  // An unimplemented file store, or a keyring the signer refuses.
-  refuse(`relaycast actors gateway refused to start: ${error instanceof Error ? error.message : String(error)}`);
+  // A file-store refusal (ConfigError, already prefixed) or a keyring the signer refuses.
+  const message = error instanceof Error ? error.message : String(error);
+  refuse(error instanceof ConfigError ? message : `relaycast actors gateway refused to start: ${message}`);
 }
 
 const address = await gateway.listen(config.port);

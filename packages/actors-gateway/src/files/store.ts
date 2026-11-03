@@ -34,3 +34,16 @@ export class InvalidStorageKeyError extends Error {
     this.name = 'InvalidStorageKeyError';
   }
 }
+
+/**
+ * `key` as an object name under `prefix` (no leading or trailing slash;
+ * empty for none). Keys are `<workspace>/<file>/<name>`, already checked by
+ * `verifyFileToken`; this second fence refuses anything with an empty, `.`
+ * or `..` segment (so also a leading or trailing slash) or a backslash.
+ */
+export function objectName(prefix: string, key: string): string {
+  if (!key || key.includes('\\') || key.split('/').some((segment) => segment === '' || segment === '.' || segment === '..')) {
+    throw new InvalidStorageKeyError(key);
+  }
+  return prefix ? `${prefix}/${key}` : key;
+}

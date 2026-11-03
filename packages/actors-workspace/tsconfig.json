@@ -6,7 +6,9 @@
     "strict": true,
     "skipLibCheck": true,
     "noEmit": true,
+    "allowImportingTsExtensions": true,
+    "erasableSyntaxOnly": true,
     "types": ["node"]
   },
-  "include": ["src"]
+  "include": ["src", "deploy"]
 }

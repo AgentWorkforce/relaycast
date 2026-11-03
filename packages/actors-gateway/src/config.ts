@@ -124,15 +124,24 @@ function firstIssue(error: z.ZodError): string {
 }
 
 /**
+ * `schema` parsed from the present variables of `env`; a failure is a
+ * {@link ConfigError} naming the first bad variable. Shared with the file
+ * store factory, which validates its own `RELAYCAST_GCS_*` / `RELAYCAST_S3_*`.
+ */
+export function parseEnv<T extends z.ZodObject>(schema: T, env: Env): z.output<T> {
+  const parsed = schema.safeParse(present(env, Object.keys(schema.shape)));
+  if (!parsed.success) throw new ConfigError('invalid_config', `${firstIssue(parsed.error)}.`);
+  return parsed.data;
+}
+
+/**
  * Validated configuration from `env`. Throws {@link ConfigError} for a
  * missing or malformed setting, an unreadable `_FILE`, a short internal
  * secret, an invalid keyring, or a file store this build does not implement
  * yet is not refused here (the store factory throws at startup).
  */
 export function loadConfig(env: Env = process.env, readFile?: (path: string) => string): GatewayConfig {
-  const parsed = EnvSchema.safeParse(present(env, Object.keys(EnvSchema.shape)));
-  if (!parsed.success) throw new ConfigError('invalid_config', `${firstIssue(parsed.error)}.`);
-  const settings = parsed.data;
+  const settings = parseEnv(EnvSchema, env);
 
   const fileSigningSecret = secretFromEnv(env, 'RELAYCAST_FILE_SIGNING_SECRET', readFile);
   if (!fileSigningSecret) throw new ConfigError('missing_file_signing_secret', 'RELAYCAST_FILE_SIGNING_SECRET (or _FILE) is required.');

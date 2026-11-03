@@ -11,7 +11,7 @@ client ──HTTP/WS──▶ gateway
                      ├─ Bearer ar_<kind>_<wsid>_<tag>_… ─▶ tag verified ──▶ Workspace[wsid].handle(request)
                      ├─ /v1/ws, /v1/node/ws ─────────▶ handle(upgrade probe) ──▶ grant ──▶ find-websocket ──▶ bridged socket
                      ├─ /internal/* ─────────────────▶ gateway (create) or Workspace[id].handle
-                     └─ /_relayfiles?token=… ─────────▶ file store (local disk; gcs/s3 later)
+                     └─ /_relayfiles?token=… ─────────▶ file store (local disk, GCS or S3)
 ```
 
 The gateway holds no workspace state. An `ar_` credential names its workspace,
@@ -41,7 +41,7 @@ so the gateway does not depend on it; replies are validated with zod.
 | `RELAYCAST_CREDENTIAL_KEYRING` (or `_FILE`) | required | `{"current":"a","keys":{"a":"<secret ≥16 chars>"}}`; signs new workspaces' tags, verifies every credential's tag. Rotate by adding a version and making it current; removing a version locks out its credentials |
 | `RELAYCAST_INTERNAL_SECRET` (or `_FILE`) | unset | Enables `/internal/*`; at least 32 characters, and the actors must be configured with the same value |
 | `RELAYCAST_PUBLIC_WORKSPACE_CREATE` | `true` | `false` hides `POST /v1/workspaces` behind a generic 404; any other value is refused |
-| `RELAYCAST_FILE_STORE` | `local` | `local`, `gcs` or `s3` (`gcs`/`s3` are not implemented yet and refuse to start) |
+| `RELAYCAST_FILE_STORE` | `local` | `local`, `gcs` or `s3`; the object stores read `RELAYCAST_GCS_*` / `RELAYCAST_S3_*` (see [File store](#file-store)) |
 | `RELAYCAST_FILE_DIR` | `/data/files` | Where the `local` store keeps bytes (`<key>` plus a `<key>.type` sidecar) |
 | `RELAYCAST_MAX_UPLOAD_BYTES` | `67108864` | Largest request body the gateway reads (413 `payload_too_large` beyond it) |
 | `RELAYCAST_SHUTDOWN_GRACE_MS` | `10000` | How long SIGTERM waits for in-flight requests |
@@ -132,10 +132,59 @@ a `FileStore` (`src/files/store.ts`):
 - 403 `forbidden` for a bad or expired token, 405 `method_not_allowed` for a
   token/method mismatch; CORS `*` with `GET, PUT, OPTIONS`.
 
-`src/files/index.ts` is the single switch point (`RELAYCAST_FILE_STORE`);
-`local` keeps bytes under `RELAYCAST_FILE_DIR` with path containment, so run
-one instance on persistent storage, or add `gcs.ts` / `s3.ts` behind the same
-interface for several.
+`src/files/index.ts` is the single switch point (`RELAYCAST_FILE_STORE`).
+Every store keeps one object per key (`<workspace>/<file>/<name>`, which the
+token already constrains; the store refuses `..`, empty segments and
+backslashes again) with the signed content type stored alongside it.
+
+### `local` (default): one replica
+
+Bytes live under `RELAYCAST_FILE_DIR` as `<key>` plus a `<key>.type` sidecar,
+with path containment. The directory is the only copy, so this is a
+**single-replica** deployment on persistent storage: in Kubernetes, one pod
+with a `ReadWriteOnce` PVC (and a `Recreate` strategy, since two pods cannot
+mount it at once). Run more than one gateway only with an object store.
+
+### `gcs`: Google Cloud Storage (`@google-cloud/storage`)
+
+| Variable | Default | Meaning |
+| --- | --- | --- |
+| `RELAYCAST_GCS_BUCKET` | required | Bucket name |
+| `RELAYCAST_GCS_PREFIX` | unset | Object name prefix (`<prefix>/<key>`); surrounding slashes are trimmed |
+
+Credentials are Application Default Credentials: Workload Identity on GKE,
+`GOOGLE_APPLICATION_CREDENTIALS` pointing at a service-account key, or the
+metadata server on GCE/Cloud Run. The identity needs
+`roles/storage.objectAdmin` on the bucket (or `roles/storage.objectCreator` +
+`roles/storage.objectViewer` plus `storage.objects.delete`). Uploads are
+simple (non-resumable): bodies are capped by `RELAYCAST_MAX_UPLOAD_BYTES` and
+already in memory when they reach the store, so a resumable session would only
+add a round trip. Reads stream from the object; `HEAD` reads its metadata;
+delete ignores an object that is already gone.
+
+### `s3`: S3 and compatibles (`@aws-sdk/client-s3`)
+
+| Variable | Default | Meaning |
+| --- | --- | --- |
+| `RELAYCAST_S3_BUCKET` | required | Bucket name |
+| `RELAYCAST_S3_REGION` | required without an endpoint; `us-east-1` with one | AWS region (`auto` for R2) |
+| `RELAYCAST_S3_ENDPOINT` | unset | `http(s)` origin of a non-AWS endpoint (MinIO, Cloudflare R2, Ceph RGW) |
+| `RELAYCAST_S3_PREFIX` | unset | Object key prefix (`<prefix>/<key>`); surrounding slashes are trimmed |
+| `RELAYCAST_S3_FORCE_PATH_STYLE` | `true` with an endpoint, else `false` | `https://host/bucket/…` (`true`) instead of `https://bucket.host/…` |
+
+Credentials come from the SDK's default chain (`AWS_ACCESS_KEY_ID` /
+`AWS_SECRET_ACCESS_KEY`, shared config, IRSA/pod identity, instance role).
+The identity needs `s3:PutObject`, `s3:GetObject`, `s3:DeleteObject` and
+`s3:HeadObject` (that is, `s3:GetObject` covers `HEAD`) on
+`arn:aws:s3:::<bucket>/<prefix>/*`. Uploads send the signed size as
+`Content-Length`, so a body that does not add up is refused by the service.
+With an endpoint set, request/response checksums are only computed when an
+operation requires them, which keeps MinIO and R2 happy.
+
+`gcs` and `s3` are the path to **more than one replica**: every gateway
+instance reads and writes the same bucket, so the gateway Deployment can scale
+and needs no volume. The SDK of the store in use is loaded on first use; the
+other is never loaded.
 
 ## Run locally
 
