@@ -35,6 +35,7 @@ import { chunkValues } from '../lib/queryChunks.js';
 import type { AtomicWrite, BatchCapability, EngineDb } from '../ports/database.js';
 import type { PresenceTracker } from '../ports/presence.js';
 import type { NodeConnectionRegistry } from '../ports/realtime.js';
+import { NODE_LIVENESS_CHECKPOINT_INTERVAL_MS } from '../ports/nodeLiveness.js';
 import { generateId } from './snowflake.js';
 import { assertRegistrableAgentName, agentLivenessLoss, agentLivenessRefresh, RELEASED_AGENT_STATUS } from './agent.js';
 import { rotateAgentIdentity } from './agentIdentity.js';
@@ -3383,9 +3384,12 @@ export interface ListNodesFilters {
   capability?: string;
   name?: string;
   /**
-   * Selects on computed liveness (persisted `status` plus a fresh heartbeat
-   * within `NODE_LIVENESS_TTL_MS`), pushed into SQL rather than applied after
-   * a full-table fetch. Omitted: no liveness selection (legacy behavior).
+   * Selects on computed liveness. Without a liveness authority: persisted
+   * `status` plus a fresh heartbeat within `NODE_LIVENESS_TTL_MS`, in SQL.
+   * Under an authority: the authority's answer per node, with `online`
+   * candidates bounded in SQL by {@link NODE_ONLINE_CANDIDATE_RECENCY_MS};
+   * `offline` rows outside that bound are offline without a probe.
+   * Omitted: no liveness selection (legacy behavior).
    */
   status?: 'online' | 'offline';
   /**
@@ -3397,7 +3401,11 @@ export interface ListNodesFilters {
   history?: boolean;
   /** Resume point for `history`: the `id` of the last row already consumed. */
   cursor?: string | null;
-  /** Page size for `history`, clamped to [1, NODE_LIST_HISTORY_MAX_LIMIT]. */
+  /**
+   * Page size for `history`, clamped to [1, NODE_LIST_HISTORY_MAX_LIMIT].
+   * Without `history`, caps a `status` selection: rows are taken in `id`
+   * order and the first `limit` matches are returned. Ignored without either.
+   */
   limit?: number;
   /**
    * Restricts the result to nodes with at least one active binding to one of
@@ -3492,6 +3500,44 @@ async function visibleActiveAgentCounts(
   return counts;
 }
 
+/**
+ * Margin for an online node's durable checkpoint to land after it is due. The
+ * hosted authority sheds a checkpoint whose write is refused under database
+ * pressure and does not retry it: the next heartbeat (at most 30 s later) is
+ * the next attempt, and each attempt holds the owner's 5 s D1 deadline first.
+ * Overload episodes run for minutes, so this covers a three-minute run of shed
+ * or timed-out checkpoints (six attempts at the 30 s cadence), the 30 s wait
+ * for the attempt that lands and its 5 s deadline, and 25 s of clock skew
+ * between the owner and this reader. A node shed for longer than that drops
+ * out of `status=online` until a checkpoint lands, while the authority may
+ * still report it online.
+ */
+const NODE_CHECKPOINT_LANDING_SLACK_MS = 240_000;
+
+/**
+ * How recent a node row's checkpoint must be for a liveness authority to be
+ * able to report the node online. An authority reports online only from a
+ * receipt within the lease (`NODE_LIVENESS_TTL_MS`), and it checkpoints a node
+ * whose receipts keep arriving at least every
+ * `NODE_LIVENESS_CHECKPOINT_INTERVAL_MS`, anchored at a receipt time no later
+ * than the stamp. So an online node's row holds a `last_heartbeat_at` no older
+ * than interval + lease, plus landing slack. Rows outside it are left unprobed
+ * for `status=online`. The stored `status` is not part of the bound: it is a
+ * projection the authority overrides.
+ */
+export const NODE_ONLINE_CANDIDATE_RECENCY_MS =
+  NODE_LIVENESS_TTL_MS + NODE_LIVENESS_CHECKPOINT_INTERVAL_MS + NODE_CHECKPOINT_LANDING_SLACK_MS;
+
+/** SQL upper bound on the rows an authority can report online. */
+function onlineCandidateCondition(now: Date) {
+  return gte(nodes.lastHeartbeatAt, new Date(now.getTime() - NODE_ONLINE_CANDIDATE_RECENCY_MS));
+}
+
+/** {@link onlineCandidateCondition} over a fetched row. */
+function isOnlineCandidate(row: Pick<NodeRow, 'lastHeartbeatAt'>, now: number): boolean {
+  return row.lastHeartbeatAt !== null && row.lastHeartbeatAt.getTime() >= now - NODE_ONLINE_CANDIDATE_RECENCY_MS;
+}
+
 /** Liveness predicate mirroring {@link isNodeLive}, pushed into SQL. */
 function livenessCondition(status: 'online' | 'offline', now: Date) {
   const staleBefore = new Date(now.getTime() - NODE_LIVENESS_TTL_MS);
@@ -3520,6 +3566,7 @@ export async function listNodes(
   if (filters.name) conditions.push(eq(nodes.name, filters.name));
   if (filters.capability) conditions.push(capabilityMatchCondition(filters.capability));
   if (filters.status && !nodeLivenessAuthority(db)) conditions.push(livenessCondition(filters.status, now));
+  else if (filters.status === 'online') conditions.push(onlineCandidateCondition(now));
   // Observer authorization is a WHERE condition, evaluated in the same query
   // as every other filter and therefore before pagination/cursor computation
   // below — a hidden node is excluded from row selection entirely, so it can
@@ -3528,13 +3575,20 @@ export async function listNodes(
   if (filters.observerAgentIds) conditions.push(observerNodeVisibilityCondition(filters.observerAgentIds));
 
   if (!filters.history) {
-    // Legacy/default shape: a bare array, unpaginated, matching every caller
-    // that predates the history/status selector. `name`/`capability`/`status`
-    // are still evaluated in SQL instead of after a full-table fetch.
-    const rows = await db.select().from(nodes).where(and(...conditions));
-    const page = await publicNodes(db, rows, now.getTime(), filters.status);
+    // Legacy/default shape: a bare array, matching every caller that predates
+    // the history/status selector. `name`/`capability`/`status` are still
+    // evaluated in SQL instead of after a full-table fetch. A `status`
+    // selection honors `limit` over rows in `id` order.
+    const limit = filters.status && filters.limit !== undefined ? Math.max(1, filters.limit) : undefined;
+    // Without an authority the SQL predicate is the whole selection, so the
+    // limit goes into SQL too; under one, probing stops at `limit` matches.
+    const query = db.select().from(nodes).where(and(...conditions));
+    const rows = !filters.status ? await query
+      : limit !== undefined && !nodeLivenessAuthority(db) ? await query.orderBy(asc(nodes.id)).limit(limit)
+      : await query.orderBy(asc(nodes.id));
+    const page = await publicNodes(db, rows, now.getTime(), filters.status, limit);
     if (!filters.observerAgentIds) return { nodes: page, nextCursor: null };
-    const counts = await visibleActiveAgentCounts(db, workspaceId, rows.map((row) => row.id), filters.observerAgentIds);
+    const counts = await visibleActiveAgentCounts(db, workspaceId, page.map((node) => node.id), filters.observerAgentIds);
     return {
       nodes: page.map((node) => ({ ...node, active_agents: counts.get(node.id) ?? 0 })),
       nextCursor: null,
@@ -4223,24 +4277,41 @@ export async function handleNodeControlMessage(args: HandleNodeControlMessageArg
   });
 }
 
-async function publicNodes(db: Db, rows: NodeRow[], now: number, status?: 'online' | 'offline') {
+async function publicNodes(db: Db, rows: NodeRow[], now: number, status?: 'online' | 'offline', limit?: number) {
   if (!nodeLivenessAuthority(db)) return rows.map(row => publicNode(row, now));
-  const result: ReturnType<typeof publicNode>[] = [];
-  await filterAsync(rows, async row => {
-    const snapshot = await inspectNodeLiveness(db, row.workspaceId, row.id);
-    const live = !!snapshot && snapshotOnline(snapshot);
-    const item = publicNode(row, now, live, snapshot?.status ?? 'unknown');
-    // Readiness is owned by the fresh lease, independently of checkpointed
-    // catalog metadata in nodes.handlers_live.
-    const receivedAt = Date.now();
-    item.handlers_live = live && !!snapshot?.providers.some(p =>
-      p.live && p.handlers_live && p.expires_at > receivedAt && p.last_received_at <= receivedAt);
-    if (!status || item.status === status) result.push(item);
-    return true;
-  });
-  // Concurrent probes must not scramble stable list ordering.
-  const positions = new Map(rows.map((row, index) => [row.id, index]));
-  return result.sort((a,b) => positions.get(a.id)! - positions.get(b.id)!);
+  // At most eight probes in flight, issued in row order. Once `limit` rows
+  // match, no new probe starts; every row before the last one taken has been
+  // decided, so the result is exactly the first matches in row order. A `status=offline` row outside the online
+  // candidate bound cannot be reported online, so it is offline unprobed.
+  const items: Array<ReturnType<typeof publicNode> | undefined> = new Array(rows.length);
+  let next = 0;
+  let matched = 0;
+  const worker = async () => {
+    while (next < rows.length && (limit === undefined || matched < limit)) {
+      const index = next++;
+      const row = rows[index];
+      if (status === 'offline' && !isOnlineCandidate(row, now)) {
+        items[index] = publicNode(row, now, false, 'offline');
+        matched += 1;
+        continue;
+      }
+      const snapshot = await inspectNodeLiveness(db, row.workspaceId, row.id);
+      const live = !!snapshot && snapshotOnline(snapshot);
+      const item = publicNode(row, now, live, snapshot?.status ?? 'unknown');
+      // Readiness is owned by the fresh lease, independently of checkpointed
+      // catalog metadata in nodes.handlers_live.
+      const receivedAt = Date.now();
+      item.handlers_live = live && !!snapshot?.providers.some(p =>
+        p.live && p.handlers_live && p.expires_at > receivedAt && p.last_received_at <= receivedAt);
+      if (!status || item.status === status) {
+        items[index] = item;
+        matched += 1;
+      }
+    }
+  };
+  await Promise.all(Array.from({ length: Math.min(8, rows.length) }, worker));
+  const result = items.filter((item): item is ReturnType<typeof publicNode> => item !== undefined);
+  return limit === undefined ? result : result.slice(0, limit);
 }
 
 async function reusableMachineNode(db: Db, node: NodeRow): Promise<boolean> {

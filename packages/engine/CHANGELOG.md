@@ -16,6 +16,9 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Fixed
 
+- `GET /v1/nodes?status=online` under a liveness authority checks only nodes with a recent heartbeat checkpoint, so it no longer times out in workspaces with many historical nodes. The checkpoint bound (`NODE_ONLINE_CANDIDATE_RECENCY_MS`) leaves four minutes for a checkpoint shed under database pressure to land, so a node heartbeating through a three-minute overload stays listed. `status=offline` lists rows past the bound without checking them.
+- `GET /v1/nodes` without `history` honors `limit` when `status` is set: rows are taken in `id` order and probing stops once `limit` nodes match. An observer's `active_agents` counts are read for the returned nodes only.
+- Node list liveness probes run as a pool of eight workers instead of lockstep batches of eight, so one slow probe no longer stalls the seven beside it.
 - The inbox mention lookup prefilters bodies with `instr(body, '@name')` instead of `LIKE`, so it stays within D1's 50-byte LIKE pattern cap for any agent name. Results are unchanged: `parseMessageMentions` is case-sensitive and needs the literal `@name`.
 - `reconcileInventory` deactivates missing agents' node bindings and offlines the agents with one statement pair per 90-id chunk, all in one atomic batch. A node that drops more agents than one D1 statement can bind no longer fails the sync with `too many SQL variables`.
 - `toErrorDetails` appends each `cause` message to `error_message`, so a Drizzle `Failed query: ...` log line carries the D1 reason (constraint, bind limit, overload).
