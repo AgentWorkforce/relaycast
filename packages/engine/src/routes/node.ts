@@ -259,11 +259,11 @@ const nodeStatusSchema = z.enum(['online', 'offline']);
 //
 // Default (no `history`): a bare array, matching every caller written before
 // this selector existed. `status` selects on liveness in SQL; under a
-// liveness authority each candidate is probed, and only `status=online`
-// candidates are bounded in SQL to checkpoint-recent rows (`offline` probes
-// every row). `status=online` is the server-filtered live-Fleet path a
-// default `fleet nodes` call should use. With `status`, `limit` caps the
-// matches.
+// liveness authority only checkpoint-recent candidates are probed
+// (`status=online` bounds them in SQL; `offline` lists the rest unprobed),
+// within a probe time budget past which the list is truncated.
+// `status=online` is the server-filtered live-Fleet path a default
+// `fleet nodes` call should use. With `status`, `limit` caps the matches.
 //
 // `history=true`: switches to the bounded, paginated contract
 // (`{ nodes, next_cursor }`) for an explicit full-roster read (`--all`).

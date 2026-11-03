@@ -863,8 +863,10 @@ so a same-name takeover is left untouched.
 `GET /nodes` pushes `capability`, `name`, and a liveness `status` selector
 into its SQL query instead of fetching the full roster and filtering in JS.
 With a hosted liveness authority, `status` is decided per node by the
-authority, and `status=online` checks only nodes with a heartbeat checkpoint
-recent enough to be live. Without `history`, the response stays the legacy
+authority, which checks only nodes with a heartbeat checkpoint recent enough
+to be live (the rest are offline unchecked) and stops checking after a fixed
+time budget, so a slow authority truncates the list rather than timing the
+request out. Without `history`, the response stays the legacy
 bare array every existing caller already handles, and `limit` caps a `status`
 selection at the first matches in `id` order; `status=online` is the
 server-filtered live-Fleet path a default listing should use, since it never
