@@ -95,16 +95,6 @@ interface WorkspaceConn {
  */
 const OBSERVER_TOKEN_REVALIDATE_MS = 5_000;
 
-/** The `type` of a raw control frame, or undefined when it is not a JSON object. */
-function frameType(raw: string): string | undefined {
-  try {
-    const parsed: unknown = JSON.parse(raw);
-    return parsed && typeof parsed === 'object' ? (parsed as { type?: unknown }).type as string | undefined : undefined;
-  } catch {
-    return undefined;
-  }
-}
-
 interface QueuedNodeMessage {
   key: string;
   message: Extract<FleetRelaycastToBrokerMessage, { type: 'action.invoke' }>;
