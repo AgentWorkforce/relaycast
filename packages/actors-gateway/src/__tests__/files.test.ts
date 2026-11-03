@@ -129,7 +129,7 @@ describe.each(STORES)('/_relayfiles with the %s store', (kind, fileStore) => {
     expect(put.status).toBe(413);
     expect(put.headers.get('connection')).toBe('close');
     expect((await readJson(put)).error).toMatchObject({ code: 'payload_too_large' });
-    expect(await harness.gateway.socketCount).toBe(0);
+    expect((await fetch(await signed({ key: KEY, op: 'stat' }), { method: 'HEAD' })).status).toBe(404);
     const within = await fetch(await signed({ key: KEY, op: 'put', size: 16, type: 'text/plain' }), { method: 'PUT', headers: { 'content-type': 'text/plain' }, body: 'x'.repeat(16) });
     expect(within.status).toBe(200);
   });

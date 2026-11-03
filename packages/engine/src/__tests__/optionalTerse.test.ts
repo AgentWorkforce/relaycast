@@ -6,9 +6,11 @@ import { describe, expect, it, vi } from 'vitest';
 const srcRoot = fileURLToPath(new URL('..', import.meta.url));
 const IMPORTS_TERSE = /from\s+['"](durable-actors|terse-sdk)(\/[^'"]*)?['"]|import\(\s*['"](durable-actors|terse-sdk)|require\(\s*['"](durable-actors|terse-sdk)/;
 
-// Resolution fails for these in this module graph, whatever a sibling
+// Importing either package throws in this module graph, whatever a sibling
 // workspace hoisted into node_modules: an entry point that reached either
-// package, directly or through a dependency, could not load below.
+// package, directly or through a dependency, could not load below. The mock
+// only covers imports vitest resolves; a native `require()` would bypass it,
+// which the source scan below covers instead.
 for (const name of ['durable-actors', 'terse-sdk']) {
   vi.doMock(name, () => { throw new Error(`${name} must not be loaded by the engine`); });
 }
@@ -38,7 +40,7 @@ describe('engine without durable-actors', () => {
     }
   });
 
-  it('loads every entry point while durable-actors and terse-sdk are unresolvable', async () => {
+  it('loads every entry point while durable-actors and terse-sdk throw on import', async () => {
     // (vitest reports a throwing factory with its own wording.)
     await expect(import('durable-actors')).rejects.toThrow();
     for (const entry of ['../index.js', '../ports/index.js', '../adapters/node/index.js', '../gateway.js', '../adapters/actor/index.js']) {

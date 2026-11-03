@@ -62,10 +62,10 @@ Values that must match across processes:
 - `DURABLE_ACTORS_CONTROL_PLANE_URL` and `DURABLE_ACTORS_PROJECT_ID`: gateway
   and deployer point at the same project (locally: `http://127.0.0.1:7100`,
   `local`).
-- `DURABLE_ACTORS_SECRET`: each process its own key for that project. With the
-  invoke-only patch (see [Least-privilege credential](#least-privilege-credential))
-  the gateway gets the invoke key and the deployer the admin key; without it
-  both get the admin key (locally: no secret).
+- `DURABLE_ACTORS_SECRET`: a key for that same project. Which key depends on
+  the invoke-only patch (see [Least-privilege credential](#least-privilege-credential)):
+  with it, the gateway gets the invoke key and the deployer the admin key;
+  without it, both get the same admin key (locally: no secret).
 - `RELAYCAST_CREDENTIAL_KEYRING`: identical on every gateway replica, or a
   credential minted through one replica is refused by another.
 - `RELAYCAST_FILE_STORE` / `RELAYCAST_FILE_DIR`: identical on every replica;

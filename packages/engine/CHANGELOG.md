@@ -11,15 +11,21 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Added
 
-- `@relaycast/engine/adapters/actor`: `ActorRealtime` runs the engine's realtime over a durable actor's sockets. `upgrade` / `upgradeNode` answer a socket grant (`SOCKET_GRANT_HEADER`, `SocketPrincipalSchema`, `SocketGrantSchema`, `isSocketGrant`, also from `@relaycast/engine/gateway`) instead of a 101; the runtime gains `onConnect` / `onMessage` / `onDisconnect` and a `sockets` option. Unknown sockets are closed `4012 actor restarted`; engine close codes map into durable-actors' range (`toActorCloseCode`: 1008 → 4008, 1012 → 4012).
-- `actorConfigFromEnv(env)` reads the actor's engine config from the self-host variables and throws `ConfigError` on a bad value.
+- `@relaycast/engine/adapters/actor`: `ActorRealtime` runs the engine's realtime over a durable actor's sockets; `upgrade` / `upgradeNode` answer a socket grant instead of a 101.
+- `SOCKET_GRANT_HEADER`, `SocketPrincipalSchema`, `SocketGrantSchema` and `isSocketGrant` describe that grant, exported from the actor adapter and `@relaycast/engine/gateway`.
+- The actor runtime gains `onConnect` / `onMessage` / `onDisconnect` and a `sockets` option; a socket the actor cannot restore is closed `4012 actor restarted`.
+- `toActorCloseCode` maps engine close codes into durable-actors' range (1008 → 4008, 1012 → 4012).
+- `actorConfigFromEnv(env)` reads the actor's engine config from the self-host variables and throws `ConfigError` on a bad value; like `bin/serve.ts`, it trims `RELAYCAST_INTERNAL_SECRET` and treats blank as unset.
 - `InProcessRealtime.setBackgroundScheduler` hands the adapter's fire-and-forget work to the host; unset, it runs detached as before.
 - `loadActiveObserverToken(db, workspaceId, tokenId)` is exported from the node adapter.
-- `@relaycast/engine/adapters/actor`: attached sockets are kept in the actor's `_actor_sockets` table (`ACTOR_SOCKETS_TABLE`, `ActorSocketTable`) and replayed on the next activation, so an actor's sleep costs its clients no reconnect. Surviving sockets are restored before a vanished one is torn down, so a lost socket never takes a node offline under a live one.
+- `@relaycast/engine/adapters/actor`: attached sockets are kept in the actor's `_actor_sockets` table (`ACTOR_SOCKETS_TABLE`, `ActorSocketTable`) and replayed on the next activation, so an actor's sleep costs its clients no reconnect.
 - `InProcessRealtime.attachNodeSocket` takes `{ connectionId, earlyDrain }`; `nodeConnectionState` / `restoreNodeConnectionState` / `providerConnectionId` expose a node connection's binding to hosts that persist it.
 - `ensureActorSchema(sql)` applies the engine migrations and the adapter's tables inside an actor call; read-only when current.
-- `GET /v1/deliveries` accepts `wait` (0–25000 ms): an empty list parks until a delivery is created for the agent, the wait expires or the client disconnects, then lists again with the same `status` and `limit`. Only creation wakes a poll; a blank `wait` is a 400; a parked request issues no statements.
-- `DeliveryWaiters`, `InProcessDeliveryWaiters`, `MAX_DELIVERY_WAIT_MS`, `DELIVERY_NOTIFY_MEMORY_MS` and `EngineProviders.deliveryWaiters`: `routeDeliveryOutcomes` notifies the recipients of every created delivery (awaited for at most 2 s after routing, never ahead of socket pushes). `createNodeRuntime` binds `InProcessDeliveryWaiters`; the workspace actor binds none and a host without the port answers `wait` at once.
+- `GET /v1/deliveries` accepts `wait` (0–25000 ms); a blank `wait` is a 400.
+- On a host with a `DeliveryWaiters` provider, an empty `wait` list parks, issuing no statements, until a delivery is created for the agent, the wait expires or the client disconnects, then lists again with the same `status` and `limit`. A host without one answers `wait` at once.
+- A parked poll is notified only by a delivery's creation, not by a status change.
+- `DeliveryWaiters`, `InProcessDeliveryWaiters`, `MAX_DELIVERY_WAIT_MS`, `DELIVERY_NOTIFY_MEMORY_MS` and `EngineProviders.deliveryWaiters`: `routeDeliveryOutcomes` notifies the recipients of every created delivery concurrently with routing, so socket pushes never wait on it; the notify is abandoned after 2 s.
+- `createNodeRuntime` binds `InProcessDeliveryWaiters`; the workspace actor binds none.
 - `@relaycast/engine/gateway` exports `INTERNAL_CAPABILITIES`, the document `/internal/capabilities` serves.
 - `NodeConnectionRegistry.isConnectionSuperseded?(connectionId)`: true once a reconnect's `node.register` moved the connection's provider to a newer socket.
 
@@ -27,12 +33,12 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 - `createActorRuntime` runs no SQL in the actor's constructor: the schema is applied inside the first call and commits with it, so a failed `create` leaves no half-built actor; a wake with a current schema runs no DDL.
 - `/internal/workspaces/:id` and `/internal/workspaces/:id/api-key` answer 404 for another workspace's id on a single-workspace host (`config.workspaceId`), where `POST /internal/workspaces` is also a 404.
-- `actorConfigFromEnv` reads `RELAYCAST_INTERNAL_SECRET` as `bin/serve.ts` does: trimmed, blank is unset.
 
 ### Fixed
 
-- A direct agent whose client reconnects before the server notices the old socket stays online: the new socket supersedes the old one instead of being refused `provider_instance_conflict`, the old socket's late close is a no-op, and the accepted `node.register` brings the agent back at once instead of at the next heartbeat (until which `POST /v1/actions/:name/invoke` answered 503 `handler_unavailable`). Applies to the Node self-host and the workspace actor.
-- Frames a superseded node socket still had queued are answered `connection_superseded` instead of acting on the live socket's provider (a stale `node.deregister` removed the new socket's binding and actions); frames settling in-flight work still pass. The liveness refresh after `node.register` runs only for an accepted register.
+- A direct agent whose client reconnects before the server notices the old socket stays online: the new socket supersedes the old one instead of being refused `provider_instance_conflict`, on the Node self-host and the workspace actor.
+- After such a reconnect the agent's actions are invokable at once, instead of answering 503 `handler_unavailable` until the next heartbeat.
+- Frames a superseded node socket still had queued are answered `connection_superseded`, so a stale `node.deregister` no longer removes the new socket's binding and actions; frames settling in-flight work still pass.
 - A key push (`POST /internal/workspaces/:id/api-key`) that creates a workspace on a workspace actor keeps the pushed key's routing tag, so the workspace can mint credentials.
 - `actorMigrationsCurrent` compares recorded names with the plan instead of counting rows, which read as current with superseded files recorded and a newer one missing.
 - The inbox mention lookup prefilters bodies with `instr(body, '@name')` instead of `LIKE`, so it stays within D1's 50-byte LIKE pattern cap for any agent name. Results are unchanged: `parseMessageMentions` is case-sensitive and needs the literal `@name`.

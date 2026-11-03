@@ -192,10 +192,15 @@ describe('WebSocket bridge', () => {
   });
 
   it('opens no upstream for a client that left while its actor was being asked', async () => {
+    let probesAnswered = 0;
     const slowGrant = (id: string): FakeWorkspace => ({
       handle: async (request) => {
         await new Promise((resolve) => setTimeout(resolve, 300));
-        return grantingWorkspace(id).handle(request);
+        try {
+          return await grantingWorkspace(id).handle(request);
+        } finally {
+          probesAnswered += 1;
+        }
       },
     });
     harness = await startHarness({ workspace: slowGrant });
@@ -203,7 +208,10 @@ describe('WebSocket bridge', () => {
     ws.on('error', () => {});
     await waitFor(() => harness!.controlPlane.invocations.length === 1);
     ws.terminate();
-    await new Promise((resolve) => setTimeout(resolve, 600));
+    // The negative checks below mean something only once the probe's grant
+    // has been answered; then give the gateway a moment to act on it.
+    await waitFor(() => probesAnswered === 1);
+    await new Promise((resolve) => setTimeout(resolve, 100));
     expect(harness.controlPlane.findWebsocketCalls).toHaveLength(0);
     expect(harness.controlPlane.sessions).toHaveLength(0);
     expect(harness.gateway.socketCount).toBe(0);

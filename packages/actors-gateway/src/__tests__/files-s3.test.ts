@@ -90,7 +90,7 @@ describe('S3FileStore', () => {
   });
   it('reports a missing bucket as a failure, not a missing file', async () => {
     const noBucket = Object.assign(new Error('The specified bucket does not exist'), { name: 'NoSuchBucket', $metadata: { httpStatusCode: 404 } });
-    const store = new S3FileStore({ bucket: 'gone', region: 'us-east-1', forcePathStyle: false, client: { send: (async () => { throw noBucket; }) as never } });
+    const store = new S3FileStore({ bucket: 'gone', region: 'us-east-1', forcePathStyle: false, client: { send: (async () => { throw noBucket; }) as S3ClientLike['send'] } });
     await expect(store.get('ws/f/a')).rejects.toThrow('bucket does not exist');
   });
 });

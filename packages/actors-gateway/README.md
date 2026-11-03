@@ -128,7 +128,7 @@ a `FileStore` (`src/files/store.ts`):
   The content type is stored with the object.
 - `GET` + `get`: streams with the stored `content-type`, `content-length`,
   `x-content-type-options: nosniff`, and `content-security-policy: sandbox`
-  for active types (HTML, SVG, XML, scripts).
+  for active types (HTML, SVG, XML, scripts, PDF).
 - `HEAD` + `stat`: 200 with `x-relaycast-object-size`, or 404.
 - `DELETE` + `delete`: 204; already gone is success; any failure is 500
   `delete_failed` so the engine's cleanup queue retries.
