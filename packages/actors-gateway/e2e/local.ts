@@ -130,7 +130,9 @@ function startProcess(name: string, command: string, args: string[], cwd: string
     tail,
     logFile,
     exited: new Promise((resolve) => {
-      child.once('exit', (code, signal) => {
+      // `close`, not `exit`: stdout/stderr may still deliver the last output after `exit`,
+      // and writing it to an ended log stream would throw.
+      child.once('close', (code, signal) => {
         proc.done = true;
         stream.end();
         resolve({ code, signal });

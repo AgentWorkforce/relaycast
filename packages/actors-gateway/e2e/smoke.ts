@@ -47,7 +47,7 @@ export interface SmokeResult {
   steps: SmokeStep[];
   failed: number;
   /** Whether alice's client reconnected on its own after the restart (vs. an explicit reconnect). */
-  aliceReconnect?: 'auto' | 'explicit';
+  aliceReconnect?: 'auto';
 }
 
 const EVENT_TIMEOUT_MS = 10_000;
@@ -123,17 +123,15 @@ function openObserverSocket(baseUrl: string, token: string) {
     EVENT_TIMEOUT_MS,
     'observer socket open',
   );
-  const waitFor = (marker: string, label: string) =>
-    withTimeout(
+  const waitFor = (marker: string, label: string) => {
+    let timer: NodeJS.Timeout | undefined;
+    return withTimeout(
       new Promise<AnyEvent>((resolve) => {
         const check = () => {
           const found = frames.find((frame) => JSON.stringify(frame).includes(marker));
-          if (found) {
-            clearInterval(timer);
-            resolve(found);
-          }
+          if (found) resolve(found);
         };
-        const timer = setInterval(check, 25);
+        timer = setInterval(check, 25);
         check();
       }),
       EVENT_TIMEOUT_MS,
@@ -141,7 +139,8 @@ function openObserverSocket(baseUrl: string, token: string) {
     ).catch((error: Error) => {
       const seen = frames.map((frame) => frame.type);
       throw new Error(`${error.message}; observer frames seen: [${seen.join(', ')}]${drops ? `; socket closed ${closeInfo}` : ''}`);
-    });
+    }).finally(() => clearInterval(timer)); // on success and on timeout alike
+  };
   return {
     ready,
     waitFor,
@@ -306,24 +305,21 @@ export async function runSmoke(options: SmokeOptions): Promise<SmokeResult> {
       await step('restart gateway 1 (SIGTERM, start again, /readyz) while alice is connected through it', async () => {
         const dropsBefore = aliceDrops;
         const reconnected = expectConnected(alice, 'alice reconnect after gateway 1 restart', RECONNECT_TIMEOUT_MS);
+        reconnected.catch(() => {}); // awaited below; no unhandled rejection if an earlier line throws first
         await restart();
         if (aliceDrops === dropsBefore) {
           // The close may still be in flight; give it a moment before judging.
           await sleep(500);
         }
         if (aliceDrops === dropsBefore) throw new Error("alice's socket did not close when gateway 1 stopped");
+        // The SDK's WsClient reconnects on its own; a run where it did not is a failure, not a fallback.
         try {
           await reconnected;
-          result.aliceReconnect = 'auto';
-          log('       alice reconnected by itself (SDK WsClient auto-reconnect)');
         } catch (error) {
-          log(`       ${error instanceof Error ? error.message : String(error)}; reconnecting alice explicitly`);
-          alice.disconnect();
-          const again = expectConnected(alice, 'alice explicit reconnect');
-          alice.connect();
-          await again;
-          result.aliceReconnect = 'explicit';
+          throw new Error(`alice did not reconnect by itself: ${error instanceof Error ? error.message : String(error)}`);
         }
+        result.aliceReconnect = 'auto';
+        log('       alice reconnected by itself (SDK WsClient auto-reconnect)');
         await sleep(500);
       });
 
@@ -333,6 +329,10 @@ export async function runSmoke(options: SmokeOptions): Promise<SmokeResult> {
       });
 
       await step('exchange 2 after the restart: alice → bob and bob → alice', () => exchange('x2'));
+
+      await step("bob's socket on gateway 2 still never dropped, through exchange 2", async () => {
+        if (bobDrops !== 0) throw new Error(`bob's socket closed ${bobDrops} time(s)`);
+      });
 
       await step('observer on gateway 2 still receives a post made through the restarted gateway 1', async () => {
         const marker = `smoke-${runId}-channel-2`;
