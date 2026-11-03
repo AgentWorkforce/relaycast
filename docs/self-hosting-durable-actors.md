@@ -162,6 +162,23 @@ release-grade; until that patch lands, treat the gateway as holding the admin
 key and restrict its network and secret exposure accordingly. Locally
 (`durable-actors dev`) there is no key unless you set `DURABLE_ACTORS_SECRET`.
 
+A durable-actors patch adding `DURABLE_ACTORS_INVOKE_API_KEY` (accepted only on
+`invoke`, `find-actor` and `find-websocket`) is being carried alongside this
+branch; with it, the gateway's `DURABLE_ACTORS_SECRET` is that invoke key and
+only the deployer holds the admin key. What the invoke key still trusts:
+
+- **`find-websocket` is full trust for sockets.** The socket ticket carries
+  caller-chosen metadata, and the actor's `onConnect` treats it as the
+  authenticated principal. The gateway therefore sets metadata only from the
+  socket grant the actor itself returned after authenticating the client's
+  token (`x-relaycast-socket-grant`), never from anything the client sent; the
+  actor additionally re-validates the principal (strict schema, its own
+  workspace id, node or observer token re-read from its database) before
+  attaching the socket.
+- The key is instance-wide, not scoped to one project.
+- The control plane does not warn when the invoke key is set while auth is
+  off (`DURABLE_ACTORS_SECRET` unset): auth-off means every caller is admin.
+
 ## Limitations
 
 - **Lookups by workspace name do not work.** The gateway routes only by the
