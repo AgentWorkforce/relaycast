@@ -52,10 +52,10 @@ RUN npm ci --omit=dev --ignore-scripts --no-audit --no-fund \
   && rm -rf packages/actors-workspace/deploy/__tests__ \
   && npm cache clean --force
 
-# Bun 1.4 (the SDK pins bun@1.4.2 as its package manager). No digest was
-# available offline; pin `oven/bun:1.4@sha256:...` from
-# `docker buildx imagetools inspect oven/bun:1.4` before building for production.
-FROM oven/bun:1.4
+# Bun 1.4 (the SDK pins bun@1.4.2 as its package manager), pinned to the
+# multi-platform index digest of `oven/bun:1.4` (`docker buildx imagetools
+# inspect oven/bun:1.4`); bump the digest together with the tag.
+FROM oven/bun:1.4@sha256:1d22548f177f4ff38e0c15baa3c2c46c6c2060ba2d1bc573bb4720b407548f1d
 
 LABEL org.opencontainers.image.title="Relaycast actors deployer" \
       org.opencontainers.image.description="Compiles the relaycast Workspace actor and registers it with a self-hosted durable-actors control plane" \

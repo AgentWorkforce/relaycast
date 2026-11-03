@@ -20,10 +20,10 @@ on:
         required: true
         type: string
       latest:
-        description: "Also tag as :latest"
+        description: "Also move :latest to this image (only an unsuffixed tag, i.e. released source, can carry it)"
         required: false
         type: boolean
-        default: true
+        default: false
 
 concurrency:
   group: publish-actors-images
@@ -60,11 +60,19 @@ jobs:
       # Both images build the engine from this checkout, so the tag names the
       # engine version they carry (optionally with a build suffix).
       - name: Verify the tag matches the engine version
+        id: tag
         env:
           TAG: ${{ inputs.tag }}
+          LATEST: ${{ inputs.latest }}
         run: |
           set -euo pipefail
+          # An OCI tag is at most 128 characters; buildx rejects a longer one only at push time.
+          if [ "${#TAG}" -gt 128 ]; then
+            echo "tag '$TAG' exceeds the 128-character OCI tag limit" >&2
+            exit 1
+          fi
           version="$(node -p "require('./packages/engine/package.json').version")"
+          suffixed=false
           case "$TAG" in
             "$version") ;;
             "$version"-*)
@@ -72,12 +80,20 @@ jobs:
                 echo "tag suffix in '$TAG' must be [0-9A-Za-z.-]" >&2
                 exit 1
               fi
+              suffixed=true
               ;;
             *)
               echo "tag '$TAG' does not match the engine version '$version' (or '$version-<suffix>')" >&2
               exit 1
               ;;
           esac
+          # :latest names released source: a suffixed tag (unreleased source) never moves it.
+          if [ "$LATEST" = "true" ] && [ "$suffixed" = "false" ]; then
+            echo "latest=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "latest=false" >> "$GITHUB_OUTPUT"
+            [ "$LATEST" = "true" ] && echo "tag $TAG carries a build suffix: :latest is not moved" >&2
+          fi
           echo "tag $TAG matches engine version: $version"
 
       - name: Build and push the gateway
@@ -90,7 +106,7 @@ jobs:
           push: true
           tags: |
             ghcr.io/${{ env.OWNER_LC }}/relaycast-actors-gateway:${{ inputs.tag }}
-            ${{ inputs.latest && format('ghcr.io/{0}/relaycast-actors-gateway:latest', env.OWNER_LC) || '' }}
+            ${{ steps.tag.outputs.latest == 'true' && format('ghcr.io/{0}/relaycast-actors-gateway:latest', env.OWNER_LC) || '' }}
 
       - name: Build and push the deployer
         id: deployer
@@ -102,7 +118,7 @@ jobs:
           push: true
           tags: |
             ghcr.io/${{ env.OWNER_LC }}/relaycast-actors-deployer:${{ inputs.tag }}
-            ${{ inputs.latest && format('ghcr.io/{0}/relaycast-actors-deployer:latest', env.OWNER_LC) || '' }}
+            ${{ steps.tag.outputs.latest == 'true' && format('ghcr.io/{0}/relaycast-actors-deployer:latest', env.OWNER_LC) || '' }}
 
       - name: Report the immutable references
         env:

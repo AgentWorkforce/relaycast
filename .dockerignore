@@ -22,3 +22,15 @@
 !packages/types/tsconfig.json
 !packages/types/src/
 !packages/types/src/**
+!packages/actors-gateway/
+!packages/actors-gateway/package.json
+!packages/actors-gateway/tsconfig.json
+!packages/actors-gateway/src/
+!packages/actors-gateway/src/**
+!packages/actors-workspace/
+!packages/actors-workspace/package.json
+!packages/actors-workspace/tsconfig.json
+!packages/actors-workspace/src/
+!packages/actors-workspace/src/**
+!packages/actors-workspace/deploy/
+!packages/actors-workspace/deploy/**
