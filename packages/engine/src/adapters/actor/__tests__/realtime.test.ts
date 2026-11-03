@@ -12,7 +12,7 @@ import {
   type SocketPrincipal,
 } from '../index.js';
 import type { ActorHttpRequest } from '../http.js';
-import { FakeWorkspaceActor, jsonRequest } from './fakeActor.js';
+import { FakeWorkspaceActor, jsonRequest, type FakeActorSocket } from './fakeActor.js';
 
 const WORKSPACE_ID = '241764880589606912';
 
@@ -248,6 +248,98 @@ describe('workspace actor realtime', () => {
     expect(invoked.json.data.status).toBe('dispatched');
     expect(second.ofType('action.invoke')).toEqual([expect.objectContaining({ action: 'crm.lookup', invocation_id: invoked.json.data.invocation_id })]);
     expect(first.ofType('action.invoke')).toEqual([]);
+    expect(actor.sockets.violations).toEqual([]);
+  });
+
+  /** A direct agent with a published action, whose status and node the assertions read. */
+  async function directAgentWithAction(actor: FakeWorkspaceActor) {
+    const { key, alice, bob, aliceId } = await workspaceWithAgents(actor);
+    const node = await nodeGrant(actor, alice);
+    expect((await call(actor, 'POST', '/v1/actions', { name: 'crm.lookup', description: 'Look someone up', handler_agent: 'alice' }, key)).status).toBe(201);
+    const agentStatus = async (on: FakeWorkspaceActor = actor) => {
+      const list = await call<{ name: string; status: string }[]>(on, 'GET', '/v1/agents', undefined, key);
+      expect(list.status).toBe(200);
+      return list.json.data.find((agent) => agent.name === 'alice')?.status;
+    };
+    const statusEvents = () => rows(actor, "SELECT type FROM workspace_events WHERE type LIKE 'node.status.%' ORDER BY seq").map((row) => row.type);
+    const socketRows = () => rows(actor, 'SELECT socket_id, provider_name FROM _actor_sockets ORDER BY attached_at, rowid');
+    const expectOnline = async (on: FakeWorkspaceActor) => {
+      const registry = on.runtime.deps.nodeConnections;
+      expect(registry.isNodeConnected(WORKSPACE_ID, node.node_id)).toBe(true);
+      expect(registry.isProviderConnected(WORKSPACE_ID, node.node_id, 'default')).toBe(true);
+      expect(registry.isProviderAttached?.(WORKSPACE_ID, node.node_id, 'default')).toBe(true);
+      expect(rows(actor, 'SELECT status FROM nodes WHERE id = ?', node.node_id)).toEqual([{ status: 'online' }]);
+      expect(await agentStatus(on)).toBe('active');
+      expect(statusEvents()).toEqual(['node.status.online']);
+    };
+    const expectOfflineOnce = async (on: FakeWorkspaceActor) => {
+      expect(on.runtime.deps.nodeConnections.isNodeConnected(WORKSPACE_ID, node.node_id)).toBe(false);
+      expect(rows(actor, 'SELECT status FROM nodes WHERE id = ?', node.node_id)).toEqual([{ status: 'offline' }]);
+      expect(await agentStatus(on)).toBe('offline');
+      expect(statusEvents()).toEqual(['node.status.online', 'node.status.offline']);
+      expect(socketRows()).toEqual([]);
+    };
+    const invoke = async (on: FakeWorkspaceActor, handler: FakeActorSocket, others: FakeActorSocket[]) => {
+      const invoked = await call<{ status: string; invocation_id: string }>(on, 'POST', '/v1/actions/crm.lookup/invoke', { input: { name: 'ada' } }, bob);
+      expect(invoked.status, JSON.stringify(invoked.json)).toBe(201);
+      expect(invoked.json.data.status).toBe('dispatched');
+      expect(handler.ofType('action.invoke')).toEqual([expect.objectContaining({ action: 'crm.lookup', invocation_id: invoked.json.data.invocation_id })]);
+      for (const other of others) expect(other.ofType('action.invoke')).toEqual([]);
+    };
+    return { key, alice, aliceId, bob, node, agentStatus, statusEvents, socketRows, expectOnline, expectOfflineOnce, invoke };
+  }
+
+  it('ignores the late disconnect of a socket a reconnect already superseded', async () => {
+    const actor = new FakeWorkspaceActor(WORKSPACE_ID);
+    const { node, socketRows, expectOnline, expectOfflineOnce, invoke } = await directAgentWithAction(actor);
+
+    // The SDK reconnects by closing its socket and opening a new one; through a
+    // gateway the actor sees the new socket connect and register before the
+    // old socket's disconnect arrives.
+    const first = await actor.connect(node.principal);
+    await actor.message(first, nodeRegister(node));
+    await actor.message(first, { v: 1, id: 'h1', type: 'node.heartbeat', active_agents: 1, handlers_live: false });
+    const second = await actor.connect(node.principal);
+    await actor.message(second, { ...nodeRegister(node), id: 'r2' });
+    expect(second.sent).toEqual([expect.objectContaining({ id: 'r2', type: 'reply', ok: true })]);
+    // The registry closed the superseded socket and forgot its row.
+    expect(first.closed).toEqual({ code: 1000, reason: 'superseded' });
+    expect(socketRows()).toEqual([{ socket_id: second.id, provider_name: 'default' }]);
+
+    await actor.disconnect(first);
+    await expectOnline(actor);
+    expect(socketRows()).toEqual([{ socket_id: second.id, provider_name: 'default' }]);
+    await invoke(actor, second, [first]);
+
+    await actor.disconnect(second);
+    await expectOfflineOnce(actor);
+    expect(actor.sockets.violations).toEqual([]);
+  });
+
+  it('ignores the late disconnect of a superseded socket after the actor restarted in between', async () => {
+    const actor = new FakeWorkspaceActor(WORKSPACE_ID);
+    const { node, agentStatus, socketRows, expectOnline, expectOfflineOnce, invoke } = await directAgentWithAction(actor);
+
+    const first = await actor.connect(node.principal);
+    await actor.message(first, nodeRegister(node));
+    const second = await actor.connect(node.principal);
+    await actor.message(second, { ...nodeRegister(node), id: 'r2' });
+    expect(second.sent).toEqual([expect.objectContaining({ id: 'r2', type: 'reply', ok: true })]);
+
+    // The actor sleeps; the next activation replays the surviving socket's row
+    // before the old socket's disconnect is delivered to it.
+    const woken = actor.restart();
+    expect(await agentStatus(woken)).toBe('active');
+    expect(second.closed).toBeNull();
+    expect(socketRows()).toEqual([{ socket_id: second.id, provider_name: 'default' }]);
+
+    await woken.disconnect(first);
+    await expectOnline(woken);
+    expect(socketRows()).toEqual([{ socket_id: second.id, provider_name: 'default' }]);
+    await invoke(woken, second, [first]);
+
+    await woken.disconnect(second);
+    await expectOfflineOnce(woken);
     expect(actor.sockets.violations).toEqual([]);
   });
 

@@ -239,7 +239,25 @@ export class ActorRealtime implements RealtimeBus, ConnectionRegistry, NodeConne
     callerAwareActions?: readonly string[],
   ): void {
     this.inner.attachProvider(workspaceId, nodeId, providerName, instanceId, connectionId, callerAwareActions);
+    this.forgetDropped();
     this.syncRow(connectionId);
+  }
+
+  /**
+   * Forget the node connections the registry dropped on its own: a
+   * reconnect's `node.register` moves the provider binding to the new socket
+   * and drops (and closes) the superseded one. Its row must go with it:
+   * replayed into a later activation it would bind a socket that is gone,
+   * and its teardown there would take the node offline under the live
+   * socket. Its late `onDisconnect` then finds nothing to tear down, as the
+   * registry intends.
+   */
+  private forgetDropped(): void {
+    for (const [socketId, conn] of this.attached) {
+      if (conn.principal.kind !== 'node' || this.inner.nodeConnectionState(socketId)) continue;
+      this.attached.delete(socketId);
+      this.table.delete(socketId);
+    }
   }
 
   setProviderDeliveryReadiness(
@@ -419,6 +437,8 @@ export class ActorRealtime implements RealtimeBus, ConnectionRegistry, NodeConne
         lastSeen: row.lastSeen,
       });
       this.attached.set(row.socketId, { principal: { v: 1, kind: 'node', workspace_id: workspaceId, node_id: row.nodeId }, handle });
+      // Rows written before supersession dropped them may bind one provider twice.
+      this.forgetDropped();
       return true;
     }
 
@@ -486,9 +506,13 @@ export class ActorRealtime implements RealtimeBus, ConnectionRegistry, NodeConne
     // Not attached: rehydrate closed it (nothing accounts for it) or it was rejected.
     if (!conn) return;
     await conn.handle.handleMessage(JSON.stringify(message));
-    // The frame may have bound a provider or negotiated readiness, and
-    // refreshed the liveness timestamp arbitration reads.
-    if (conn.principal.kind === 'node') this.syncRow(socket.id);
+    // The frame may have bound a provider (superseding another socket's
+    // binding) or negotiated readiness, and refreshed the liveness timestamp
+    // arbitration reads.
+    if (conn.principal.kind === 'node') {
+      this.forgetDropped();
+      this.syncRow(socket.id);
+    }
   }
 
   async onDisconnect(socket: ActorSocketLike): Promise<void> {

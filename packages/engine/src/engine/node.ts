@@ -132,9 +132,18 @@ export interface WorkspaceDeadlineHolder {
 
 function resolveProviderIdentity(
   message: { provider?: FleetProviderIdentity },
+  nodeId: string,
   connectionId: string | undefined,
 ): FleetProviderIdentity {
   if (message.provider) return message.provider;
+  // An implicit direct node is one agent's own delivery host, reached by one
+  // client with that agent's credential; it never names a provider instance.
+  // Its identity is the node itself, stable across sockets, so the attach
+  // arbitration reads a reconnect as the same instance (the new socket
+  // supersedes the old one) rather than a live duplicate. The connection id
+  // would make every reconnect a conflict whenever the old socket's close
+  // reaches the server after the new socket's register.
+  if (nodeId.startsWith(IMPLICIT_DIRECT_NODE_ID_PREFIX)) return { name: DEFAULT_PROVIDER_NAME, instance_id: nodeId };
   return { name: DEFAULT_PROVIDER_NAME, instance_id: connectionId ?? generateId() };
 }
 
@@ -1340,11 +1349,21 @@ export async function handleProviderDisconnect(
   providerName: string,
   hasRemainingConnections: boolean,
   deps?: InvocationCompletionDeps,
+  options: {
+    /**
+     * Read under the node lock, right before the first write: true when a
+     * newer connection re-bound the provider while this teardown waited
+     * its turn (a reconnect whose register was queued ahead of the old
+     * socket's close). The close is then stale and nothing is written.
+     */
+    superseded?: () => boolean;
+  } = {},
 ) {
   // Serialized with node-control operations so a teardown can't race a
   // concurrent register's provider upsert / aggregate recompute (or, on
   // better-sqlite3, deadlock its isolated transaction).
   return serializeNodeOp(workspaceId, nodeId, async () => {
+    if (options.superseded?.()) return;
     if (!hasRemainingConnections) {
       await markNodeOffline(db, registry, workspaceId, nodeId, { deps, reason: 'disconnected' });
       return;
@@ -3768,7 +3787,7 @@ export async function handleNodeControlMessage(args: HandleNodeControlMessageArg
     }
     switch (message.type) {
       case 'node.register': {
-        const provider = resolveProviderIdentity(message, args.connectionId);
+        const provider = resolveProviderIdentity(message, args.nodeId, args.connectionId);
         if (args.connectionId && args.registry.providerAttachConflict) {
           const conflict = args.registry.providerAttachConflict(
             args.workspaceId,

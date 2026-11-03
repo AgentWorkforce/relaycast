@@ -1034,9 +1034,16 @@ export class InProcessRealtime implements RealtimeBus, ConnectionRegistry, NodeC
       if (conns.size === 0) this.nodeConnIndex.delete(nodeKey);
     }
     const providers = this.providerIndex.get(nodeKey);
-    if (providerName && providers?.get(providerName) === connectionId) {
-      providers.delete(providerName);
-      if (providers.size === 0) this.providerIndex.delete(nodeKey);
+    // The provider is this connection's to take offline only while the index
+    // still names it. A reconnect's `node.register` moves the binding to the
+    // newer socket (`attachProvider`), so a close that finds its provider
+    // bound elsewhere is stale: the presence it carried has been re-certified
+    // on the live socket, and it must not touch that binding, the provider's
+    // rows, its agents or the node.
+    const heldBinding = providerName !== undefined && providers?.get(providerName) === connectionId;
+    if (heldBinding) {
+      providers!.delete(providerName);
+      if (providers!.size === 0) this.providerIndex.delete(nodeKey);
       this.nodeQueues.delete(this.providerQueueKey(nodeKey, providerName));
     }
     const hasRemaining = this.isNodeConnected(workspaceId, nodeId);
@@ -1044,18 +1051,24 @@ export class InProcessRealtime implements RealtimeBus, ConnectionRegistry, NodeC
     // silently dropped the provider-offline / aggregate recompute the node roster
     // would keep stale capabilities with no signal. Log it; a close still must
     // not throw.
-    if (providerName) {
-      await handleProviderDisconnect(this.db, this, workspaceId, nodeId, providerName, hasRemaining, this.nodeCompletionDeps).catch((err) => {
+    if (heldBinding) {
+      await handleProviderDisconnect(this.db, this, workspaceId, nodeId, providerName, hasRemaining, this.nodeCompletionDeps, {
+        // Decided under the node lock: a reconnect whose register was queued
+        // ahead of this teardown found the provider free (unbound just above)
+        // and bound its own socket; this close is then stale.
+        superseded: () => this.isProviderAttached(workspaceId, nodeId, providerName),
+      }).catch((err) => {
         // Pass the error object so the runtime logs its stack, not just the message.
         console.error('[node.teardown] provider disconnect failed', { workspace_id: workspaceId, node_id: nodeId, provider: providerName }, err);
       });
     } else if (!hasRemaining) {
-      // Connection dropped before it bound a provider and it was the node's last.
-      // Serialize with node-control ops (register/heartbeat) and re-check
-      // connectivity under the lock: a reconnect racing this close may have bound
-      // a fresh socket, in which case the node must stay online. Without this a
-      // stale close could append node.status.offline after the reconnect's online
-      // event and leave the node marked offline despite a live socket.
+      // Connection dropped without holding a provider binding and it was the
+      // node's last. Serialize with node-control ops (register/heartbeat) and
+      // re-check connectivity under the lock: a reconnect racing this close may
+      // have bound a fresh socket, in which case the node must stay online.
+      // Without this a stale close could append node.status.offline after the
+      // reconnect's online event and leave the node marked offline despite a
+      // live socket.
       await serializeNodeOp(workspaceId, nodeId, async () => {
         if (this.isNodeConnected(workspaceId, nodeId)) return;
         await markNodeOffline(this.db, this, workspaceId, nodeId, { deps: this.nodeCompletionDeps, reason: 'disconnected' });
