@@ -405,7 +405,11 @@ export function createActorRuntime(options: ActorRuntimeOptions): ActorRuntime {
         throw new Error('create serves POST /v1/workspaces only');
       }
       ensureSchema();
-      credentialTag.set(tag);
+      // A keyed create's retry reaches the actor that already created the
+      // workspace, possibly after a keyring rotation, with the now-current
+      // tag: the workspace's tag never changes (its key version stays in the
+      // keyring), so an existing one stands and the replay is answered.
+      if (credentialTag.get() === undefined) credentialTag.set(tag);
       return this.handle(request);
     },
 

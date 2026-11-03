@@ -303,10 +303,14 @@ export class FakeWorkspaceActor {
    */
   async handle(request: ActorHttpRequest): Promise<ActorHttpResponse> {
     if (request.method === 'POST' && new URL(request.url).pathname === '/v1/workspaces') {
-      const tag = await TEST_CREDENTIAL_TAGS.tag(this.id);
-      return this.call(() => this.runtime.create(request, tag));
+      return this.create(request, await TEST_CREDENTIAL_TAGS.tag(this.id));
     }
     return this.call(() => this.runtime.handle(request));
+  }
+
+  /** `create` with the tag the gateway hands over (one call, as `handle`). */
+  create(request: ActorHttpRequest, tag: string): Promise<ActorHttpResponse> {
+    return this.call(() => this.runtime.create(request, tag));
   }
 
   /** `onAlarm`: the firing alarm reads as set during the call and is consumed after it unless re-armed. */

@@ -111,11 +111,21 @@ describe('workspace actor runtime', () => {
     expect(new Headers(ok.headers).get('deprecation')).toBeNull();
   });
 
-  it('keeps the credential tag its gateway handed over at create', async () => {
+  it('keeps the credential tag its gateway handed over at create, also when a keyed replay carries a rotated one', async () => {
     const actor = new FakeWorkspaceActor(WORKSPACE_ID);
-    await workspaceWithAgents(actor);
-    const other = jsonRequest('POST', '/v1/workspaces', { name: 'again' });
-    await expect(actor.sql.atomic(() => actor.runtime.create(other, 'bAAAAAAAAAA'))).rejects.toThrow(/different credential tag/);
+    const { key } = await workspaceWithAgents(actor);
+    const original = actor.sql.exec('SELECT tag FROM _actor_credential_tag') as { tag: string }[];
+    expect(original).toHaveLength(1);
+    // The gateway's keyring rotated: the retry of a keyed create reaches this
+    // actor with the now-current tag. The create is not refused for it, the
+    // workspace's tag stands, and credentials keep carrying it.
+    const retry = jsonRequest('POST', '/v1/workspaces', { name: 'again' });
+    const answered = await actor.create(retry, 'bAAAAAAAAAA');
+    expect(answered.status).not.toBe(502);
+    expect(actor.sql.exec('SELECT tag FROM _actor_credential_tag')).toEqual(original);
+    const minted = await call<{ token: string }>(actor, 'POST', '/v1/agents', { name: 'carol' }, key);
+    expect(minted.status).toBe(201);
+    expect(minted.json.data.token).toContain(`_${original[0].tag}_`);
     expect(() => new FakeWorkspaceActor('ws_not_a_snowflake')).toThrow(/64-bit snowflake/);
   });
 
