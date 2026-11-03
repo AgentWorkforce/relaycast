@@ -88,7 +88,8 @@ export class DeploymentClient {
                 status = response.status
                 // Once a 2xx arrived the request ran: a body that cannot be read is reported, never resent.
                 text = await response.text().catch((error: unknown) => {
-                    if (!response.ok) throw error
+                    // A non-2xx whose body is lost keeps its status (4xx is final, 5xx retries as usual).
+                    if (!response.ok) return ""
                     throw new ControlPlaneError(response.status, "unreadable_response", `${method} ${this.url()} answered ${response.status} with a body that could not be read: ${describe(error)}`)
                 })
                 if (!response.ok) {

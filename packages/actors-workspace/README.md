@@ -91,7 +91,7 @@ printed.
 | `DURABLE_ACTORS_SECRET` | Admin key, sent as `Authorization: Bearer` (required unless `--local`) |
 | `DURABLE_ACTORS_ORGANIZATION_ID` | Organization id the project runs under (required for a bundle) |
 | `DURABLE_ACTORS_ARTIFACT_BUCKET` | The control plane's artifact bucket, its own `DURABLE_ACTORS_ARTIFACT_BUCKET` (required for a bundle; a bundle in any other bucket is refused) |
-| `DURABLE_ACTORS_SECRET_REFS` | Comma-separated Kubernetes Secret names (at most 16) whose keys become the actor's environment |
+| `DURABLE_ACTORS_SECRET_REFS` | Comma-separated Kubernetes Secret names (DNS subdomains, at most 16) whose keys become the actor's environment; required for a bundle, since the actor needs `RELAYCAST_PUBLIC_URL` and `RELAYCAST_FILE_SIGNING_SECRET` from them |
 | `DURABLE_ACTORS_ARTIFACT_PREFIX` | Object prefix in the bucket; the control plane only accepts the default `durable-actors/v3/artifacts` |
 
 ### The actor's secrets

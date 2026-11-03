@@ -38,7 +38,7 @@ environment:
   DURABLE_ACTORS_SECRET              admin key, sent as a bearer token (required unless --local)
   DURABLE_ACTORS_ORGANIZATION_ID     organization id (required for a bundle; "local" with --local)
   DURABLE_ACTORS_ARTIFACT_BUCKET     GCS artifact bucket of the control plane (required for a bundle)
-  DURABLE_ACTORS_SECRET_REFS         comma-separated Kubernetes Secret names for the actor's env (at most 16)
+  DURABLE_ACTORS_SECRET_REFS         comma-separated Kubernetes Secret names for the actor's env (required for a bundle; at most 16)
   DURABLE_ACTORS_ARTIFACT_PREFIX     object prefix inside the bucket (default ${DEFAULT_ARTIFACT_PREFIX})`
 
 export function parseOptions(argv: readonly string[]): Options {
@@ -99,7 +99,7 @@ const EnvSchema = z.object({
 
 /** A DNS subdomain name, as Kubernetes requires of a Secret's name. */
 function isKubernetesSecretName(name: string): boolean {
-    return name.length <= 253 && /^[a-z0-9]([-a-z0-9.]*[a-z0-9])?$/.test(name)
+    return name.length <= 253 && /^[a-z0-9](?:[-a-z0-9]*[a-z0-9])?(?:\.[a-z0-9](?:[-a-z0-9]*[a-z0-9])?)*$/.test(name)
 }
 
 export interface ConnectionConfig {

@@ -48,7 +48,7 @@ describe("bundleConfigFromEnv", () => {
         expect(() => bundleConfigFromEnv({ ...BASE, DURABLE_ACTORS_CONTROL_PLANE_URL: "https://actors.example.com/?x=1" })).toThrow(/DURABLE_ACTORS_CONTROL_PLANE_URL/)
         expect(bundleConfigFromEnv({ ...BASE, DURABLE_ACTORS_CONTROL_PLANE_URL: "https://actors.example.com/" }).controlPlaneUrl).toBe("https://actors.example.com/")
         expect(() => bundleConfigFromEnv({ ...BASE, DURABLE_ACTORS_SECRET_REFS: `ok,${"n".repeat(254)}` })).toThrow("Kubernetes Secret names")
-        for (const bad of ["bad/name", "Upper", "-leading", "trailing-", "under_score"]) {
+        for (const bad of ["bad/name", "Upper", "-leading", "trailing-", "under_score", "a..b", "bad-.name", "bad.-name", ".leading", "trailing."]) {
             expect(() => bundleConfigFromEnv({ ...BASE, DURABLE_ACTORS_SECRET_REFS: `ok,${bad}` }), bad).toThrow("Kubernetes Secret names")
         }
         expect(() => bundleConfigFromEnv({ ...BASE, DURABLE_ACTORS_SECRET_REFS: " , " })).toThrow("DURABLE_ACTORS_SECRET_REFS is required for a bundle deployment")

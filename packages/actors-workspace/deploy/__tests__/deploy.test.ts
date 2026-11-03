@@ -13,7 +13,7 @@ interface Seen {
     body: unknown
 }
 
-type Reply = { status: number; body: unknown; raw?: string }
+type Reply = { status: number; body: unknown; raw?: string; cut?: boolean }
 
 /** A control plane that records every request and answers from a queue (the last reply repeats). */
 class FakeControlPlane {
@@ -31,6 +31,12 @@ class FakeControlPlane {
                 this.requests.push({ method: request.method!, url: request.url!, headers: request.headers, body: text ? JSON.parse(text) : undefined })
                 const reply = this.replies.length > 1 ? this.replies.shift()! : (this.replies[0] ?? { status: 200, body: { changed: true } })
                 response.writeHead(reply.status, { "content-type": "application/json" })
+                if (reply.cut) {
+                    // Headers and part of the body reach the client, then the connection drops.
+                    response.flushHeaders()
+                    response.write('{"chan', () => setTimeout(() => response.destroy(), 20))
+                    return
+                }
                 response.end(reply.raw ?? JSON.stringify(reply.body))
             })
         })
@@ -199,6 +205,19 @@ describe("deploy.ts", () => {
         expect(await invoke(["--status"])).toBe(1)
         expect(plane.requests.map((request) => request.method)).toEqual(["GET"])
         expect(err.at(-1)).toMatch(/^deploy: control plane 200 malformed_response: GET .* answered 200 with a body that is not JSON$/)
+    })
+
+    it("does not retry a 2xx whose body could not be read, and keeps the status of a 4xx whose body was lost", async () => {
+        plane.replies.push({ status: 200, body: undefined, cut: true })
+        expect(await invoke([])).toBe(1)
+        expect(plane.requests.map((request) => request.method)).toEqual(["PUT"])
+        expect(err.at(-1)).toMatch(/^deploy: control plane 200 unreadable_response: PUT .* answered 200 with a body that could not be read/)
+        plane.requests.length = 0
+        plane.replies.length = 0
+        plane.replies.push({ status: 404, body: undefined, cut: true })
+        expect(await invoke(["--status"])).toBe(1)
+        expect(plane.requests.map((request) => request.method)).toEqual(["GET"])
+        expect(err.at(-1)).toBe("deploy: control plane 404 http_404: HTTP 404")
     })
 
     it("gives up on a persistent 5xx and on an unreachable control plane", async () => {
