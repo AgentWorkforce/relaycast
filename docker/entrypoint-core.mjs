@@ -23,11 +23,13 @@ Environment:
                                         (at least 32 characters)
   RELAYCAST_PUBLIC_WORKSPACE_CREATE     Set false to 404 the public POST /v1/workspaces
   RELAYCAST_CREDENTIAL_KEYRING(_FILE)   {"current":"a","keys":{"a":"<secret>"}}: signs ar_ credential
-                                        tags, enabling POST /v1/credentials/upgrade
+                                        tags locally
   RELAYCAST_RELAYAUTH_URL + RELAYCAST_RELAYAUTH_TOKEN(_FILE)
                                         Take ar_ credential tags from RelayAuth instead of a
-                                        local keyring (an explicit keyring wins)
-  RELAYCAST_CREDENTIAL_FORMAT           legacy (default) or ar (needs the keyring or RelayAuth)
+                                        local keyring (an explicit keyring wins; 3 s request
+                                        timeout, lists revalidated after 5 min, a 404 remembered 30 s)
+  RELAYCAST_CREDENTIAL_FORMAT           legacy (default) or ar (needs the keyring or RelayAuth);
+                                        either tagger enables POST /v1/credentials/upgrade
   RELAYCAST_LEGACY_CREDENTIAL_GRACE_SECONDS  Grace of an upgraded legacy credential (default 30 days, at most 10 years)
   RELAYCAST_LEGACY_CREDENTIAL_SUNSET    ISO-8601 date sent as Sunset on legacy-authenticated responses
   RELAYCAST_ALLOW_INSECURE_BASE_URL     Set true to accept http:// (or IP-literal / single-label)

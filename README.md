@@ -1423,7 +1423,14 @@ from `RELAYCAST_CREDENTIAL_KEYRING` and the family from
 `@relaycast/engine/gateway`) takes the tags from
 `GET <url>/v1/relaycast/credential-tags/:wsid` instead; the self-host wires it
 from `RELAYCAST_RELAYAUTH_URL` + `RELAYCAST_RELAYAUTH_TOKEN` whenever no
-explicit keyring is set.
+explicit keyring is set. It asks RelayAuth at most once per workspace at a
+time, times each request out after 3 s (`timeoutMs`) and fails closed,
+revalidates a workspace's tag list after 5 min (`ttlMs`, so a removed key
+version stops verifying), remembers a `404` for 30 s (`negativeTtlMs`; a mint
+re-asks at once) and refetches for an unknown key version at most once per
+workspace per 30 s (`unknownVersionRefetchIntervalMs`). A workspace RelayAuth
+has not tagged verifies nothing and cannot mint, so RelayAuth tags a workspace
+before the engine first mints for it.
 
 ### Credential upgrade
 

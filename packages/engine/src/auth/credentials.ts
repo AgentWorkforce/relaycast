@@ -153,7 +153,9 @@ export type DerivationFamily = { format: 'legacy' } | { format: 'ar'; tag: strin
  * in, the deployment's current one first: `legacy`, and `ar` under each tag
  * the deployment's tagger knows for the workspace. A replay derives each, so
  * one retried after a family switch or a keyring rotation still recovers what
- * the first attempt committed.
+ * the first attempt committed. A workspace the tagger holds no tag for (one
+ * RelayAuth never tagged) has no `ar` family: nothing can have been minted
+ * under it, so the replay tries `legacy` alone rather than failing.
  */
 export async function derivationFamilies(db: object, workspaceId: string): Promise<DerivationFamily[]> {
   // A workspace id that is not a snowflake cannot carry an ar_ credential.

@@ -48,8 +48,11 @@ export interface CredentialTagger {
   /** The tag new credentials for `workspaceId` carry. */
   tag(workspaceId: string): Promise<string>;
   /**
-   * Every tag a credential for `workspaceId` may carry, the current one first.
-   * Deterministic-key recovery (workspace create replay) tries each.
+   * Every tag a credential for `workspaceId` may carry, the current one first;
+   * empty for a workspace this tagger holds no tag for (one RelayAuth never
+   * tagged, or an actor its gateway has not tagged yet). Deterministic-key
+   * recovery (workspace create replay, node token rotation replay) tries
+   * each, and simply has no `ar` family to try when the list is empty.
    */
   tags(workspaceId: string): Promise<readonly string[]>;
 }
@@ -128,18 +131,19 @@ export function createCredentialTagSigner(keyring: CredentialKeyring): Credentia
 
 /** A tagger for one workspace whose tag was handed over at create (the workspace actor). */
 export function fixedCredentialTagger(workspaceId: string, tag: () => string | undefined): CredentialTagger {
-  const current = (forWorkspace: string): string => {
+  const own = (forWorkspace: string): string | undefined => {
     if (forWorkspace !== workspaceId) throw new Error(`No credential tag for workspace ${forWorkspace}`);
-    const value = tag();
-    if (!value) throw new Error('This workspace has no credential tag yet; its gateway supplies one at create');
-    return value;
+    return tag();
   };
   return {
     async tag(forWorkspace) {
-      return current(forWorkspace);
+      const value = own(forWorkspace);
+      if (!value) throw new Error('This workspace has no credential tag yet; its gateway supplies one at create');
+      return value;
     },
     async tags(forWorkspace) {
-      return [current(forWorkspace)];
+      const value = own(forWorkspace);
+      return value ? [value] : [];
     },
   };
 }

@@ -9,13 +9,26 @@ export type CredentialEnvConfig = Pick<
   'credentialFormat' | 'credentialTagger' | 'legacyCredentialGraceSeconds' | 'legacyCredentialSunset'
 >;
 
-/** The remote tagger RelayAuth's envs describe, or undefined when neither is set. */
-function relayauthTaggerFromEnv(env: NodeJS.ProcessEnv): EngineConfig['credentialTagger'] {
+/**
+ * The remote tagger RelayAuth's envs describe, or undefined when neither is
+ * set. Half a pair is refused even when a keyring would be used instead: it
+ * is a misconfiguration, and a deployment that meant RelayAuth would
+ * otherwise mint from a keyring it meant to retire.
+ */
+function relayauthTaggerFromEnv(env: NodeJS.ProcessEnv, keyringSet: boolean): EngineConfig['credentialTagger'] {
   const baseUrl = env.RELAYCAST_RELAYAUTH_URL?.trim();
   const token = secretFromEnv(env, 'RELAYCAST_RELAYAUTH_TOKEN');
   if (!baseUrl && !token) return undefined;
   if (!baseUrl || !token) {
-    throw new ConfigError('RELAYCAST_RELAYAUTH_URL and RELAYCAST_RELAYAUTH_TOKEN(_FILE) are set together');
+    const [set, missing] = baseUrl
+      ? ['RELAYCAST_RELAYAUTH_URL', 'RELAYCAST_RELAYAUTH_TOKEN(_FILE)']
+      : ['RELAYCAST_RELAYAUTH_TOKEN(_FILE)', 'RELAYCAST_RELAYAUTH_URL'];
+    throw new ConfigError(
+      `${set} is set without ${missing}: RELAYCAST_RELAYAUTH_URL and RELAYCAST_RELAYAUTH_TOKEN(_FILE) are set together`
+      + (keyringSet
+        ? '; RELAYCAST_CREDENTIAL_KEYRING is set and would have been used, so unset the RelayAuth variable or complete the pair'
+        : ''),
+    );
   }
   try {
     return remoteCredentialTagger({ baseUrl, token });
@@ -29,11 +42,12 @@ function relayauthTaggerFromEnv(env: NodeJS.ProcessEnv): EngineConfig['credentia
  * `relaycast-engine` binary and the container entrypoint both read them here:
  *
  * - `RELAYCAST_CREDENTIAL_KEYRING(_FILE)`: `{"current":"a","keys":{"a":"<secret>"}}`,
- *   the keyring that signs `ar_` credential tags (enables
- *   `POST /v1/credentials/upgrade`);
+ *   the keyring that signs `ar_` credential tags;
  * - `RELAYCAST_RELAYAUTH_URL` + `RELAYCAST_RELAYAUTH_TOKEN(_FILE)`: take the
- *   tags from RelayAuth instead of a local keyring. An explicit keyring wins
- *   over RelayAuth; either also satisfies `RELAYCAST_CREDENTIAL_FORMAT=ar`;
+ *   tags from RelayAuth instead of a local keyring (`remoteCredentialTagger`
+ *   with its default timeout and TTLs). An explicit keyring wins over
+ *   RelayAuth; either tagger enables `POST /v1/credentials/upgrade` and
+ *   satisfies `RELAYCAST_CREDENTIAL_FORMAT=ar`;
  * - `RELAYCAST_CREDENTIAL_FORMAT`: `legacy` (default) or `ar` (needs a tagger);
  * - `RELAYCAST_LEGACY_CREDENTIAL_GRACE_SECONDS`: how long an upgraded legacy
  *   credential keeps working (default 30 days);
@@ -44,7 +58,7 @@ function relayauthTaggerFromEnv(env: NodeJS.ProcessEnv): EngineConfig['credentia
  */
 export function credentialConfigFromEnv(env: NodeJS.ProcessEnv): CredentialEnvConfig {
   const keyring = secretFromEnv(env, 'RELAYCAST_CREDENTIAL_KEYRING');
-  const relayauthTagger = relayauthTaggerFromEnv(env);
+  const relayauthTagger = relayauthTaggerFromEnv(env, keyring !== undefined);
   const format = env.RELAYCAST_CREDENTIAL_FORMAT?.trim() || 'legacy';
   if (format !== 'legacy' && format !== 'ar') {
     throw new ConfigError('RELAYCAST_CREDENTIAL_FORMAT must be "legacy" or "ar"');

@@ -28,11 +28,13 @@ Environment:
                                     (workspaces then come from /internal/workspaces)
   RELAYCAST_CREDENTIAL_KEYRING(_FILE)
                                     {"current":"a","keys":{"a":"<secret>"}}: signs ar_ credential
-                                    tags, enabling POST /v1/credentials/upgrade
+                                    tags locally
   RELAYCAST_RELAYAUTH_URL + RELAYCAST_RELAYAUTH_TOKEN(_FILE)
                                     Take ar_ credential tags from RelayAuth instead of a
-                                    local keyring (an explicit keyring wins)
-  RELAYCAST_CREDENTIAL_FORMAT       legacy (default) or ar (needs the keyring or RelayAuth)
+                                    local keyring (an explicit keyring wins; 3 s request
+                                    timeout, lists revalidated after 5 min, a 404 remembered 30 s)
+  RELAYCAST_CREDENTIAL_FORMAT       legacy (default) or ar (needs the keyring or RelayAuth);
+                                    either tagger enables POST /v1/credentials/upgrade
   RELAYCAST_LEGACY_CREDENTIAL_GRACE_SECONDS
                                     How long an upgraded legacy credential keeps working (default 30 days, at most 10 years)
   RELAYCAST_LEGACY_CREDENTIAL_SUNSET
