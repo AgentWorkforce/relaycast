@@ -155,10 +155,31 @@ describe('WebSocket bridge', () => {
     await waitFor(() => harness!.gateway.socketCount === 0);
   });
 
-  it('maps close codes the library refuses to send to 1011', () => {
+  it('relays a status-less close as 1000, a dropped peer as 1001, and codes the library refuses to send as 1011', () => {
     expect(sendableCloseCode(1000)).toBe(1000);
     expect(sendableCloseCode(1012)).toBe(1012);
     expect(sendableCloseCode(4000)).toBe(4000);
-    for (const code of [1004, 1005, 1006, 1015, 2000, 5000]) expect(sendableCloseCode(code)).toBe(1011);
+    expect(sendableCloseCode(1005)).toBe(1000);
+    expect(sendableCloseCode(1006)).toBe(1001);
+    for (const code of [1004, 1015, 2000, 5000]) expect(sendableCloseCode(code)).toBe(1011);
+  });
+
+  it('opens no upstream for a client that left while its actor was being asked', async () => {
+    const slowGrant = (id: string): FakeWorkspace => ({
+      handle: async (request) => {
+        await new Promise((resolve) => setTimeout(resolve, 300));
+        return grantingWorkspace(id).handle(request);
+      },
+    });
+    harness = await startHarness({ workspace: slowGrant });
+    const ws = new WebSocket(`${harness.baseUrl.replace('http', 'ws')}/v1/ws?token=${await harness.credential()}`);
+    ws.on('error', () => {});
+    await waitFor(() => harness!.controlPlane.invocations.length === 1);
+    ws.terminate();
+    await new Promise((resolve) => setTimeout(resolve, 600));
+    expect(harness.controlPlane.findWebsocketCalls).toHaveLength(0);
+    expect(harness.controlPlane.sessions).toHaveLength(0);
+    expect(harness.gateway.socketCount).toBe(0);
+    expect(harness.logs.find((entry) => entry.event === 'socket.client_gone')).toMatchObject({ path: '/v1/ws', workspace_id: WORKSPACE_ID });
   });
 });

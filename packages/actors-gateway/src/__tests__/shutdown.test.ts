@@ -48,6 +48,43 @@ describe('graceful shutdown', () => {
     await expect(fetch(`${harness.baseUrl}/healthz`)).rejects.toThrow();
   });
 
+  it('refuses an upgrade still waiting on its actor, and drops a client that never answers its close frame', async () => {
+    harness = await startHarness({
+      workspace: () => ({
+        handle: async (request) => {
+          const headers = Object.fromEntries(request.headers);
+          if (headers.upgrade !== 'websocket') return jsonResponse(404, { ok: false, error: { code: 'not_found', message: 'no' } });
+          if (new URL(request.url).pathname === '/v1/node/ws') await new Promise(() => {});
+          return jsonResponse(200, { ok: true, data: { metadata: { v: 1, kind: 'observer', workspace_id: WORKSPACE_ID, observer_token_id: 'obs-1' } } }, [[SOCKET_GRANT_HEADER, '1']]);
+        },
+      }),
+      env: { RELAYCAST_SHUTDOWN_GRACE_MS: '300' },
+    });
+    const token = await harness.credential();
+    const bridged = await new Promise<WebSocket>((resolve, reject) => {
+      const ws = new WebSocket(`${harness!.baseUrl.replace('http', 'ws')}/v1/ws?token=${token}`);
+      ws.once('open', () => resolve(ws));
+      ws.once('error', reject);
+    });
+    await waitFor(() => harness!.gateway.socketCount === 1);
+    // A peer that stopped reading never completes the close handshake.
+    (bridged as unknown as { _socket: { pause: () => void } })._socket.pause();
+
+    const stuck = new WebSocket(`${harness.baseUrl.replace('http', 'ws')}/v1/node/ws?token=${token}`);
+    const refused = new Promise<number>((resolve) => stuck.once('unexpected-response', (_req, res) => { res.resume(); resolve(res.statusCode ?? 0); }));
+    stuck.on('error', () => {});
+    await waitFor(() => harness!.controlPlane.invocations.length === 2);
+
+    const started = Date.now();
+    await harness.gateway.close();
+    expect(Date.now() - started).toBeLessThan(2000);
+    expect(await refused).toBe(503);
+    expect(harness.gateway.socketCount).toBe(0);
+    expect(harness.logs.find((entry) => entry.event === 'gateway.socket_drain_timeout')).toMatchObject({ sockets: 1 });
+    expect(harness.controlPlane.sessions).toHaveLength(1);
+    await waitFor(() => harness!.controlPlane.sessions[0].readyState === WebSocket.CLOSED);
+  });
+
   it('drops requests still in flight once the grace period ends', async () => {
     harness = await startHarness({ workspace: () => ({ handle: () => new Promise(() => {}) }), env: { RELAYCAST_SHUTDOWN_GRACE_MS: '200' } });
     const stuck = fetch(`${harness.baseUrl}/v1/never`, { headers: { authorization: `Bearer ${await harness.credential()}` } });

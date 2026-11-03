@@ -22,6 +22,8 @@ import { parseSocketGrant } from './socketGrant.js';
 /** Largest frame a client may send upstream. */
 export const CLIENT_MAX_MESSAGE_BYTES = 1024 * 1024;
 const UPSTREAM_MAX_MESSAGE_BYTES = 16 * 1024 * 1024;
+/** Frames queued for a client that is not reading; past this it is closed as a slow consumer. */
+const MAX_CLIENT_BUFFERED_BYTES = 2 * UPSTREAM_MAX_MESSAGE_BYTES;
 const DEFAULT_PING_INTERVAL_MS = 30_000;
 const DEFAULT_CONNECT_TIMEOUT_MS = 10_000;
 /** A close reason is at most 123 bytes on the wire. */
@@ -30,8 +32,10 @@ const SOCKET_PATHS = new Set(['/v1/ws', '/v1/node/ws']);
 
 export interface SocketBridge {
   handleUpgrade(req: IncomingMessage, socket: Duplex, head: Buffer): void;
-  /** Close every bridged client with `code`, then drop the ones that do not answer. */
+  /** Begin closing every bridged client with `code`; refuse the upgrades still pending and any that arrive after. */
   closeAll(code: number, reason: string): void;
+  /** Drop the clients whose close handshake did not finish (the shutdown deadline). */
+  terminateAll(): void;
   /** Open bridges. */
   readonly size: number;
 }
@@ -46,9 +50,15 @@ export function queryOrBearerToken(req: IncomingMessage, url: URL): string | und
   return url.searchParams.get('token')?.trim() || bearerToken(req);
 }
 
-/** Codes the `ws` library will put in a close frame; others become 1011. */
+/**
+ * The code to relay a peer's close with: 1005 (it sent no status) is a normal
+ * close and 1006 (its connection dropped) means it went away; the codes the
+ * `ws` library refuses to put in a close frame become 1011.
+ */
 export function sendableCloseCode(code: number): number {
-  const valid = (code >= 1000 && code <= 1014 && code !== 1004 && code !== 1005 && code !== 1006) || (code >= 3000 && code <= 4999);
+  if (code === 1005) return 1000;
+  if (code === 1006) return 1001;
+  const valid = (code >= 1000 && code <= 1014 && code !== 1004) || (code >= 3000 && code <= 4999);
   return valid ? code : 1011;
 }
 
@@ -124,7 +134,14 @@ export function createSocketBridge(ctx: GatewayContext, options: SocketBridgeOpt
       if (upstream.readyState === WebSocket.OPEN) upstream.send(data.toString());
     });
     upstream.on('message', (data) => {
-      if (client.readyState === WebSocket.OPEN) client.send(data.toString());
+      if (client.readyState !== WebSocket.OPEN) return;
+      // The actor is not paused for a client that stopped reading; bound what
+      // can pile up for one instead.
+      if (client.bufferedAmount > MAX_CLIENT_BUFFERED_BYTES) {
+        client.close(1013, 'slow consumer');
+        return;
+      }
+      client.send(data.toString());
     });
 
     upstream.on('close', (code, reason) => {
@@ -156,35 +173,78 @@ export function createSocketBridge(ctx: GatewayContext, options: SocketBridgeOpt
     }, pingIntervalMs);
   }
 
-  async function bridge(req: IncomingMessage, socket: Duplex, head: Buffer, url: URL, requestId: string, workspaceId: string): Promise<void> {
+  interface Pending {
+    socket: Duplex;
+    /** Set once the control plane's socket is being opened. */
+    upstream?: WebSocket;
+    /** True once the upgrade was answered (bridged or refused), the client went away, or shutdown began. */
+    settled: boolean;
+    onGone: () => void;
+    /**
+     * Keeps the socket flowing while the upgrade is pending (Node leaves an
+     * upgraded socket paused, so its FIN would go unread): bytes a client sends
+     * before its 101 are kept for the handshake.
+     */
+    onData: (chunk: Buffer) => void;
+    early: Buffer[];
+  }
+  /** Upgrades between arrival and their answer, so a client that leaves or a shutdown can cancel them. */
+  const pending = new Set<Pending>();
+  let closing = false;
+
+  /** Mark `entry` answered; false when something else (client gone, shutdown) already did. */
+  function settle(entry: Pending): boolean {
+    if (entry.settled) return false;
+    entry.settled = true;
+    pending.delete(entry);
+    entry.socket.off('close', entry.onGone);
+    entry.socket.off('end', entry.onGone);
+    entry.socket.off('data', entry.onData);
+    return true;
+  }
+
+  async function bridge(entry: Pending, req: IncomingMessage, head: Buffer, url: URL, requestId: string, workspaceId: string): Promise<void> {
+    const { socket } = entry;
     const started = performance.now();
     const probe = await ctx.actors.handle(workspaceId, { method: 'GET', url: url.toString(), headers: probeHeaders(req, requestId), body: null });
+    if (entry.settled) return;
     // Only a grant to the probe this gateway sent opens a socket; anything
     // else, including a 200 that is not a grant, refuses the upgrade.
     const principal = parseSocketGrant(probe);
     if (!principal) {
       const status = probe.status === 200 ? 502 : probe.status;
       ctx.logger.info('socket.refused', { path: url.pathname, workspace_id: workspaceId, request_id: requestId, status });
+      settle(entry);
       rejectUpgrade(socket, status, jsonBody(probe.body));
       return;
     }
     const grant = await ctx.actors.findWebsocket(workspaceId, principal);
+    if (entry.settled) return;
     if (grant.connectByMs < Date.now()) throw new ActorCallError('grant_expired', 'the socket grant expired before the gateway could use it');
 
     const upstream = new WebSocket(grant.websocketUrl, { maxPayload: UPSTREAM_MAX_MESSAGE_BYTES, handshakeTimeout: connectTimeoutMs });
+    entry.upstream = upstream;
     const info: Bridged = { path: url.pathname, workspaceId, requestId, started };
-    let settled = false;
     upstream.once('open', () => {
-      if (settled) return;
-      settled = true;
-      wss.handleUpgrade(req, socket, head, (client) => {
+      if (!settle(entry)) {
+        upstream.close(1001, 'client went away');
+        return;
+      }
+      let piped = false;
+      wss.handleUpgrade(req, socket, entry.early.length > 0 ? Buffer.concat([head, ...entry.early]) : head, (client) => {
+        piped = true;
         ctx.logger.info('socket.open', { path: info.path, workspace_id: workspaceId, request_id: requestId, home_region: grant.homeRegion });
         pipe(client, upstream, info);
       });
+      // The library calls back synchronously, and not at all for a client
+      // whose socket is no longer usable: nothing would ever close the upstream.
+      if (!piped) {
+        ctx.logger.info('socket.client_gone', { path: info.path, workspace_id: workspaceId, request_id: requestId });
+        upstream.close(1001, 'client went away');
+      }
     });
     const failed = (error: unknown): void => {
-      if (settled) return;
-      settled = true;
+      if (!settle(entry)) return;
       ctx.logger.error('socket.upstream_failed', { path: url.pathname, workspace_id: workspaceId, request_id: requestId, error: errorText(error) });
       // The client's handshake completes so it receives a close code rather than a dropped TCP connection.
       wss.handleUpgrade(req, socket, head, (client) => client.close(1011, 'upstream unavailable'));
@@ -193,9 +253,12 @@ export function createSocketBridge(ctx: GatewayContext, options: SocketBridgeOpt
     upstream.once('close', () => failed(new Error('upstream closed before open')));
   }
 
+  const shuttingDown = JSON.stringify({ ok: false, error: { code: 'shutting_down', message: 'The gateway is restarting; retry' } });
+
   return {
     handleUpgrade(req, socket, head) {
       socket.on('error', () => {});
+      if (closing) return rejectUpgrade(socket, 503, shuttingDown);
       const requestId = requestIdFor(req);
       const url = requestUrl(req, ctx.fallbackHost());
       if (!url) return rejectUpgrade(socket, 400, JSON.stringify({ ok: false, error: { code: 'invalid_request', message: 'Invalid Host header' } }));
@@ -203,13 +266,33 @@ export function createSocketBridge(ctx: GatewayContext, options: SocketBridgeOpt
       const token = queryOrBearerToken(req, url);
       if (!token) return rejectUpgrade(socket, 401, JSON.stringify({ ok: false, error: { code: 'unauthorized', message: 'Missing token' } }));
       const credential = parseArCredential(token);
+      const entry: Pending = {
+        socket,
+        settled: false,
+        // A client that leaves while its actor is being asked: the answer, if
+        // any, has nobody to go to, and an upstream already opening is dropped.
+        onGone: () => {
+          if (!settle(entry)) return;
+          ctx.logger.info('socket.client_gone', { path: url.pathname, workspace_id: credential?.workspaceId, request_id: requestId });
+          entry.upstream?.terminate();
+          socket.destroy();
+        },
+        onData: (chunk) => { entry.early.push(chunk); },
+        early: [],
+      };
+      pending.add(entry);
+      socket.once('close', entry.onGone);
+      socket.once('end', entry.onGone);
+      socket.on('data', entry.onData);
       void (async () => {
         if (!credential || !(await ctx.credentialTags.verify(token))) {
+          if (!settle(entry)) return;
           rejectUpgrade(socket, 401, JSON.stringify({ ok: false, error: { code: 'unauthorized', message: 'An ar_ credential issued by this deployment is required' } }));
           return;
         }
-        await bridge(req, socket, head, url, requestId, credential.workspaceId);
+        await bridge(entry, req, head, url, requestId, credential.workspaceId);
       })().catch((error: unknown) => {
+        if (!settle(entry)) return;
         const status = error instanceof ActorCallError ? 502 : 500;
         ctx.logger.error('socket.failed', { path: url.pathname, workspace_id: credential?.workspaceId, request_id: requestId, error: errorText(error) });
         rejectUpgrade(socket, status, JSON.stringify({
@@ -221,8 +304,21 @@ export function createSocketBridge(ctx: GatewayContext, options: SocketBridgeOpt
       });
     },
     closeAll(code, reason) {
+      closing = true;
+      // An upgrade still waiting on its actor is refused now rather than
+      // completed into a bridge nobody will close.
+      for (const entry of [...pending]) {
+        if (!settle(entry)) continue;
+        entry.upstream?.terminate();
+        rejectUpgrade(entry.socket, 503, shuttingDown);
+      }
       for (const client of clients) client.close(code, reason);
       wss.close();
+    },
+    terminateAll() {
+      for (const client of clients) client.terminate();
+      // Their close events follow on a later tick; the count is settled now.
+      clients.clear();
     },
     get size() {
       return clients.size;

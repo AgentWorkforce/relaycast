@@ -39,9 +39,9 @@ export interface Gateway {
   /** Bind and listen; resolves with the bound address. */
   listen(port?: number, host?: string): Promise<AddressInfo>;
   /**
-   * Stop accepting, close bridged sockets with 1012 `gateway restarting`,
-   * wait up to `shutdownGraceMs` for in-flight requests, then drop whatever
-   * is left.
+   * Stop accepting, refuse pending upgrades, close bridged sockets with 1012
+   * `gateway restarting`, wait up to `shutdownGraceMs` for in-flight requests
+   * and close handshakes, then drop whatever is left.
    */
   close(): Promise<void>;
   /** Bridged WebSocket clients currently open. */
@@ -123,10 +123,14 @@ export function createGateway(config: GatewayConfig, options: GatewayOptions = {
       const closed = new Promise<void>((resolve) => server.close(() => resolve()));
       bridge.closeAll(1012, 'gateway restarting');
       const deadline = Date.now() + config.shutdownGraceMs;
-      while (inflight.size > 0 && Date.now() < deadline) {
+      while ((inflight.size > 0 || bridge.size > 0) && Date.now() < deadline) {
         await new Promise((resolve) => setTimeout(resolve, DRAIN_POLL_MS));
       }
       if (inflight.size > 0) logger.warn('gateway.drain_timeout', { in_flight: inflight.size });
+      // Upgraded sockets are not `closeAllConnections`' to close: a peer that
+      // never answered its close frame is dropped here.
+      if (bridge.size > 0) logger.warn('gateway.socket_drain_timeout', { sockets: bridge.size });
+      bridge.terminateAll();
       server.closeAllConnections();
       await closed;
     },
