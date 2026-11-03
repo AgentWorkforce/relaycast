@@ -377,7 +377,15 @@ export function createActorRuntime(options: ActorRuntimeOptions): ActorRuntime {
    */
   const keepPushedTag = (request: ActorHttpRequest, status: number): void => {
     if (status !== 201 || request.method !== 'POST' || credentialTag.get() !== undefined) return;
-    if (new URL(request.url).pathname !== `/internal/workspaces/${options.workspaceId}/api-key`) return;
+    const match = /^\/internal\/workspaces\/([^/]+)\/api-key$/.exec(new URL(request.url).pathname);
+    if (!match) return;
+    let pushedTo: string;
+    try {
+      pushedTo = decodeURIComponent(match[1]);
+    } catch {
+      return;
+    }
+    if (pushedTo !== options.workspaceId) return;
     let apiKey: unknown;
     try {
       apiKey = (JSON.parse(request.body ?? 'null') as { api_key?: unknown } | null)?.api_key;

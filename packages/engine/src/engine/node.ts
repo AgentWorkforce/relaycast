@@ -116,6 +116,13 @@ export interface HandleNodeControlMessageArgs {
    */
   connectionSuperseded?: () => boolean;
   /**
+   * The provider the connection held before a reconnect superseded it. A
+   * settling frame it still sends (`action.result` for work dispatched to
+   * it) resolves to this provider, which the invocation row names, rather
+   * than to the cleared binding's `default` fallback.
+   */
+  supersededProviderName?: string;
+  /**
    * Set by a socket owner that verified this `node.heartbeat` is identical to
    * the last heartbeat the engine accepted on this connection, in the same
    * liveness generation, under `role`: a durable checkpoint of unchanged
@@ -3769,7 +3776,7 @@ export async function handleNodeControlMessage(args: HandleNodeControlMessageArg
   // connection's provider binding synchronously, and a lookup inside the callback
   // would then fall back to `default` and act on the wrong provider.
   const boundProviderName = args.connectionId
-    ? args.registry.providerNameForConnection?.(args.connectionId)
+    ? (args.registry.providerNameForConnection?.(args.connectionId) ?? args.supersededProviderName)
     : undefined;
   // The connection's registered identity is authoritative — a provider can't act
   // on another provider by putting a different name in the frame. The frame's

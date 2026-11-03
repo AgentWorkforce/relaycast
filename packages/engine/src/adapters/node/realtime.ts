@@ -76,6 +76,8 @@ interface NodeConn {
    * processed still knows (the registry forgets the connection at close).
    */
   superseded: boolean;
+  /** The provider this connection held before a reconnect superseded it; settling frames resolve to it. */
+  supersededProviderName?: string;
 }
 
 /** See {@link InProcessRealtime.nodeConnectionState}. */
@@ -760,6 +762,7 @@ export class InProcessRealtime implements RealtimeBus, ConnectionRegistry, NodeC
       }
       if (superseded) {
         superseded.superseded = true;
+        superseded.supersededProviderName = superseded.providerName;
         superseded.providerName = undefined;
         try {
           superseded.socket.close(1000, 'superseded');
@@ -985,6 +988,7 @@ export class InProcessRealtime implements RealtimeBus, ConnectionRegistry, NodeC
           // Read under the node lock from the handle's own connection object:
           // outlives the registry's marker, which goes with the close.
           connectionSuperseded: () => conn.superseded,
+          supersededProviderName: conn.supersededProviderName,
           admitRegistration: createRegistrationAdmission({ db: this.db, admission: this.admission, workspace: workspaceId }),
           raw,
         });

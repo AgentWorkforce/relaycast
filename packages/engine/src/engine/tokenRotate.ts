@@ -67,7 +67,9 @@ export const WORKSPACE_KEY_DEFAULT_GRACE_MS = 60_000;
  * because an old key that stays alive indefinitely is a credential, not a
  * grace window.
  */
-export const WORKSPACE_KEY_MAX_GRACE_MS = 3_600_000;
+import { WORKSPACE_KEY_MAX_GRACE_MS } from './internalCapabilities.js';
+
+export { WORKSPACE_KEY_MAX_GRACE_MS };
 
 /**
  * Replace a workspace's API key, capturing the superseded key into the

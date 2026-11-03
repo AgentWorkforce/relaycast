@@ -28,7 +28,7 @@ const ADAPTER_TABLES: readonly ActorTable[] = [
  * once with the call, and a failed first call rolls it back whole.
  *
  * The check is read-only when the schema is current: one `sqlite_master`
- * read for the tables and one count of the applied migrations, no DDL. Only
+ * read for the tables and one read of the recorded migration names, no DDL. Only
  * what is missing is created. Returns true when nothing had to be done, so
  * the caller can skip the check for the rest of the activation (a schema
  * that was already committed cannot roll back with this call).
