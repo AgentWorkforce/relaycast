@@ -1,0 +1,128 @@
+name: Publish Actors Images
+
+# Publishes the two images for self-hosting relaycast on durable-actors to GHCR
+# and prints their immutable digests:
+#   relaycast-actors-gateway   docker/actors-gateway.Dockerfile
+#   relaycast-actors-deployer  docker/actors-deployer.Dockerfile
+#
+# Manual only, like publish-container.yml: a published image is what another
+# company pins and runs. Authentication is the built-in GITHUB_TOKEN.
+#
+# NOTE: a package created by Actions starts PRIVATE even from a public repo.
+# After the first successful run, set each package to public once in
+# Settings → Packages → <name> → Change visibility.
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Image tag: the engine version in packages/engine/package.json (e.g. 12.6.2), or that version plus a build suffix (e.g. 12.6.2-actors.1) for an image built from unreleased source on this ref"
+        required: true
+        type: string
+      latest:
+        description: "Also tag as :latest"
+        required: false
+        type: boolean
+        default: true
+
+concurrency:
+  group: publish-actors-images
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  publish:
+    name: Build and push
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - uses: docker/setup-qemu-action@v3
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ github.token }}
+
+      # GHCR repository names must be lowercase, and the org is "AgentWorkforce".
+      - name: Lowercase the owner for the image name
+        run: echo "OWNER_LC=${GITHUB_REPOSITORY_OWNER,,}" >> "$GITHUB_ENV"
+
+      # Both images build the engine from this checkout, so the tag names the
+      # engine version they carry (optionally with a build suffix).
+      - name: Verify the tag matches the engine version
+        env:
+          TAG: ${{ inputs.tag }}
+        run: |
+          set -euo pipefail
+          version="$(node -p "require('./packages/engine/package.json').version")"
+          case "$TAG" in
+            "$version") ;;
+            "$version"-*)
+              if ! printf '%s' "${TAG#"$version"-}" | grep -Eq '^[0-9A-Za-z][0-9A-Za-z.-]*$'; then
+                echo "tag suffix in '$TAG' must be [0-9A-Za-z.-]" >&2
+                exit 1
+              fi
+              ;;
+            *)
+              echo "tag '$TAG' does not match the engine version '$version' (or '$version-<suffix>')" >&2
+              exit 1
+              ;;
+          esac
+          echo "tag $TAG matches engine version: $version"
+
+      - name: Build and push the gateway
+        id: gateway
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: docker/actors-gateway.Dockerfile
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: |
+            ghcr.io/${{ env.OWNER_LC }}/relaycast-actors-gateway:${{ inputs.tag }}
+            ${{ inputs.latest && format('ghcr.io/{0}/relaycast-actors-gateway:latest', env.OWNER_LC) || '' }}
+
+      - name: Build and push the deployer
+        id: deployer
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: docker/actors-deployer.Dockerfile
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: |
+            ghcr.io/${{ env.OWNER_LC }}/relaycast-actors-deployer:${{ inputs.tag }}
+            ${{ inputs.latest && format('ghcr.io/{0}/relaycast-actors-deployer:latest', env.OWNER_LC) || '' }}
+
+      - name: Report the immutable references
+        env:
+          OWNER: ${{ env.OWNER_LC }}
+          TAG: ${{ inputs.tag }}
+          GATEWAY_DIGEST: ${{ steps.gateway.outputs.digest }}
+          DEPLOYER_DIGEST: ${{ steps.deployer.outputs.digest }}
+        run: |
+          set -euo pipefail
+          {
+            echo "## Published"
+            echo
+            echo '```'
+            echo "ghcr.io/${OWNER}/relaycast-actors-gateway:${TAG}"
+            echo "ghcr.io/${OWNER}/relaycast-actors-gateway@${GATEWAY_DIGEST}"
+            echo "ghcr.io/${OWNER}/relaycast-actors-deployer:${TAG}"
+            echo "ghcr.io/${OWNER}/relaycast-actors-deployer@${DEPLOYER_DIGEST}"
+            echo '```'
+            echo
+            echo "Pin the digests, not the tags — a tag can be moved, a digest cannot."
+            echo "Platforms: linux/amd64, linux/arm64"
+            echo "Source commit: ${GITHUB_SHA}"
+          } >> "$GITHUB_STEP_SUMMARY"
