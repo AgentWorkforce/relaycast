@@ -7,6 +7,7 @@ const BASE = {
     DURABLE_ACTORS_PROJECT_ID: "relaycast",
     DURABLE_ACTORS_ORGANIZATION_ID: "acme",
     DURABLE_ACTORS_ARTIFACT_BUCKET: "acme-actors",
+    DURABLE_ACTORS_SECRET_REFS: "relaycast-env",
 }
 
 describe("parseOptions", () => {
@@ -32,7 +33,7 @@ describe("bundleConfigFromEnv", () => {
             secretRefs: ["relaycast-env", "relaycast-internal"],
             artifactPrefix: "durable-actors/v3/artifacts",
         })
-        expect(bundleConfigFromEnv({ ...BASE, DURABLE_ACTORS_ARTIFACT_PREFIX: "custom/artifacts" }).artifactPrefix).toBe("custom/artifacts")
+        expect(bundleConfigFromEnv({ ...BASE, DURABLE_ACTORS_SECRET_REFS: "env", DURABLE_ACTORS_ARTIFACT_PREFIX: "custom/artifacts" }).artifactPrefix).toBe("custom/artifacts")
     })
 
     it("names the missing or invalid variable without echoing values", () => {
@@ -46,7 +47,15 @@ describe("bundleConfigFromEnv", () => {
         expect(() => bundleConfigFromEnv({ ...BASE, DURABLE_ACTORS_CONTROL_PLANE_URL: "https://actors.example.com/admin" })).toThrow(/DURABLE_ACTORS_CONTROL_PLANE_URL must be an http\(s\) origin/)
         expect(() => bundleConfigFromEnv({ ...BASE, DURABLE_ACTORS_CONTROL_PLANE_URL: "https://actors.example.com/?x=1" })).toThrow(/DURABLE_ACTORS_CONTROL_PLANE_URL/)
         expect(bundleConfigFromEnv({ ...BASE, DURABLE_ACTORS_CONTROL_PLANE_URL: "https://actors.example.com/" }).controlPlaneUrl).toBe("https://actors.example.com/")
-        expect(() => bundleConfigFromEnv({ ...BASE, DURABLE_ACTORS_SECRET_REFS: `ok,${"n".repeat(256)}` })).toThrow("at most 255 characters")
+        expect(() => bundleConfigFromEnv({ ...BASE, DURABLE_ACTORS_SECRET_REFS: `ok,${"n".repeat(254)}` })).toThrow("Kubernetes Secret names")
+        for (const bad of ["bad/name", "Upper", "-leading", "trailing-", "under_score"]) {
+            expect(() => bundleConfigFromEnv({ ...BASE, DURABLE_ACTORS_SECRET_REFS: `ok,${bad}` }), bad).toThrow("Kubernetes Secret names")
+        }
+        expect(() => bundleConfigFromEnv({ ...BASE, DURABLE_ACTORS_SECRET_REFS: " , " })).toThrow("DURABLE_ACTORS_SECRET_REFS is required for a bundle deployment")
+        expect(() => bundleConfigFromEnv({ ...BASE, DURABLE_ACTORS_SECRET_REFS: undefined })).toThrow("DURABLE_ACTORS_SECRET_REFS is required for a bundle deployment")
+        for (const bare of ["https://actors.example.com?", "https://actors.example.com#", "https://actors.example.com/?"]) {
+            expect(() => bundleConfigFromEnv({ ...BASE, DURABLE_ACTORS_CONTROL_PLANE_URL: bare }), bare).toThrow(/DURABLE_ACTORS_CONTROL_PLANE_URL/)
+        }
         expect(() => bundleConfigFromEnv({ ...BASE, DURABLE_ACTORS_ARTIFACT_BUCKET: "bucket/path" })).toThrow(/DURABLE_ACTORS_ARTIFACT_BUCKET/)
         expect(() => bundleConfigFromEnv({ ...BASE, DURABLE_ACTORS_ARTIFACT_PREFIX: "/abs/" })).toThrow(/DURABLE_ACTORS_ARTIFACT_PREFIX/)
         expect(() => bundleConfigFromEnv({ ...BASE, DURABLE_ACTORS_SECRET_REFS: Array(17).fill("s").join(",") })).toThrow("at most 16")

@@ -198,7 +198,7 @@ describe("deploy.ts", () => {
         plane.replies.push({ status: 200, body: undefined, raw: "<html>not json</html>" })
         expect(await invoke(["--status"])).toBe(1)
         expect(plane.requests.map((request) => request.method)).toEqual(["GET"])
-        expect(err.at(-1)).toMatch(/^deploy: control plane 200 malformed_response: GET .* answered 2xx with a body that is not JSON$/)
+        expect(err.at(-1)).toMatch(/^deploy: control plane 200 malformed_response: GET .* answered 200 with a body that is not JSON$/)
     })
 
     it("gives up on a persistent 5xx and on an unreachable control plane", async () => {

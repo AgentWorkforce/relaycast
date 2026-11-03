@@ -74,7 +74,8 @@ const component = z.string().trim().min(1).max(64)
 const origin = z.string().trim().refine((value) => {
     try {
         const url = new URL(value)
-        return /^https?:$/.test(url.protocol) && !!url.hostname && !url.username && !url.password && url.pathname === "/" && !url.search && !url.hash
+        // `URL` drops a bare trailing `?` or `#`, which the request path would land behind.
+        return /^https?:$/.test(url.protocol) && !!url.hostname && !url.username && !url.password && url.pathname === "/" && !/[?#]/.test(value)
     } catch {
         return false
     }
@@ -95,6 +96,11 @@ const EnvSchema = z.object({
         z.string().trim().min(1).refine((prefix) => !/^\/|\/$|\/\//.test(prefix), "must be a relative object prefix").optional()
     ),
 })
+
+/** A DNS subdomain name, as Kubernetes requires of a Secret's name. */
+function isKubernetesSecretName(name: string): boolean {
+    return name.length <= 253 && /^[a-z0-9]([-a-z0-9.]*[a-z0-9])?$/.test(name)
+}
 
 export interface ConnectionConfig {
     controlPlaneUrl: string
@@ -145,10 +151,16 @@ export function bundleConfigFromEnv(env: Record<string, string | undefined>): Bu
         .split(",")
         .map((name) => name.trim())
         .filter((name) => name !== "")
-    // The limits `SecretRefsSchema` enforces on the request, checked here so a
-    // bad value fails before anything is compiled or uploaded.
+    // Checked here so a bad value fails before anything is compiled or
+    // uploaded: the actor needs RELAYCAST_PUBLIC_URL and
+    // RELAYCAST_FILE_SIGNING_SECRET from at least one Secret, and each name
+    // must be a Kubernetes Secret name (a DNS subdomain), which the request
+    // schema's 255-character limit alone does not guarantee.
+    if (secretRefs.length === 0)
+        throw new ConfigError("DURABLE_ACTORS_SECRET_REFS is required for a bundle deployment (the actor's environment comes from those Secrets)")
     if (secretRefs.length > 16) throw new ConfigError("DURABLE_ACTORS_SECRET_REFS allows at most 16 names")
-    if (secretRefs.some((name) => name.length > 255)) throw new ConfigError("DURABLE_ACTORS_SECRET_REFS names are at most 255 characters")
+    if (secretRefs.some((name) => !isKubernetesSecretName(name)))
+        throw new ConfigError("DURABLE_ACTORS_SECRET_REFS names must be Kubernetes Secret names: at most 253 lowercase alphanumerics, '-' or '.', starting and ending with an alphanumeric")
     if (new Set(secretRefs).size !== secretRefs.length) throw new ConfigError("DURABLE_ACTORS_SECRET_REFS repeats a name")
     return {
         ...connection(values),

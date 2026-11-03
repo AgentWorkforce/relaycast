@@ -77,6 +77,7 @@ export class DeploymentClient {
         const payload = body === undefined ? undefined : JSON.stringify(body)
         for (let attempt = 0; ; attempt++) {
             let text: string
+            let status = 0
             try {
                 const response = await this.request(this.url(), {
                     method,
@@ -84,7 +85,12 @@ export class DeploymentClient {
                     body: payload,
                     signal: AbortSignal.timeout(timeoutMs),
                 })
-                text = await response.text()
+                status = response.status
+                // Once a 2xx arrived the request ran: a body that cannot be read is reported, never resent.
+                text = await response.text().catch((error: unknown) => {
+                    if (!response.ok) throw error
+                    throw new ControlPlaneError(response.status, "unreadable_response", `${method} ${this.url()} answered ${response.status} with a body that could not be read: ${describe(error)}`)
+                })
                 if (!response.ok) {
                     const error = errorFrom(response.status, text)
                     if (response.status < 500 || attempt >= this.retries) throw error
@@ -103,7 +109,7 @@ export class DeploymentClient {
             try {
                 return JSON.parse(text)
             } catch {
-                throw new ControlPlaneError(200, "malformed_response", `${method} ${this.url()} answered 2xx with a body that is not JSON`)
+                throw new ControlPlaneError(status, "malformed_response", `${method} ${this.url()} answered ${status} with a body that is not JSON`)
             }
         }
     }
