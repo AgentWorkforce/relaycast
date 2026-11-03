@@ -12,7 +12,8 @@ import {
   type SocketPrincipal,
 } from '../index.js';
 import type { ActorHttpRequest } from '../http.js';
-import { FakeWorkspaceActor, jsonRequest, type FakeActorSocket } from './fakeActor.js';
+import { FAKE_FILE_SECRET, FakeWorkspaceActor, jsonRequest, type FakeActorSocket } from './fakeActor.js';
+import { signSocketPrincipal, verifySocketPrincipal } from '../socket-grant.js';
 
 const WORKSPACE_ID = '241764880589606912';
 
@@ -82,11 +83,14 @@ describe('workspace actor realtime', () => {
     const actor = new FakeWorkspaceActor(WORKSPACE_ID);
     const { alice } = await workspaceWithAgents(actor);
     const node = await nodeGrant(actor, alice);
-    expect(node.principal).toEqual({ v: 1, kind: 'node', workspace_id: WORKSPACE_ID, node_id: node.node_id });
+    expect(node.principal).toMatchObject({ v: 1, kind: 'node', workspace_id: WORKSPACE_ID, node_id: node.node_id, iat: expect.any(Number), nonce: expect.any(String), sig: expect.any(String) });
 
     const response = await actor.handle(upgradeRequest('/v1/node/ws', node.token));
     expect(new Headers(response.headers).get(SOCKET_GRANT_HEADER)).toBe('1');
-    expect(JSON.parse(response.body)).toEqual({ ok: true, data: { metadata: node.principal } });
+    // Every grant is its own: the same identity, freshly signed.
+    const again = JSON.parse(response.body) as { ok: boolean; data: { metadata: SocketPrincipal } };
+    expect(again).toMatchObject({ ok: true, data: { metadata: { v: 1, kind: 'node', workspace_id: WORKSPACE_ID, node_id: node.node_id } } });
+    expect(again.data.metadata.nonce).not.toBe(node.principal.nonce);
 
     const forged = await actor.handle(upgradeRequest('/v1/node/ws', `${node.token.slice(0, -4)}zzzz`));
     expect(forged.status).toBe(401);
@@ -101,7 +105,7 @@ describe('workspace actor realtime', () => {
     const actor = new FakeWorkspaceActor(WORKSPACE_ID);
     const { key } = await workspaceWithAgents(actor);
     const observer = await observerGrant(actor, key);
-    expect(observer.principal).toEqual({ v: 1, kind: 'observer', workspace_id: WORKSPACE_ID, observer_token_id: observer.id });
+    expect(observer.principal).toMatchObject({ v: 1, kind: 'observer', workspace_id: WORKSPACE_ID, observer_token_id: observer.id, iat: expect.any(Number), nonce: expect.any(String), sig: expect.any(String) });
     expect(JSON.stringify(observer.principal)).not.toContain(observer.token);
     // A workspace key is not an observer.
     expect((await actor.handle(upgradeRequest('/v1/ws', key))).status).toBe(401);
@@ -170,8 +174,9 @@ describe('workspace actor realtime', () => {
     const other = await actor.connect(foreign);
     expect(other.rejected?.code).toBe(INVALID_PRINCIPAL_CLOSE_CODE);
 
-    const gone: SocketPrincipal = { v: 1, kind: 'node', workspace_id: WORKSPACE_ID, node_id: 'node_never_enrolled' };
-    expect((await actor.connect(gone)).rejected).toEqual({ code: UNAUTHORIZED_CLOSE_CODE, reason: 'unknown node' });
+    // Signed by this actor's secret (as a grant would be), naming a node that does not exist.
+    const gone = await signSocketPrincipal(FAKE_FILE_SECRET, { v: 1, kind: 'node', workspace_id: WORKSPACE_ID, node_id: 'node_never_enrolled' });
+    expect((await actor.connect(gone, { asIs: true })).rejected).toEqual({ code: UNAUTHORIZED_CLOSE_CODE, reason: 'unknown node' });
     expect(actor.sockets.connections.size).toBe(0);
   });
 
@@ -487,6 +492,45 @@ describe('workspace actor realtime', () => {
     expect(statusEvents()).toEqual(['node.status.online']);
     expect(rows(actor, 'SELECT socket_id FROM _actor_sockets')).toEqual([{ socket_id: beta.id }]);
     expect(beta.closed).toBeNull();
+    expect(actor.sockets.violations).toEqual([]);
+  });
+
+  it('signs every grant it issues and attaches only a grant it signed, recently, once', async () => {
+    const actor = new FakeWorkspaceActor(WORKSPACE_ID);
+    const { alice, key } = await workspaceWithAgents(actor);
+    const node = await nodeGrant(actor, alice);
+    const observer = await observerGrant(actor, key);
+    for (const principal of [node.principal, observer.principal]) {
+      expect(principal).toMatchObject({ iat: expect.any(Number), nonce: expect.any(String), sig: expect.any(String) });
+      expect(await verifySocketPrincipal(FAKE_FILE_SECRET, principal)).toBe('ok');
+    }
+
+    // The grant as issued attaches ...
+    const live = await actor.connect(node.principal, { asIs: true });
+    expect(live.rejected).toBeNull();
+    // ... once: the same grant presented again is refused.
+    const replayed = await actor.connect(node.principal, { asIs: true });
+    expect(replayed.rejected).toEqual({ code: UNAUTHORIZED_CLOSE_CODE, reason: 'socket grant already used' });
+
+    // Metadata assembled without the actor's secret cannot attach: unsigned, tampered, or signed with another key.
+    const { iat: _iat, nonce: _nonce, sig: _sig, ...bare } = node.principal;
+    const unsigned = await actor.connect(bare, { asIs: true });
+    expect(unsigned.rejected).toEqual({ code: UNAUTHORIZED_CLOSE_CODE, reason: 'socket grant unsigned' });
+    const fresh = await signSocketPrincipal(FAKE_FILE_SECRET, bare);
+    const tampered = await actor.connect({ ...fresh, node_id: `${node.node_id}x` }, { asIs: true });
+    expect(tampered.rejected).toEqual({ code: UNAUTHORIZED_CLOSE_CODE, reason: 'socket grant bad signature' });
+    const foreign = await actor.connect(await signSocketPrincipal('another-secret', bare), { asIs: true });
+    expect(foreign.rejected).toEqual({ code: UNAUTHORIZED_CLOSE_CODE, reason: 'socket grant bad signature' });
+    // A grant older than the window is refused even with a valid signature.
+    const stale = await actor.connect(await signSocketPrincipal(FAKE_FILE_SECRET, bare, Date.now() - 180_000), { asIs: true });
+    expect(stale.rejected).toEqual({ code: UNAUTHORIZED_CLOSE_CODE, reason: 'socket grant expired' });
+    const future = await actor.connect(await signSocketPrincipal(FAKE_FILE_SECRET, bare, Date.now() + 120_000), { asIs: true });
+    expect(future.rejected).toEqual({ code: UNAUTHORIZED_CLOSE_CODE, reason: 'socket grant not yet valid' });
+
+    // The live socket was never disturbed.
+    expect(live.closed).toBeNull();
+    await actor.message(live, nodeRegister(node));
+    expect(actor.runtime.deps.nodeConnections.isNodeConnected(WORKSPACE_ID, node.node_id)).toBe(true);
     expect(actor.sockets.violations).toEqual([]);
   });
 

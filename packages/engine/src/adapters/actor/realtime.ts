@@ -37,7 +37,7 @@ import { getNodeById } from '../../engine/node.js';
 import { hasObserverScope } from '../../engine/observerToken.js';
 import { getWorkspaceExpiry } from '../../engine/workspace.js';
 import { isWorkspaceExpired } from '../../auth/workspaceExpiry.js';
-import { SocketPrincipalSchema, socketGrantResponse, type SocketPrincipal } from './socket-grant.js';
+import { SOCKET_GRANT_MAX_AGE_MS, SocketPrincipalSchema, signSocketPrincipal, socketGrantResponse, verifySocketPrincipal, type SocketPrincipal } from './socket-grant.js';
 import { ActorSocketTable, type ActorSocketRow } from './socket-table.js';
 import type { ActorSql } from './database.js';
 
@@ -75,6 +75,8 @@ export interface ActorSocketSource {
 export interface ActorRealtimeOptions {
   /** The actor's workspace; sockets granted for another are refused. */
   workspaceId: string;
+  /** Signs the socket grants this actor issues and verifies them at connect (the file-signing secret). */
+  grantSecret: string;
   sockets: ActorSocketSource;
   /** The actor's database, for the `_actor_sockets` rows. */
   sql: ActorSql;
@@ -144,6 +146,13 @@ export class ActorRealtime implements RealtimeBus, ConnectionRegistry, NodeConne
   private live = new Map<string, ActorSocketLike>();
   /** Whether the rows written by an earlier activation were replayed into this one. */
   private replayed = false;
+  /**
+   * Nonces of the grants attached during this activation, by issue time,
+   * so a captured grant cannot attach a second socket while it is still
+   * valid. In memory only: a replay after the actor slept is bounded by the
+   * grant's age instead.
+   */
+  private readonly usedNonces = new Map<string, number>();
 
   constructor(private readonly db: EngineDb, private readonly options: ActorRealtimeOptions) {
     this.inner = new InProcessRealtime(db);
@@ -167,16 +176,16 @@ export class ActorRealtime implements RealtimeBus, ConnectionRegistry, NodeConne
    */
   async upgrade(args: UpgradeArgs): Promise<Response> {
     if (!args.observerToken) return unauthorized('Observer token required for workspace stream');
-    return socketGrantResponse({
+    return socketGrantResponse(await signSocketPrincipal(this.options.grantSecret, {
       v: 1,
       kind: 'observer',
       workspace_id: args.workspaceId,
       observer_token_id: args.observerToken.id,
-    });
+    }));
   }
 
   async upgradeNode(args: NodeUpgradeArgs): Promise<Response> {
-    return socketGrantResponse({ v: 1, kind: 'node', workspace_id: args.workspaceId, node_id: args.nodeId });
+    return socketGrantResponse(await signSocketPrincipal(this.options.grantSecret, { v: 1, kind: 'node', workspace_id: args.workspaceId, node_id: args.nodeId }));
   }
 
   sendToNode(workspaceId: string, nodeId: string, message: FleetRelaycastToBrokerMessage): Promise<boolean> {
@@ -482,8 +491,9 @@ export class ActorRealtime implements RealtimeBus, ConnectionRegistry, NodeConne
 
   /**
    * A socket the gateway opened with a grant. Its metadata must be the
-   * principal the grant carried, for this workspace, and still authenticate;
-   * otherwise the connection is rejected.
+   * principal this actor granted (signed by it, recent, not attached
+   * before), for this workspace, and still authenticate; otherwise the
+   * connection is rejected.
    */
   async onConnect(socket: ActorSocketLike): Promise<void> {
     await this.rehydrate({ socket, phase: 'connect' });
@@ -495,6 +505,14 @@ export class ActorRealtime implements RealtimeBus, ConnectionRegistry, NodeConne
     if (principal.workspace_id !== this.options.workspaceId) {
       return reject(socket, INVALID_PRINCIPAL_CLOSE_CODE, 'socket principal names another workspace');
     }
+    const now = Date.now();
+    const verdict = await verifySocketPrincipal(this.options.grantSecret, principal, now);
+    if (verdict !== 'ok') return reject(socket, UNAUTHORIZED_CLOSE_CODE, `socket grant ${verdict.replace(/_/g, ' ')}`);
+    for (const [nonce, iat] of this.usedNonces) {
+      if (now - iat > SOCKET_GRANT_MAX_AGE_MS) this.usedNonces.delete(nonce);
+    }
+    if (this.usedNonces.has(principal.nonce!)) return reject(socket, UNAUTHORIZED_CLOSE_CODE, 'socket grant already used');
+    this.usedNonces.set(principal.nonce!, principal.iat!);
     const workspace = await getWorkspaceExpiry(this.db, principal.workspace_id);
     if (!workspace || isWorkspaceExpired(workspace)) return reject(socket, UNAUTHORIZED_CLOSE_CODE, 'workspace unavailable');
 

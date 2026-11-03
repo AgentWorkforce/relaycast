@@ -15,9 +15,11 @@ const grantingWorkspace = (id: string): FakeWorkspace => ({
     if (headers.upgrade !== 'websocket' || headers.connection !== 'Upgrade') return jsonResponse(426, { ok: false, error: { code: 'upgrade_required', message: 'ws only' } });
     if (!token?.startsWith('ar_ag_')) return jsonResponse(401, { ok: false, error: { code: 'invalid_token', message: 'Invalid token' } });
     if (headers['sec-websocket-key']) return jsonResponse(400, { ok: false, error: { code: 'bad_probe', message: 'hop-by-hop header leaked' } });
+    // Signed as the actor signs it; the gateway must hand these fields to the control plane untouched.
+    const signature = { iat: 1_700_000_000_000, nonce: 'n-1234', sig: 's-abcd' };
     const metadata = url.pathname === '/v1/node/ws'
-      ? { v: 1, kind: 'node', workspace_id: id, node_id: `node-${headers['x-request-id']}` }
-      : { v: 1, kind: 'observer', workspace_id: id, observer_token_id: `obs-${headers['x-request-id']}` };
+      ? { v: 1, kind: 'node', workspace_id: id, node_id: `node-${headers['x-request-id']}`, ...signature }
+      : { v: 1, kind: 'observer', workspace_id: id, observer_token_id: `obs-${headers['x-request-id']}`, ...signature };
     return jsonResponse(200, { ok: true, data: { metadata } }, [[SOCKET_GRANT_HEADER, '1']]);
   },
 });
@@ -59,7 +61,7 @@ describe('WebSocket bridge', () => {
     expect(probeHeaders.upgrade).toBe('websocket');
     expect(probeHeaders.connection).toBe('Upgrade');
     expect(probeHeaders['sec-websocket-key']).toBeUndefined();
-    expect(harness.controlPlane.findWebsocketCalls).toEqual([{ actorId: WORKSPACE_ID, metadata: { v: 1, kind: 'observer', workspace_id: WORKSPACE_ID, observer_token_id: expect.stringMatching(/^obs-/) }, homeRegion: undefined }]);
+    expect(harness.controlPlane.findWebsocketCalls).toEqual([{ actorId: WORKSPACE_ID, metadata: { v: 1, kind: 'observer', workspace_id: WORKSPACE_ID, observer_token_id: expect.stringMatching(/^obs-/), iat: 1_700_000_000_000, nonce: 'n-1234', sig: 's-abcd' }, homeRegion: undefined }]);
 
     const echoed = once<[Buffer]>(client, 'message');
     client.send(JSON.stringify({ type: 'subscribe' }));

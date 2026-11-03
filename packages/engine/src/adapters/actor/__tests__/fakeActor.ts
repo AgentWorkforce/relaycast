@@ -10,6 +10,10 @@ import {
 import { SQLITE_CONSTRAINT_CODES, type ActorSql, type SqliteValue } from '../database.js';
 import type { ActorHttpRequest, ActorHttpResponse } from '../http.js';
 import { createCredentialTagSigner } from '../../../auth/credentialTags.js';
+import { SocketPrincipalSchema, signSocketPrincipal } from '../socket-grant.js';
+
+/** The file-signing secret the fake runtime signs grants with. */
+export const FAKE_FILE_SECRET = 'file-secret';
 
 /** The keyring the fake gateway signs workspace tags with. */
 export const TEST_CREDENTIAL_TAGS = createCredentialTagSigner({ current: 'a', keys: { a: 'actor-test-tag-secret' } });
@@ -266,7 +270,7 @@ export class FakeWorkspaceActor {
       sql: this.sql,
       workspaceId: id,
       baseUrl: 'https://armadillo.test',
-      fileSigningSecret: 'file-secret',
+      fileSigningSecret: FAKE_FILE_SECRET,
       outboundFetch: () => Promise.reject(new Error('no network in tests')),
       alarm: this.alarm,
       sockets: this.sockets,
@@ -316,8 +320,14 @@ export class FakeWorkspaceActor {
   }
 
   /** `onConnect` for a socket the gateway opened with `metadata` (a grant's principal). */
-  async connect(metadata: unknown): Promise<FakeActorSocket> {
-    const socket = this.sockets.connecting(metadata);
+  /**
+   * `onConnect` with `metadata`. A signed principal is re-signed with a fresh
+   * nonce and issue time (as every real upgrade gets its own grant), so tests
+   * may reuse one grant for several sockets; `asIs` sends it untouched.
+   */
+  async connect(metadata: unknown, options: { asIs?: boolean } = {}): Promise<FakeActorSocket> {
+    const parsed = options.asIs ? undefined : SocketPrincipalSchema.safeParse(metadata);
+    const socket = this.sockets.connecting(parsed?.success && parsed.data.sig !== undefined ? await signSocketPrincipal(FAKE_FILE_SECRET, parsed.data) : metadata);
     await this.call(() => this.runtime.onConnect(socket));
     if (socket.state === 'connecting') socket.state = 'open';
     return socket;

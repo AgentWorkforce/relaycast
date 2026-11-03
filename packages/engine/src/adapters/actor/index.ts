@@ -248,6 +248,7 @@ export function createActorRuntime(options: ActorRuntimeOptions): ActorRuntime {
   const telemetry = safeTelemetrySink(options.telemetry ?? new NoopTelemetrySink());
   const realtime = new ActorRealtime(db, {
     workspaceId: options.workspaceId,
+    grantSecret: options.fileSigningSecret,
     sockets: options.sockets ?? NO_SOCKETS,
     sql,
     background: schedule,
