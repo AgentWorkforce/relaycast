@@ -8,7 +8,9 @@ import { generateId } from './engine/snowflake.js';
 
 export { parseArCredential } from './auth/credentials.js';
 export type { CredentialKind } from './auth/credentials.js';
-export { createCredentialTagSigner, parseCredentialKeyring } from './auth/credentialTags.js';
+export { createCredentialTagSigner, credentialTagAccepted, parseCredentialKeyring } from './auth/credentialTags.js';
+export { remoteCredentialTagger } from './auth/remoteCredentialTags.js';
+export type { RemoteCredentialTaggerOptions } from './auth/remoteCredentialTags.js';
 export type { CredentialKeyring, CredentialTagSigner, CredentialTagger } from './auth/credentialTags.js';
 export { signFileToken, verifyFileToken } from './lib/fileTokens.js';
 export type { FileTokenPayload } from './lib/fileTokens.js';

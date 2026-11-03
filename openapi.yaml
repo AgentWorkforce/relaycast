@@ -7134,8 +7134,11 @@ paths:
                   description: >-
                     Control-plane-minted key: `rk_live_` plus 32-256 characters of
                     `[A-Za-z0-9_-]`, or an `ar_ws_` key naming this workspace (only
-                    `ar_ws_` where the deployment accepts only `ar_` credentials). Omit to
-                    have the engine mint one in the deployment's credential family.
+                    `ar_ws_` where the deployment accepts only `ar_` credentials).
+                    An `ar_ws_` key's tag must verify against the deployment's
+                    credential tagger when one is configured (the keyring or
+                    RelayAuth). Omit to have the engine mint one in the
+                    deployment's credential family.
                 key_generation:
                   type: integer
                   minimum: 1

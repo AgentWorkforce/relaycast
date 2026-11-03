@@ -95,7 +95,8 @@ terse deploy                         # prints TERSE_ACTOR_URL
 
 Run the gateway anywhere with `TERSE_ACTOR_URL`, `TERSE_API_KEY`, the same
 `RELAYCAST_FILE_SIGNING_SECRET`, and `RELAYCAST_CREDENTIAL_KEYRING`
-(`{"current":"a","keys":{"a":"<secret>"}}`). Credentials outlive key changes,
+(`{"current":"a","keys":{"a":"<secret>"}}`) — or `RELAYCAST_RELAYAUTH_URL` +
+`RELAYCAST_RELAYAUTH_TOKEN` when RelayAuth owns the keyring. Credentials outlive key changes,
 so rotation adds a key version and makes it current, and never drops one: a
 tag verifies with the version it names. Removing a version locks out every
 credential tagged under it.

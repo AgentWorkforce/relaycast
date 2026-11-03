@@ -18,6 +18,8 @@ Packages without a separate changelog are covered by the cross-package notes bel
 
 ## [Unreleased - Minor]
 
+- A self-host can take `ar_` credential tags from RelayAuth (`RELAYCAST_RELAYAUTH_URL` + `RELAYCAST_RELAYAUTH_TOKEN`) instead of a local `RELAYCAST_CREDENTIAL_KEYRING`; an explicit keyring wins, and either satisfies `RELAYCAST_CREDENTIAL_FORMAT=ar`.
+- `POST /internal/workspaces/:id/api-key` refuses a pushed `ar_ws_` key whose tag the deployment's credential tagger did not sign.
 - `GET /v1/deliveries?wait=<ms>` long-polls (0–25000 ms): an empty answer waits until a matching delivery is created for the agent or the wait expires, and reads nothing while it waits.
 - SDKs pass `wait`: TypeScript `deliveries({ waitMs })`, Rust `wait_for_deliveries(opts, wait_ms)`, Swift `ListDeliveriesOptions(waitMs:)`.
 - The self-hosted server wakes waiters in process; other hosts supply a `DeliveryWaiters` provider, and an engine without one answers `wait` at once.

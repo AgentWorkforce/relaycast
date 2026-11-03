@@ -29,7 +29,10 @@ Environment:
   RELAYCAST_CREDENTIAL_KEYRING(_FILE)
                                     {"current":"a","keys":{"a":"<secret>"}}: signs ar_ credential
                                     tags, enabling POST /v1/credentials/upgrade
-  RELAYCAST_CREDENTIAL_FORMAT       legacy (default) or ar (needs RELAYCAST_CREDENTIAL_KEYRING)
+  RELAYCAST_RELAYAUTH_URL + RELAYCAST_RELAYAUTH_TOKEN(_FILE)
+                                    Take ar_ credential tags from RelayAuth instead of a
+                                    local keyring (an explicit keyring wins)
+  RELAYCAST_CREDENTIAL_FORMAT       legacy (default) or ar (needs the keyring or RelayAuth)
   RELAYCAST_LEGACY_CREDENTIAL_GRACE_SECONDS
                                     How long an upgraded legacy credential keeps working (default 30 days, at most 10 years)
   RELAYCAST_LEGACY_CREDENTIAL_SUNSET

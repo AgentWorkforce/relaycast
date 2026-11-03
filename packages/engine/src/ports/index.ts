@@ -136,9 +136,9 @@ export interface EngineConfig {
   credentialFormat?: CredentialFormat;
   /**
    * The routing tag for this deployment's workspaces' `ar_` credentials:
-   * `createCredentialTagSigner(keyring)` on a host that holds the keyring.
-   * Required to mint `ar_` credentials, including through
-   * `POST /v1/credentials/upgrade`.
+   * `createCredentialTagSigner(keyring)` on a host that holds the keyring, or
+   * `remoteCredentialTagger` when RelayAuth holds it. Required to mint `ar_`
+   * credentials, including through `POST /v1/credentials/upgrade`.
    */
   credentialTagger?: CredentialTagger;
   /**

@@ -9,6 +9,8 @@
 //   RELAYCAST_CREDENTIAL_KEYRING  {"current":"a","keys":{"a":"<secret>"}}: signs
 //                        credential tags. Rotate by adding a version and making it
 //                        current; removing a version locks out its credentials.
+//                        Or RELAYCAST_RELAYAUTH_URL + RELAYCAST_RELAYAUTH_TOKEN:
+//                        tags come from RelayAuth instead of a local keyring.
 //   RELAYCAST_FILE_DIR   where file bytes live (default ./files). Run one
 //                        gateway instance on persistent storage, or replace
 //                        serveFile with a shared object store.
@@ -22,6 +24,7 @@ import {
     generateWorkspaceId,
     parseArCredential,
     parseCredentialKeyring,
+    remoteCredentialTagger,
     verifyFileToken,
     type ActorHttpRequest,
     type ActorHttpResponse,
@@ -44,11 +47,18 @@ const workspace = (id: string) => createActorStub<WorkspaceStub>("Workspace", id
 
 const fileSecret = process.env.RELAYCAST_FILE_SIGNING_SECRET
 if (!fileSecret) throw new Error("RELAYCAST_FILE_SIGNING_SECRET is not set")
-const credentialKeyring = process.env.RELAYCAST_CREDENTIAL_KEYRING
-if (!credentialKeyring) throw new Error("RELAYCAST_CREDENTIAL_KEYRING is not set")
-// Credentials carry a tag only this gateway's keyring signs, so a credential
-// naming a made-up workspace is refused here and never creates an actor.
-const credentialTags = createCredentialTagSigner(parseCredentialKeyring(credentialKeyring))
+// Credentials carry a tag only this deployment's tagger signs — a local
+// keyring, or RelayAuth when it owns the keyring — so a credential naming a
+// made-up workspace is refused here and never creates an actor.
+const credentialTags = (() => {
+    const keyring = process.env.RELAYCAST_CREDENTIAL_KEYRING
+    if (keyring) return createCredentialTagSigner(parseCredentialKeyring(keyring))
+    const baseUrl = process.env.RELAYCAST_RELAYAUTH_URL
+    const token = process.env.RELAYCAST_RELAYAUTH_TOKEN
+    if (baseUrl && token) return remoteCredentialTagger({ baseUrl, token })
+    if (baseUrl || token) throw new Error("RELAYCAST_RELAYAUTH_URL and RELAYCAST_RELAYAUTH_TOKEN are set together")
+    throw new Error("RELAYCAST_CREDENTIAL_KEYRING (or RELAYCAST_RELAYAUTH_URL + RELAYCAST_RELAYAUTH_TOKEN) is not set")
+})()
 const fileRoot = resolve(process.env.RELAYCAST_FILE_DIR ?? resolve(import.meta.dir, "files"))
 /**
  * Largest request body the gateway reads. Uploads are the largest bodies, and

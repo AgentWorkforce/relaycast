@@ -59,6 +59,18 @@ export interface CredentialTagSigner extends CredentialTagger {
   verify(token: string): Promise<boolean>;
 }
 
+/**
+ * Whether a tagger stands behind an `ar_` credential's tag: a signer's
+ * `verify`, or membership in the tags a plain tagger lists for the workspace
+ * (that list is everything a tagger without `verify` can vouch for).
+ */
+export async function credentialTagAccepted(tagger: CredentialTagger, token: string): Promise<boolean> {
+  if ('verify' in tagger) return (tagger as CredentialTagSigner).verify(token);
+  const parsed = parseCredential(token);
+  if (parsed?.family !== 'ar') return false;
+  return (await tagger.tags(parsed.workspaceId)).includes(parsed.tag);
+}
+
 const TAG_BODY_LENGTH = 10;
 const TAG_MODULUS = 62n ** BigInt(TAG_BODY_LENGTH);
 const encoder = new TextEncoder();

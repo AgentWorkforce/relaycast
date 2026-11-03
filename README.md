@@ -1418,7 +1418,12 @@ A deployment mints `ar_` credentials with `credentialFormat: 'ar'` and a
 keyring `{"current":"a","keys":{"a":"<secret>"}}`). Rotation adds a key version
 and makes it current, and never drops one. The Node self-host reads the keyring
 from `RELAYCAST_CREDENTIAL_KEYRING` and the family from
-`RELAYCAST_CREDENTIAL_FORMAT`.
+`RELAYCAST_CREDENTIAL_FORMAT`. When RelayAuth owns the keyring,
+`remoteCredentialTagger({ baseUrl, token })` (also under
+`@relaycast/engine/gateway`) takes the tags from
+`GET <url>/v1/relaycast/credential-tags/:wsid` instead; the self-host wires it
+from `RELAYCAST_RELAYAUTH_URL` + `RELAYCAST_RELAYAUTH_TOKEN` whenever no
+explicit keyring is set.
 
 ### Credential upgrade
 

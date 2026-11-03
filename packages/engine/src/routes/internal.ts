@@ -1,5 +1,6 @@
 import { isArWorkspaceId, parseCredential } from '@relaycast/types';
-import { AR_WORKSPACE_ID_REQUIRED, acceptsOnlyAr, credentialFormat } from '../auth/credentials.js';
+import { AR_WORKSPACE_ID_REQUIRED, acceptsOnlyAr, credentialFormat, credentialTagger } from '../auth/credentials.js';
+import { credentialTagAccepted } from '../auth/credentialTags.js';
 import { Hono } from 'hono';
 import { createMiddleware } from 'hono/factory';
 import { z } from 'zod';
@@ -149,6 +150,12 @@ internalRoutes.post('/workspaces/:id/api-key', async (c) => {
       const key = parseCredential(body.api_key);
       if (key?.family === 'ar' && key.workspaceId !== workspaceId) {
         return jsonError(c, 'invalid_request', 'api_key names another workspace', 400);
+      }
+      // A tagger signs every ar_ tag this deployment accepts; without it a
+      // pushed key would register a credential no gateway routes to.
+      const tagger = credentialTagger(c.get('db'));
+      if (key?.family === 'ar' && tagger && !(await credentialTagAccepted(tagger, body.api_key))) {
+        return jsonError(c, 'invalid_request', 'api_key carries a credential tag this deployment did not sign', 400);
       }
       // A deployment that accepts only ar_ credentials never holds a legacy key.
       if (key?.family !== 'ar' && acceptsOnlyAr(c.get('db'))) {
