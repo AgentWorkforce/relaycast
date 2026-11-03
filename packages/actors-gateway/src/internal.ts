@@ -137,10 +137,9 @@ export async function handleInternal(ctx: GatewayContext, { req, res, url, reque
       setWorkspace(workspaceId);
       const body = req.method === 'POST' ? await readBody(req, MAX_INTERNAL_BODY_BYTES) : null;
       if (isKeyPush && body) {
-        // A pushed `ar_ws_` key becomes the workspace's credential, and the
-        // actor keeps its tag as the workspace's routing tag when the push
-        // creates the workspace: only a tag this keyring signed may get there,
-        // or every later credential the actor mints would be refused here.
+        // A pushed `ar_ws_` key becomes the workspace's credential. Only a tag
+        // this deployment's tagger accepts is forwarded. The actor refuses the
+        // push until create has handed it a tag.
         const pushed = pushedWorkspaceKey(body);
         if (pushed !== undefined) {
           const key = parseArCredential(pushed);

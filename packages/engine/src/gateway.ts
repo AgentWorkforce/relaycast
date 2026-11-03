@@ -1,14 +1,17 @@
 /**
  * The pieces a stateless gateway in front of workspace actors needs, without
- * the engine itself: parse an `ar_` credential and verify its tag with the
- * keyring (no lookup), mint workspace ids (plain snowflakes) and their tags,
- * serve signed file URLs, and forward requests as actor calls.
+ * the engine itself: parse an `ar_` credential and verify its tag (a local
+ * keyring, or RelayAuth via `remoteCredentialTagger`), mint workspace ids
+ * (plain snowflakes) and their tags, serve signed file URLs, and forward
+ * requests as actor calls.
  */
 import { generateId } from './engine/snowflake.js';
 
 export { parseArCredential } from './auth/credentials.js';
 export type { CredentialKind } from './auth/credentials.js';
-export { createCredentialTagSigner, parseCredentialKeyring } from './auth/credentialTags.js';
+export { createCredentialTagSigner, credentialTagAccepted, parseCredentialKeyring } from './auth/credentialTags.js';
+export { remoteCredentialTagger } from './auth/remoteCredentialTags.js';
+export type { RemoteCredentialTaggerOptions } from './auth/remoteCredentialTags.js';
 export type { CredentialKeyring, CredentialTagSigner, CredentialTagger } from './auth/credentialTags.js';
 export { INTERNAL_CAPABILITIES } from './engine/internalCapabilities.js';
 export { signFileToken, verifyFileToken } from './lib/fileTokens.js';

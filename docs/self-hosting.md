@@ -94,7 +94,8 @@ Flags take precedence over environment variables.
 | — | `RELAYCAST_WORKSPACE_BOOTSTRAP_SECRET` / `RELAYCAST_WORKSPACE_BOOTSTRAP_SECRET_FILE` | unset (fail closed) | Stable server-only derivation secret for anonymous keyed workspace retries. Generate once with `openssl rand -hex 32` and persist it across restarts. |
 | — | `RELAYCAST_WORKSPACE_BOOTSTRAP_PROOF_REQUIRED` | `false` | Optional self-host policy requiring callers to prove the derivation secret. Leave unset for hosted-safe anonymous retries. |
 | — | `RELAYCAST_CREDENTIAL_KEYRING` / `RELAYCAST_CREDENTIAL_KEYRING_FILE` | unset | `{"current":"a","keys":{"a":"<secret>"}}`: signs `ar_` credential tags and enables `POST /v1/credentials/upgrade`. |
-| — | `RELAYCAST_CREDENTIAL_FORMAT` | `legacy` | `ar` mints `ar_` credentials (needs the keyring; workspace ids must then be snowflakes). |
+| — | `RELAYCAST_RELAYAUTH_URL` + `RELAYCAST_RELAYAUTH_TOKEN` / `RELAYCAST_RELAYAUTH_TOKEN_FILE` | unset | Take `ar_` credential tags from RelayAuth (`GET <url>/v1/relaycast/credential-tags/:wsid`) instead of a local keyring. Set both or neither; a half-set refuses startup unless a keyring is set. An explicit keyring wins and these are not read. Like a keyring, this enables `POST /v1/credentials/upgrade`. Minting and verifying succeed only for workspaces RelayAuth has already tagged. |
+| — | `RELAYCAST_CREDENTIAL_FORMAT` | `legacy` | `ar` mints `ar_` credentials (needs the keyring or RelayAuth; workspace ids must then be snowflakes). |
 | — | `RELAYCAST_LEGACY_CREDENTIAL_GRACE_SECONDS` | 30 days | How long an upgraded legacy credential keeps working. |
 | — | `RELAYCAST_LEGACY_CREDENTIAL_SUNSET` | unset | ISO-8601 date sent as `Sunset` on legacy-authenticated responses. |
 | — | `RELAYCAST_INTERNAL_SECRET` / `RELAYCAST_INTERNAL_SECRET_FILE` | unset (disabled) | Enables the [internal admin API](#internal-admin-api) for a trusted control plane. Must be at least 32 characters (startup refuses a shorter one). |
@@ -192,7 +193,9 @@ both.
 - **Push** (`api_key` = a key the control plane minted: an `rk_live_…` key
   matching `^rk_live_[A-Za-z0-9_-]{32,256}$`, which covers both the engine's
   32-hex keys and the cloud's base64url keys, or an `ar_ws_…` key naming this
-  workspace; `key_generation` must be a safe integer): upserts. A server-minted
+  workspace — when a credential tagger is configured its tag must verify, so a
+  control plane pushes only tags the deployment's keyring or RelayAuth signed;
+  `key_generation` must be a safe integer): upserts. A server-minted
   key follows the deployment's credential family. A deployment that mints `ar_` credentials
   (`RELAYCAST_CREDENTIAL_FORMAT=ar`) takes only snowflake workspace ids here
   (`400 invalid_request` before any write); legacy-minting deployments keep the

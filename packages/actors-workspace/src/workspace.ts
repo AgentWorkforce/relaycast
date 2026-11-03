@@ -111,7 +111,7 @@ export class Workspace extends Actor {
         })
     }
 
-    /** `POST /v1/workspaces`, with the tag the gateway's keyring signed for this id. */
+    /** `POST /v1/workspaces`, with the tag the gateway's tagger issued for this id. */
     async create(request: ActorHttpRequest, credentialTag: string): Promise<ActorHttpResponse> {
         return this.db.transaction(() => this.runtime.create(request, credentialTag))
     }

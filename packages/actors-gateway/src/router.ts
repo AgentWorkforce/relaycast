@@ -1,8 +1,8 @@
 /**
  * Route one HTTP request. The gateway holds no workspace state: an `ar_`
- * credential names its workspace, its tag proves this deployment's keyring
- * tagged that workspace, and that workspace's actor authenticates it against
- * its own tables.
+ * credential names its workspace, its tag proves this deployment's tagger
+ * (a local keyring, or RelayAuth) issued it, and that workspace's actor
+ * authenticates the credential against its own tables.
  */
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import { performance } from 'node:perf_hooks';
@@ -140,7 +140,7 @@ export function createRequestHandler(ctx: GatewayContext, options: RequestHandle
     const hasBody = req.method !== 'GET' && req.method !== 'HEAD';
     if (req.method === 'POST' && path === '/v1/workspaces') {
       if (!ctx.config.publicWorkspaceCreate) return sendError(res, 404, 'not_found', 'Route not found');
-      // Credentials carry a tag only this gateway's keyring signs, so a
+      // Credentials carry a tag only this deployment's tagger issues, so a
       // credential naming a made-up workspace is refused here and never
       // creates an actor. A keyed create lands on an id derived from the key;
       // when the deployment requires proof of the bootstrap secret, an

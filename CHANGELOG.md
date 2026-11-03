@@ -18,6 +18,8 @@ Packages without a separate changelog are covered by the cross-package notes bel
 
 ## [Unreleased - Minor]
 
+- A self-host takes `ar_` credential tags from RelayAuth (`RELAYCAST_RELAYAUTH_URL` plus `RELAYCAST_RELAYAUTH_TOKEN` or `RELAYCAST_RELAYAUTH_TOKEN_FILE`) when no `RELAYCAST_CREDENTIAL_KEYRING` is set; an explicit keyring wins.
+- `POST /internal/workspaces/:id/api-key` refuses a pushed `ar_ws_` key whose tag the deployment's tagger does not accept. On a workspace actor that push is `400` until the gateway has handed over a tag.
 - Prevent stalled webhook delivery attempts from overwriting a newer attempt’s status or retry deadline after their lease is reclaimed.
 
 - A sender can follow its message. `POST /v1/dm` answers with `delivery: { id, status, expires_at } | null` and `POST /v1/channels/:name/messages` with `deliveries: [{ id, agent_id, status, expires_at }]` (first 50, plus `deliveries_truncated`). The sender then receives `delivery.delivered` when a row reaches the recipient's socket or push endpoint and the new `delivery.acked` when the recipient acks it (REST ack, node cumulative ack, or `http_push` `on_2xx` / `response`), each with the recipient's `agent_id` / `agent_name`, `status` and `at`. `GET /v1/messages/:id/deliveries` lists every recipient's delivery and read state (`read_at`) for a message the caller sent; a workspace key or an admitted observer reads any message. Recipient-side events are unchanged.
