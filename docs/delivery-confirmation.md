@@ -159,11 +159,12 @@ either a cumulative `up_to_seq` or a single `delivery_id`:
 - bare `up_to_seq` → every unsettled row with `seq <= up_to_seq` (acceptance),
   or the cumulative ack cursor (consumption, as before).
 
-A client therefore keeps one contiguous watermark per connection and per
-frame type, anchored just below the first `seq` it receives on that
-connection: it sends `up_to_seq` only when every lower seq since the anchor
-succeeded (persisted, respectively consumed), and the `delivery_id` form
-otherwise. Persistence failing for N but succeeding for N+1 yields
+A client therefore keeps one contiguous watermark per agent (the engine
+numbers `seq` per agent row, so a client hosting several agents sees one
+independent stream each), per connection and per frame type, anchored just
+below the first `seq` it receives for that agent on that connection: it
+sends `up_to_seq` only when every lower seq since the anchor succeeded
+(persisted, respectively consumed), and the `delivery_id` form otherwise. Persistence failing for N but succeeding for N+1 yields
 `{"type":"delivery.accepted","agent":"bob","delivery_id":"<N+1>"}` and
 nothing for N; when the server re-delivers N and it persists, the client
 sends `up_to_seq: N+1`. The same rule governs `delivery.ack` now that acks
@@ -171,7 +172,10 @@ depend on handler success: a handler failure at N holds the ack watermark
 below N even if N+1 succeeded; N+1 is acked by `delivery_id` (the cursor
 does not move), and N stays unacked on the server until it is re-delivered
 and consumed, or the connection resets (a new connection replays from the
-server's cursor and starts fresh watermarks).
+server's cursor and starts fresh watermarks; a delivery still being handled
+when the socket dropped sends no confirmation at all on the new connection,
+since the server replays it there and the stale frame's success could
+otherwise anchor the fresh watermark above an unconsumed lower seq).
 
 TS SDK behaviour (`ws.ts`): with `autoAckDeliveries`, `delivery.ack` is sent
 only after every handler for the delivery returned and every promise it
@@ -252,8 +256,9 @@ Retries of a send dedupe on `Idempotency-Key` (scope `dm:direct` /
 `channel-message:<channel>`, 24 h); the replay carries the same `message.id`
 and `delivery.id`, which are the keys for `GET /v1/messages/:id/deliveries`.
 Node delivery is at-least-once; the SDK dedupes redelivered frames by event
-id, and `delivery.accepted` / `delivery.ack` for an already-settled row are
-no-ops.
+id (only a frame whose handlers succeeded counts as seen: a re-delivery
+after a handler failure reruns the handlers before anything is acked), and
+`delivery.accepted` / `delivery.ack` for an already-settled row are no-ops.
 
 ## Storage
 

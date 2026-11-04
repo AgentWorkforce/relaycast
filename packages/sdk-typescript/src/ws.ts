@@ -188,9 +188,19 @@ export class WsClient {
   /** `deliver` frames are processed in arrival order; a failed step never stalls the next. */
   private deliverChain: Promise<void> = Promise.resolve();
   private deliverPending = 0;
-  /** Per-connection contiguous watermarks for `delivery.accepted` and `delivery.ack`. */
-  private acceptWatermark = new SeqWatermark();
-  private ackWatermark = new SeqWatermark();
+  /**
+   * Contiguous watermarks for `delivery.accepted` and `delivery.ack`, one per
+   * agent (the engine numbers `seq` per agent row) and per connection.
+   */
+  private acceptWatermarks = new Map<string, SeqWatermark>();
+  private ackWatermarks = new Map<string, SeqWatermark>();
+  /**
+   * Bumped on every socket open. A `deliver` frame is fenced to the generation
+   * it arrived on: once the socket reconnected, the server replays everything
+   * that connection left unacked, so a confirmation from the old generation
+   * is dropped rather than applied to the new connection's watermarks.
+   */
+  private connectionGeneration = 0;
   private nodeMode: boolean;
   private lastNodeRegistration: Record<string, unknown> | null = null;
   /** The in-flight `node.register` request id, until its reply names the engine's capabilities. */
@@ -233,6 +243,8 @@ export class WsClient {
   private lastEventAt: string | null = null;
   /** Recently dispatched event ids (insertion-ordered for LRU eviction) for replay dedupe. */
   private seenEventIds = new Set<string>();
+  /** Delivered events whose handlers are still running, by dedupe key. */
+  private inFlightEvents = new Map<string, Promise<void>>();
 
   constructor(options: WsClientOptions) {
     const origin = readInternalWsOrigin(options) ?? SDK_ORIGIN;
@@ -423,14 +435,16 @@ export class WsClient {
     this.isOpen = true;
     this.reconnectAttempt = 0;
     this.permanentlyDisconnected = false;
+    // A new connection replays from the server's cursor: watermarks restart,
+    // and deliveries still in flight from the previous one may not confirm.
+    this.connectionGeneration += 1;
+    this.acceptWatermarks.clear();
+    this.ackWatermarks.clear();
 
     if (this.nodeRegistration) {
       const registration = await this.nodeRegistration();
       if (this.ws !== ws || this.closed) return;
       this.lastNodeRegistration = registration;
-      // A new connection replays from the server's cursor: watermarks restart.
-      this.acceptWatermark = new SeqWatermark();
-      this.ackWatermark = new SeqWatermark();
       // A new connection may reach a different engine: forget what the last
       // one announced until this registration's reply says.
       this.engineCapabilities = new Set();
@@ -563,9 +577,9 @@ export class WsClient {
     if (!isRecord(parsed) || typeof parsed.type !== 'string') return false;
 
     if (parsed.type === 'deliver') {
-      if (typeof parsed.seq === 'number' && Number.isFinite(parsed.seq)) {
-        this.acceptWatermark.arrive(parsed.seq);
-        this.ackWatermark.arrive(parsed.seq);
+      if (typeof parsed.seq === 'number' && Number.isFinite(parsed.seq) && typeof parsed.agent === 'string') {
+        this.watermarkFor(this.acceptWatermarks, parsed.agent).arrive(parsed.seq);
+        this.watermarkFor(this.ackWatermarks, parsed.agent).arrive(parsed.seq);
       }
       this.queueDeliver(parsed);
       return true;
@@ -628,7 +642,10 @@ export class WsClient {
    * fails is logged and the next frame still runs.
    */
   private queueDeliver(parsed: Record<string, unknown>): void {
-    const run = () => this.processDeliver(parsed);
+    // Fenced at arrival: a frame still queued when the socket reconnects
+    // belongs to the old connection even though it runs after the reopen.
+    const generation = this.connectionGeneration;
+    const run = () => this.processDeliver(parsed, generation);
     const step = this.deliverPending === 0 ? run() : this.deliverChain.then(run);
     this.deliverPending += 1;
     this.deliverChain = step.catch((err) => this.warn('delivery processing failed', err)).finally(() => {
@@ -641,7 +658,7 @@ export class WsClient {
    * -> handlers -> `delivery.ack` once they all completed. Any failure leaves
    * the row unacked on the server for re-delivery; nothing here throws.
    */
-  private async processDeliver(parsed: Record<string, unknown>): Promise<void> {
+  private async processDeliver(parsed: Record<string, unknown>, generation: number): Promise<void> {
     const seq = typeof parsed.seq === 'number' && Number.isFinite(parsed.seq) ? parsed.seq : null;
     const agent = typeof parsed.agent === 'string' ? parsed.agent : null;
     const deliveryId = typeof parsed.delivery_id === 'string' ? parsed.delivery_id : null;
@@ -666,7 +683,7 @@ export class WsClient {
           this.warn('acceptDelivery failed; delivery left on the server for re-delivery', { deliveryId, seq, error: err });
           return;
         }
-        this.sendConfirmation('delivery.accepted', this.acceptWatermark, agent, deliveryId, seq);
+        this.sendConfirmation('delivery.accepted', this.acceptWatermarks, generation, agent, deliveryId, seq);
       }
 
       const completed = this.dispatchDeliver(parsed);
@@ -676,7 +693,7 @@ export class WsClient {
       }
       if (this.ackMode === 'on-receipt') {
         // Legacy: consumed means dispatched, whatever the handlers do.
-        this.sendJson({ v: 1, type: 'delivery.ack', agent, up_to_seq: seq });
+        if (generation === this.connectionGeneration) this.sendJson({ v: 1, type: 'delivery.ack', agent, up_to_seq: seq });
         completed.catch((err) => this.warn('delivery handler failed after on-receipt ack', { deliveryId, seq, error: err }));
         return;
       }
@@ -686,7 +703,7 @@ export class WsClient {
         this.warn('delivery handler failed; delivery left unconsumed for re-delivery', { deliveryId, seq, error: err });
         return;
       }
-      this.sendConfirmation('delivery.ack', this.ackWatermark, agent, deliveryId, seq);
+      this.sendConfirmation('delivery.ack', this.ackWatermarks, generation, agent, deliveryId, seq);
     } catch (err) {
       this.warn('delivery processing failed; delivery left unconsumed for re-delivery', { deliveryId, seq, error: err });
     }
@@ -700,19 +717,36 @@ export class WsClient {
     return this.emitServerLikeEvent(payload.type, data);
   }
 
+  private watermarkFor(watermarks: Map<string, SeqWatermark>, agent: string): SeqWatermark {
+    let watermark = watermarks.get(agent);
+    if (watermark === undefined) {
+      watermark = new SeqWatermark();
+      watermarks.set(agent, watermark);
+    }
+    return watermark;
+  }
+
   /**
    * Report one success on the wire: cumulative `up_to_seq` while this
-   * connection's successes are contiguous, else the per-delivery
-   * `delivery_id` form (the engine applies a named row on its own).
+   * connection's successes for the agent are contiguous, else the
+   * per-delivery `delivery_id` form (the engine applies a named row on its
+   * own). A success from a previous connection is dropped: that connection's
+   * unacked rows are replayed on this one, and confirming a stale row here
+   * (even by `delivery_id`) could race this connection's own dispatch of it.
    */
   private sendConfirmation(
     type: 'delivery.accepted' | 'delivery.ack',
-    watermark: SeqWatermark,
+    watermarks: Map<string, SeqWatermark>,
+    generation: number,
     agent: string,
     deliveryId: string | null,
     seq: number,
   ): void {
-    const upTo = watermark.record(seq);
+    if (generation !== this.connectionGeneration) {
+      this.warn(`${type} dropped: delivery belongs to a previous connection and is replayed on this one`, { deliveryId, seq });
+      return;
+    }
+    const upTo = this.watermarkFor(watermarks, agent).record(seq);
     if (upTo !== null) {
       this.sendJson({ v: 1, type, agent, up_to_seq: upTo });
     } else if (deliveryId !== null) {
@@ -720,19 +754,52 @@ export class WsClient {
     }
   }
 
+  /**
+   * Hand a delivered event to handlers; resolves once they all completed.
+   * Node delivery is at-least-once, so redelivered frames are deduped the
+   * same way the standard onmessage flow dedupes server events, but only a
+   * frame whose handlers succeeded counts as seen: the key is recorded up
+   * front (a duplicate arriving while the handlers run shares that run's
+   * outcome instead of starting another) and forgotten again if they fail,
+   * so the server's re-delivery of an unconsumed frame reruns them before
+   * anything is acknowledged.
+   */
   private emitServerLikeEvent(eventType: string, data: Record<string, unknown>): Promise<void> {
     const transformed = this.transformServerLikeEvent(eventType, data);
-    // Node delivery is at-least-once, so redelivered frames must be deduped
-    // the same way the standard onmessage flow dedupes server events.
-    if (
-      typeof transformed.id === 'string' &&
-      transformed.id.length > 0 &&
-      typeof transformed.type === 'string'
-    ) {
-      const dedupeKey = `${transformed.type}:${transformed.id}`;
-      if (this.seenEventIds.has(dedupeKey)) return Promise.resolve();
-      this.rememberEventId(dedupeKey);
+    const dedupeKey =
+      typeof transformed.id === 'string' && transformed.id.length > 0 && typeof transformed.type === 'string'
+        ? `${transformed.type}:${transformed.id}`
+        : null;
+    if (dedupeKey === null) return this.emitTransformedEvent(transformed);
+    const inFlight = this.inFlightEvents.get(dedupeKey);
+    if (inFlight !== undefined) {
+      // Settled by the run in progress; rerun only if that run failed (it
+      // forgets the key first, so the rerun below records it afresh).
+      return inFlight.then(undefined, () => this.emitServerLikeEvent(eventType, data));
     }
+    if (this.seenEventIds.has(dedupeKey)) return Promise.resolve();
+    this.rememberEventId(dedupeKey);
+    let completed: Promise<void>;
+    try {
+      completed = this.emitTransformedEvent(transformed);
+    } catch (err) {
+      completed = Promise.reject(err);
+    }
+    const tracked = completed.then(
+      () => {
+        this.inFlightEvents.delete(dedupeKey);
+      },
+      (err: unknown) => {
+        this.inFlightEvents.delete(dedupeKey);
+        this.seenEventIds.delete(dedupeKey);
+        throw err;
+      },
+    );
+    this.inFlightEvents.set(dedupeKey, tracked);
+    return tracked;
+  }
+
+  private emitTransformedEvent(transformed: Record<string, unknown>): Promise<void> {
     const result = ServerEventSchema.safeParse(transformed);
     if (result.success) {
       return this.emitCollect(result.data.type, camelizeKeys(result.data) as WsClientEvent);

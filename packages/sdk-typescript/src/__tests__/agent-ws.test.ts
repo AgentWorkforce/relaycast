@@ -272,31 +272,36 @@ describe('AgentClient WebSocket integration', () => {
     });
   }
 
-  const deliverFrame = (seq: number) => ({
+  /** A `deliver` frame for `agent` at its `seq`; `key` names the row and message (`del_<key>`, `m_<key>`). */
+  const deliverFrameFor = (agent: string, seq: number, key = String(seq)) => ({
     v: 1,
     type: 'deliver',
-    delivery_id: `del_${seq}`,
+    delivery_id: `del_${key}`,
     agent_id: 'agent_1',
-    agent: 'worker',
-    msg_id: `m_${seq}`,
+    agent,
+    msg_id: `m_${key}`,
     seq,
     mode: 'wait',
     payload: {
       type: 'dm.received',
       data: {
-        conversation_id: 'dm_1', id: `m_${seq}`, from_agent_id: 'bot_1', from_name: 'Bot', to: 'worker',
+        conversation_id: 'dm_1', id: `m_${key}`, from_agent_id: 'bot_1', from_name: 'Bot', to: agent,
         text: 'confirm me', created_at: '2026-09-24T05:00:00.000Z', attachments: [], metadata: {},
-        message: { id: `m_${seq}`, agent_id: 'bot_1', agent_name: 'Bot', text: 'confirm me', attachments: [], metadata: {} },
+        message: { id: `m_${key}`, agent_id: 'bot_1', agent_name: 'Bot', text: 'confirm me', attachments: [], metadata: {} },
       },
     },
   });
+  const deliverFrame = (seq: number) => deliverFrameFor('worker', seq);
 
   /** Settle the transport's ordered deliver chain (acceptance hooks resolve on microtasks). */
   async function settleDeliveries(): Promise<void> {
-    for (let i = 0; i < 20; i += 1) await Promise.resolve();
+    for (let i = 0; i < 40; i += 1) await Promise.resolve();
   }
 
   const sentTypes = (ws: MockWebSocket) => ws.send.mock.calls.map(([payload]) => JSON.parse(String(payload)).type as string);
+  const sentFrames = (ws: MockWebSocket, type: string) =>
+    ws.send.mock.calls.map(([payload]) => JSON.parse(String(payload))).filter((frame) => frame.type === type);
+  const ack = (agent: string, form: { up_to_seq: number } | { delivery_id: string }) => ({ v: 1, type: 'delivery.ack', agent, ...form });
 
   it('sends no delivery.accepted without a persistence hook, even when the engine lists the capability', async () => {
     const handler = vi.fn();
@@ -501,6 +506,242 @@ describe('AgentClient WebSocket integration', () => {
       { v: 1, type: 'delivery.ack', agent: 'worker', up_to_seq: 5 },
     ]);
     await settleDeliveries();
+  });
+
+  it('reruns the handlers of a delivery whose handler rejected when the server re-delivers it, and acks only after that run resolved', async () => {
+    const calls: string[] = [];
+    let release!: () => void;
+    const retried = new Promise<void>((resolve) => { release = resolve; });
+    const agent = createAgent();
+    agent.on.dmReceived(async (event) => {
+      calls.push(event.message.id);
+      if (calls.length === 1) throw new Error('model crashed');
+      await retried;
+    });
+    agent.connect();
+    const ws = await nextSocket();
+    ws.simulateOpen();
+    await replyToRegistration(ws);
+
+    ws.simulateMessage(deliverFrame(4));
+    await settleDeliveries();
+    expect(calls).toEqual(['m_4']);
+    expect(sentFrames(ws, 'delivery.ack')).toEqual([]);
+
+    // The same row comes back (same delivery_id, msg_id and seq): the failed
+    // run did not mark it seen, so the handler runs again with the message.
+    ws.simulateMessage(deliverFrame(4));
+    await settleDeliveries();
+    expect(calls).toEqual(['m_4', 'm_4']);
+    expect(sentFrames(ws, 'delivery.ack')).toEqual([]);
+
+    release();
+    await settleDeliveries();
+    expect(calls).toHaveLength(2);
+    expect(sentFrames(ws, 'delivery.ack')).toEqual([ack('worker', { up_to_seq: 4 })]);
+  });
+
+  it('reruns the handlers of a delivery whose handler threw synchronously when the server re-delivers it', async () => {
+    const handler = vi.fn((event: { message: { id: string } }) => {
+      if (handler.mock.calls.length === 1) throw new Error(`sync boom for ${event.message.id}`);
+    });
+    const agent = createAgent();
+    agent.on.dmReceived(handler);
+    agent.connect();
+    const ws = await nextSocket();
+    ws.simulateOpen();
+    await replyToRegistration(ws);
+
+    ws.simulateMessage(deliverFrame(4));
+    await settleDeliveries();
+    expect(handler).toHaveBeenCalledTimes(1);
+    expect(sentFrames(ws, 'delivery.ack')).toEqual([]);
+
+    ws.simulateMessage(deliverFrame(4));
+    await settleDeliveries();
+    expect(handler).toHaveBeenCalledTimes(2);
+    expect(handler.mock.calls[1]![0]).toMatchObject({ message: { id: 'm_4' } });
+    expect(sentFrames(ws, 'delivery.ack')).toEqual([ack('worker', { up_to_seq: 4 })]);
+  });
+
+  it('acks a re-delivered frame whose handlers already succeeded without running them again', async () => {
+    const handler = vi.fn();
+    const agent = createAgent();
+    agent.on.dmReceived(handler);
+    agent.connect();
+    const ws = await nextSocket();
+    ws.simulateOpen();
+    await replyToRegistration(ws);
+
+    ws.simulateMessage(deliverFrame(6));
+    await settleDeliveries();
+    ws.simulateMessage(deliverFrame(6));
+    await settleDeliveries();
+
+    // Consumed once; the duplicate is confirmed by name since the watermark already covers it.
+    expect(handler).toHaveBeenCalledTimes(1);
+    expect(sentFrames(ws, 'delivery.ack')).toEqual([
+      ack('worker', { up_to_seq: 6 }),
+      ack('worker', { delivery_id: 'del_6' }),
+    ]);
+  });
+
+  it('re-runs the persistence hook and the handlers of a re-delivered frame whose handler failed after acceptance', async () => {
+    const order: string[] = [];
+    const acceptDelivery = vi.fn(async (delivery: { deliveryId: string }) => { order.push(`hook:${delivery.deliveryId}`); });
+    const agent = createAgent({ ws: { autoAcceptDeliveries: true, acceptDelivery } });
+    const handler = vi.fn(() => {
+      order.push(`handler:${sentTypes(ws).filter((type) => type === 'delivery.ack').length} acks so far`);
+      if (handler.mock.calls.length === 1) throw new Error('model crashed');
+    });
+    agent.on.dmReceived(handler);
+    agent.connect();
+    const ws = await nextSocket();
+    ws.simulateOpen();
+    await replyToRegistration(ws, ['delivery.accepted']);
+
+    ws.simulateMessage(deliverFrame(3));
+    await settleDeliveries();
+    expect(sentFrames(ws, 'delivery.accepted')).toEqual([{ v: 1, type: 'delivery.accepted', agent: 'worker', up_to_seq: 3 }]);
+    expect(sentFrames(ws, 'delivery.ack')).toEqual([]);
+
+    // Nothing is cached across the failure: the hook stores the row again
+    // (the engine accepts an accepted row idempotently) and the handler
+    // reruns before the ack.
+    ws.simulateMessage(deliverFrame(3));
+    await settleDeliveries();
+    expect(order).toEqual(['hook:del_3', 'handler:0 acks so far', 'hook:del_3', 'handler:0 acks so far']);
+    expect(sentFrames(ws, 'delivery.accepted')).toEqual([
+      { v: 1, type: 'delivery.accepted', agent: 'worker', up_to_seq: 3 },
+      { v: 1, type: 'delivery.accepted', agent: 'worker', delivery_id: 'del_3' },
+    ]);
+    expect(sentFrames(ws, 'delivery.ack')).toEqual([ack('worker', { up_to_seq: 3 })]);
+  });
+
+  it('shares the outcome of a run still in flight with a duplicate frame: acks when it succeeds, reruns when it fails', async () => {
+    const outcomes = new Map<string, { resolve: () => void; reject: (err: Error) => void }>();
+    const handler = vi.fn((event: { message: { id: string } }) => new Promise<void>((resolve, reject) => {
+      outcomes.set(event.message.id, { resolve, reject });
+    }));
+    // 'on-receipt' returns from the deliver chain before the handlers settle,
+    // so a duplicate can arrive while the first run is still going.
+    const agent = createAgent({ ws: { ackMode: 'on-receipt' } });
+    agent.on.dmReceived(handler);
+    agent.connect();
+    const ws = await nextSocket();
+    ws.simulateOpen();
+    await replyToRegistration(ws);
+
+    ws.simulateMessage(deliverFrame(1));
+    ws.simulateMessage(deliverFrame(1));
+    await settleDeliveries();
+    expect(handler).toHaveBeenCalledTimes(1);
+    outcomes.get('m_1')!.resolve();
+    await settleDeliveries();
+    expect(handler).toHaveBeenCalledTimes(1);
+
+    ws.simulateMessage(deliverFrame(2));
+    ws.simulateMessage(deliverFrame(2));
+    await settleDeliveries();
+    expect(handler).toHaveBeenCalledTimes(2);
+    outcomes.get('m_2')!.reject(new Error('model crashed'));
+    await settleDeliveries();
+    // The duplicate waited for the first run and, as it failed, ran the handlers itself.
+    expect(handler).toHaveBeenCalledTimes(3);
+    expect(handler.mock.calls[2]![0]).toMatchObject({ message: { id: 'm_2' } });
+    outcomes.get('m_2')!.resolve();
+    await settleDeliveries();
+  });
+
+  it('drops confirmations from the previous connection after a reconnect instead of applying them to the new watermark', async () => {
+    const calls: string[] = [];
+    let release!: () => void;
+    const working = new Promise<void>((resolve) => { release = resolve; });
+    const failing = new Set(['m_8']);
+    const agent = createAgent();
+    agent.on.dmReceived(async (event) => {
+      calls.push(event.message.id);
+      if (failing.delete(event.message.id)) throw new Error('model crashed');
+      if (event.message.id === 'm_9' && calls.filter((id) => id === 'm_9').length === 1) await working;
+    });
+    agent.connect();
+    const ws = await nextSocket();
+    ws.simulateOpen();
+    await replyToRegistration(ws);
+
+    // 8 fails (unacked); 9's handler is still running when the socket drops.
+    ws.simulateMessage(deliverFrame(8));
+    ws.simulateMessage(deliverFrame(9));
+    await settleDeliveries();
+    expect(calls).toEqual(['m_8', 'm_9']);
+    expect(sentFrames(ws, 'delivery.ack')).toEqual([]);
+
+    ws.simulateClose();
+    await vi.advanceTimersByTimeAsync(1000);
+    const ws2 = await nextSocket(1);
+    ws2.simulateOpen();
+    await replyToRegistration(ws2);
+
+    // The old 9 completes before anything arrived on the new connection. Its
+    // ack must not anchor the fresh watermark at 8 and claim `up_to_seq: 9`.
+    release();
+    await settleDeliveries();
+    expect(sentFrames(ws, 'delivery.ack')).toEqual([]);
+    expect(sentFrames(ws2, 'delivery.ack')).toEqual([]);
+
+    // The server replays what the old connection left unacked.
+    ws2.simulateMessage(deliverFrame(8));
+    ws2.simulateMessage(deliverFrame(9));
+    await settleDeliveries();
+    expect(calls).toEqual(['m_8', 'm_9', 'm_8']);
+    expect(sentFrames(ws2, 'delivery.ack')).toEqual([
+      ack('worker', { up_to_seq: 8 }),
+      ack('worker', { up_to_seq: 9 }),
+    ]);
+    expect(sentFrames(ws, 'delivery.ack')).toEqual([]);
+  });
+
+  it('keeps one watermark per agent: interleaved seqs of two agents never collapse or break each other', async () => {
+    const agent = createAgent();
+    agent.on.dmReceived(() => {});
+    agent.connect();
+    const ws = await nextSocket();
+    ws.simulateOpen();
+    await replyToRegistration(ws);
+
+    ws.simulateMessage(deliverFrameFor('alice', 1, 'a1'));
+    ws.simulateMessage(deliverFrameFor('bob', 1, 'b1'));
+    ws.simulateMessage(deliverFrameFor('alice', 2, 'a2'));
+    ws.simulateMessage(deliverFrameFor('bob', 2, 'b2'));
+    await settleDeliveries();
+    expect(sentFrames(ws, 'delivery.ack')).toEqual([
+      ack('alice', { up_to_seq: 1 }),
+      ack('bob', { up_to_seq: 1 }),
+      ack('alice', { up_to_seq: 2 }),
+      ack('bob', { up_to_seq: 2 }),
+    ]);
+  });
+
+  it("keeps one watermark per agent: one agent's failed delivery does not hold the other agent's cursor", async () => {
+    const agent = createAgent();
+    agent.on.dmReceived((event) => {
+      if (event.message.id === 'm_a1') throw new Error('model crashed');
+    });
+    agent.connect();
+    const ws = await nextSocket();
+    ws.simulateOpen();
+    await replyToRegistration(ws);
+
+    ws.simulateMessage(deliverFrameFor('alice', 1, 'a1'));
+    ws.simulateMessage(deliverFrameFor('bob', 1, 'b1'));
+    ws.simulateMessage(deliverFrameFor('alice', 2, 'a2'));
+    ws.simulateMessage(deliverFrameFor('bob', 2, 'b2'));
+    await settleDeliveries();
+    expect(sentFrames(ws, 'delivery.ack')).toEqual([
+      ack('bob', { up_to_seq: 1 }),
+      ack('alice', { delivery_id: 'del_a2' }),
+      ack('bob', { up_to_seq: 2 }),
+    ]);
   });
 
   it('on.deliveryReplied fires with the sender-side delivery.replied context update', async () => {
