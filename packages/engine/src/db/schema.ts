@@ -233,6 +233,13 @@ export const agentInboundPolicies = sqliteTable(
   (table) => [
     index('idx_agent_inbound_policies_workspace').on(table.workspaceId),
     check('agent_inbound_policies_mode_check', sql`${table.mode} IN ('open', 'allowlist')`),
+    // agent_id alone can point at an agent in another workspace. A mismatched
+    // workspace_id would miss this row and leave the agent open.
+    foreignKey({
+      columns: [table.workspaceId, table.agentId],
+      foreignColumns: [agents.workspaceId, agents.id],
+      name: 'agent_inbound_policies_agent_fk',
+    }).onDelete('cascade'),
   ],
 );
 

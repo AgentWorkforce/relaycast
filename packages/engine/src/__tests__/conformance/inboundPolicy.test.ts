@@ -94,7 +94,13 @@ describe('inbound policy', () => {
     const zInvite = await call(z.token, 'POST', '/v1/channels/ops/invite', { agent_name: 'x' });
     expect(zInvite.status).toBe(404);
     expect(zInvite.body.error.code).toBe('agent_not_found');
-    expect((await call(y.token, 'POST', '/v1/channels/ops/invite', { agent_name: 'x' })).status).toBeLessThan(300);
+    const yInvite = await call(y.token, 'POST', '/v1/channels/ops/invite', { agent_name: 'x' });
+    expect(yInvite.status).toBeLessThan(300);
+    const members = await call(ws.workspaceKey, 'GET', '/v1/channels/ops/members');
+    expect(members.status).toBe(200);
+    expect(members.body.data).toEqual(expect.arrayContaining([
+      expect.objectContaining({ agent_name: 'x' }),
+    ]));
 
     // Knowing a message id in x's DM is not a way in.
     const sent = await dm(y.token, 'x', 'private');
@@ -138,6 +144,18 @@ describe('inbound policy', () => {
     const missing = await setPolicy(z.token, 'z', { mode: 'allowlist', allowed_agents: ['nobody'] });
     expect(probe.status).toBe(404);
     expect(probe.body.error.code).toBe(missing.body.error.code);
+    expect(probe.body.error.message).toBe(missing.body.error.message.replace('nobody', 'x'));
+
+    // A missing neighbor must not change the answer for a name that refuses the caller.
+    const hiddenThenMissing = await setPolicy(z.token, 'z', { mode: 'allowlist', allowed_agents: ['x', 'nobody'] });
+    const missingThenHidden = await setPolicy(z.token, 'z', { mode: 'allowlist', allowed_agents: ['nobody', 'x'] });
+    expect(hiddenThenMissing.status).toBe(404);
+    expect(hiddenThenMissing.body.error.message).toBe('Agent "x" not found');
+    expect(missingThenHidden.body.error.message).toBe('Agent "nobody" not found');
+
+    // An agent this caller may address is not hidden, so the missing name is the error.
+    const visibleThenMissing = await setPolicy(z.token, 'z', { mode: 'allowlist', allowed_agents: ['y', 'nobody'] });
+    expect(visibleThenMissing.body.error.message).toBe('Agent "nobody" not found');
   });
 
   it('resolves and reads an allowlist larger than one D1 IN-list chunk', async () => {
@@ -242,5 +260,71 @@ describe('inbound policy', () => {
     const refused = await post(y.token);
     expect(refused.status).toBe(403);
     expect(refused.body.error.code).toBe('participant_not_allowed');
+  });
+
+  it('rejects a group post when the policy narrows after the pre-check', async () => {
+    const { x, y } = await seed();
+    const group = await call(y.token, 'POST', '/v1/dm/group', { participants: ['x'] });
+    expect((await setPolicy(x.token, 'x', { mode: 'allowlist', allowed_agents: [] })).status).toBe(200);
+
+    const sqlite = stack.runtime.handle.sqlite;
+    const originalPrepare = sqlite.prepare.bind(sqlite);
+    sqlite.prepare = ((source: string) => {
+      const stmt = originalPrepare(source);
+      if (/^\s*select\b/i.test(source) && /agent_inbound_policies/i.test(source)) {
+        stmt.all = (() => []) as typeof stmt.all;
+      }
+      return stmt;
+    }) as typeof sqlite.prepare;
+    try {
+      const refused = await call(y.token, 'POST', `/v1/dm/${group.body.data.id}/messages`, { text: 'hello' });
+      expect(refused.status).toBe(403);
+      expect(refused.body.error.code).toBe('participant_not_allowed');
+    } finally {
+      sqlite.prepare = originalPrepare as typeof sqlite.prepare;
+    }
+  });
+
+  it('rejects a concurrent add that the pre-check did not see', async () => {
+    const ws = await createWorkspace(stack.app, 'race-ws');
+    const [y, x, z, w] = await Promise.all(
+      ['y', 'x', 'z', 'w'].map((name) => registerAgent(stack.app, ws.workspaceKey, name)),
+    );
+    const group = await call(y.token, 'POST', '/v1/dm/group', { participants: ['w'] });
+    expect(group.status).toBe(201);
+    expect((await setPolicy(ws.workspaceKey, 'x', { mode: 'allowlist', allowed_agents: ['y', 'w'] })).status).toBe(200);
+    expect((await setPolicy(ws.workspaceKey, 'z', { mode: 'allowlist', allowed_agents: ['y', 'w'] })).status).toBe(200);
+
+    const sqlite = stack.runtime.handle.sqlite;
+    const originalPrepare = sqlite.prepare.bind(sqlite);
+    let sneaked = false;
+    sqlite.prepare = ((source: string) => {
+      const stmt = originalPrepare(source);
+      if (/insert into dm_participants/i.test(source) && /where/i.test(source)) {
+        const all = stmt.all.bind(stmt);
+        stmt.all = ((...args: unknown[]) => {
+          if (!sneaked) {
+            sneaked = true;
+            originalPrepare('INSERT INTO dm_participants (conversation_id, agent_id) VALUES (?, ?)').run(group.body.data.id, z.agentId);
+          }
+          return all(...args);
+        }) as typeof stmt.all;
+      }
+      return stmt;
+    }) as typeof sqlite.prepare;
+    try {
+      const add = await call(y.token, 'POST', `/v1/dm/${group.body.data.id}/participants`, { agent_name: 'x' });
+      expect(sneaked).toBe(true);
+      expect(add.status).toBe(403);
+      expect(add.body.error.code).toBe('participant_not_allowed');
+    } finally {
+      sqlite.prepare = originalPrepare as typeof sqlite.prepare;
+    }
+    const members = stack.runtime.handle.sqlite.prepare(
+      'SELECT agent_id FROM dm_participants WHERE conversation_id = ? AND left_at IS NULL',
+    ).all(group.body.data.id) as { agent_id: string }[];
+    const ids = members.map((row) => row.agent_id);
+    expect(ids).toContain(z.agentId);
+    expect(ids).not.toContain(x.agentId);
   });
 });

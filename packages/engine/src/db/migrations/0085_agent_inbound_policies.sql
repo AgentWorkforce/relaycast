@@ -3,14 +3,17 @@
 -- or bypass a policy. A missing row means open (the pre-policy behavior).
 -- allowed_agent_ids is the agent's own list, which its token may only narrow;
 -- pinned_agent_ids is set with the workspace key (owner, admins) and the
--- agent cannot remove it.
+-- agent cannot remove it. The composite foreign key keeps workspace_id on the
+-- same agent as agent_id; a mismatched workspace would miss the lookup and
+-- leave that agent open.
 CREATE TABLE agent_inbound_policies (
   agent_id TEXT PRIMARY KEY NOT NULL REFERENCES agents(id) ON DELETE CASCADE,
   workspace_id TEXT NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
   mode TEXT NOT NULL CHECK (mode IN ('open', 'allowlist')),
   allowed_agent_ids TEXT NOT NULL DEFAULT '[]',
   pinned_agent_ids TEXT NOT NULL DEFAULT '[]',
-  updated_at INTEGER NOT NULL DEFAULT (unixepoch())
+  updated_at INTEGER NOT NULL DEFAULT (unixepoch()),
+  FOREIGN KEY (workspace_id, agent_id) REFERENCES agents(workspace_id, id) ON DELETE CASCADE
 );
 
 -- Conversation checks load every participant's policy in one workspace query.

@@ -125,20 +125,92 @@ export async function refusingMembers(
   return [...policies].filter(([recipientId, policy]) => !policyAdmits(policy, senderId, recipientId)).map(([id]) => id);
 }
 
-/** Resolve agent names in this workspace to ids; unknown names are reported. */
-async function resolveAgentNames(db: Db, workspaceId: string, names: readonly string[]): Promise<Map<string, string>> {
+/** Names that exist in this workspace. A missing name is left out of the map. */
+async function lookupAgentNames(db: Db, workspaceId: string, names: readonly string[]): Promise<Map<string, string>> {
   const unique = [...new Set(names)];
   if (unique.length === 0) return new Map();
   const rows = await queryInChunks(unique, (chunk) => db
     .select({ id: agents.id, name: agents.name })
     .from(agents)
     .where(and(eq(agents.workspaceId, workspaceId), inArray(agents.name, chunk))));
-  const byName = new Map(rows.map((row) => [row.name, row.id]));
-  const missing = unique.filter((name) => !byName.has(name));
-  if (missing.length > 0) {
-    throw codedError(`Agent "${missing[0]}" not found`, 'agent_not_found', 404);
+  return new Map(rows.map((row) => [row.name, row.id]));
+}
+
+function agentNameNotFound(name: string) {
+  return codedError(`Agent "${name}" not found`, 'agent_not_found', 404);
+}
+
+/** First requested name with no row, in request order. */
+function firstMissingName(names: readonly string[], byName: Map<string, string>): string | null {
+  const seen = new Set<string>();
+  for (const name of names) {
+    if (seen.has(name)) continue;
+    seen.add(name);
+    if (!byName.has(name)) return name;
   }
-  return byName;
+  return null;
+}
+
+/**
+ * True when no other active member of the conversation refuses `senderId`.
+ * Evaluated inside the message insert, so a narrow that committed first
+ * rejects the write instead of delivering.
+ */
+export function groupSenderAdmittedSql(workspaceId: string, senderId: string, conversationId: string) {
+  return sql`NOT EXISTS (
+    SELECT 1 FROM dm_participants AS member
+    WHERE member.conversation_id = ${conversationId}
+      AND member.left_at IS NULL
+      AND member.agent_id <> ${senderId}
+      AND EXISTS (
+        SELECT 1 FROM agent_inbound_policies AS policy
+        WHERE policy.agent_id = member.agent_id
+          AND policy.workspace_id = ${workspaceId}
+          AND policy.mode = 'allowlist'
+          AND NOT EXISTS (
+            SELECT 1 FROM json_each(policy.allowed_agent_ids) AS allowed
+            WHERE allowed.value = ${senderId}
+          )
+          AND NOT EXISTS (
+            SELECT 1 FROM json_each(policy.pinned_agent_ids) AS pinned
+            WHERE pinned.value = ${senderId}
+          )
+      )
+  )`;
+}
+
+/**
+ * True when every active member, plus `inviteeId`, admits every other member
+ * of that set. Evaluated inside the participant insert, so a concurrent add
+ * or a narrow that committed first rejects this one.
+ */
+export function groupInviteAdmittedSql(workspaceId: string, conversationId: string, inviteeId: string) {
+  const prospective = sql`(
+    SELECT agent_id FROM dm_participants
+    WHERE conversation_id = ${conversationId} AND left_at IS NULL
+    UNION SELECT ${inviteeId}
+  )`;
+  return sql`NOT EXISTS (
+    SELECT 1
+    FROM ${prospective} AS recipient
+    JOIN agent_inbound_policies AS policy
+      ON policy.agent_id = recipient.agent_id
+     AND policy.workspace_id = ${workspaceId}
+     AND policy.mode = 'allowlist'
+    WHERE EXISTS (
+      SELECT 1
+      FROM ${prospective} AS sender
+      WHERE sender.agent_id <> recipient.agent_id
+        AND NOT EXISTS (
+          SELECT 1 FROM json_each(policy.allowed_agent_ids) AS allowed
+          WHERE allowed.value = sender.agent_id
+        )
+        AND NOT EXISTS (
+          SELECT 1 FROM json_each(policy.pinned_agent_ids) AS pinned
+          WHERE pinned.value = sender.agent_id
+        )
+    )
+  )`;
 }
 
 async function namesFor(db: Db, workspaceId: string, ids: readonly string[]): Promise<{ id: string; name: string }[]> {
@@ -190,16 +262,25 @@ export async function setInboundPolicy(
   const stored = await readStoredInboundPolicy(db, workspaceId, agentId);
   const current = stored.policy;
   const allowedByName = input.allowedAgents
-    ? await resolveAgentNames(db, workspaceId, input.allowedAgents)
+    ? await lookupAgentNames(db, workspaceId, input.allowedAgents)
     : new Map<string, string>();
-  if (actor.kind === 'agent') {
-    // Naming an agent that refuses this one must not confirm it exists.
+  if (actor.kind === 'agent' && input.allowedAgents) {
+    // A name that is missing and a name that refuses this agent are the same
+    // answer. Report the earliest requested name, so a missing neighbor cannot
+    // reveal that an earlier hidden name exists.
     const policies = await getInboundPolicies(db, workspaceId, [...allowedByName.values()]);
-    for (const [name, id] of allowedByName) {
-      if (!policyAdmits(policies.get(id)!, actor.agentId, id)) {
-        throw codedError(`Agent "${name}" not found`, 'agent_not_found', 404);
+    const seen = new Set<string>();
+    for (const name of input.allowedAgents) {
+      if (seen.has(name)) continue;
+      seen.add(name);
+      const id = allowedByName.get(name);
+      if (!id || !policyAdmits(policies.get(id) ?? OPEN_POLICY, actor.agentId, id)) {
+        throw agentNameNotFound(name);
       }
     }
+  } else if (input.allowedAgents) {
+    const missing = firstMissingName(input.allowedAgents, allowedByName);
+    if (missing) throw agentNameNotFound(missing);
   }
   const allowedIds = [...allowedByName.values()];
 
@@ -222,7 +303,10 @@ export async function setInboundPolicy(
       );
     }
   } else if (input.pinnedAgents !== undefined) {
-    pinnedIds = [...(await resolveAgentNames(db, workspaceId, input.pinnedAgents)).values()];
+    const pinnedByName = await lookupAgentNames(db, workspaceId, input.pinnedAgents);
+    const missing = firstMissingName(input.pinnedAgents, pinnedByName);
+    if (missing) throw agentNameNotFound(missing);
+    pinnedIds = [...pinnedByName.values()];
   }
 
   // Pinned agents persist while the policy is open, so Cloud can pin the owner

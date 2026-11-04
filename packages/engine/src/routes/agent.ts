@@ -671,7 +671,7 @@ agentRoutes.get(
       const workspace = c.get('workspace');
       const caller = c.get('agent');
       const name = c.req.param('name');
-      const target = await agentEngine.getAgentByName(db, workspace.id, name);
+      const target = await identityTargetByName(db, workspace.id, name);
       if (!target || (caller && caller.id !== target.id)) return agentNotFound(c, name);
       return jsonOk(c, await inboundPolicyEngine.inboundPolicyView(db, workspace.id, target.id));
     } catch (err: unknown) {
@@ -695,7 +695,7 @@ agentRoutes.put(
       const name = c.req.param('name');
       const parsed = await parseJsonBody(c, inboundPolicySchema, 'mode is required: open or allowlist');
       if (!parsed.ok) return parsed.response;
-      const target = await agentEngine.getAgentByName(db, workspace.id, name);
+      const target = await identityTargetByName(db, workspace.id, name);
       if (!target || (caller && caller.id !== target.id)) return agentNotFound(c, name);
       const policy = await inboundPolicyEngine.setInboundPolicy(
         db,

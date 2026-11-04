@@ -1,8 +1,8 @@
 import { prepareAuthorityFanout } from './deliveryWrites.js';
-import { eq, and, isNull } from 'drizzle-orm';
+import { eq, and, isNull, sql } from 'drizzle-orm';
 import type { getDb } from '../db/index.js';
 import { messages, channels, agents, dmConversations, dmParticipants, messageAttachments } from '../db/schema.js';
-import { runAtomicWrites, type AtomicWrite } from '../ports/database.js';
+import { databaseConstraintKind, runAtomicWrites, type AtomicWrite } from '../ports/database.js';
 import { generateId } from './snowflake.js';
 import {
   buildGroupDmDeliveryWrite,
@@ -12,7 +12,7 @@ import {
 import { DEFAULT_MAILBOX_DEPTH_CAP, DEFAULT_MAILBOX_TTL_MS, DEFAULT_OFFLINE_FANOUT_EXCLUDE_MS, type MailboxConfig } from './mailboxConfig.js';
 import type { WorkspaceDeliveryPolicy } from './workspaceDeliveryPolicy.js';
 import { codedError } from '../lib/httpError.js';
-import { assertMayAddress, findConversationConflict, refusingMembers } from './inboundPolicy.js';
+import { assertMayAddress, findConversationConflict, groupInviteAdmittedSql, groupSenderAdmittedSql, refusingMembers } from './inboundPolicy.js';
 import { resolveSendAttachments } from './attachments.js';
 import { publicMessageMetadata, sanitizeUserMessageMetadata } from './messageMetadata.js';
 import { buildMessageSessionWrite, requireSessionRefFromMetadata } from './sessionMessages.js';
@@ -179,7 +179,9 @@ export async function postGroupMessage(
   // stays in routes. Delivery recipients are derived by the delivery insert
   // from current active participants.
   const authorityLeases = await prepareAuthorityFanout(db, workspaceId, { conversationId });
-  const results = await runAtomicWrites(db, (writeDb) => {
+  let results: unknown[];
+  try {
+    results = await runAtomicWrites(db, (writeDb) => {
     const writes: AtomicWrite[] = [
       writeDb
         .insert(messages)
@@ -188,7 +190,12 @@ export async function postGroupMessage(
           workspaceId,
           channelId: conv.channelId,
           agentId,
-          body: data.text,
+          // NULL violates messages.body. The predicate is part of this insert,
+          // so a member that narrowed after the earlier check rolls the post
+          // back instead of delivering.
+          body: sql<string>`(
+            SELECT ${data.text} WHERE ${groupSenderAdmittedSql(workspaceId, agentId, conversationId)}
+          )`,
           hasAttachments,
           metadata,
           sessionRef,
@@ -231,6 +238,10 @@ export async function postGroupMessage(
 
     return writes;
   }, { requireAtomic: Boolean(options.workspaceDeliveryPolicy) });
+  } catch (error) {
+    if (databaseConstraintKind(error) === 'address_changed') throw participantNotAllowed();
+    throw error;
+  }
   const [message] = results[0] as (typeof messages.$inferSelect)[];
   const deliveryOutcomes: DeliveryOutcomeRecords = await fetchGroupDeliveryOutcomes(db, {
     messageId,
@@ -320,23 +331,27 @@ export async function addParticipant(
     return { conversation_id: conversationId, agent: inviteeAgentName, already_member: true };
   }
 
-  if (existing && existing.leftAt) {
-    // Re-add by clearing leftAt
-    await db
-      .update(dmParticipants)
-      .set({ leftAt: null })
-      .where(
-        and(
-          eq(dmParticipants.conversationId, conversationId),
-          eq(dmParticipants.agentId, invitee.id),
-        ),
-      );
-  } else {
-    await db.insert(dmParticipants).values({
-      conversationId,
-      agentId: invitee.id,
-    });
-  }
+  const admitted = groupInviteAdmittedSql(workspaceId, conversationId, invitee.id);
+  // The pre-check above is the common answer. This write rechecks the live
+  // member set, so a concurrent add or a narrow cannot admit a pair that
+  // refuses each other.
+  const written = existing?.leftAt
+    ? await db.all<{ conversation_id: string }>(sql`
+        UPDATE dm_participants
+        SET left_at = NULL
+        WHERE conversation_id = ${conversationId}
+          AND agent_id = ${invitee.id}
+          AND left_at IS NOT NULL
+          AND ${admitted}
+        RETURNING conversation_id
+      `)
+    : await db.all<{ conversation_id: string }>(sql`
+        INSERT INTO dm_participants (conversation_id, agent_id)
+        SELECT ${conversationId}, ${invitee.id}
+        WHERE ${admitted}
+        RETURNING conversation_id
+      `);
+  if (written.length === 0) throw participantNotAllowed();
 
   return { conversation_id: conversationId, agent: inviteeAgentName, already_member: false };
 }
