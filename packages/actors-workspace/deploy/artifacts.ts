@@ -72,13 +72,39 @@ export interface S3ArtifactStoreOptions {
     forcePathStyle: boolean
     /** Substitute client (tests); otherwise an `S3Client` with the SDK's default credential chain. */
     client?: S3ClientLike
+    /** The wait before conditional PUT retry `attempt` (1-based) after a 409; tests pass a no-op. */
+    conflictDelay?: (attempt: number) => Promise<void>
 }
 
-/** The write lost to an existing object: 412 PreconditionFailed, or 409 ConditionalRequestConflict from a concurrent conditional write. */
-function isAlreadyExists(error: unknown): boolean {
-    const e = error as { name?: unknown; Code?: unknown; $metadata?: { httpStatusCode?: unknown } } | null
-    const name = e?.name ?? e?.Code
-    return name === "PreconditionFailed" || name === "ConditionalRequestConflict" || e?.$metadata?.httpStatusCode === 412
+/** Conditional PUTs sent before a persistent 409 falls back to `HeadObject`. */
+export const S3_CONFLICT_ATTEMPTS = 4
+
+const defaultConflictDelay = (attempt: number) =>
+    new Promise<void>((resolve) => setTimeout(resolve, 100 * 2 ** (attempt - 1) + Math.random() * 50))
+
+type PutOutcome = "created" | "exists" | "conflict"
+
+function s3ErrorName(error: unknown): unknown {
+    const e = error as { name?: unknown; Code?: unknown } | null
+    return e?.name ?? e?.Code
+}
+
+/**
+ * How a conditional PUT ended: 412 PreconditionFailed means the object
+ * exists; 409 ConditionalRequestConflict means a concurrent conditional write
+ * to the key had not settled, so the object may or may not exist yet.
+ */
+function putOutcome(error: unknown): PutOutcome | undefined {
+    const name = s3ErrorName(error)
+    const status = (error as { $metadata?: { httpStatusCode?: unknown } } | null)?.$metadata?.httpStatusCode
+    if (name === "PreconditionFailed" || status === 412) return "exists"
+    if (name === "ConditionalRequestConflict") return "conflict"
+    return undefined
+}
+
+function isMissing(error: unknown): boolean {
+    const name = s3ErrorName(error)
+    return name === "NotFound" || name === "NoSuchKey" || (error as { $metadata?: { httpStatusCode?: unknown } } | null)?.$metadata?.httpStatusCode === 404
 }
 
 /**
@@ -86,9 +112,12 @@ function isAlreadyExists(error: unknown): boolean {
  * Identity, IRSA, an instance role, `AWS_PROFILE`; never a configured key).
  * As on GCS, each object must not exist yet (`If-None-Match: *`); it carries
  * `x-amz-meta-da-generation: 1`, the generation the control plane records.
- * When the write loses to an existing object (a retried PUT that had in fact
- * landed), the object's own `da-generation` is the answer; an object without
- * one was not written by a deployer and fails the upload.
+ * When the write loses to an existing object (412, e.g. a retried PUT that
+ * had in fact landed), the object's own `da-generation` from `HeadObject` is
+ * the answer; an object without one was not written by a deployer and fails
+ * the upload. A 409 (a concurrent conditional write still settling) retries
+ * the conditional PUT with backoff, and only a persistent 409 falls back to
+ * `HeadObject`.
  *
  * The SDK is imported on first use, never for a GCS deploy.
  */
@@ -112,26 +141,43 @@ export function s3ArtifactStore(bucket: string, options: S3ArtifactStoreOptions)
     return {
         async upload(objectName, bytes) {
             const { sdk, client } = await load()
-            try {
-                await client.send(
-                    new sdk.PutObjectCommand({
-                        Bucket: bucket,
-                        Key: objectName,
-                        Body: bytes,
-                        ContentType: contentType(objectName),
-                        IfNoneMatch: "*",
-                        Metadata: { [S3_GENERATION_METADATA]: S3_GENERATION },
-                    })
-                )
-                return { generation: S3_GENERATION }
-            } catch (error) {
-                if (!isAlreadyExists(error)) throw error
+            const url = `s3://${bucket}/${objectName}`
+            let outcome: PutOutcome = "conflict"
+            for (let attempt = 1; attempt <= S3_CONFLICT_ATTEMPTS && outcome === "conflict"; attempt++) {
+                if (attempt > 1) await (options.conflictDelay ?? defaultConflictDelay)(attempt - 1)
+                try {
+                    await client.send(
+                        new sdk.PutObjectCommand({
+                            Bucket: bucket,
+                            Key: objectName,
+                            Body: bytes,
+                            ContentType: contentType(objectName),
+                            IfNoneMatch: "*",
+                            Metadata: { [S3_GENERATION_METADATA]: S3_GENERATION },
+                        })
+                    )
+                    return { generation: S3_GENERATION }
+                } catch (error) {
+                    const next = putOutcome(error)
+                    if (next === undefined) throw error
+                    outcome = next
+                }
             }
-            const head = await client.send(new sdk.HeadObjectCommand({ Bucket: bucket, Key: objectName }))
+            let head
+            try {
+                head = await client.send(new sdk.HeadObjectCommand({ Bucket: bucket, Key: objectName }))
+            } catch (error) {
+                if (!isMissing(error)) throw error
+                throw new Error(
+                    outcome === "conflict"
+                        ? `${url}: the conditional PUT answered 409 ConditionalRequestConflict ${S3_CONFLICT_ATTEMPTS} times and the object does not exist`
+                        : `${url}: the conditional PUT answered 412 PreconditionFailed but the object does not exist`
+                )
+            }
             const generation = head.Metadata?.[S3_GENERATION_METADATA]
             if (generation === undefined || generation === "")
                 throw new Error(
-                    `s3://${bucket}/${objectName} already exists without ${S3_GENERATION_METADATA} metadata; it was not uploaded by the deployer, so its generation is unknown`
+                    `${url} already exists without ${S3_GENERATION_METADATA} metadata; it was not uploaded by the deployer, so its generation is unknown`
                 )
             return { generation }
         },

@@ -1,6 +1,6 @@
 import { HeadObjectCommand, PutObjectCommand } from "@aws-sdk/client-s3"
 import { describe, expect, it } from "vitest"
-import { S3_GENERATION, type S3ClientLike, artifactStoreFor, objectUrl, s3ArtifactStore } from "../artifacts.ts"
+import { S3_CONFLICT_ATTEMPTS, S3_GENERATION, type S3ClientLike, artifactStoreFor, objectUrl, s3ArtifactStore } from "../artifacts.ts"
 
 interface StoredObject {
     bytes: Uint8Array
@@ -13,22 +13,22 @@ const s3Error = (name: string, status: number) => Object.assign(new Error(name),
 /**
  * An S3 bucket keyed by `<bucket>/<key>` that answers real command instances
  * and enforces `If-None-Match: *` the way S3 does (412 PreconditionFailed);
- * `conflict` makes the next conditional PUT answer 409 instead, as S3 does
- * for a concurrent conditional write.
+ * `conflictNext(n)` makes the next n conditional PUTs answer 409 instead, as
+ * S3 does while a concurrent conditional write to the key settles.
  */
 function fakeS3() {
     const objects = new Map<string, StoredObject>()
     const calls: string[] = []
     const puts: PutObjectCommand["input"][] = []
-    let conflict = false
+    let conflicts = 0
     const send = async (command: unknown): Promise<unknown> => {
         if (command instanceof PutObjectCommand) {
             const { Bucket, Key, Body, ContentType, Metadata, IfNoneMatch } = command.input
             const id = `${Bucket}/${Key}`
             calls.push(`put ${id}`)
             puts.push(command.input)
-            if (conflict) {
-                conflict = false
+            if (conflicts > 0) {
+                conflicts--
                 throw s3Error("ConditionalRequestConflict", 409)
             }
             if (IfNoneMatch === "*" && objects.has(id)) throw s3Error("PreconditionFailed", 412)
@@ -48,8 +48,8 @@ function fakeS3() {
         objects,
         calls,
         puts,
-        conflictNext: () => {
-            conflict = true
+        conflictNext: (count = 1) => {
+            conflicts = count
         },
         client: { send: send as S3ClientLike["send"] },
     }
@@ -57,7 +57,14 @@ function fakeS3() {
 
 const OBJECT = "durable-actors/v3/artifacts/7d3b9a6e-9d1c-4f0a-8b58-2d6c4d7b2b61/actors.mjs"
 const BYTES = new TextEncoder().encode("export const actors = {};")
-const OPTIONS = { region: "us-east-1", forcePathStyle: false }
+const delays: number[] = []
+const OPTIONS = {
+    region: "us-east-1",
+    forcePathStyle: false,
+    conflictDelay: async (attempt: number) => {
+        delays.push(attempt)
+    },
+}
 
 describe("s3ArtifactStore", () => {
     it("creates the object conditionally with da-generation metadata and reports generation 1", async () => {
@@ -92,13 +99,40 @@ describe("s3ArtifactStore", () => {
         expect(fake.calls).toEqual([`put acme-actors/${OBJECT}`, `head acme-actors/${OBJECT}`])
     })
 
-    it("answers an existing object's da-generation after a 409 ConditionalRequestConflict", async () => {
+    it("retries the conditional PUT after a 409 ConditionalRequestConflict and creates the object", async () => {
+        delays.length = 0
+        const fake = fakeS3()
+        fake.conflictNext(2)
+        const store = s3ArtifactStore("acme-actors", { ...OPTIONS, client: fake.client })
+        expect(await store.upload(OBJECT, BYTES)).toEqual({ generation: "1" })
+        expect(fake.calls).toEqual([`put acme-actors/${OBJECT}`, `put acme-actors/${OBJECT}`, `put acme-actors/${OBJECT}`])
+        expect(delays).toEqual([1, 2])
+        expect(fake.objects.get(`acme-actors/${OBJECT}`)?.metadata).toEqual({ "da-generation": "1" })
+    })
+
+    it("answers the existing object's da-generation when a retry after a 409 gets 412", async () => {
         const fake = fakeS3()
         fake.objects.set(`acme-actors/${OBJECT}`, { bytes: BYTES, contentType: "text/javascript", metadata: { "da-generation": "7" } })
         fake.conflictNext()
         const store = s3ArtifactStore("acme-actors", { ...OPTIONS, client: fake.client })
         expect(await store.upload(OBJECT, BYTES)).toEqual({ generation: "7" })
-        expect(fake.calls).toEqual([`put acme-actors/${OBJECT}`, `head acme-actors/${OBJECT}`])
+        expect(fake.calls).toEqual([`put acme-actors/${OBJECT}`, `put acme-actors/${OBJECT}`, `head acme-actors/${OBJECT}`])
+    })
+
+    it("falls back to HEAD after persistent 409s, and fails clearly when the object is absent", async () => {
+        const fake = fakeS3()
+        fake.objects.set(`acme-actors/${OBJECT}`, { bytes: BYTES, contentType: "text/javascript", metadata: { "da-generation": "1" } })
+        fake.conflictNext(S3_CONFLICT_ATTEMPTS)
+        const store = s3ArtifactStore("acme-actors", { ...OPTIONS, client: fake.client })
+        expect(await store.upload(OBJECT, BYTES)).toEqual({ generation: "1" })
+        expect(fake.calls).toEqual([...Array(S3_CONFLICT_ATTEMPTS).fill(`put acme-actors/${OBJECT}`), `head acme-actors/${OBJECT}`])
+
+        const other = "durable-actors/v3/artifacts/other/actors.mjs"
+        fake.conflictNext(S3_CONFLICT_ATTEMPTS)
+        await expect(store.upload(other, BYTES)).rejects.toThrow(
+            `s3://acme-actors/${other}: the conditional PUT answered 409 ConditionalRequestConflict ${S3_CONFLICT_ATTEMPTS} times and the object does not exist`
+        )
+        expect(fake.objects.has(`acme-actors/${other}`)).toBe(false)
     })
 
     it("fails clearly when the existing object has no da-generation metadata", async () => {
@@ -112,12 +146,15 @@ describe("s3ArtifactStore", () => {
         await expect(store.upload(OBJECT, BYTES)).rejects.toThrow("without da-generation metadata")
     })
 
-    it("propagates any other S3 error without a HEAD", async () => {
-        const send = async () => {
+    it("propagates any other S3 error without a retry or a HEAD", async () => {
+        const sent: string[] = []
+        const send = async (command: unknown) => {
+            sent.push((command as { constructor: { name: string } }).constructor.name)
             throw s3Error("AccessDenied", 403)
         }
         const store = s3ArtifactStore("acme-actors", { ...OPTIONS, client: { send: send as S3ClientLike["send"] } })
         await expect(store.upload(OBJECT, BYTES)).rejects.toThrow("AccessDenied")
+        expect(sent).toEqual(["PutObjectCommand"])
     })
 })
 
