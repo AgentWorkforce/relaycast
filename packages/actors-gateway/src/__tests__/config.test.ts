@@ -123,12 +123,16 @@ describe('configuration', () => {
     expect(loadConfig({ ...baseEnv(URL), RELAYCAST_WORKSPACE_BOOTSTRAP_SECRET_FILE: '/secrets/bootstrap' }, () => 'from-file\n').workspaceBootstrapSecret).toBe('from-file');
   });
 
-  it('reads the bootstrap proof flag as "true" or "false" only, as the engine does', () => {
+  it('reads the bootstrap proof flag from its raw value, exactly "true" or "false", as the actor does', () => {
     const secret = { RELAYCAST_WORKSPACE_BOOTSTRAP_SECRET: 'bootstrap-secret-0123456789abcdef' };
     expect(loadConfig(baseEnv(URL, secret)).workspaceBootstrapProofRequired).toBe(false);
     expect(loadConfig(baseEnv(URL, { ...secret, RELAYCAST_WORKSPACE_BOOTSTRAP_PROOF_REQUIRED: 'false' })).workspaceBootstrapProofRequired).toBe(false);
     expect(loadConfig(baseEnv(URL, { ...secret, RELAYCAST_WORKSPACE_BOOTSTRAP_PROOF_REQUIRED: 'true' })).workspaceBootstrapProofRequired).toBe(true);
-    for (const value of ['yes', '1', 'TRUE', 'required']) {
+    // Blank is unset.
+    expect(loadConfig(baseEnv(URL, { ...secret, RELAYCAST_WORKSPACE_BOOTSTRAP_PROOF_REQUIRED: '' })).workspaceBootstrapProofRequired).toBe(false);
+    expect(loadConfig(baseEnv(URL, { ...secret, RELAYCAST_WORKSPACE_BOOTSTRAP_PROOF_REQUIRED: '  ' })).workspaceBootstrapProofRequired).toBe(false);
+    // Not trimmed: the actor refuses "true ", so the gateway does too, rather than start a stack the actors will not.
+    for (const value of ['yes', '1', 'TRUE', 'required', 'true ', ' false']) {
       const refused = refusal(baseEnv(URL, { ...secret, RELAYCAST_WORKSPACE_BOOTSTRAP_PROOF_REQUIRED: value }));
       expect(refused.code).toBe('invalid_config');
       expect(refused.message).toMatch(/RELAYCAST_WORKSPACE_BOOTSTRAP_PROOF_REQUIRED/);

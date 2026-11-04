@@ -122,7 +122,6 @@ const EnvSchema = z.object({
   DURABLE_ACTORS_PROJECT_ID: component('DURABLE_ACTORS_PROJECT_ID'),
   DURABLE_ACTORS_HOME_REGION: component('DURABLE_ACTORS_HOME_REGION').optional(),
   RELAYCAST_PUBLIC_WORKSPACE_CREATE: z.enum(['true', 'false']).default('true'),
-  RELAYCAST_WORKSPACE_BOOTSTRAP_PROOF_REQUIRED: z.enum(['true', 'false']).default('false'),
   RELAYCAST_FILE_STORE: z.enum(['local', 'gcs', 's3']).default('local'),
   RELAYCAST_FILE_DIR: z.string().min(1).default('/data/files'),
   RELAYCAST_MAX_UPLOAD_BYTES: integer(1).default(64 * 1024 * 1024),
@@ -132,6 +131,18 @@ const EnvSchema = z.object({
   RELAYCAST_LOG_FORMAT: z.enum(['json', 'text']).default('json'),
   RELAYCAST_ENV: z.string().min(1).default('production'),
 });
+
+/**
+ * A flag the actors read untrimmed (`exactly "true" or "false"`): the raw
+ * value, so the gateway refuses what an actor would refuse. Blank is unset.
+ */
+const ExactFlagSchema = z.preprocess((value) => (typeof value === 'string' && value.trim() === '' ? undefined : value), z.enum(['true', 'false']).optional());
+
+function exactFlag(env: Env, name: string): boolean {
+  const parsed = ExactFlagSchema.safeParse(env[name]);
+  if (!parsed.success) throw new ConfigError('invalid_config', `${name} must be exactly "true" or "false".`);
+  return parsed.data === 'true';
+}
 
 /** Trimmed, with empty values dropped, so a blank variable means "unset". */
 function present(env: Env, names: readonly string[]): Record<string, string> {
@@ -206,7 +217,7 @@ export function loadConfig(env: Env = process.env, readFile?: (path: string) => 
     internalSecret,
     workspaceBootstrapSecret,
     // Accepted without a secret, as the engine's server is: a keyed create then fails closed (503) before any proof is asked.
-    workspaceBootstrapProofRequired: settings.RELAYCAST_WORKSPACE_BOOTSTRAP_PROOF_REQUIRED === 'true',
+    workspaceBootstrapProofRequired: exactFlag(env, 'RELAYCAST_WORKSPACE_BOOTSTRAP_PROOF_REQUIRED'),
     publicWorkspaceCreate: settings.RELAYCAST_PUBLIC_WORKSPACE_CREATE === 'true',
     fileStore: settings.RELAYCAST_FILE_STORE,
     fileDir: settings.RELAYCAST_FILE_DIR,

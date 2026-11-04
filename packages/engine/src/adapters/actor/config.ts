@@ -34,8 +34,9 @@ const ActorEnvSchema = z.object({
   RELAYCAST_ENV: z.preprocess(unsetIfBlank, z.string().trim().min(1).optional()),
   /**
    * The engine's self-host policy: an anonymous keyed create must also send
-   * `X-Workspace-Bootstrap-Secret`. Exactly `true` or `false`; the gateway
-   * reads the same variable and gates at the edge first.
+   * `X-Workspace-Bootstrap-Secret`. The raw value, exactly `true` or `false`
+   * (blank is unset; `true ` or `TRUE` is refused); the gateway reads the
+   * same variable by the same rule and gates at the edge first.
    */
   RELAYCAST_WORKSPACE_BOOTSTRAP_PROOF_REQUIRED: z.preprocess(unsetIfBlank, z.enum(['true', 'false']).optional()),
 });

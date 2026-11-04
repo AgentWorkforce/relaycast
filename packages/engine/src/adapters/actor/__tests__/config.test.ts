@@ -1,7 +1,7 @@
-import { mkdtempSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { describe, expect, it } from 'vitest';
+import { afterAll, describe, expect, it } from 'vitest';
 import { encodeArCredential } from '@relaycast/types';
 import { createCredentialTagSigner } from '../../../auth/credentialTags.js';
 import { ConfigError, DEFAULT_ACTOR_MAX_UPLOAD_BYTES, actorConfigFromEnv } from '../index.js';
@@ -11,6 +11,9 @@ const WORKSPACE_ID = '241764880589606912';
 const INTERNAL_SECRET = 'an-internal-secret-of-thirty-two-chars!!';
 
 describe('actorConfigFromEnv', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'relaycast-actor-config-'));
+  afterAll(() => rmSync(dir, { recursive: true, force: true }));
+
   it('defaults to production, a 64 MiB upload cap and messages kept forever', () => {
     expect(actorConfigFromEnv({})).toEqual({
       environment: 'production',
@@ -46,28 +49,29 @@ describe('actorConfigFromEnv', () => {
     });
   });
 
-  it('reads the bootstrap secret and proof flag as bin/serve.ts does', () => {
+  it('reads the bootstrap secret as exact bytes and the proof flag as exactly "true" or "false", blank unset', () => {
     // The secret's bytes feed a derivation: a direct value is verbatim, only an empty one is unset.
     expect(actorConfigFromEnv({ RELAYCAST_WORKSPACE_BOOTSTRAP_SECRET: ' exact bytes ' }).workspaceBootstrapSecret).toBe(' exact bytes ');
     expect(actorConfigFromEnv({ RELAYCAST_WORKSPACE_BOOTSTRAP_SECRET: '  ' }).workspaceBootstrapSecret).toBe('  ');
     expect(actorConfigFromEnv({ RELAYCAST_WORKSPACE_BOOTSTRAP_SECRET: '' }).workspaceBootstrapSecret).toBeUndefined();
     // `_FILE`: one trailing newline dropped, a direct value wins, an unreadable file is a refusal naming the variable.
-    const dir = mkdtempSync(join(tmpdir(), 'relaycast-actor-config-'));
     const file = join(dir, 'bootstrap');
     writeFileSync(file, ' from file \r\n');
     expect(actorConfigFromEnv({ RELAYCAST_WORKSPACE_BOOTSTRAP_SECRET_FILE: file }).workspaceBootstrapSecret).toBe(' from file ');
     expect(actorConfigFromEnv({ RELAYCAST_WORKSPACE_BOOTSTRAP_SECRET: 'direct', RELAYCAST_WORKSPACE_BOOTSTRAP_SECRET_FILE: file }).workspaceBootstrapSecret).toBe('direct');
     expect(() => actorConfigFromEnv({ RELAYCAST_WORKSPACE_BOOTSTRAP_SECRET_FILE: join(dir, 'missing') })).toThrow(ConfigError);
     expect(() => actorConfigFromEnv({ RELAYCAST_WORKSPACE_BOOTSTRAP_SECRET_FILE: join(dir, 'missing') })).toThrow(/RELAYCAST_WORKSPACE_BOOTSTRAP_SECRET_FILE/);
-    // The proof flag is exactly "true" or "false"; blank is unset (false), anything else is refused by name.
+    // The proof flag is the raw value, exactly "true" or "false" (not trimmed); blank is unset (false), anything else is refused by name.
     expect(actorConfigFromEnv({}).workspaceBootstrapProofRequired).toBeUndefined();
     expect(actorConfigFromEnv({ RELAYCAST_WORKSPACE_BOOTSTRAP_PROOF_REQUIRED: 'false' }).workspaceBootstrapProofRequired).toBeUndefined();
     expect(actorConfigFromEnv({ RELAYCAST_WORKSPACE_BOOTSTRAP_PROOF_REQUIRED: '' }).workspaceBootstrapProofRequired).toBeUndefined();
+    expect(actorConfigFromEnv({ RELAYCAST_WORKSPACE_BOOTSTRAP_PROOF_REQUIRED: '  ' }).workspaceBootstrapProofRequired).toBeUndefined();
     expect(actorConfigFromEnv({ RELAYCAST_WORKSPACE_BOOTSTRAP_PROOF_REQUIRED: 'true' }).workspaceBootstrapProofRequired).toBe(true);
     // Like the server, the flag without a secret is accepted: keyed creates then fail closed (503) before any proof is checked.
     expect(actorConfigFromEnv({ RELAYCAST_WORKSPACE_BOOTSTRAP_PROOF_REQUIRED: 'true' })).toEqual({ ...actorConfigFromEnv({}), workspaceBootstrapProofRequired: true });
     expect(() => actorConfigFromEnv({ RELAYCAST_WORKSPACE_BOOTSTRAP_PROOF_REQUIRED: 'yes' })).toThrow(/RELAYCAST_WORKSPACE_BOOTSTRAP_PROOF_REQUIRED/);
     expect(() => actorConfigFromEnv({ RELAYCAST_WORKSPACE_BOOTSTRAP_PROOF_REQUIRED: 'TRUE' })).toThrow(ConfigError);
+    expect(() => actorConfigFromEnv({ RELAYCAST_WORKSPACE_BOOTSTRAP_PROOF_REQUIRED: 'true ' })).toThrow(/RELAYCAST_WORKSPACE_BOOTSTRAP_PROOF_REQUIRED/);
   });
 
   it('refuses bad values by name', () => {
