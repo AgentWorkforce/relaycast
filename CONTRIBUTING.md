@@ -34,8 +34,10 @@ CI run is required before merge.
 - Never commit secrets, credentials, real customer data or production
   identifiers, including in tests and fixtures. Use obviously fake values.
 - Fork pull request CI runs without repository secrets. Workflows that use
-  secrets (publishing and deploys) run only from `main`, from release tags, or
-  when a maintainer with write access starts them.
+  secrets run only from `main`, from release tags, or when a maintainer with
+  write access starts them. The one exception is `preview.yml`, which uses
+  Cloudflare secrets to tear down the preview environment when a pull request
+  from a branch in this repository closes; it never runs for forks.
 
 A maintainer reviews every pull request. We may ask for changes, or decline a
 change that doesn't fit the project's direction.
