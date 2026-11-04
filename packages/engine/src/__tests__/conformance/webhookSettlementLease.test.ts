@@ -67,7 +67,12 @@ it.each(cases)('fences stale HTTP $oldStatus after $initialAttempts prior attemp
       expect(before.status).toBe('dead_letter');
     }
     release();
-    await oldAttempt;
+    const oldOutcome = await oldAttempt;
+    if (initialAttempts === 0) {
+      expect(oldOutcome).toMatchObject({ code: 'event_delivery_retryable_failure' });
+    } else {
+      expect(oldOutcome).toMatchObject({ deadLettered: 1 });
+    }
     const [after] = await db.select().from(webhookDeliveries);
     expect(after).toEqual(before);
   } finally {
