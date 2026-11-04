@@ -74,6 +74,15 @@ describe('AgentClient durable delivery', () => {
       expect(sent.delivery).toMatchObject({ id: 'del_1', state: 'delivered', acceptedAt: '2026-06-01T00:00:00.500Z' });
     });
 
+    it('dm() sends reply_to_message_id for an explicit answer', async () => {
+      mockFetch.mockImplementation(() => mockResponse({ conversation_id: 'dm_1', message: { id: 'm_2', reply_to_message_id: 'm_1' }, delivery: null }));
+
+      const sent = await me.dm('bob', 'yes', { replyTo: 'm_1' });
+
+      expect(JSON.parse(mockFetch.mock.calls[0]![1].body as string)).toEqual({ to: 'bob', text: 'yes', mode: 'wait', reply_to_message_id: 'm_1' });
+      expect(sent.message.replyToMessageId).toBe('m_1');
+    });
+
     it('dm() omits wait_ms unless asked', async () => {
       mockFetch.mockImplementation(() => mockResponse({ conversation_id: 'dm_1', message: { id: 'm_1' }, delivery: null }));
 

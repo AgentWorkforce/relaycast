@@ -54,6 +54,7 @@ type PendingDeliveryRow = {
   metadata: unknown;
   hasAttachments: boolean;
   threadId: string | null;
+  replyToMessageId: string | null;
   createdAt: Date;
   channelId: string;
   channelName: string;
@@ -172,6 +173,7 @@ async function listDeliveriesUnlabeled(
       body: messages.body,
       metadata: messages.metadata,
       threadId: messages.threadId,
+      replyToMessageId: messages.replyToMessageId,
       createdAt: messages.createdAt,
       hasAttachments: messages.hasAttachments,
     })
@@ -654,6 +656,8 @@ export async function readDeliveryStates(
   status: DeliveryStatus;
   state: DeliveryState;
   acceptedAt: Date | null;
+  repliedAt: Date | null;
+  replyMessageId: string | null;
   error: string | null;
   expiresAt: Date | null;
 }>> {
@@ -663,9 +667,9 @@ export async function readDeliveryStates(
       id: deliveries.id,
       agentId: deliveries.agentId,
       status: deliveries.status,
-      deliveredAt: deliveries.deliveredAt,
       acceptedAt: deliveries.acceptedAt,
       repliedAt: deliveries.repliedAt,
+      replyMessageId: deliveries.replyMessageId,
       error: deliveries.error,
       expiresAt: deliveries.expiresAt,
     })
@@ -677,63 +681,47 @@ export async function readDeliveryStates(
     status: row.status as DeliveryStatus,
     state: deliveryStateOf(row),
     acceptedAt: row.acceptedAt,
+    repliedAt: row.repliedAt,
+    replyMessageId: row.replyMessageId,
     error: row.error,
     expiresAt: row.expiresAt,
   }]));
 }
 
-/** Whether a sender waiting on this row has anything left to wait for. */
-export function deliveryStateSettled(row: { state: DeliveryState; acceptedAt: Date | null }): boolean {
-  return row.state !== 'queued' && (row.state !== 'delivered' || row.acceptedAt !== null);
+/** Whether a sender waiting on this row has anything left to wait for: anything past `queued` is accepted or better. */
+export function deliveryStateSettled(row: { state: DeliveryState }): boolean {
+  return row.state !== 'queued';
 }
 
-/** Most unreplied rows one DM reply marks `replied` (newest first). */
-export const DELIVERY_REPLY_MARK_MAX = 200;
-
 /**
- * A DM in `conversationId` from `replierAgentId` answers every delivery that
- * conversation's other party addressed to the replier and that nobody
- * answered yet: those rows get `replied_at` and `reply_message_id`. Rows that
- * failed or dead-lettered are not answered (they never reached the replier).
- * One bounded read, then id-indexed updates in D1-safe chunks. Returns the
- * ids marked, so the caller can tell their senders.
+ * The recipient answered `messageId` with `replyMessageId` (a DM's
+ * `reply_to_message_id`, or a thread reply's parent): mark exactly that
+ * message's delivery to the replier `replied_at` / `reply_message_id`.
+ * Explicit correlation only — nothing is inferred from conversation order.
+ * A row still `queued` (never handed to the recipient's software) or failed
+ * is left alone: the reply itself is accepted as a message, but the row
+ * cannot truthfully say the recipient answered what it never received.
+ * Returns the ids marked (at most one per recipient), so the caller can tell
+ * the sender.
  */
 export async function markDeliveriesReplied(
   db: Db,
   workspaceId: string,
-  input: { conversationId: string; replierAgentId: string; replyMessageId: string },
+  input: { messageId: string; recipientAgentId: string; replyMessageId: string },
 ): Promise<string[]> {
-  const candidates = await db
-    .select({ id: deliveries.id })
-    .from(deliveries)
-    .innerJoin(messages, eq(deliveries.messageId, messages.id))
-    .innerJoin(dmConversations, eq(dmConversations.channelId, messages.channelId))
-    .where(and(
-      eq(deliveries.workspaceId, workspaceId),
-      eq(dmConversations.id, input.conversationId),
-      eq(deliveries.agentId, input.replierAgentId),
-      ne(messages.agentId, input.replierAgentId),
-      ne(deliveries.messageId, input.replyMessageId),
-      isNull(deliveries.repliedAt),
-      inArray(deliveries.status, ['queued', 'delivered', 'acked']),
-    ))
-    .orderBy(sql`${deliveries.seq} DESC`)
-    .limit(DELIVERY_REPLY_MARK_MAX);
-  if (candidates.length === 0) return [];
-
   const now = new Date();
-  const replied: string[] = [];
-  const updated = await queryInChunks(candidates.map((row) => row.id), (chunk) => db
+  const updated = await db
     .update(deliveries)
     .set({ repliedAt: now, replyMessageId: input.replyMessageId, updatedAt: now })
     .where(and(
       eq(deliveries.workspaceId, workspaceId),
-      inArray(deliveries.id, chunk),
+      eq(deliveries.messageId, input.messageId),
+      eq(deliveries.agentId, input.recipientAgentId),
+      inArray(deliveries.status, ['delivered', 'acked']),
       isNull(deliveries.repliedAt),
     ))
-    .returning({ id: deliveries.id }));
-  for (const row of updated) replied.push(row.id);
-  return replied;
+    .returning({ id: deliveries.id });
+  return updated.map((row) => row.id);
 }
 
 /** Most delivery rows `getMessageDeliveries` returns for one message. */
@@ -1068,6 +1056,7 @@ function buildRoutableDeliveryEvent(
           injection_mode: injectionMode,
           attachments,
           metadata: publicMessageMetadata(row.metadata as Record<string, unknown> | null),
+          reply_to_message_id: row.replyToMessageId,
         },
         created_at: row.createdAt.toISOString(),
         id: row.delivery.messageId,
@@ -1117,6 +1106,7 @@ function buildRoutableDeliveryEvent(
         agent_name: senderName,
         ...senderAddressField(row.metadata as Record<string, unknown> | null),
         thread_id: row.threadId,
+        reply_to_message_id: row.replyToMessageId,
         text: row.body,
         blocks: (row.blocks as unknown[] | null) || null,
         metadata: publicMessageMetadata(row.metadata as Record<string, unknown> | null),
@@ -1139,6 +1129,7 @@ function buildRoutableDeliveryEvent(
       metadata: publicMessageMetadata(row.metadata as Record<string, unknown> | null),
       has_attachments: row.hasAttachments,
       thread_id: row.threadId,
+      reply_to_message_id: row.replyToMessageId,
       created_at: row.createdAt.toISOString(),
       mentions,
       attachments,
@@ -1203,6 +1194,7 @@ export async function fetchDueNodeDeliveryEvents(
       metadata: messages.metadata,
       hasAttachments: messages.hasAttachments,
       threadId: messages.threadId,
+      replyToMessageId: messages.replyToMessageId,
       createdAt: messages.createdAt,
       channelId: messages.channelId,
       channelName: channels.name,
@@ -1339,6 +1331,7 @@ export async function fetchQueuedWsBacklogEvents(
       metadata: messages.metadata,
       hasAttachments: messages.hasAttachments,
       threadId: messages.threadId,
+      replyToMessageId: messages.replyToMessageId,
       createdAt: messages.createdAt,
       channelId: messages.channelId,
       channelName: channels.name,
@@ -1547,6 +1540,7 @@ async function replayPendingToNode(
         ackSeq: agents.deliveryAckSeq,
         body: messages.body, blocks: messages.blocks, metadata: messages.metadata,
         hasAttachments: messages.hasAttachments, threadId: messages.threadId,
+      replyToMessageId: messages.replyToMessageId,
         createdAt: messages.createdAt, channelId: messages.channelId,
         channelName: channels.name, conversationId: dmConversations.id,
         dmType: dmConversations.dmType, senderAgentId: messages.agentId,

@@ -14,6 +14,20 @@ import { jsonError } from '../lib/httpResponse.js';
  */
 export const sendWaitMsSchema = z.number().int().min(0).max(MAX_SEND_WAIT_MS);
 
+type LiveDeliveryState = NonNullable<ReturnType<Awaited<ReturnType<typeof deliveryEngine.readDeliveryStates>>['get']>>;
+
+/** The row's current state overlaid on the receipt the send created. */
+function liveFields(live: LiveDeliveryState) {
+  return {
+    status: live.status,
+    acceptedAt: live.acceptedAt,
+    repliedAt: live.repliedAt,
+    replyMessageId: live.replyMessageId,
+    error: live.error,
+    expiresAt: live.expiresAt,
+  };
+}
+
 const sendWaitQuerySchema = z.object({
   wait_ms: z.preprocess(
     (value) => (typeof value === 'string' && value.trim() === '' ? Number.NaN : value),
@@ -34,7 +48,8 @@ export function resolveSendWaitMs(
 }
 
 /**
- * Park up to `waitMs` for every row in `records` to be confirmed or settled,
+ * Park up to `waitMs` for every row in `records` to be accepted or settled
+ * (consumed, replied, failed) — a host-side socket write is not enough —
  * then return the rows' current sender-facing receipts. Nothing is held while
  * parked: each wake re-reads the rows and parks again on the ones still
  * short. Hosts without a `DeliveryWaiters` provider answer at once with the
@@ -64,9 +79,7 @@ export async function awaitSentDeliveries(
     if (pending.length === 0 || remaining <= 0) {
       return records.map((record) => {
         const live = states.get(record.id);
-        return live
-          ? sentDeliveryReceipt({ ...record, status: live.status, acceptedAt: live.acceptedAt, error: live.error, expiresAt: live.expiresAt })
-          : sentDeliveryReceipt(record);
+        return live ? sentDeliveryReceipt({ ...record, ...liveFields(live) }) : sentDeliveryReceipt(record);
       });
     }
     const outcome = await waiters.waitForDeliveryState({
@@ -81,9 +94,7 @@ export async function awaitSentDeliveries(
       const final = await deliveryEngine.readDeliveryStates(c.get('engine').db, workspaceId, ids);
       return records.map((record) => {
         const live = final.get(record.id);
-        return live
-          ? sentDeliveryReceipt({ ...record, status: live.status, acceptedAt: live.acceptedAt, error: live.error, expiresAt: live.expiresAt })
-          : sentDeliveryReceipt(record);
+        return live ? sentDeliveryReceipt({ ...record, ...liveFields(live) }) : sentDeliveryReceipt(record);
       });
     }
   }

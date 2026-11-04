@@ -14,6 +14,8 @@ export function sentDeliveryReceipt(
   record: Pick<DeliveryFanoutRecord, 'id' | 'agentId' | 'status'> & {
     expiresAt?: Date | string | null;
     acceptedAt?: Date | string | null;
+    repliedAt?: Date | string | null;
+    replyMessageId?: string | null;
     error?: string | null;
   },
 ): SentDelivery {
@@ -23,6 +25,8 @@ export function sentDeliveryReceipt(
     status: record.status as SentDelivery['status'],
     state: deliveryStateOf(record),
     accepted_at: isoOrNull(record.acceptedAt),
+    replied_at: isoOrNull(record.repliedAt),
+    reply_message_id: record.replyMessageId ?? null,
     error: record.error ?? null,
     expires_at: isoOrNull(record.expiresAt),
   };

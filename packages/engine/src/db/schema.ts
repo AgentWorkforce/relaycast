@@ -719,6 +719,9 @@ export const messages = sqliteTable(
       .notNull()
       .references(() => agents.id),
     threadId: text('thread_id').references((): AnySQLiteColumn => messages.id),
+    // The message this one explicitly answers (DM `reply_to_message_id`, or a
+    // thread reply's parent); drives the sender's `replied` delivery state.
+    replyToMessageId: text('reply_to_message_id'),
     body: text('body').notNull(),
     blocks: text('blocks', { mode: 'json' }),
     metadata: text('metadata', { mode: 'json' }).$type<Record<string, unknown>>().default({}),

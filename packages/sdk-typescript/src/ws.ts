@@ -27,15 +27,31 @@ export interface WsClientOptions {
   path?: string;
   nodeRegistration?: () => Record<string, unknown> | Promise<Record<string, unknown>>;
   /** Send `delivery.ack` (consumed) after each `deliver` frame is dispatched to handlers. */
-  autoAckDeliveries?: boolean;
-  /**
-   * Send `delivery.accepted` the moment a `deliver` frame is parsed, before
-   * any handler runs: the receipt the sender's `wait_ms` waits for. Sent only
-   * when the engine's `node.register` reply lists the `delivery.accepted`
+  autoAckDeliveries?: boolean;  /**
+   * Send `delivery.accepted` — "the receiving software holds this delivery
+   * and will process it" (not a socket write, not the later consumption
+   * ack); the receipt a sender's `wait_ms` waits for and the only thing that
+   * makes its delivery `delivered` — after {@link acceptDelivery} has stored
+   * the frame and before any handler runs. This client dispatches straight
+   * to handlers with no queue, so the hook is the only durable holder; an
+   * in-memory handler client reports `queued` -> `consumed`, never
+   * `delivered`. Defaults to `false`: set it only when you persist
+   * deliveries durably before handlers run, and supply `acceptDelivery`.
+   * Without the hook nothing is sent, so an in-memory client reports
+   * `queued` / `consumed` honestly rather than `delivered`. Also requires the
+   * engine's `node.register` reply to list the `delivery.accepted`
    * capability, so an older engine never sees a frame it would reject.
-   * Defaults to `autoAckDeliveries`.
    */
   autoAcceptDeliveries?: boolean;
+  /**
+   * Persistence hook for {@link autoAcceptDeliveries}: write the delivery to
+   * your durable inbox or store. `delivery.accepted` is sent only after it
+   * resolves. If it throws or rejects, no acceptance is sent, but the
+   * delivery is still dispatched to handlers and acked as usual: a failed
+   * acceptance is not a failed delivery, the sender merely never learns
+   * `delivered` for that row.
+   */
+  acceptDelivery?: (delivery: AcceptedDelivery) => Promise<void> | void;
   maxReconnectAttempts?: number;
   reconnectJitter?: boolean;
   reconnectBaseDelayMs?: number;
@@ -102,6 +118,18 @@ export function withInternalWsOrigin<T extends WsClientOptions>(
   return copy as T;
 }
 
+/** A `deliver` frame as handed to {@link WsClientOptions.acceptDelivery} before any handler runs. */
+export interface AcceptedDelivery {
+  deliveryId: string;
+  agent: string;
+  agentId: string | null;
+  messageId: string | null;
+  seq: number;
+  mode: string | null;
+  /** The event the frame carries (`{ type, data }`), as sent on the wire. */
+  payload: Record<string, unknown> | null;
+}
+
 export class WsClient {
   private token: string | (() => string | Promise<string>);
   private baseUrl: string;
@@ -109,6 +137,9 @@ export class WsClient {
   private nodeRegistration?: () => Record<string, unknown> | Promise<Record<string, unknown>>;
   private autoAckDeliveries: boolean;
   private autoAcceptDeliveries: boolean;
+  private acceptDelivery?: (delivery: AcceptedDelivery) => Promise<void> | void;
+  /** `deliver` frames are processed in arrival order, even while an acceptance hook is pending. */
+  private deliverChain: Promise<void> = Promise.resolve();
   private nodeMode: boolean;
   private lastNodeRegistration: Record<string, unknown> | null = null;
   /** The in-flight `node.register` request id, until its reply names the engine's capabilities. */
@@ -158,7 +189,12 @@ export class WsClient {
     this.path = options.path ?? '/v1/ws';
     this.nodeRegistration = options.nodeRegistration;
     this.autoAckDeliveries = options.autoAckDeliveries ?? false;
-    this.autoAcceptDeliveries = options.autoAcceptDeliveries ?? this.autoAckDeliveries;
+    this.acceptDelivery = options.acceptDelivery;
+    // Acceptance claims durable storage: only with a hook that provides it.
+    this.autoAcceptDeliveries = options.autoAcceptDeliveries === true && typeof options.acceptDelivery === 'function';
+    if (options.autoAcceptDeliveries === true && !this.autoAcceptDeliveries && options.debug) {
+      console.warn('[relaycast] autoAcceptDeliveries needs an acceptDelivery persistence hook; no delivery.accepted will be sent');
+    }
     this.nodeMode = this.path === '/v1/node/ws' || !!options.nodeRegistration;
     this.debug = options.debug ?? false;
     this.maxReconnectAttempts = Number.isFinite(options.maxReconnectAttempts)
@@ -454,31 +490,42 @@ export class WsClient {
     if (parsed.type === 'deliver') {
       const addressed = typeof parsed.agent === 'string'
         && typeof parsed.seq === 'number' && Number.isFinite(parsed.seq);
-      // The frame is held in this process now: tell the sender before any
-      // handler (or the model behind it) runs. `delivery.ack` below stays the
-      // consumed signal, sent once handlers were dispatched.
-      if (this.autoAcceptDeliveries && addressed && this.engineCapabilities.has('delivery.accepted')) {
-        this.sendJson({
-          v: 1,
-          type: 'delivery.accepted',
-          agent: parsed.agent,
-          ...(typeof parsed.delivery_id === 'string' ? { delivery_id: parsed.delivery_id } : {}),
-          up_to_seq: parsed.seq,
-        });
+      const hook = this.acceptDelivery;
+      const accepting = this.autoAcceptDeliveries && hook !== undefined && addressed
+        && typeof parsed.delivery_id === 'string' && this.engineCapabilities.has('delivery.accepted');
+      if (!accepting || hook === undefined) {
+        this.dispatchDeliver(parsed, addressed);
+        return true;
       }
-      const payload = isRecord(parsed.payload) ? parsed.payload : null;
-      if (payload && typeof payload.type === 'string') {
-        const data = isRecord(payload.data) ? payload.data : {};
-        this.emitServerLikeEvent(payload.type, data);
-      }
-      if (this.autoAckDeliveries && addressed) {
-        this.sendJson({
-          v: 1,
-          type: 'delivery.ack',
-          agent: parsed.agent,
-          up_to_seq: parsed.seq,
-        });
-      }
+      // Durable acceptance first: the frame is stored by the application's
+      // hook, then the sender is told, then handlers (and the model behind
+      // them) run. Frames stay in arrival order behind a pending hook.
+      const delivery: AcceptedDelivery = {
+        deliveryId: parsed.delivery_id as string,
+        agent: parsed.agent as string,
+        agentId: typeof parsed.agent_id === 'string' ? parsed.agent_id : null,
+        messageId: typeof parsed.msg_id === 'string' ? parsed.msg_id : null,
+        seq: parsed.seq as number,
+        mode: typeof parsed.mode === 'string' ? parsed.mode : null,
+        payload: isRecord(parsed.payload) ? parsed.payload : null,
+      };
+      this.deliverChain = this.deliverChain.then(async () => {
+        try {
+          await hook(delivery);
+          this.sendJson({
+            v: 1,
+            type: 'delivery.accepted',
+            agent: delivery.agent,
+            delivery_id: delivery.deliveryId,
+            up_to_seq: delivery.seq,
+          });
+        } catch (err) {
+          // Not a delivery failure: the frame is still handled and acked; the
+          // sender simply never learns `delivered` for this row.
+          if (this.debug) console.warn('[relaycast] acceptDelivery failed; delivery.accepted not sent', err);
+        }
+        this.dispatchDeliver(parsed, addressed);
+      });
       return true;
     }
 
@@ -526,6 +573,23 @@ export class WsClient {
     // Node control replies/errors are transport-level acknowledgements for the
     // direct node client. They are intentionally not surfaced as app events.
     return parsed.type === 'reply' || parsed.type === 'error' || parsed.type === 'pong' || parsed.type === 'resync_ack';
+  }
+
+  /** Hand a `deliver` frame's event to handlers, then send the consumed signal (`delivery.ack`). */
+  private dispatchDeliver(parsed: Record<string, unknown>, addressed: boolean): void {
+    const payload = isRecord(parsed.payload) ? parsed.payload : null;
+    if (payload && typeof payload.type === 'string') {
+      const data = isRecord(payload.data) ? payload.data : {};
+      this.emitServerLikeEvent(payload.type, data);
+    }
+    if (this.autoAckDeliveries && addressed) {
+      this.sendJson({
+        v: 1,
+        type: 'delivery.ack',
+        agent: parsed.agent,
+        up_to_seq: parsed.seq,
+      });
+    }
   }
 
   private emitServerLikeEvent(eventType: string, data: Record<string, unknown>): void {

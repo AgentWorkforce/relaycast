@@ -126,7 +126,7 @@ describe('sender-side delivery receipts', () => {
     stack.runtime.realtime.attachWorkspaceSocket(ws.workspaceId, stream);
 
     const sent = await sendDm(alice.token, 'bob', 'did you get this?');
-    expect(sent.delivery).toEqual({ id: expect.any(String), status: 'queued', state: 'queued', accepted_at: null, error: null, expires_at: expect.any(String) });
+    expect(sent.delivery).toEqual({ id: expect.any(String), status: 'queued', state: 'queued', accepted_at: null, replied_at: null, reply_message_id: null, error: null, expires_at: expect.any(String) });
     expect(sent.delivery).not.toHaveProperty('agent_id');
     const deliveryId = sent.delivery!.id;
 
@@ -145,7 +145,7 @@ describe('sender-side delivery receipts', () => {
     expect(receipts.body.data).toEqual({
       message_id: sent.id,
       deliveries: [{
-        id: deliveryId, agent_id: bob.agentId, agent_name: 'bob', status: 'delivered', state: 'delivered',
+        id: deliveryId, agent_id: bob.agentId, agent_name: 'bob', status: 'delivered', state: 'queued',
         created_at: expect.any(String), delivered_at: expect.any(String), accepted_at: null, acked_at: null,
         replied_at: null, reply_message_id: null, dead_lettered_at: null, error: null, read_at: null,
       }],
@@ -196,7 +196,7 @@ describe('sender-side delivery receipts', () => {
       const original = (await first.json()) as {
         data: { id: string; delivery: { id: string; status: string; expires_at: string | null } | null };
       };
-      expect(original.data.delivery).toEqual({ id: expect.any(String), status: 'queued', state: 'queued', accepted_at: null, error: null, expires_at: expect.any(String) });
+      expect(original.data.delivery).toEqual({ id: expect.any(String), status: 'queued', state: 'queued', accepted_at: null, replied_at: null, reply_message_id: null, error: null, expires_at: expect.any(String) });
       await stack.settle();
 
       // Lose the KV record and its lock (an eviction or outage after the
@@ -302,7 +302,7 @@ describe('sender-side delivery receipts', () => {
       data: { id: string; deliveries: Array<Record<string, unknown>>; deliveries_truncated: boolean };
     }).data;
     expect(smallBody.deliveries).toEqual([
-      { id: expect.any(String), agent_id: bob.agentId, status: 'queued', state: 'queued', accepted_at: null, error: null, expires_at: expect.any(String) },
+      { id: expect.any(String), agent_id: bob.agentId, status: 'queued', state: 'queued', accepted_at: null, replied_at: null, reply_message_id: null, error: null, expires_at: expect.any(String) },
     ]);
     expect(smallBody.deliveries_truncated).toBe(false);
 

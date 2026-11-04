@@ -800,22 +800,31 @@ The sender can follow what happened to its message. `POST /dm` answers with
 `delivery: { id, status, state, accepted_at, error, expires_at } | null`;
 `POST /channels/:name/messages` answers with `deliveries: [{ id, agent_id, status, state,
 accepted_at, error, expires_at }]` (the first 50, plus `deliveries_truncated`). `state` is the
-sender-facing vocabulary, derived from the row: `queued` (row created, delivery continues),
-`delivered` (the receiving software accepted it — `accepted_at` set — or the host wrote it to the
-recipient's socket or push endpoint; `accepted_at` tells the two apart), `consumed` (the
-recipient acked it), `replied` (the recipient sent a DM back in the conversation) and `failed`
-(see `error`); the raw `status` stays beside it. Acceptance is the receiving software's
-`delivery.accepted` node frame — sent the moment the client holds the delivery, before any
-handler or model runs — or an `http_push` 2xx; a socket write alone never counts as accepted.
+sender-facing vocabulary, derived from the row: `queued` (row created, delivery continues —
+including after the host wrote it to a socket, which proves nothing about the client), `delivered`
+(the receiving software durably accepted it: `accepted_at` set), `consumed` (the recipient acked
+it), `replied` (the recipient explicitly answered it) and `failed` (see `error`); the raw `status`
+stays beside it (`status: delivered` with `accepted_at: null` is a socket write, `state: queued`).
+Acceptance is the receiving software's `delivery.accepted` node frame — "the receiving software
+holds this delivery and will process it", sent before any handler runs; not a socket write (bytes
+left the server) and not consumption (the later `delivery.ack`) — or an `http_push` 2xx. The claim
+is durable because relaycast keeps the row unacked and re-delivers it on reconnect until
+`delivery.ack`: a crash between acceptance and consumption is a re-delivery, never a loss, so a
+client may accept from a durable inbox or from an in-process queue backed by that retention. A
+client with neither (an in-memory handler) sends nothing and is reported honestly as
+`queued` → `consumed`, never `delivered`.
 Pass `wait_ms` (body or query, 0–2000; **1000 is the recommended value**) and the send parks up
 to that budget for the acceptance (or a stronger signal), then answers with the row's current
-`state`; when the budget ends first it answers at once with the row as it stands while delivery
-continues, and the client follows the events or the status route below. A replay never parks,
+`state`; when the budget ends first it answers at once with the row as it stands (`queued`) while
+delivery continues, and the client follows the events or the status route below. A replay never parks,
 and a host without a delivery waiter (the workspace actor) answers at once.
 As each row moves, the sender receives `delivery.delivered` (`accepted: true` for the receiver's
-acceptance, `false` for the host's socket write), `delivery.acked` (the recipient acked it —
-through `POST /deliveries/:id/ack`, a node's cumulative `delivery.ack`, or an `http_push` node's
-`on_2xx` / `response` ack mode) and `delivery.replied` (DMs only; carries `reply_message_id`),
+acceptance — the only one that means the client has it; `false` for the host's socket write, kept
+for compatibility), `delivery.acked` (the recipient acked it — through `POST /deliveries/:id/ack`,
+a node's cumulative `delivery.ack`, or an `http_push` node's `on_2xx` / `response` ack mode) and
+`delivery.replied` (the recipient explicitly answered it: a DM sent with `reply_to_message_id`
+naming the recipient's message in that conversation, or a thread reply to it; carries
+`reply_message_id`, and the reply exposes `reply_to_message_id`),
 each with `delivery_id`, `message_id`, the recipient's `agent_id` / `agent_name`, `status` and
 `at`; `delivery.failed` already reports rejected, expired and unreachable rows.
 `GET /messages/:id/deliveries` returns `{ message_id, deliveries: [{ id, agent_id, agent_name,
@@ -1300,7 +1309,9 @@ agent.on.deliveryDelivered((e) => console.log(`acked ${e.deliveryId}`));
 
 // As a sender: wait a short budget for the receiver's acceptance, then follow the rest live.
 const sent = await agent.dm('bob', 'ready?', { waitMs: 1000 });
-console.log(sent.delivery?.state); // 'delivered' once bob's client accepted it, else 'queued'
+console.log(sent.delivery?.state); // 'delivered' once bob's client durably accepted it, else 'queued'
+// Answer explicitly so the sender's delivery becomes 'replied'.
+agent.on.dmReceived((e) => agent.dm(e.message.agentName, 'yes', { replyTo: e.message.id }));
 agent.on.deliveryDelivered((e) => { if (e.accepted) console.log(`${e.agentName} holds ${e.messageId}`); });
 agent.on.deliveryAcked((e) => console.log(`${e.agentName} consumed ${e.messageId} at ${e.at}`));
 agent.on.deliveryReplied((e) => console.log(`${e.agentName} replied with ${e.replyMessageId}`));

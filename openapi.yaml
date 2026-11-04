@@ -656,6 +656,10 @@ components:
     Message:
       type: object
       properties:
+        reply_to_message_id:
+          type: string
+          nullable: true
+          description: The message this one explicitly answers (a DM's `reply_to_message_id`, or a thread reply's parent).
         id:
           type: string
         channel_id:
@@ -971,6 +975,15 @@ components:
               format: date-time
               nullable: true
               description: When the receiving software accepted the row (`delivery.accepted`, or an `http_push` 2xx).
+            replied_at:
+              type: string
+              format: date-time
+              nullable: true
+              description: When the recipient explicitly answered the message.
+            reply_message_id:
+              type: string
+              nullable: true
+              description: The recipient's reply once `replied_at` is set.
             error:
               type: string
               nullable: true
@@ -986,10 +999,15 @@ components:
       description: >-
         The sender-facing delivery state, derived from the row: `failed`
         (status failed / dead-lettered; see `error`), `replied` (the recipient
-        sent a DM back in the conversation), `consumed` (the recipient acked),
-        `delivered` (the receiving software accepted the row — `accepted_at`
-        set — or the host wrote it to the recipient's socket or push endpoint),
-        else `queued`. The raw `status` is kept beside it.
+        explicitly answered it: `reply_to_message_id` or a thread reply),
+        `consumed` (the recipient acked), `delivered` (the receiving software
+        holds the row and will process it: `accepted_at` set by
+        `delivery.accepted` — sent before any handler runs, from a durable
+        inbox or a queue backed by relaycast's re-delivery-until-ack — or an
+        `http_push` 2xx), else `queued` — including a row the host only
+        wrote to the recipient's socket (raw `status: delivered`, `accepted_at:
+        null`), which proves nothing about the client. The raw `status` is
+        kept beside it.
 
     SentDelivery:
       type: object
@@ -1012,6 +1030,15 @@ components:
           format: date-time
           nullable: true
           description: When the receiving software accepted the row; `null` until then.
+        replied_at:
+          type: string
+          format: date-time
+          nullable: true
+          description: When the recipient explicitly answered the message.
+        reply_message_id:
+          type: string
+          nullable: true
+          description: The recipient's reply once `replied_at` is set.
         error:
           type: string
           nullable: true
@@ -1058,7 +1085,7 @@ components:
           type: string
           format: date-time
           nullable: true
-          description: When the recipient sent a DM back in the conversation (DMs only).
+          description: When the recipient explicitly answered the message (`reply_to_message_id`, or a thread reply).
         reply_message_id:
           type: string
           nullable: true
@@ -4402,6 +4429,15 @@ paths:
                   enum: [wait, steer]
                   default: wait
                   description: Injection mode for the DM
+                reply_to_message_id:
+                  type: string
+                  description: >-
+                    The recipient's message this DM answers. Must be a message
+                    from the recipient in this conversation, else
+                    `400 invalid_request`. Marks that message's delivery to the
+                    sender of this DM as `replied` (`delivery.replied` to its
+                    sender) and is stored on the message as
+                    `reply_to_message_id`.
                 wait_ms:
                   type: integer
                   minimum: 0
@@ -4413,9 +4449,9 @@ paths:
                     delivery (`delivery.accepted`, or an `http_push` 2xx) or the
                     row settles (consumed, replied, failed), then answers with
                     the row's `state`; when the budget ends first it answers
-                    with the row as it stands (`queued`, or `delivered` with
-                    `accepted_at: null` after a socket write) while delivery
-                    continues. Not part of the idempotency fingerprint; a
+                    with the row as it stands (`state: queued`, even after a
+                    socket write — raw `status: delivered`, `accepted_at:
+                    null`) while delivery continues. Not part of the idempotency fingerprint; a
                     replay never parks. Hosts without a delivery waiter (the
                     workspace actor) answer at once.
       responses:
@@ -5125,12 +5161,13 @@ paths:
 
         Rows are returned in creation order and capped at 500. Each carries
         the raw `status` and the derived `state` (`queued`, `delivered`,
-        `consumed`, `replied`, `failed`), with `accepted_at` telling a
-        receiver's acceptance apart from a host-side socket write. Senders
-        also receive `delivery.delivered` (`accepted: true` once the receiving
-        software accepted the row, `false` for the host's socket write),
+        `consumed`, `replied`, `failed`); `delivered` requires `accepted_at`,
+        so a host-side socket write (raw `status: delivered`) still reads as
+        `queued`. Senders also receive `delivery.delivered` (`accepted: true`
+        once the receiving software accepted the row — the only value that
+        means the client has it; `false` for the host's socket write),
         `delivery.acked` (the recipient consumed it) and `delivery.replied`
-        (the recipient sent a DM back; `reply_message_id`) as they happen;
+        (the recipient explicitly answered it; `reply_message_id`) as they happen;
         `delivery.failed` already reports rejected, expired and unreachable
         rows. A send's `message.id` and `delivery.id` are the lookup keys here;
         the send's `Idempotency-Key` is the dedupe handle for retries.

@@ -7,3 +7,8 @@
 ALTER TABLE deliveries ADD COLUMN accepted_at INTEGER;
 ALTER TABLE deliveries ADD COLUMN replied_at INTEGER;
 ALTER TABLE deliveries ADD COLUMN reply_message_id TEXT;
+
+-- A reply names the message it answers (`reply_to_message_id` on POST /v1/dm,
+-- the parent of a thread reply), so `replied` is an explicit correlation,
+-- never inferred from conversation order.
+ALTER TABLE messages ADD COLUMN reply_to_message_id TEXT;

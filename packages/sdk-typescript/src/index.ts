@@ -57,7 +57,7 @@ export type {
   TakeOverAgentInput,
 } from './identity.js';
 export { WsClient } from './ws.js';
-export type { WsClientOptions, EventHandler } from './ws.js';
+export type { WsClientOptions, EventHandler, AcceptedDelivery } from './ws.js';
 export { NodeProviderClient, NodeRegistrationError } from './node-provider.js';
 export type {
   NodeProviderOptions,

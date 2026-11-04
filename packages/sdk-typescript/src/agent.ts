@@ -107,6 +107,11 @@ export interface SendDmOptions extends IdempotencyOption, DeliveryConfirmationOp
   mode?: 'wait' | 'steer';
   attachments?: string[];
   data?: Record<string, unknown> | null;
+  /**
+   * The recipient's message this DM answers (must be theirs, in this
+   * conversation). Marks that message's delivery `replied` for its sender.
+   */
+  replyTo?: string;
 }
 
 export interface SendMessageOptions extends IdempotencyOption, DeliveryConfirmationOption {
@@ -654,6 +659,7 @@ export class AgentClient {
       ...(opts?.attachments ? { attachments: opts.attachments } : {}),
       ...(opts?.data !== undefined ? { data: opts.data } : {}),
       mode: opts?.mode ?? 'wait',
+      ...(opts?.replyTo ? { replyToMessageId: opts.replyTo } : {}),
       ...(opts?.waitMs != null ? { waitMs: opts.waitMs } : {}),
     };
     return this.client.post('/v1/dm', body, idempotencyHeaders(opts));
@@ -671,6 +677,7 @@ export class AgentClient {
       ...(opts?.attachments ? { attachments: opts.attachments } : {}),
       ...(opts?.data !== undefined ? { data: opts.data } : {}),
       mode: opts?.mode ?? 'wait',
+      ...(opts?.replyTo ? { replyToMessageId: opts.replyTo } : {}),
       ...(opts?.waitMs != null ? { waitMs: opts.waitMs } : {}),
     };
     return this.client.post('/v1/dm', body, idempotencyHeaders(opts));

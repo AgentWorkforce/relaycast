@@ -800,14 +800,14 @@ export async function sweepUnreachableDeliveries(
 }
 
 /**
- * A DM the recipient sent back answers the sender's earlier deliveries in that
- * conversation: mark them `replied` and tell their senders
- * (`delivery.replied` with the reply's id). Best-effort after the reply
- * committed; DMs only (a channel post has no single party it answers).
+ * The replier explicitly answered `messageId` (a DM's `reply_to_message_id`,
+ * a thread reply's parent): mark that message's delivery to the replier
+ * `replied` and tell its sender (`delivery.replied` with the reply's id).
+ * Best-effort after the reply committed.
  */
-export async function notifyDmReply(
+export async function notifyMessageReplied(
   c: HonoContext,
-  input: { conversationId: string; replierAgentId: string; replyMessageId: string },
+  input: { messageId: string; recipientAgentId: string; replyMessageId: string },
 ): Promise<void> {
   const ctx = routingContextFromHono(c);
   const replied = await deliveryEngine.markDeliveriesReplied(ctx.db, ctx.workspaceId, input);

@@ -288,14 +288,49 @@ describe('AgentClient WebSocket integration', () => {
     },
   });
 
+  /** Settle the transport's ordered deliver chain (acceptance hooks resolve on microtasks). */
+  async function settleDeliveries(): Promise<void> {
+    for (let i = 0; i < 20; i += 1) await Promise.resolve();
+  }
+
+  const sentTypes = (ws: MockWebSocket) => ws.send.mock.calls.map(([payload]) => JSON.parse(String(payload)).type as string);
+
+  it('sends no delivery.accepted without a persistence hook, even when the engine lists the capability', async () => {
+    const handler = vi.fn();
+    for (const ws of [
+      { autoAcceptDeliveries: true },           // asked for, but nothing persists: stay honest
+      { acceptDelivery: async () => {} },       // a hook alone does not opt in
+      {},
+    ] as const) {
+      MockWebSocket.instances = [];
+      const agent = createAgent({ ws });
+      agent.on.dmReceived(handler);
+      agent.connect();
+      const socket = await nextSocket();
+      socket.simulateOpen();
+      await replyToRegistration(socket, ['delivery.accepted']);
+
+      socket.simulateMessage(deliverFrame(3));
+      await settleDeliveries();
+
+      const sent = socket.send.mock.calls.map(([payload]) => JSON.parse(String(payload)));
+      expect(sent.filter((frame) => frame.type === 'delivery.accepted')).toEqual([]);
+      expect(sent.filter((frame) => frame.type === 'delivery.ack')).toEqual([
+        { v: 1, type: 'delivery.ack', agent: 'worker', up_to_seq: 3 },
+      ]);
+    }
+    expect(handler).toHaveBeenCalledTimes(3);
+  });
+
   it('sends no delivery.accepted when the engine did not list the capability, but still acks', async () => {
-    const agent = createAgent();
+    const agent = createAgent({ ws: { autoAcceptDeliveries: true, acceptDelivery: async () => {} } });
     agent.connect();
     const ws = await nextSocket();
     ws.simulateOpen();
     await replyToRegistration(ws);
 
     ws.simulateMessage(deliverFrame(3));
+    await settleDeliveries();
 
     const sent = ws.send.mock.calls.map(([payload]) => JSON.parse(String(payload)));
     expect(sent.filter((frame) => frame.type === 'delivery.accepted')).toEqual([]);
@@ -304,8 +339,16 @@ describe('AgentClient WebSocket integration', () => {
     ]);
   });
 
-  it('accepts a deliver frame before any handler runs, and acks after dispatch', async () => {
-    const agent = createAgent();
+  it('accepts only after the persistence hook resolved, before any handler runs, and acks after dispatch', async () => {
+    const order: string[] = [];
+    let release!: () => void;
+    const stored = new Promise<void>((resolve) => { release = resolve; });
+    const acceptDelivery = vi.fn(async (delivery: { deliveryId: string; seq: number }) => {
+      order.push(`hook:${delivery.deliveryId}`);
+      await stored;
+      order.push('stored');
+    });
+    const agent = createAgent({ ws: { autoAcceptDeliveries: true, acceptDelivery } });
     agent.connect();
     const ws = await nextSocket();
     ws.simulateOpen();
@@ -313,10 +356,20 @@ describe('AgentClient WebSocket integration', () => {
 
     const framesWhenHandled: string[] = [];
     agent.on.dmReceived(() => {
-      framesWhenHandled.push(...ws.send.mock.calls.map(([payload]) => JSON.parse(String(payload)).type as string));
+      order.push('handler');
+      framesWhenHandled.push(...sentTypes(ws));
     });
 
     ws.simulateMessage(deliverFrame(7));
+    await settleDeliveries();
+    // Nothing is claimed while the store is still writing.
+    expect(acceptDelivery).toHaveBeenCalledWith(expect.objectContaining({ deliveryId: 'del_7', agent: 'worker', messageId: 'm_7', seq: 7, mode: 'wait' }));
+    expect(sentTypes(ws)).not.toContain('delivery.accepted');
+    expect(order).toEqual(['hook:del_7']);
+
+    release();
+    await settleDeliveries();
+    expect(order).toEqual(['hook:del_7', 'stored', 'handler']);
 
     // The acceptance was already on the wire when the handler ran; the ack was not.
     expect(framesWhenHandled).toContain('delivery.accepted');
@@ -330,6 +383,25 @@ describe('AgentClient WebSocket integration', () => {
     expect(sent.filter((frame) => frame.type === 'delivery.ack')).toEqual([
       { v: 1, type: 'delivery.ack', agent: 'worker', up_to_seq: 7 },
     ]);
+  });
+
+  it('still dispatches and acks a delivery whose persistence hook rejected, without accepting it', async () => {
+    const handler = vi.fn();
+    const agent = createAgent({ ws: { autoAcceptDeliveries: true, acceptDelivery: async () => { throw new Error('disk full'); } } });
+    agent.on.dmReceived(handler);
+    agent.connect();
+    const ws = await nextSocket();
+    ws.simulateOpen();
+    await replyToRegistration(ws, ['delivery.accepted']);
+
+    ws.simulateMessage(deliverFrame(8));
+    ws.simulateMessage(deliverFrame(9));
+    await settleDeliveries();
+
+    expect(handler).toHaveBeenCalledTimes(2);
+    const sent = ws.send.mock.calls.map(([payload]) => JSON.parse(String(payload)));
+    expect(sent.filter((frame) => frame.type === 'delivery.accepted')).toEqual([]);
+    expect(sent.filter((frame) => frame.type === 'delivery.ack').map((frame) => frame.up_to_seq)).toEqual([8, 9]);
   });
 
   it('on.deliveryReplied fires with the sender-side delivery.replied context update', async () => {

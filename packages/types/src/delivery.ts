@@ -16,9 +16,10 @@ export type DeliveryStatus = z.infer<typeof DeliveryStatusSchema>;
 //   failed    -> status failed / dead_lettered (`error` says why)
 //   replied   -> the recipient sent a DM back in the conversation (`replied_at`)
 //   consumed  -> the recipient acked (status acked)
-//   delivered -> the receiving software accepted it (`accepted_at`), or the
-//                host wrote it to the recipient's socket / push endpoint
-//                (`delivered_at`); `accepted_at` tells the two apart
+//   delivered -> the receiving software accepted it (`accepted_at`: the
+//                `delivery.accepted` frame or an http_push 2xx). A host-side
+//                socket write (raw status `delivered`, `delivered_at`) is NOT
+//                enough: it proves nothing about the client, so it stays
 //   queued    -> the row exists and delivery continues
 export const DeliveryStateSchema = z.enum(['queued', 'delivered', 'consumed', 'replied', 'failed']);
 export type DeliveryState = z.infer<typeof DeliveryStateSchema>;
@@ -109,10 +110,14 @@ export const SentDeliverySchema = z.object({
   id: z.string(),
   agent_id: z.string(),
   status: DeliveryStatusSchema,
-  /** Derived sender-facing state; `queued` at send time unless the send waited (`wait_ms`). */
+  /** Derived sender-facing state; `queued` at send time unless the send waited (`wait_ms`). `delivered` means the receiving software accepted it. */
   state: DeliveryStateSchema,
   /** When the receiving software accepted the row (`delivery.accepted`); `null` until then. */
   accepted_at: z.string().nullable(),
+  /** When the recipient explicitly answered the message; `null` until then. */
+  replied_at: z.string().nullable(),
+  /** The recipient's reply once `replied_at` is set. */
+  reply_message_id: z.string().nullable(),
   /** Failure reason once `state` is `failed`. */
   error: z.string().nullable(),
   expires_at: z.string().nullable(),

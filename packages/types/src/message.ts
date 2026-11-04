@@ -82,6 +82,8 @@ export const CoreMessagePayloadSchema = z.object({
   injection_mode: MessageInjectionModeSchema.optional(),
   attachments: z.array(FileAttachmentSchema).optional(),
   metadata: z.record(z.string(), z.unknown()).optional(),
+  /** The recipient's message this DM explicitly answers (`reply_to_message_id` on send). */
+  reply_to_message_id: z.string().nullable().optional(),
 });
 export type CoreMessagePayload = z.infer<typeof CoreMessagePayloadSchema>;
 
@@ -98,6 +100,8 @@ export const MessageWithMetaSchema = z.object({
   metadata: z.record(z.string(), z.unknown()).optional(),
   has_attachments: z.boolean(),
   thread_id: z.string().nullable(),
+  /** The message this one explicitly answers (a thread reply's parent); drives the sender's `replied` state. */
+  reply_to_message_id: z.string().nullable().optional(),
   attachments: z.array(FileAttachmentSchema),
   created_at: z.string(),
   reply_count: z.number(),

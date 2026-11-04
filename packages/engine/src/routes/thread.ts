@@ -9,7 +9,7 @@ import * as threadEngine from '../engine/thread.js';
 import { resolveMailboxConfig } from '../engine/mailboxConfig.js';
 import { resolveWorkspaceDeliveryPolicyFor } from '../engine/workspaceDeliveryPolicy.js';
 import { publishWorkspaceEvent } from './fanout.js';
-import { notifyDeliveryRejections, routeDeliveryOutcomes } from './deliveryRouting.js';
+import { notifyDeliveryRejections, routeDeliveryOutcomes, notifyMessageReplied } from './deliveryRouting.js';
 import { buildThreadReplyEventData } from '../engine/deliveryWire.js';
 import {
   getMessageObserverResource,
@@ -127,6 +127,14 @@ threadRoutes.post(
             'fanout delivery rejected',
           );
         }
+
+        // A thread reply answers its parent: that message's delivery to the
+        // replier is `replied` for the parent's sender.
+        runInBackground(
+          c,
+          notifyMessageReplied(c, { messageId: parentId, recipientAgentId: agentId, replyMessageId: String(publicReplyData.id) }),
+          'mark replied delivery',
+        );
 
         emitServerEvent(c, workspace.id, 'thread.reply.created', {
           message_id: publicReplyData.id,

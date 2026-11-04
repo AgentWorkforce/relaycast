@@ -38,19 +38,34 @@ must also copy migration `0081_delivery_confirmation.sql` into its
 
 Decisions:
 
-- **Acceptance is the authoritative `delivered`.** `accepted_at` is stamped by
+- **Acceptance is the only `delivered`.** `accepted_at` is stamped by
   `delivery.accepted` or an `http_push` 2xx (the receiving server's own
-  answer). A ws socket write still moves the row to `delivered` (compat) but
-  the sender's event says `accepted: false`, and the derived state keeps
-  `accepted_at` beside it so the two are never confused.
+  answer). A ws socket write still moves the raw `status` to `delivered`
+  (compatibility with #620 consumers) and still emits the sender's
+  `delivery.delivered`, but with `accepted: false`, and the derived `state`
+  stays `queued`: only `accepted: true` / `accepted_at` means the client has
+  it. The SDK sends the acceptance only after an application-supplied
+  persistence hook stored the frame; a client with no durable inbox sends
+  nothing and is reported `queued` → `consumed`, never `delivered`.
 - **`delivery.ack` stays the consumed signal**, stored as `acked`, exposed as
   `state: consumed`. An ack also stamps `accepted_at` if the receiver never
   sent the acceptance (consumed implies held).
-- **`replied` is DMs only.** A channel post has no single party whose later
-  message "answers" it; a DM does. Marking happens on the reply's send.
-- **`wait_ms` waits for acceptance or better**, never for a socket write: a
-  legacy receiver that sends no `delivery.accepted` runs the budget out and
-  the response says `delivered` with `accepted_at: null`.
+- **`replied` is explicit correlation only.** A DM names what it answers
+  with `reply_to_message_id` (verified: the recipient's own message, in that
+  conversation, else `400 invalid_request`); a thread reply answers its
+  parent. Exactly that message's delivery to the replier is marked. Nothing
+  is inferred from conversation order (the earlier draft's "mark every
+  unanswered DM" heuristic was dropped entirely), and a row still raw
+  `queued` — never handed to the recipient's software — is never marked: the
+  reply is accepted as a message, but the row cannot claim the recipient
+  answered what it never received. The correlation is stored on the reply
+  (`messages.reply_to_message_id`, exposed on message and DM history
+  responses).
+- **`wait_ms` waits for acceptance or better** (`state` past `queued`:
+  delivered, consumed, replied, failed), never for a socket write: a legacy
+  receiver that sends no `delivery.accepted` runs the budget out and the
+  response says `state: queued` (raw `status: delivered`, `accepted_at:
+  null`). A reply that lands during the wait answers it with `replied`.
 - **`client_message_id` was not added.** `messages` has no dedicated column
   for a caller-supplied id (only `metadata` JSON and the deliveries'
   `idempotency_key`), and the brief rules out a second migration for it.
@@ -65,18 +80,34 @@ Decisions:
 | `state` | Derived from | Meaning |
 | --- | --- | --- |
 | `failed` | `status` in `failed`, `dead_lettered` | not delivered; `error` says why |
-| `replied` | `replied_at` set | the recipient sent a DM back in the conversation (`reply_message_id`) |
+| `replied` | `replied_at` set | the recipient explicitly answered it: a DM with `reply_to_message_id`, or a thread reply (`reply_message_id`) |
 | `consumed` | `status = acked` | the recipient acknowledged (REST ack, node `delivery.ack`, `http_push` ack modes) |
-| `delivered` | `accepted_at` or `delivered_at` set (or `status = delivered`) | `accepted_at` set: the receiving software holds it. `accepted_at: null`: the host only wrote it to a socket |
-| `queued` | otherwise | the row exists; delivery continues |
+| `delivered` | `accepted_at` set | the receiving software durably holds it (`delivery.accepted`, or an `http_push` 2xx) |
+| `queued` | otherwise — including raw `status = delivered` with `accepted_at: null` | the row exists; delivery continues. A host-side socket write is not a receipt |
 
 Carried on: `POST /v1/dm` → `delivery`, `POST /v1/channels/:name/messages` →
-`deliveries[]` (`{ id, agent_id, status, state, accepted_at, error, expires_at }`),
+`deliveries[]` (`{ id, agent_id, status, state, accepted_at, replied_at, reply_message_id, error, expires_at }`),
 `GET /v1/messages/:id/deliveries` → `deliveries[]` (adds `created_at`,
 `delivered_at`, `acked_at`, `replied_at`, `reply_message_id`,
 `dead_lettered_at`, `read_at`).
 
 ## Wire contract: `delivery.accepted` (broker / SDK → relaycast)
+
+**Definition.** `delivery.accepted` means: *the receiving software holds this
+delivery and will process it*, sent before any handler runs. It is not a
+socket write (which proves only that bytes left the server) and not
+consumption (the later `delivery.ack`).
+
+**Where the durability of the claim comes from.** relaycast keeps the row
+unacked and re-delivers it on reconnect until the client's `delivery.ack`,
+so a client crash between acceptance and consumption is a re-delivery,
+never a loss. A client may therefore send the acceptance once the delivery
+is in its durable inbox **or** in an in-process queue that is backed by that
+server-side retention. The Relay Desktop spawn node does the latter: it
+queues, then acks only after writing the delivery into the agent session.
+The TypeScript SDK dispatches synchronously to handlers with no queue, so
+it sends the acceptance only behind the `acceptDelivery` persist hook; an
+in-memory handler client reports `queued` → `consumed`, never `delivered`.
 
 **Capability gate — never parse versions.** A successful `node.register`
 reply lists the inbound frames the engine understands beyond the baseline in
@@ -91,9 +122,11 @@ Re-read it on every connection: a reconnect may land on a different engine.
 {"v":1,"type":"reply","id":"r1","ok":true,"data":{"provider":{"name":"default","instance_id":"…"},"accepted_capabilities":[],"capabilities":["delivery.accepted"],"…":"…"}}
 ```
 
-Send it the moment the delivery is durably held by the receiving client
-(persisted, or at least queued in process for dispatch) and **before** any
-handler or model runs. Cumulative by `up_to_seq` like `delivery.ack`, or a
+Send it only once the delivery is held as defined above (a durable inbox,
+or a retention-backed in-process queue — not merely parsed in memory on
+the way to a handler) and **before** any handler or model runs. A client
+that holds neither must not send it; its deliveries are then reported
+`queued` until consumed, which is the truth. Cumulative by `up_to_seq` like `delivery.ack`, or a
 single row by `delivery_id`; at least one is required, both may be given.
 
 ```json
@@ -123,10 +156,11 @@ Sender-side events (workspace stream + the sender's node `context.update`):
 {"type":"delivery.replied","delivery_id":"del_…","message_id":"msg_…","agent_id":"agt_…","agent_name":"bob","status":"replied","reply_message_id":"msg_…","at":"…"}
 ```
 
-A ws socket write emits `delivery.delivered` with `accepted: false`; the
-acceptance then emits a second one with `accepted: true` (unless the
-acceptance landed before the host's batch was read, in which case only the
-accepted one is sent).
+A ws socket write emits `delivery.delivered` with `accepted: false` (kept
+for #620 consumers; the row's `state` is still `queued`); the acceptance
+then emits a second one with `accepted: true` (unless the acceptance landed
+before the host's batch was read, in which case only the accepted one is
+sent). Only `accepted: true` means the client has the message.
 
 ### Rust and Swift SDKs, Relay Desktop probe
 
@@ -164,10 +198,18 @@ short enough to sit inside a tool call.
   `GET /v1/messages/:id/deliveries`.
 - `wait_ms` is not part of the idempotency fingerprint.
 
-The TypeScript SDK gates its `delivery.accepted` on the reply's list
-(`autoAcceptDeliveries` stays the master switch).
+The TypeScript SDK sends `delivery.accepted` only when all three hold:
+`autoAcceptDeliveries: true` (default `false` — set it only when you persist
+deliveries durably before handlers run), an `acceptDelivery(delivery)`
+persistence hook is configured and has resolved for that frame, and the
+`node.register` reply listed the capability. A hook that throws or rejects
+sends no acceptance; the delivery is still dispatched to handlers and acked
+(an acceptance failure is not a delivery failure — the sender simply never
+sees `delivered` for that row). Frames are processed in arrival order behind
+a pending hook.
 
-TypeScript: `agent.dm('bob', text, { waitMs: 1000 })`,
+TypeScript: `agent.dm('bob', text, { waitMs: 1000, replyTo: theirMessageId })`,
+`agent.reply(parentId, text)` (thread reply; answers the parent),
 `agent.send('#general', text, { waitMs: 1000 })`; read `delivery.state` /
 `deliveries[].state`.
 
@@ -183,7 +225,8 @@ no-ops.
 ## Storage
 
 Migration `0081_delivery_confirmation.sql` adds nullable
-`deliveries.accepted_at`, `replied_at`, `reply_message_id` (no backfill, no
-index: both are read through the row's id or the message's deliveries).
-Reply marking reads at most 200 candidate rows per reply and updates them in
-D1-safe chunks; acceptance settles a cumulative range in id-indexed pages of 50.
+`deliveries.accepted_at`, `replied_at`, `reply_message_id` and
+`messages.reply_to_message_id` (no backfill, no index: rows are reached
+through the delivery's id or the message's deliveries). Reply marking is one
+UPDATE on the answered message's delivery to the replier; acceptance
+settles a cumulative range in id-indexed pages of 50.
