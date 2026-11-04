@@ -104,17 +104,19 @@ describe('durable delivery api', () => {
 
   it('returns the same 404 for an expired and cross-workspace delivery', async () => {
     const { ws, bob, messageId } = await seed();
-    await stack.runtime.deps.db.update(deliveries).set({ expiresAt: new Date(1) })
-      .where(and(eq(deliveries.workspaceId, ws.workspaceId), eq(deliveries.messageId, messageId)));
-    const expired = await pendingByMessage(bob.token, messageId);
-    expect(expired.status).toBe(404);
-    expect((await expired.json()).error.code).toBe('delivery_not_found');
-
     const other = await createWorkspace(stack.app, 'other-delivery-ws');
     const remote = await registerAgent(stack.app, other.workspaceKey, 'remote');
     const foreign = await pendingByMessage(remote.token, messageId);
     expect(foreign.status).toBe(404);
     expect((await foreign.json()).error.code).toBe('delivery_not_found');
+    const stillPending = await pendingByMessage(bob.token, messageId);
+    expect(stillPending.status).toBe(200);
+
+    await stack.runtime.deps.db.update(deliveries).set({ expiresAt: new Date(1) })
+      .where(and(eq(deliveries.workspaceId, ws.workspaceId), eq(deliveries.messageId, messageId)));
+    const expired = await pendingByMessage(bob.token, messageId);
+    expect(expired.status).toBe(404);
+    expect((await expired.json()).error.code).toBe('delivery_not_found');
   });
 
   it('finds a pending message beyond the first 200 queue entries', async () => {
