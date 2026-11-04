@@ -2,6 +2,7 @@ import { createServer, type IncomingMessage, type Server } from "node:http"
 import { realpathSync } from "node:fs"
 import { afterEach, beforeEach, describe, expect, it } from "vitest"
 import type { ArtifactStore } from "../artifacts.ts"
+import type { ArtifactStoreConfig } from "../config.ts"
 import { sha256Base64Url } from "../bundle.ts"
 import type { CompiledActor } from "../compile.ts"
 import { EXIT_USAGE, PACKAGE_DIR, run } from "../deploy.ts"
@@ -60,8 +61,10 @@ const compile = async (): Promise<CompiledActor> => ({ files: [{ path: "actors.m
 class MemoryArtifacts implements ArtifactStore {
     readonly objects = new Map<string, Uint8Array>()
     readonly bucket: string
-    constructor(bucket: string) {
+    readonly config: ArtifactStoreConfig
+    constructor(bucket: string, config: ArtifactStoreConfig) {
         this.bucket = bucket
+        this.config = config
     }
     async upload(objectName: string, bytes: Uint8Array) {
         this.objects.set(objectName, bytes)
@@ -80,8 +83,8 @@ describe("deploy.ts", () => {
     const invoke = (argv: string[], overrides: Record<string, string | undefined> = {}) =>
         run(argv, { ...env, ...overrides }, {
             compile,
-            artifactStore: (bucket) => {
-                const store = new MemoryArtifacts(bucket)
+            artifactStore: (bucket, config) => {
+                const store = new MemoryArtifacts(bucket, config)
                 stores.push(store)
                 return store
             },
@@ -136,6 +139,13 @@ describe("deploy.ts", () => {
             contract_hash: expect.stringMatching(/^sha256:[0-9a-f]{64}$/),
         })
         expect(err.join("\n")).not.toContain("admin-key")
+    })
+
+    it("uploads through the S3 store when DURABLE_ACTORS_ARTIFACT_STORE=s3", async () => {
+        expect(await invoke([], { DURABLE_ACTORS_ARTIFACT_STORE: "s3", AWS_REGION: "us-west-2" })).toBe(0)
+        expect(stores[0]!.config).toEqual({ kind: "s3", region: "us-west-2", forcePathStyle: false })
+        expect(err).toContain(`uploading s3://acme-actors/durable-actors/v3/artifacts/${UUID}/actors.mjs (${ACTOR_BYTES.byteLength} bytes)`)
+        expect(plane.requests).toHaveLength(1)
     })
 
     it("--dry-run compiles and prints the request without uploading or registering", async () => {
