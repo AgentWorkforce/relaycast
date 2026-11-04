@@ -27,7 +27,7 @@ import {
 } from './http.js';
 import { handleInternal } from './internal.js';
 import { errorText } from './log.js';
-import { chooseWorkspaceId, isWorkspaceIdTaken } from './workspaceId.js';
+import { BOOTSTRAP_PROOF_HEADER, chooseWorkspaceId, isWorkspaceIdTaken } from './workspaceId.js';
 
 export const SERVICE_NAME = 'relaycast-actors-gateway';
 /** How long a readiness answer from the control plane is reused. */
@@ -174,7 +174,17 @@ export function createRequestHandler(ctx: GatewayContext, options: RequestHandle
         if (probe.status === 401 || probe.status === 403) return sendError(res, 401, 'unauthorized', 'The owner credential was refused by its workspace');
         // Anything else (429 with its retry headers, a 5xx) is the owner workspace's answer, passed on so the client can retry.
         if (probe.status !== 200) return sendActorResponse(res, probe);
-        request = { ...request, headers: request.headers.filter(([name]) => name !== 'authorization') };
+        // The child's engine then sees an anonymous keyed create, so when the
+        // deployment requires proof the gateway proves the secret itself (as
+        // the internal create does), in place of anything the client sent.
+        const proof = ctx.config.workspaceBootstrapProofRequired ? ctx.config.workspaceBootstrapSecret : undefined;
+        request = {
+          ...request,
+          headers: [
+            ...request.headers.filter(([name]) => name !== 'authorization' && name !== BOOTSTRAP_PROOF_HEADER),
+            ...(proof === undefined ? [] : [[BOOTSTRAP_PROOF_HEADER, proof] as [string, string]]),
+          ],
+        };
       }
       let response = await ctx.actors.create(workspaceId, request, await ctx.credentialTags.tag(workspaceId), { signal });
       if (!chosen.keyed && isWorkspaceIdTaken(response)) {

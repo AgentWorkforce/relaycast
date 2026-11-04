@@ -61,9 +61,10 @@ export async function chooseWorkspaceId(req: IncomingMessage, policy: KeyedCreat
     return { error: { status: 503, code: 'workspace_create_idempotency_unavailable', message: 'Anonymous workspace create idempotency is not configured on this deployment' } };
   }
   // The engine's anonymous keyed create is one with no Authorization header
-  // at all (any other non-owner bearer it answers 401 itself). The proof is
-  // compared in constant time against the secret's exact bytes.
-  if (policy.proofRequired && req.headers.authorization === undefined) {
+  // (any other non-owner bearer it answers 401 itself); a blank one is as
+  // good as none here, so the gate still applies. The proof is compared in
+  // constant time against the secret's exact bytes.
+  if (policy.proofRequired && !req.headers.authorization?.trim()) {
     const proof = presentedProof(req);
     if (!proof || !constantTimeEqual(proof, policy.bootstrapSecret)) {
       return { error: { status: 401, code: 'workspace_create_bootstrap_secret_invalid', message: 'A valid workspace bootstrap secret is required for anonymous idempotent workspace creation' } };

@@ -120,17 +120,19 @@ describe('internal admin API', () => {
     expect(keyed.status).toBe(201);
     const [keyedCall] = harness.controlPlane.invocations;
     expect(keyedCall.actorId).toBe(await deriveKeyedWorkspaceId(secret, 'cccccccccccccccccccccccccccccccc'));
-    const keyedHeaders = (keyedCall.args[0] as { headers: [string, string][] }).headers;
-    expect(keyedHeaders).toContainEqual(['x-workspace-bootstrap-secret', secret]);
-    expect(keyedHeaders).toContainEqual(['idempotency-key', 'cccccccccccccccccccccccccccccccc']);
+    const proofHeaders = (index: number) => (harness!.controlPlane.invocations[index].args[0] as { headers: [string, string][] }).headers
+      .filter(([name]) => name === 'x-workspace-bootstrap-secret');
+    // Exactly the gateway's proof, once.
+    expect(proofHeaders(0)).toEqual([['x-workspace-bootstrap-secret', secret]]);
+    expect((keyedCall.args[0] as { headers: [string, string][] }).headers).toContainEqual(['idempotency-key', 'cccccccccccccccccccccccccccccccc']);
     // A caller's own proof header is not what travels; the synthesized request is the gateway's.
     const presented = await create({ 'idempotency-key': 'cccccccccccccccccccccccccccccccc', 'x-workspace-bootstrap-secret': 'not-the-configured-secret' });
     expect(presented.status).toBe(201);
-    expect((harness.controlPlane.invocations[1].args[0] as { headers: [string, string][] }).headers).toContainEqual(['x-workspace-bootstrap-secret', secret]);
+    expect(proofHeaders(1)).toEqual([['x-workspace-bootstrap-secret', secret]]);
     // An unkeyed internal create needs no proof and carries none.
     const unkeyed = await create({});
     expect(unkeyed.status).toBe(201);
-    expect((harness.controlPlane.invocations[2].args[0] as { headers: [string, string][] }).headers.map(([name]) => name)).not.toContain('x-workspace-bootstrap-secret');
+    expect(proofHeaders(2)).toEqual([]);
     expect(JSON.stringify(harness.logs)).not.toContain(secret);
   });
 

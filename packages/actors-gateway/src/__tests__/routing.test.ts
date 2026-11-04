@@ -306,6 +306,76 @@ describe('routing', () => {
     ]);
   });
 
+  it('proves the secret itself for an owner-keyed create when the deployment requires proof, in place of anything the client sent', async () => {
+    const secret = 'bootstrap-secret-0123456789abcdef';
+    harness = await startHarness({ workspace: echoWorkspace, env: { RELAYCAST_WORKSPACE_BOOTSTRAP_SECRET: secret, RELAYCAST_WORKSPACE_BOOTSTRAP_PROOF_REQUIRED: 'true' } });
+    const key = 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa';
+    const owner = await harness.credential(OTHER_WORKSPACE_ID, 'workspace');
+    const create = (headers: Record<string, string> = {}) => fetch(`${harness!.baseUrl}/v1/workspaces`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', 'idempotency-key': key, authorization: `Bearer ${owner}`, ...headers },
+      body: JSON.stringify({ name: 'team' }),
+    });
+    const proofHeaders = (call: { args: unknown[] }) => (call.args[0] as ActorHttpRequest).headers.filter(([name]) => name === 'x-workspace-bootstrap-secret');
+    // The bearer is checked in the owner's actor and dropped; the child sees an anonymous keyed create, so the gateway's proof travels with it.
+    const created = await create();
+    expect(created.status).toBe(201);
+    // A replay: the same owner and key reach the same actor, with the proof again.
+    const replayed = await create();
+    expect(replayed.status).toBe(201);
+    // A client-supplied header is replaced, not forwarded.
+    const bogus = await create({ 'x-workspace-bootstrap-secret': 'not-the-configured-secret' });
+    expect(bogus.status).toBe(201);
+    const childId = await deriveKeyedWorkspaceId(secret, key, OTHER_WORKSPACE_ID);
+    expect(harness.controlPlane.invocations.map((call) => [call.method, call.actorId])).toEqual([
+      ['handle', OTHER_WORKSPACE_ID], ['create', childId],
+      ['handle', OTHER_WORKSPACE_ID], ['create', childId],
+      ['handle', OTHER_WORKSPACE_ID], ['create', childId],
+    ]);
+    for (const call of harness.controlPlane.invocations.filter((invocation) => invocation.method === 'create')) {
+      expect(proofHeaders(call)).toEqual([['x-workspace-bootstrap-secret', secret]]);
+      expect((call.args[0] as ActorHttpRequest).headers.map(([name]) => name)).not.toContain('authorization');
+    }
+    expect(JSON.stringify(harness.logs)).not.toContain(secret);
+  });
+
+  it('treats a blank Authorization header as absent: the proof gate applies to the keyed create', async () => {
+    const secret = 'bootstrap-secret-0123456789abcdef';
+    harness = await startHarness({ workspace: echoWorkspace, env: { RELAYCAST_WORKSPACE_BOOTSTRAP_SECRET: secret, RELAYCAST_WORKSPACE_BOOTSTRAP_PROOF_REQUIRED: 'true' } });
+    // `fetch` normalizes header values, so the whitespace-only case goes through node:http as is.
+    const create = (authorization: string, proof?: string) => new Promise<{ status: number; body: string }>((resolve, reject) => {
+      const url = new URL(`${harness!.baseUrl}/v1/workspaces`);
+      const req = request({
+        host: url.hostname,
+        port: url.port,
+        path: url.pathname,
+        method: 'POST',
+        headers: {
+          'content-type': 'application/json',
+          'idempotency-key': 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+          authorization,
+          ...(proof === undefined ? {} : { 'x-workspace-bootstrap-secret': proof }),
+        },
+      }, (res) => {
+        const chunks: Buffer[] = [];
+        res.on('data', (chunk: Buffer) => chunks.push(chunk));
+        res.on('end', () => resolve({ status: res.statusCode ?? 0, body: Buffer.concat(chunks).toString('utf8') }));
+      });
+      req.on('error', reject);
+      req.end(JSON.stringify({ name: 'team' }));
+    });
+    for (const authorization of ['', '   ']) {
+      const refused = await create(authorization);
+      expect(refused.status, JSON.stringify(authorization)).toBe(401);
+      expect(JSON.parse(refused.body).error).toMatchObject({ code: 'workspace_create_bootstrap_secret_invalid' });
+    }
+    expect(harness.controlPlane.invocations).toHaveLength(0);
+    // With the proof it passes the gate and reaches the key's actor, whose engine answers the blank header itself.
+    expect((await create('', secret)).status).toBe(201);
+    expect(harness.controlPlane.invocations).toHaveLength(1);
+    expect(harness.controlPlane.invocations[0]).toMatchObject({ method: 'create', actorId: await deriveKeyedWorkspaceId(secret, 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa') });
+  });
+
   it('asks no proof when the deployment does not require one, and fails a keyed create closed before any proof when it has no secret', async () => {
     const secret = 'bootstrap-secret-0123456789abcdef';
     harness = await startHarness({ workspace: echoWorkspace, env: { RELAYCAST_WORKSPACE_BOOTSTRAP_SECRET: secret } });
