@@ -330,6 +330,13 @@ async function settleDelivery(
   result: AttemptDeliveryResult,
   now: Date,
 ): Promise<void> {
+  // A D1 settlement can resume after another consumer reclaimed the lease.
+  const ownsClaim = and(
+    eq(webhookDeliveries.id, delivery.id),
+    eq(webhookDeliveries.status, 'pending'),
+    eq(webhookDeliveries.attempts, delivery.attempts),
+    eq(webhookDeliveries.nextAttemptAt, delivery.nextAttemptAt),
+  );
   if (result.ok) {
     await db
       .update(webhookDeliveries)
@@ -339,7 +346,7 @@ async function settleDelivery(
         lastError: null,
         completedAt: now,
       })
-      .where(and(eq(webhookDeliveries.id, delivery.id), eq(webhookDeliveries.status, 'pending')));
+      .where(ownsClaim);
     return;
   }
 
@@ -352,7 +359,7 @@ async function settleDelivery(
         lastError: result.error,
         completedAt: now,
       })
-      .where(and(eq(webhookDeliveries.id, delivery.id), eq(webhookDeliveries.status, 'pending')));
+      .where(ownsClaim);
     return;
   }
 
@@ -365,7 +372,7 @@ async function settleDelivery(
         lastError: result.error,
         completedAt: now,
       })
-      .where(and(eq(webhookDeliveries.id, delivery.id), eq(webhookDeliveries.status, 'pending')));
+      .where(ownsClaim);
     return;
   }
 
@@ -377,7 +384,7 @@ async function settleDelivery(
       lastStatus: result.status,
       lastError: result.error,
     })
-    .where(and(eq(webhookDeliveries.id, delivery.id), eq(webhookDeliveries.status, 'pending')));
+    .where(ownsClaim);
 }
 
 async function deliverWithoutPersistence(

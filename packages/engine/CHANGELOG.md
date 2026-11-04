@@ -43,6 +43,7 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Fixed
 
+- Prevent stalled webhook delivery attempts from overwriting a newer attempt’s status or retry deadline after their lease is reclaimed.
 - Reduce database work during settled webhook outbox cleanup while preserving retention and deletion counts (migration `0082_pending_events_settled_retention.sql`).
 - A direct agent whose client reconnects before the server notices the old socket stays online: the new socket supersedes the old one instead of being refused `provider_instance_conflict`, on the Node self-host and the workspace actor.
 - After such a reconnect the agent's actions are invokable at once, instead of answering 503 `handler_unavailable` until the next heartbeat.
