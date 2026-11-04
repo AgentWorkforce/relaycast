@@ -207,9 +207,9 @@ dmRoutes.post(
       }
 
       // The sender's handle on the recipient's delivery row: `null` when no
-      // row was created (a replayed A2A acceptance, or a rejected delivery).
-      // Replays read `_delivery` back from the idempotency record, so a
-      // replayed response carries the same `delivery`.
+      // row was created (a rejected delivery). Replays read `_delivery` back
+      // from the idempotency record — KV or the durable claim the admission
+      // batch stamped — so a replayed response carries the same `delivery`.
       const sentDelivery = effectiveIdempotent.data._delivery;
       return jsonIdempotentOk(c, {
         ...effectiveIdempotent,

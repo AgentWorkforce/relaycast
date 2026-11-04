@@ -13,6 +13,7 @@ import {
 } from './harness.js';
 import { fetchDeliveryFanoutRecords } from '../../engine/deliveryWrites.js';
 import { notifySenderDeliveryReceipts } from '../../engine/deliveryReceipts.js';
+import { buildIdempotencyStorageKey } from '../../middleware/idempotency.js';
 import { routeDeliveryOutcomes } from '../../routes/deliveryRouting.js';
 
 type DeliveryReceipt = {
@@ -172,6 +173,59 @@ describe('sender-side delivery receipts', () => {
     expect(receipts.body.data!.deliveries).toEqual([expect.objectContaining({
       status: 'acked', delivered_at: expect.any(String), acked_at: expect.any(String), read_at: expect.any(String),
     })]);
+  });
+
+  it('carries the same delivery on an idempotent replay, whether KV or the durable claim answers it', async () => {
+    const ws = await createWorkspace(stack.app, 'receipts-dm-replay');
+    const alice = await registerAgent(stack.app, ws.workspaceKey, 'alice');
+    const bob = await registerAgent(stack.app, ws.workspaceKey, 'bob');
+
+    for (const replayPath of ['kv', 'durable'] as const) {
+      const key = `receipt-replay-${replayPath}`;
+      const send = () => stack.app.request('/v1/dm', authed(alice.token, {
+        method: 'POST',
+        headers: { 'Idempotency-Key': key },
+        body: JSON.stringify({ to: 'bob', text: `replayed from ${replayPath}` }),
+      }));
+      const first = await send();
+      expect(first.status).toBe(201);
+      const original = (await first.json()) as {
+        data: { id: string; delivery: { id: string; status: string; expires_at: string | null } | null };
+      };
+      expect(original.data.delivery).toEqual({ id: expect.any(String), status: 'queued', expires_at: expect.any(String) });
+      await stack.settle();
+
+      // Lose the KV record and its lock (an eviction or outage after the
+      // commit): the replay must then come from the durable direct-DM claim,
+      // which carries the receipt the admission batch stamped onto it.
+      const evictKv = async () => {
+        const stored = await buildIdempotencyStorageKey(ws.workspaceId, alice.agentId, 'dm:direct', key);
+        await Promise.all([stack.runtime.deps.kv.delete(stored), stack.runtime.deps.kv.delete(`${stored}:lock`)]);
+      };
+      if (replayPath === 'durable') await evictKv();
+      const replay = await send();
+      expect(replay.status).toBe(201);
+      expect(replay.headers.get('Idempotency-Replayed')).toBe('true');
+      expect(await replay.json()).toEqual(original);
+      await stack.settle();
+
+      // The replayed handle is the one row the send created, not a second one.
+      const receipts = await messageDeliveries(alice.token, original.data.id);
+      expect(receipts.body.data!.deliveries).toEqual([
+        expect.objectContaining({ id: original.data.delivery!.id, agent_id: bob.agentId, status: 'queued' }),
+      ]);
+
+      if (replayPath === 'durable') {
+        // The stamped receipt outlives the row: once the delivery is settled and
+        // pruned, the durable replay still repeats the original handle.
+        stack.runtime.handle.sqlite.prepare('DELETE FROM deliveries WHERE id = ?').run(original.data.delivery!.id);
+        await evictKv();
+        const afterPrune = await send();
+        expect(afterPrune.status).toBe(201);
+        expect(afterPrune.headers.get('Idempotency-Replayed')).toBe('true');
+        expect(await afterPrune.json()).toEqual(original);
+      }
+    }
   });
 
   it('reports read_at once the recipient marks the message read', async () => {

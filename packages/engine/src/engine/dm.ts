@@ -18,6 +18,7 @@ import {
   messageLogs,
   nodes,
   directDmIdempotency,
+  deliveries,
 } from '../db/schema.js';
 import { sha256Hex } from '../lib/crypto.js';
 import { runAtomicWrites, databaseConstraintKind, type AtomicWrite } from '../ports/database.js';
@@ -27,6 +28,7 @@ import { buildMessageLogWrite } from './console.js';
 import {
   buildDirectDeliveryWrite,
   fetchDirectDeliveryOutcomes,
+  type DeliveryFanoutRecord,
   type DeliveryOutcomeRecords,
 } from './deliveryWrites.js';
 import { DEFAULT_MAILBOX_DEPTH_CAP, DEFAULT_MAILBOX_TTL_MS, DEFAULT_OFFLINE_FANOUT_EXCLUDE_MS, type MailboxConfig } from './mailboxConfig.js';
@@ -489,6 +491,23 @@ async function promoteLegacyInbound(
   return { ...retained.response, _delivery: null, _delivery_rejections: [], _notifications_durable: true };
 }
 
+/** The sender's receipt the admission batch stamps onto a durable response record. */
+type StoredDeliveryReceipt = Pick<DeliveryFanoutRecord, 'id' | 'agentId' | 'status'> & { expiresAt: string | null };
+
+/**
+ * `_delivery` for a durably replayed send: the receipt `sendDm`'s admission
+ * batch stamped onto the record (`direct_dm_idempotency`, `a2a_egress_context`)
+ * once the delivery row existed, so the replay repeats the original `delivery`
+ * after the row is settled or pruned, as a KV replay does. Only the receipt
+ * fields are kept, and a replay never routes the row again
+ * (`_notifications_durable`), so the narrower shape stands in for the record.
+ * Records written before the stamp existed carry nothing and replay as `null`.
+ */
+function storedDelivery(response: object): SendDmResult['_delivery'] {
+  const { _delivery } = response as { _delivery?: StoredDeliveryReceipt | null };
+  return (_delivery ?? null) as SendDmResult['_delivery'];
+}
+
 async function replayAcceptedA2aEgress(db: Db, id: string): Promise<void> {
   try {
     await dispatchA2aEgress(db, id);
@@ -558,7 +577,7 @@ export async function sendDm(
     if (acceptedEgress) await replayAcceptedA2aEgress(db, acceptedEgress.id);
     return {
       ...(acceptedDirect.response as Omit<SendDmResult, '_delivery' | '_delivery_rejections'>),
-      _delivery: null,
+      _delivery: storedDelivery(acceptedDirect.response),
       _delivery_rejections: [],
       _notifications_durable: true,
       _idempotency_replayed: true,
@@ -611,7 +630,7 @@ export async function sendDm(
       await db.insert(a2aEgressContext).values({ id: accepted.id, messageId: accepted.messageId, response }).onConflictDoNothing();
       [context] = await db.select().from(a2aEgressContext).where(eq(a2aEgressContext.id, accepted.id));
     }
-    return { ...context.response, _delivery: null, _delivery_rejections: [], _notifications_durable: true };
+    return { ...context.response, _delivery: storedDelivery(context.response), _delivery_rejections: [], _notifications_durable: true };
   }
 
   const inboundId = options.inboundIdentity
@@ -806,6 +825,27 @@ export async function sendDm(
 
     if (inboundId) writes.push(writeDb.insert(a2aInbound).values({ id: inboundId, workspaceId, messageId, fingerprint: inboundFingerprint, response: publicResult }));
     if (egressId) writes.push(writeDb.insert(a2aEgressContext).values({ id: egressId, messageId, response: publicResult }));
+    if (deliveryId && (directClaimId || egressId)) {
+      // The claim and the egress context store the public response before the
+      // delivery row exists. Stamp the sender's receipt onto them in this same
+      // batch, so a durable replay repeats the original `delivery` even after
+      // the row is settled or pruned; a mailbox-rejected send (no row) stamps
+      // `null`. `json()` keeps the subquery result an object, not a string.
+      const receipt = sql`json((SELECT json_object(
+        'id', ${deliveries.id}, 'agentId', ${deliveries.agentId}, 'status', ${deliveries.status},
+        'expiresAt', strftime('%Y-%m-%dT%H:%M:%fZ', ${deliveries.expiresAt}, 'unixepoch')
+      ) FROM ${deliveries} WHERE ${deliveries.id} = ${deliveryId}))`;
+      if (directClaimId) {
+        writes.push(writeDb.update(directDmIdempotency)
+          .set({ response: sql`json_set(${directDmIdempotency.response}, '$._delivery', ${receipt})` })
+          .where(eq(directDmIdempotency.id, directClaimId)));
+      }
+      if (egressId) {
+        writes.push(writeDb.update(a2aEgressContext)
+          .set({ response: sql`json_set(${a2aEgressContext.response}, '$._delivery', ${receipt})` })
+          .where(eq(a2aEgressContext.id, egressId)));
+      }
+    }
     if (persistWebhookOutbox) {
       writes.push(writeDb.insert(pendingEvents).values({
         id: messageId,

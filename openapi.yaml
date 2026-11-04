@@ -947,8 +947,9 @@ components:
           nullable: true
           description: >-
             The recipient's durable delivery row, or `null` when none was created
-            (a replayed A2A acceptance, or a delivery the mailbox rejected — see
-            `delivery.failed`). `status` is `queued` at send time; follow
+            (a delivery the mailbox rejected — see `delivery.failed`). `status`
+            is `queued` at send time, and an idempotent replay repeats the
+            original value; follow
             `delivery.delivered` / `delivery.acked` events or
             `GET /messages/{id}/deliveries` for what happens next.
           type: object
