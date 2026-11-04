@@ -1,8 +1,14 @@
 import { Hono } from 'hono';
 import type { AppEnv } from '../env.js';
-import { requireAgentToken } from '../middleware/auth.js';
+import { requireAgentToken, requireWorkspaceRead } from '../middleware/auth.js';
 import { rateLimit } from '../middleware/rateLimit.js';
 import * as deliveryEngine from '../engine/delivery.js';
+import { notifySenderDeliveryReceipts } from '../engine/deliveryReceipts.js';
+import {
+  getMessageObserverResource,
+  getObserverTokenFromContext,
+  observerAllowsMessageResource,
+} from '../engine/observerToken.js';
 import { fanoutToAgents } from './fanout.js';
 import { runInBackground } from './background.js';
 import { errorResponse } from '../lib/httpError.js';
@@ -76,7 +82,8 @@ deliveryRoutes.post(
         return jsonNotFound(c, 'delivery_not_found', 'Delivery not found');
       }
       // Only fan out when this call actually transitioned the delivery, so
-      // idempotent retries don't emit duplicate notifications.
+      // idempotent retries don't emit duplicate notifications. The recipient
+      // keeps its `delivery.delivered`; the sender learns of the ack.
       if (result.changed) {
         runInBackground(
           c,
@@ -86,8 +93,47 @@ deliveryRoutes.post(
           }),
           'fanout delivery.delivered',
         );
+        runInBackground(
+          c,
+          notifySenderDeliveryReceipts({ db, engine: c.get('engine') }, workspace.id, [result.delivery.id], 'acked'),
+          'notify sender delivery.acked',
+        );
       }
       return jsonOk(c, result.delivery);
+    } catch (err: unknown) {
+      return errorResponse(c, err);
+    }
+  },
+);
+
+// GET /v1/messages/:id/deliveries - the sender's view of a message's deliveries.
+// A workspace key or an observer token with `messages:read` / `dms:read` (and
+// filters that admit the message) reads any message; an agent token reads
+// only messages it sent. Any other agent gets `message_not_found`, like
+// `POST /v1/messages/:id/read`, so the route reveals nothing about messages
+// the caller did not send. Node tokens are refused.
+deliveryRoutes.get(
+  '/messages/:id/deliveries',
+  requireWorkspaceRead(['messages:read', 'dms:read'], { allowNode: false }),
+  rateLimit,
+  async (c) => {
+    try {
+      const db = c.get('db');
+      const workspace = c.get('workspace');
+      const agent = c.get('agent');
+      const messageId = c.req.param('id');
+      const observer = getObserverTokenFromContext(c);
+      if (observer) {
+        const resource = await getMessageObserverResource(db, workspace.id, messageId);
+        if (!resource || !observerAllowsMessageResource(observer, resource, { normalScope: 'messages:read' })) {
+          return jsonNotFound(c, 'message_not_found', 'Message not found');
+        }
+      }
+      const result = await deliveryEngine.getMessageDeliveries(db, workspace.id, messageId);
+      if (!result || (agent && result.sender_agent_id !== agent.id)) {
+        return jsonNotFound(c, 'message_not_found', 'Message not found');
+      }
+      return jsonOk(c, { message_id: result.message_id, deliveries: result.deliveries });
     } catch (err: unknown) {
       return errorResponse(c, err);
     }
