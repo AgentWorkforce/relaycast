@@ -36,6 +36,8 @@ permissions:
 jobs:
   publish:
     name: Build and push
+    # Images ship to self-hosters: publish only from main, like publish-container.yml.
+    if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     timeout-minutes: 60
     steps:
