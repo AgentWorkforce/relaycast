@@ -176,6 +176,31 @@ class SeqWatermark {
   }
 }
 
+/**
+ * Steps run one after another in push order. An idle queue starts a step
+ * synchronously (so handlers see a delivery at once); a step that fails is
+ * reported and never stalls the next one.
+ */
+class SerialQueue {
+  private chain: Promise<void> = Promise.resolve();
+  private pending = 0;
+
+  push(step: () => Promise<void>, onError: (err: unknown) => void): void {
+    const run = (): Promise<void> => {
+      try {
+        return step();
+      } catch (err) {
+        return Promise.reject(err);
+      }
+    };
+    const next = this.pending === 0 ? run() : this.chain.then(run);
+    this.pending += 1;
+    this.chain = next.catch(onError).finally(() => {
+      this.pending -= 1;
+    });
+  }
+}
+
 export class WsClient {
   private token: string | (() => string | Promise<string>);
   private baseUrl: string;
@@ -185,9 +210,20 @@ export class WsClient {
   private autoAcceptDeliveries: boolean;
   private acceptDelivery?: (delivery: AcceptedDelivery) => Promise<void> | void;
   private ackMode: 'after-handlers' | 'on-receipt';
-  /** `deliver` frames are processed in arrival order; a failed step never stalls the next. */
-  private deliverChain: Promise<void> = Promise.resolve();
-  private deliverPending = 0;
+  /**
+   * Intake of `deliver` frames (persist, `delivery.accepted`) in arrival
+   * order; it never waits for handlers, so a slow handler holds neither later
+   * acceptances nor other agents.
+   */
+  private deliverIntake = new SerialQueue();
+  /**
+   * Handler dispatch and `delivery.ack`, ordered per agent: an agent's
+   * handlers see its deliveries in `seq` order, and a hung handler holds only
+   * that agent's later handlers and acks (its rows stay unacked server-side).
+   * Kept across reconnects: a replayed frame queues behind the earlier run of
+   * the same agent and shares its outcome through `inFlightEvents`.
+   */
+  private dispatchQueues = new Map<string, SerialQueue>();
   /**
    * Contiguous watermarks for `delivery.accepted` and `delivery.ack`, one per
    * agent (the engine numbers `seq` per agent row) and per connection.
@@ -636,85 +672,99 @@ export class WsClient {
     console.warn(`[relaycast] ${message}`, detail);
   }
 
-  /**
-   * Queue a `deliver` frame behind the ones before it. An idle queue starts
-   * the frame at once, so handlers still see it synchronously; a step that
-   * fails is logged and the next frame still runs.
-   */
+  /** Queue a `deliver` frame's intake behind the ones before it. */
   private queueDeliver(parsed: Record<string, unknown>): void {
     // Fenced at arrival: a frame still queued when the socket reconnects
     // belongs to the old connection even though it runs after the reopen.
     const generation = this.connectionGeneration;
-    const run = () => this.processDeliver(parsed, generation);
-    const step = this.deliverPending === 0 ? run() : this.deliverChain.then(run);
-    this.deliverPending += 1;
-    this.deliverChain = step.catch((err) => this.warn('delivery processing failed', err)).finally(() => {
-      this.deliverPending -= 1;
-    });
+    const seq = typeof parsed.seq === 'number' && Number.isFinite(parsed.seq) ? parsed.seq : null;
+    const deliveryId = typeof parsed.delivery_id === 'string' ? parsed.delivery_id : null;
+    this.deliverIntake.push(
+      () => this.processDeliver(parsed, generation),
+      (err) => this.warn('delivery intake failed; delivery left on the server for re-delivery', { deliveryId, seq, error: err }),
+    );
   }
 
   /**
-   * One delivery, start to finish: persist (when accepting) -> `delivery.accepted`
-   * -> handlers -> `delivery.ack` once they all completed. Any failure leaves
-   * the row unacked on the server for re-delivery; nothing here throws.
+   * Intake of one delivery: persist (when accepting) -> `delivery.accepted`
+   * -> hand it to its agent's dispatch queue. A failed hook leaves the row on
+   * the server for re-delivery: neither accept, dispatch nor ack.
    */
   private async processDeliver(parsed: Record<string, unknown>, generation: number): Promise<void> {
     const seq = typeof parsed.seq === 'number' && Number.isFinite(parsed.seq) ? parsed.seq : null;
     const agent = typeof parsed.agent === 'string' ? parsed.agent : null;
     const deliveryId = typeof parsed.delivery_id === 'string' ? parsed.delivery_id : null;
     const hook = this.acceptDelivery;
-    try {
-      if (this.autoAcceptDeliveries && hook !== undefined && agent !== null && seq !== null && deliveryId !== null
-        && this.engineCapabilities.has('delivery.accepted')) {
-        const delivery: AcceptedDelivery = {
-          deliveryId,
-          agent,
-          agentId: typeof parsed.agent_id === 'string' ? parsed.agent_id : null,
-          messageId: typeof parsed.msg_id === 'string' ? parsed.msg_id : null,
-          seq,
-          mode: typeof parsed.mode === 'string' ? parsed.mode : null,
-          payload: isRecord(parsed.payload) ? parsed.payload : null,
-        };
-        try {
-          await hook(delivery);
-        } catch (err) {
-          // Nothing is stored: neither accept, dispatch nor ack. The server
-          // keeps the row and re-delivers it on reconnect.
-          this.warn('acceptDelivery failed; delivery left on the server for re-delivery', { deliveryId, seq, error: err });
-          return;
-        }
-        this.sendConfirmation('delivery.accepted', this.acceptWatermarks, generation, agent, deliveryId, seq);
-      }
-
-      const completed = this.dispatchDeliver(parsed);
-      if (!this.autoAckDeliveries || agent === null || seq === null) {
-        completed.catch((err) => this.warn('delivery handler failed', { deliveryId, seq, error: err }));
-        return;
-      }
-      if (this.ackMode === 'on-receipt') {
-        // Legacy: consumed means dispatched, whatever the handlers do.
-        if (generation === this.connectionGeneration) this.sendJson({ v: 1, type: 'delivery.ack', agent, up_to_seq: seq });
-        completed.catch((err) => this.warn('delivery handler failed after on-receipt ack', { deliveryId, seq, error: err }));
-        return;
-      }
+    if (this.autoAcceptDeliveries && hook !== undefined && agent !== null && seq !== null && deliveryId !== null
+      && this.engineCapabilities.has('delivery.accepted')) {
+      const delivery: AcceptedDelivery = {
+        deliveryId,
+        agent,
+        agentId: typeof parsed.agent_id === 'string' ? parsed.agent_id : null,
+        messageId: typeof parsed.msg_id === 'string' ? parsed.msg_id : null,
+        seq,
+        mode: typeof parsed.mode === 'string' ? parsed.mode : null,
+        payload: isRecord(parsed.payload) ? parsed.payload : null,
+      };
       try {
-        await completed;
+        await hook(delivery);
       } catch (err) {
-        this.warn('delivery handler failed; delivery left unconsumed for re-delivery', { deliveryId, seq, error: err });
+        // Nothing is stored: neither accept, dispatch nor ack. The server
+        // keeps the row and re-delivers it on reconnect.
+        this.warn('acceptDelivery failed; delivery left on the server for re-delivery', { deliveryId, seq, error: err });
         return;
       }
-      this.sendConfirmation('delivery.ack', this.ackWatermarks, generation, agent, deliveryId, seq);
-    } catch (err) {
-      this.warn('delivery processing failed; delivery left unconsumed for re-delivery', { deliveryId, seq, error: err });
+      this.sendConfirmation('delivery.accepted', this.acceptWatermarks, generation, agent, deliveryId, seq);
     }
+
+    let queue = this.dispatchQueues.get(agent ?? '');
+    if (queue === undefined) {
+      queue = new SerialQueue();
+      this.dispatchQueues.set(agent ?? '', queue);
+    }
+    queue.push(
+      () => this.consumeDeliver(parsed, generation, agent, seq, deliveryId),
+      (err) => this.warn('delivery processing failed; delivery left unconsumed for re-delivery', { deliveryId, seq, error: err }),
+    );
+  }
+
+  /**
+   * Handlers -> `delivery.ack` once they all completed. A handler failure
+   * leaves the row unacked on the server for re-delivery.
+   */
+  private async consumeDeliver(
+    parsed: Record<string, unknown>,
+    generation: number,
+    agent: string | null,
+    seq: number | null,
+    deliveryId: string | null,
+  ): Promise<void> {
+    const completed = this.dispatchDeliver(parsed, agent);
+    if (!this.autoAckDeliveries || agent === null || seq === null) {
+      completed.catch((err) => this.warn('delivery handler failed', { deliveryId, seq, error: err }));
+      return;
+    }
+    if (this.ackMode === 'on-receipt') {
+      // Legacy: consumed means dispatched, whatever the handlers do.
+      if (generation === this.connectionGeneration) this.sendJson({ v: 1, type: 'delivery.ack', agent, up_to_seq: seq });
+      completed.catch((err) => this.warn('delivery handler failed after on-receipt ack', { deliveryId, seq, error: err }));
+      return;
+    }
+    try {
+      await completed;
+    } catch (err) {
+      this.warn('delivery handler failed; delivery left unconsumed for re-delivery', { deliveryId, seq, error: err });
+      return;
+    }
+    this.sendConfirmation('delivery.ack', this.ackWatermarks, generation, agent, deliveryId, seq);
   }
 
   /** Hand a `deliver` frame's event to handlers; resolves once they all completed. */
-  private dispatchDeliver(parsed: Record<string, unknown>): Promise<void> {
+  private dispatchDeliver(parsed: Record<string, unknown>, recipient: string | null): Promise<void> {
     const payload = isRecord(parsed.payload) ? parsed.payload : null;
     if (!payload || typeof payload.type !== 'string') return Promise.resolve();
     const data = isRecord(payload.data) ? payload.data : {};
-    return this.emitServerLikeEvent(payload.type, data);
+    return this.emitServerLikeEvent(payload.type, data, recipient);
   }
 
   private watermarkFor(watermarks: Map<string, SeqWatermark>, agent: string): SeqWatermark {
@@ -762,20 +812,22 @@ export class WsClient {
    * front (a duplicate arriving while the handlers run shares that run's
    * outcome instead of starting another) and forgotten again if they fail,
    * so the server's re-delivery of an unconsumed frame reruns them before
-   * anything is acknowledged.
+   * anything is acknowledged. The key is scoped to the `recipient` agent: one
+   * message delivered to two agents hosted on this client is two deliveries,
+   * each with its own handler run and ack.
    */
-  private emitServerLikeEvent(eventType: string, data: Record<string, unknown>): Promise<void> {
+  private emitServerLikeEvent(eventType: string, data: Record<string, unknown>, recipient: string | null = null): Promise<void> {
     const transformed = this.transformServerLikeEvent(eventType, data);
     const dedupeKey =
       typeof transformed.id === 'string' && transformed.id.length > 0 && typeof transformed.type === 'string'
-        ? `${transformed.type}:${transformed.id}`
+        ? `${recipient === null ? '' : `${recipient}:`}${transformed.type}:${transformed.id}`
         : null;
     if (dedupeKey === null) return this.emitTransformedEvent(transformed);
     const inFlight = this.inFlightEvents.get(dedupeKey);
     if (inFlight !== undefined) {
       // Settled by the run in progress; rerun only if that run failed (it
       // forgets the key first, so the rerun below records it afresh).
-      return inFlight.then(undefined, () => this.emitServerLikeEvent(eventType, data));
+      return inFlight.then(undefined, () => this.emitServerLikeEvent(eventType, data, recipient));
     }
     if (this.seenEventIds.has(dedupeKey)) return Promise.resolve();
     this.rememberEventId(dedupeKey);

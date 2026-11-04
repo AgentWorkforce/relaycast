@@ -185,6 +185,15 @@ keep flowing. With a persistence hook configured, a hook failure means
 neither accept, dispatch nor ack. `ackMode: 'on-receipt'` restores the
 earlier synchronous ack-after-dispatch for clients that accept the loss.
 
+Intake and handler completion are separate stages. Intake (parse, the
+persistence hook, `delivery.accepted`) runs in arrival order and never waits
+for handlers; dispatch (handlers, then `delivery.ack`) is ordered per agent.
+A slow or hung handler therefore holds only that agent's later handlers and
+acks (those rows stay unacked server-side and are replayed on reconnect;
+on a new connection they are stored and accepted at once but handled only
+after the hung run let go), never the persistence or acceptance of later
+frames, and never another agent hosted on the same client.
+
 Sender-side events (workspace stream + the sender's node `context.update`):
 
 ```json
@@ -255,10 +264,12 @@ TypeScript: `agent.dm('bob', text, { waitMs: 1000, replyTo: theirMessageId })`,
 Retries of a send dedupe on `Idempotency-Key` (scope `dm:direct` /
 `channel-message:<channel>`, 24 h); the replay carries the same `message.id`
 and `delivery.id`, which are the keys for `GET /v1/messages/:id/deliveries`.
-Node delivery is at-least-once; the SDK dedupes redelivered frames by event
-id (only a frame whose handlers succeeded counts as seen: a re-delivery
-after a handler failure reruns the handlers before anything is acked), and
-`delivery.accepted` / `delivery.ack` for an already-settled row are no-ops.
+Node delivery is at-least-once; the SDK dedupes redelivered frames by
+recipient agent and event id (one message delivered to two agents hosted on
+the same client is handled and acked once per agent; only a frame whose
+handlers succeeded counts as seen, so a re-delivery after a handler failure
+reruns the handlers before anything is acked), and `delivery.accepted` /
+`delivery.ack` for an already-settled row are no-ops.
 
 ## Storage
 

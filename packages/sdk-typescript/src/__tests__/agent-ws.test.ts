@@ -272,22 +272,22 @@ describe('AgentClient WebSocket integration', () => {
     });
   }
 
-  /** A `deliver` frame for `agent` at its `seq`; `key` names the row and message (`del_<key>`, `m_<key>`). */
-  const deliverFrameFor = (agent: string, seq: number, key = String(seq)) => ({
+  /** A `deliver` frame for `agent` at its `seq`; `key` names the row (`del_<key>`) and, by default, the message (`m_<key>`). */
+  const deliverFrameFor = (agent: string, seq: number, key = String(seq), messageId = `m_${key}`) => ({
     v: 1,
     type: 'deliver',
     delivery_id: `del_${key}`,
     agent_id: 'agent_1',
     agent,
-    msg_id: `m_${key}`,
+    msg_id: messageId,
     seq,
     mode: 'wait',
     payload: {
       type: 'dm.received',
       data: {
-        conversation_id: 'dm_1', id: `m_${key}`, from_agent_id: 'bot_1', from_name: 'Bot', to: agent,
+        conversation_id: 'dm_1', id: messageId, from_agent_id: 'bot_1', from_name: 'Bot', to: agent,
         text: 'confirm me', created_at: '2026-09-24T05:00:00.000Z', attachments: [], metadata: {},
-        message: { id: `m_${key}`, agent_id: 'bot_1', agent_name: 'Bot', text: 'confirm me', attachments: [], metadata: {} },
+        message: { id: messageId, agent_id: 'bot_1', agent_name: 'Bot', text: 'confirm me', attachments: [], metadata: {} },
       },
     },
   });
@@ -302,6 +302,7 @@ describe('AgentClient WebSocket integration', () => {
   const sentFrames = (ws: MockWebSocket, type: string) =>
     ws.send.mock.calls.map(([payload]) => JSON.parse(String(payload))).filter((frame) => frame.type === type);
   const ack = (agent: string, form: { up_to_seq: number } | { delivery_id: string }) => ({ v: 1, type: 'delivery.ack', agent, ...form });
+  const accepted = (agent: string, form: { up_to_seq: number } | { delivery_id: string }) => ({ v: 1, type: 'delivery.accepted', agent, ...form });
 
   it('sends no delivery.accepted without a persistence hook, even when the engine lists the capability', async () => {
     const handler = vi.fn();
@@ -742,6 +743,158 @@ describe('AgentClient WebSocket integration', () => {
       ack('alice', { delivery_id: 'del_a2' }),
       ack('bob', { up_to_seq: 2 }),
     ]);
+  });
+
+  it('persists and accepts later frames while a handler hangs; their handlers and acks wait behind it in order', async () => {
+    const calls: string[] = [];
+    let release!: () => void;
+    const working = new Promise<void>((resolve) => { release = resolve; });
+    const acceptDelivery = vi.fn(async (_delivery: { deliveryId: string }) => {});
+    const agent = createAgent({ ws: { autoAcceptDeliveries: true, acceptDelivery } });
+    agent.on.dmReceived(async (event) => {
+      calls.push(event.message.id);
+      if (event.message.id === 'm_1') await working;
+    });
+    agent.connect();
+    const ws = await nextSocket();
+    ws.simulateOpen();
+    await replyToRegistration(ws, ['delivery.accepted']);
+
+    ws.simulateMessage(deliverFrame(1));
+    ws.simulateMessage(deliverFrame(2));
+    ws.simulateMessage(deliverFrame(3));
+    await settleDeliveries();
+    // Intake never waits for handlers: 2 and 3 are stored and accepted while 1 hangs.
+    expect(acceptDelivery.mock.calls.map(([delivery]) => delivery.deliveryId)).toEqual(['del_1', 'del_2', 'del_3']);
+    expect(sentFrames(ws, 'delivery.accepted')).toEqual([
+      accepted('worker', { up_to_seq: 1 }), accepted('worker', { up_to_seq: 2 }), accepted('worker', { up_to_seq: 3 }),
+    ]);
+    // Dispatch is ordered per agent: 2 and 3 are handled (and acked) only after 1 completed.
+    expect(calls).toEqual(['m_1']);
+    expect(sentFrames(ws, 'delivery.ack')).toEqual([]);
+
+    release();
+    await settleDeliveries();
+    expect(calls).toEqual(['m_1', 'm_2', 'm_3']);
+    expect(sentFrames(ws, 'delivery.ack')).toEqual([
+      ack('worker', { up_to_seq: 1 }), ack('worker', { up_to_seq: 2 }), ack('worker', { up_to_seq: 3 }),
+    ]);
+  });
+
+  it("one agent's hung handler holds neither another agent's handlers nor its acks", async () => {
+    const calls: string[] = [];
+    let release!: () => void;
+    const working = new Promise<void>((resolve) => { release = resolve; });
+    const agent = createAgent();
+    agent.on.dmReceived(async (event) => {
+      calls.push(event.message.id);
+      if (event.message.id === 'm_a1') await working;
+    });
+    agent.connect();
+    const ws = await nextSocket();
+    ws.simulateOpen();
+    await replyToRegistration(ws);
+
+    ws.simulateMessage(deliverFrameFor('alice', 1, 'a1'));
+    ws.simulateMessage(deliverFrameFor('bob', 1, 'b1'));
+    ws.simulateMessage(deliverFrameFor('alice', 2, 'a2'));
+    ws.simulateMessage(deliverFrameFor('bob', 2, 'b2'));
+    await settleDeliveries();
+    expect(calls).toEqual(['m_a1', 'm_b1', 'm_b2']);
+    expect(sentFrames(ws, 'delivery.ack')).toEqual([ack('bob', { up_to_seq: 1 }), ack('bob', { up_to_seq: 2 })]);
+
+    release();
+    await settleDeliveries();
+    expect(calls).toEqual(['m_a1', 'm_b1', 'm_b2', 'm_a2']);
+    expect(sentFrames(ws, 'delivery.ack')).toEqual([
+      ack('bob', { up_to_seq: 1 }), ack('bob', { up_to_seq: 2 }), ack('alice', { up_to_seq: 1 }), ack('alice', { up_to_seq: 2 }),
+    ]);
+  });
+
+  it('accepts replayed frames on a new connection at once while an old-generation handler still hangs; handlers and acks wait behind it', async () => {
+    const calls: string[] = [];
+    let release!: () => void;
+    const working = new Promise<void>((resolve) => { release = resolve; });
+    const acceptDelivery = vi.fn(async () => {});
+    const agent = createAgent({ ws: { autoAcceptDeliveries: true, acceptDelivery } });
+    agent.on.dmReceived(async (event) => {
+      calls.push(event.message.id);
+      if (event.message.id === 'm_8') await working;
+    });
+    agent.connect();
+    const ws = await nextSocket();
+    ws.simulateOpen();
+    await replyToRegistration(ws, ['delivery.accepted']);
+
+    ws.simulateMessage(deliverFrame(8));
+    ws.simulateMessage(deliverFrame(9));
+    await settleDeliveries();
+    expect(sentFrames(ws, 'delivery.accepted')).toEqual([accepted('worker', { up_to_seq: 8 }), accepted('worker', { up_to_seq: 9 })]);
+    expect(calls).toEqual(['m_8']);
+
+    ws.simulateClose();
+    await vi.advanceTimersByTimeAsync(1000);
+    const ws2 = await nextSocket(1);
+    ws2.simulateOpen();
+    await replyToRegistration(ws2, ['delivery.accepted']);
+
+    // The server replays both unacked rows: stored and accepted immediately on
+    // the new connection, handled only once the hung run let the agent's queue go.
+    ws2.simulateMessage(deliverFrame(8));
+    ws2.simulateMessage(deliverFrame(9));
+    await settleDeliveries();
+    expect(acceptDelivery).toHaveBeenCalledTimes(4);
+    expect(sentFrames(ws2, 'delivery.accepted')).toEqual([accepted('worker', { up_to_seq: 8 }), accepted('worker', { up_to_seq: 9 })]);
+    expect(calls).toEqual(['m_8']);
+    expect(sentFrames(ws, 'delivery.ack')).toEqual([]);
+    expect(sentFrames(ws2, 'delivery.ack')).toEqual([]);
+
+    release();
+    await settleDeliveries();
+    // Each message was handled once; the old-generation outcomes were dropped,
+    // the replays shared them and acked on the new connection in order.
+    expect(calls).toEqual(['m_8', 'm_9']);
+    expect(sentFrames(ws, 'delivery.ack')).toEqual([]);
+    expect(sentFrames(ws2, 'delivery.ack')).toEqual([ack('worker', { up_to_seq: 8 }), ack('worker', { up_to_seq: 9 })]);
+  });
+
+  it('handles one message delivered to two hosted agents once per recipient: dedupe is per agent', async () => {
+    const handler = vi.fn();
+    const agent = createAgent();
+    agent.on.dmReceived(handler);
+    agent.connect();
+    const ws = await nextSocket();
+    ws.simulateOpen();
+    await replyToRegistration(ws);
+
+    ws.simulateMessage(deliverFrameFor('alice', 1, 'a1', 'm_shared'));
+    ws.simulateMessage(deliverFrameFor('bob', 1, 'b1', 'm_shared'));
+    await settleDeliveries();
+    expect(handler).toHaveBeenCalledTimes(2);
+    expect(handler.mock.calls.map(([event]) => event.message.id)).toEqual(['m_shared', 'm_shared']);
+    expect(sentFrames(ws, 'delivery.ack')).toEqual([ack('alice', { up_to_seq: 1 }), ack('bob', { up_to_seq: 1 })]);
+  });
+
+  it("skips one agent's re-delivered copy of a message without touching another agent's first copy", async () => {
+    const handler = vi.fn();
+    const agent = createAgent();
+    agent.on.dmReceived(handler);
+    agent.connect();
+    const ws = await nextSocket();
+    ws.simulateOpen();
+    await replyToRegistration(ws);
+
+    ws.simulateMessage(deliverFrameFor('alice', 1, 'a1', 'm_shared'));
+    await settleDeliveries();
+    ws.simulateMessage(deliverFrameFor('alice', 1, 'a1', 'm_shared'));
+    await settleDeliveries();
+    expect(handler).toHaveBeenCalledTimes(1);
+    expect(sentFrames(ws, 'delivery.ack')).toEqual([ack('alice', { up_to_seq: 1 }), ack('alice', { delivery_id: 'del_a1' })]);
+
+    ws.simulateMessage(deliverFrameFor('bob', 1, 'b1', 'm_shared'));
+    await settleDeliveries();
+    expect(handler).toHaveBeenCalledTimes(2);
+    expect(sentFrames(ws, 'delivery.ack').at(-1)).toEqual(ack('bob', { up_to_seq: 1 }));
   });
 
   it('on.deliveryReplied fires with the sender-side delivery.replied context update', async () => {
