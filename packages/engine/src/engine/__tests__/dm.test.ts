@@ -744,9 +744,11 @@ describe('inbound policy admission at commit', () => {
     expect(narrowed).toBe(true);
     const stored = await db.select({ body: messages.body }).from(messages).where(eq(messages.workspaceId, ws));
     expect(stored).toEqual([]);
-    // The conversation is created after the pre-check and before the insert.
-    // Its presence is what shows the pre-check passed and the insert recheck failed.
+    // The shell is created after the pre-check. A refused send removes it so
+    // listing conversations cannot name the recipient the 404 just hid.
     const conversations = await db.select().from(dmConversations).where(eq(dmConversations.workspaceId, ws));
-    expect(conversations).toHaveLength(1);
+    expect(conversations).toEqual([]);
+    const roster = await db.select().from(dmParticipants);
+    expect(roster).toEqual([]);
   });
 });

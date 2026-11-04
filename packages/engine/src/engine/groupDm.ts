@@ -349,9 +349,24 @@ export async function addParticipant(
         INSERT INTO dm_participants (conversation_id, agent_id)
         SELECT ${conversationId}, ${invitee.id}
         WHERE ${admitted}
+        ON CONFLICT (conversation_id, agent_id) DO NOTHING
         RETURNING conversation_id
       `);
-  if (written.length === 0) throw participantNotAllowed();
+  if (written.length === 0) {
+    // A concurrent add of this same agent wins the primary key. That request
+    // already admitted them; this one reports membership instead of a 500.
+    const [current] = await db
+      .select({ leftAt: dmParticipants.leftAt })
+      .from(dmParticipants)
+      .where(and(
+        eq(dmParticipants.conversationId, conversationId),
+        eq(dmParticipants.agentId, invitee.id),
+      ));
+    if (current && !current.leftAt) {
+      return { conversation_id: conversationId, agent: inviteeAgentName, already_member: true };
+    }
+    throw participantNotAllowed();
+  }
 
   return { conversation_id: conversationId, agent: inviteeAgentName, already_member: false };
 }

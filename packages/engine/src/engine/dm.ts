@@ -293,6 +293,35 @@ async function resolveConversation(
 }
 
 /**
+ * A refused send must not leave the 1:1 shell `resolveConversation` just
+ * created. Listing that empty conversation would name the recipient after the
+ * send returned not-found. A conversation that already has a message stays.
+ */
+async function discardEmptyDirectConversation(
+  db: Db,
+  workspaceId: string,
+  conversationId: string,
+  channelId: string,
+): Promise<void> {
+  const [message] = await db
+    .select({ id: messages.id })
+    .from(messages)
+    .where(eq(messages.channelId, channelId))
+    .limit(1);
+  if (message) return;
+  await db.delete(dmParticipants).where(eq(dmParticipants.conversationId, conversationId));
+  await db.delete(dmConversations).where(and(
+    eq(dmConversations.id, conversationId),
+    eq(dmConversations.workspaceId, workspaceId),
+  ));
+  await db.delete(channels).where(and(
+    eq(channels.id, channelId),
+    eq(channels.workspaceId, workspaceId),
+    eq(channels.channelType, 1),
+  ));
+}
+
+/**
  * Persisted DM metadata. Server-owned keys go after caller metadata so a
  * federated peer cannot override how the local runtime is injected, and
  * `sanitizeUserMessageMetadata` already drops any caller-supplied
@@ -904,7 +933,9 @@ export async function sendDm(
     if (databaseConstraintKind(error) === 'address_changed') {
       // The insert predicate failed. An address that no longer matches and a
       // recipient that no longer admits this sender are the same not-found the
-      // pre-check returns, so the message is not stored.
+      // pre-check returns, so the message is not stored. Drop the empty shell
+      // created above so the conversation list cannot name that recipient.
+      await discardEmptyDirectConversation(db, workspaceId, conv.id, conv.channelId);
       if (options.address !== undefined) throw addressNotFound(options.address);
       throw codedError(`Agent "${data.to}" not found`, 'agent_not_found', 404);
     }

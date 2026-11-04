@@ -179,11 +179,7 @@ describe('inbound policy', () => {
       const set = await setPolicy(owner.token, 'owner', { mode: 'allowlist', allowed_agents: names });
       expect(set.status).toBe(200);
       const listed = new Set((set.body.data.allowed_agents as { name: string }[]).map((agent) => agent.name));
-      expect(listed.size).toBe(names.length);
-      expect(listed.has('peer-0')).toBe(true);
-      expect(listed.has('peer-89')).toBe(true);
-      expect(listed.has('peer-90')).toBe(true);
-      expect(listed.has('peer-255')).toBe(true);
+      expect(listed).toEqual(new Set(names));
       const read = await call(owner.token, 'GET', '/v1/agents/owner/inbound-policy');
       expect(read.status).toBe(200);
       expect(read.body.data.allowed_agents).toHaveLength(names.length);
@@ -326,5 +322,40 @@ describe('inbound policy', () => {
     const ids = members.map((row) => row.agent_id);
     expect(ids).toContain(z.agentId);
     expect(ids).not.toContain(x.agentId);
+  });
+
+  it('reports already a member when the same participant is added twice at once', async () => {
+    const ws = await createWorkspace(stack.app, 'same-add-ws');
+    const [y, x, w] = await Promise.all(
+      ['y', 'x', 'w'].map((name) => registerAgent(stack.app, ws.workspaceKey, name)),
+    );
+    const group = await call(y.token, 'POST', '/v1/dm/group', { participants: ['w'] });
+    expect(group.status).toBe(201);
+
+    const sqlite = stack.runtime.handle.sqlite;
+    const originalPrepare = sqlite.prepare.bind(sqlite);
+    let raced = false;
+    sqlite.prepare = ((source: string) => {
+      const stmt = originalPrepare(source);
+      if (/insert into dm_participants/i.test(source) && /on conflict/i.test(source)) {
+        const all = stmt.all.bind(stmt);
+        stmt.all = ((...args: unknown[]) => {
+          if (!raced) {
+            raced = true;
+            originalPrepare('INSERT INTO dm_participants (conversation_id, agent_id) VALUES (?, ?)').run(group.body.data.id, x.agentId);
+          }
+          return all(...args);
+        }) as typeof stmt.all;
+      }
+      return stmt;
+    }) as typeof sqlite.prepare;
+    try {
+      const add = await call(y.token, 'POST', `/v1/dm/${group.body.data.id}/participants`, { agent_name: 'x' });
+      expect(raced).toBe(true);
+      expect(add.status).toBe(200);
+      expect(add.body.data.already_member).toBe(true);
+    } finally {
+      sqlite.prepare = originalPrepare as typeof sqlite.prepare;
+    }
   });
 });
