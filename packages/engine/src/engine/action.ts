@@ -35,6 +35,7 @@ import {
   invocationEvent,
   invocationTouchedNode,
   nodeNamesFor,
+  recordEventsBeforeTerminal,
   recordInvocationEvent,
   registeredAgentForInvocation,
 } from './invocationEvents.js';
@@ -3543,13 +3544,10 @@ async function dispatchNodeInvocation(args: {
         eq(actionInvocations.workspaceId, args.workspaceId),
         eq(actionInvocations.id, args.invocationId),
       ));
-    if (settled && !OPEN_INVOCATION_STATUSES.some((status) => status === settled.status)) {
-      return { accepted: false, pending: false, sent: true, settled };
-    }
     // The socket owner's authorization CAS recorded this dispatch outside the
-    // engine. Record it on the timeline now, only while it is still this
-    // node's live dispatch.
-    await recordInvocationEvent(args.db, args.workspaceId, args.invocationId, [
+    // engine. A handler that already finished is no longer an open row, so the
+    // dispatch is inserted ahead of that result instead of being dropped.
+    const timeline = [
       ...(args.leadingEvents ?? []),
       invocationEvent('dispatched', {
         node_id: args.nodeId,
@@ -3558,10 +3556,16 @@ async function dispatchNodeInvocation(args: {
         agent_name: args.agent.name,
         ...(settled ? { attempt: settled.dispatchAttempts } : {}),
       }),
-    ], [
+    ];
+    if (settled && !OPEN_INVOCATION_STATUSES.some((status) => status === settled.status)) {
+      await recordEventsBeforeTerminal(args.db, args.workspaceId, args.invocationId, timeline);
+      return { accepted: false, pending: false, sent: true, settled };
+    }
+    const recorded = await recordInvocationEvent(args.db, args.workspaceId, args.invocationId, timeline, [
       eq(actionInvocations.dispatchedNodeId, args.nodeId),
       inArray(actionInvocations.status, OPEN_INVOCATION_STATUSES),
     ]);
+    if (!recorded) await recordEventsBeforeTerminal(args.db, args.workspaceId, args.invocationId, timeline);
     return { accepted: true, pending, sent: true };
   }
 

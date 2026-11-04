@@ -71,6 +71,70 @@ export function dispatchAttemptEvent(event: ActionInvocationEvent, incrementsAtt
     COALESCE(${actionInvocations.dispatchAttempts}, 0) + ${sql.raw(incrementsAttempt ? '1' : '0')})`;
 }
 
+const TERMINAL_TIMELINE_TYPES = new Set(['completed', 'failed', 'result_received']);
+
+/**
+ * Put `incoming` ahead of the first terminal event. A handler that finishes
+ * before the dispatch is recorded would otherwise leave a result with no
+ * dispatch. Returns null when that dispatch is already present.
+ */
+export function placeEventsBeforeTerminal(
+  existing: readonly ActionInvocationEvent[],
+  incoming: readonly ActionInvocationEvent[],
+): ActionInvocationEvent[] | null {
+  const dispatch = incoming.find((event) => event.type === 'dispatched');
+  if (dispatch && existing.some((event) => event.type === 'dispatched'
+    && event.node_id === dispatch.node_id
+    && event.attempt === dispatch.attempt)) {
+    return null;
+  }
+  const terminal = existing.findIndex((event) => TERMINAL_TIMELINE_TYPES.has(event.type));
+  const next = terminal < 0
+    ? [...existing, ...incoming]
+    : [...existing.slice(0, terminal), ...incoming, ...existing.slice(terminal)];
+  if (next.length <= INVOCATION_EVENT_LIMIT) return next;
+  const overflow = next.length - INVOCATION_EVENT_LIMIT;
+  return [next[0]!, ...next.slice(1 + overflow)];
+}
+
+/**
+ * Record events on a row the handler may already have completed. The open-status
+ * append cannot match that row, so this writes the dispatch ahead of the result.
+ */
+export async function recordEventsBeforeTerminal(
+  db: EngineDb,
+  workspaceId: string,
+  invocationId: string,
+  incoming: readonly ActionInvocationEvent[],
+): Promise<boolean> {
+  if (incoming.length === 0) return false;
+  try {
+    const [row] = await db
+      .select({ events: actionInvocations.events, status: actionInvocations.status })
+      .from(actionInvocations)
+      .where(and(
+        eq(actionInvocations.workspaceId, workspaceId),
+        eq(actionInvocations.id, invocationId),
+      ));
+    if (!row) return false;
+    const existing = Array.isArray(row.events) ? row.events : [];
+    const next = placeEventsBeforeTerminal(existing, incoming);
+    if (!next) return true;
+    const updated = await db
+      .update(actionInvocations)
+      .set({ events: next })
+      .where(and(
+        eq(actionInvocations.workspaceId, workspaceId),
+        eq(actionInvocations.id, invocationId),
+        eq(actionInvocations.status, row.status),
+      ))
+      .returning({ id: actionInvocations.id });
+    return updated.length > 0;
+  } catch {
+    return false;
+  }
+}
+
 /**
  * Append one event without changing state. Best-effort: a timeline write must
  * never fail the protocol step that observed it. `where` narrows which rows a

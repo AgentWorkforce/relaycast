@@ -9,6 +9,7 @@ import {
   INVOCATION_EVENT_LIMIT,
   explainInvocation,
   invocationEvent,
+  placeEventsBeforeTerminal,
   recordInvocationEvent,
 } from '../../engine/invocationEvents.js';
 
@@ -653,6 +654,16 @@ describe('spawn invocation timeline', () => {
     expect(row!.events).toHaveLength(INVOCATION_EVENT_LIMIT);
     expect(row!.events[0]).toMatchObject({ type: 'created' });
     expect(row!.events.at(-1)).toMatchObject({ reason: `probe-${INVOCATION_EVENT_LIMIT + 9}` });
+  });
+});
+
+describe('placeEventsBeforeTerminal', () => {
+  it('inserts a late dispatch ahead of the result and ignores a repeat', () => {
+    const dispatch = invocationEvent('dispatched', { node_id: 'node_a', attempt: 1 });
+    const completed = invocationEvent('completed', { node_id: 'node_a' });
+    const placed = placeEventsBeforeTerminal([completed], [dispatch]);
+    expect(placed?.map((event) => event.type)).toEqual(['dispatched', 'completed']);
+    expect(placeEventsBeforeTerminal(placed!, [dispatch])).toBeNull();
   });
 });
 
