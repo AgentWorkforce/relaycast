@@ -184,6 +184,17 @@ keeps the success in its watermark: N+1 is reported by `up_to_seq` once N is
 re-delivered and consumed, or replayed on the next connection and deduped
 there (its handlers do not run again). It never acks across the gap.
 
+Known limitation: the anchor is the first seq seen on the connection, not a
+server cursor. The direct node transport does no cursor handshake
+(`delivery_ack_seq` is only in the `agent.register` / `agent.recover` replies
+of cursor-aware providers), so if a live frame reaches a fresh connection
+before the reconnect replay of older unacked rows, the first cumulative
+confirmation can cover rows the client has not seen yet (they are still
+delivered and handled afterwards, but were confirmed early). The pre-12.8
+ack and `ackMode: 'on-receipt'` send `up_to_seq: seq` for every frame and
+have the same exposure, wider. Closing it means anchoring at the server's
+cursor (the handshake) — a follow-up, not part of this change.
+
 TS SDK behaviour (`ws.ts`): with `autoAckDeliveries`, `delivery.ack` is sent
 only after every handler for the delivery returned and every promise it
 returned resolved (`ackMode: 'after-handlers'`, the default); a handler that
@@ -256,10 +267,11 @@ The TypeScript SDK sends `delivery.accepted` only when all three hold:
 deliveries durably before handlers run), an `acceptDelivery(delivery)`
 persistence hook is configured and has resolved for that frame, and the
 `node.register` reply listed the capability. A hook that throws or rejects
-sends no acceptance; the delivery is still dispatched to handlers and acked
-(an acceptance failure is not a delivery failure — the sender simply never
-sees `delivered` for that row). Frames are processed in arrival order behind
-a pending hook.
+stored nothing, so that delivery is neither accepted, dispatched nor acked:
+it stays unacked on the server and is re-delivered on reconnect, when the
+hook and the handlers run again. Later frames on the connection still flow
+(intake is in arrival order; acceptance then uses the per-delivery form
+until the gap is re-delivered and persisted).
 
 TypeScript: `agent.dm('bob', text, { waitMs: 1000, replyTo: theirMessageId })`,
 `agent.reply(parentId, text)` (thread reply; answers the parent),

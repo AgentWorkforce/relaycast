@@ -502,6 +502,69 @@ describe('AgentClient WebSocket integration', () => {
     warnSpy.mockRestore();
   });
 
+  it('waits for a subscribe(channels, handler) callback before acking, and leaves the delivery unacked when it rejects', async () => {
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    let release!: () => void;
+    const working = new Promise<void>((resolve) => { release = resolve; });
+    const agent = createAgent();
+    agent.subscribe(['@self'], async (event) => {
+      if (event.message.id === 'm_2') throw new Error('model crashed');
+      await working;
+    });
+    const ws = await nextSocket();
+    ws.simulateOpen();
+    await replyToRegistration(ws, ['delivery.ack.delivery_id']);
+
+    ws.simulateMessage(deliverFrame(1));
+    await settleDeliveries();
+    expect(sentFrames(ws, 'delivery.ack')).toEqual([]);
+    release();
+    await settleDeliveries();
+    expect(sentFrames(ws, 'delivery.ack')).toEqual([ack('worker', { up_to_seq: 1 })]);
+
+    // The callback's rejection is the delivery's failure: 2 stays unacked, 3 is acked on its own.
+    ws.simulateMessage(deliverFrame(2));
+    ws.simulateMessage(deliverFrame(3));
+    await settleDeliveries();
+    expect(sentFrames(ws, 'delivery.ack')).toEqual([ack('worker', { up_to_seq: 1 }), ack('worker', { delivery_id: 'del_3' })]);
+    expect(warnSpy).toHaveBeenCalledWith(
+      expect.stringContaining('delivery handler failed; delivery left unconsumed'),
+      expect.objectContaining({ deliveryId: 'del_2', seq: 2 }),
+    );
+    warnSpy.mockRestore();
+  });
+
+  it("reports a delivery's failure only once every handler settled, so the agent's next delivery waits for a sibling handler still running", async () => {
+    let release!: () => void;
+    const slow = new Promise<void>((resolve) => { release = resolve; });
+    const seen: string[] = [];
+    const agent = createAgent();
+    agent.on.dmReceived(async (event) => {
+      seen.push(`fast:${event.message.id}`);
+      if (event.message.id === 'm_1') throw new Error('model crashed');
+    });
+    agent.on.dmReceived(async (event) => {
+      seen.push(`slow:${event.message.id}`);
+      if (event.message.id === 'm_1') await slow;
+    });
+    agent.connect();
+    const ws = await nextSocket();
+    ws.simulateOpen();
+    await replyToRegistration(ws, ['delivery.ack.delivery_id']);
+
+    ws.simulateMessage(deliverFrame(1));
+    ws.simulateMessage(deliverFrame(2));
+    await settleDeliveries();
+    // 1's first handler failed at once, but its second is still working: 2 waits behind it.
+    expect(seen).toEqual(['fast:m_1', 'slow:m_1']);
+    expect(sentFrames(ws, 'delivery.ack')).toEqual([]);
+
+    release();
+    await settleDeliveries();
+    expect(seen).toEqual(['fast:m_1', 'slow:m_1', 'fast:m_2', 'slow:m_2']);
+    expect(sentFrames(ws, 'delivery.ack')).toEqual([ack('worker', { delivery_id: 'del_2' })]);
+  });
+
   it('keeps processing later deliveries when a handler throws synchronously, without acking the failed one', async () => {
     const seen: string[] = [];
     const agent = createAgent();
@@ -1196,11 +1259,11 @@ describe('AgentClient WebSocket integration', () => {
     expect(ws.send.mock.calls.map(([payload]) => JSON.parse(String(payload))).some((frame) => frame.type === 'unsubscribe')).toBe(false);
   });
 
-  it('subscribe(channels, handler) logs rejected handler promises', async () => {
+  it('subscribe(channels, handler) logs a rejected handler promise on the workspace stream, where nothing waits for it', async () => {
     const agent = createAgent();
     const err = new Error('handler failed');
     const handler = vi.fn().mockRejectedValue(err);
-    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    const errorSpy = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
 
     agent.subscribe(['general'], handler);
     const ws = await nextSocket();
@@ -1216,7 +1279,7 @@ describe('AgentClient WebSocket integration', () => {
     }
 
     expect(handler).toHaveBeenCalledTimes(1);
-    expect(errorSpy).toHaveBeenCalledWith('[relaycast] Subscription handler failed', err);
+    expect(errorSpy).toHaveBeenCalledWith('[relaycast] event handler failed', { event: 'message.created', error: err });
     errorSpy.mockRestore();
   });
 

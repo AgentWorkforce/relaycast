@@ -438,15 +438,16 @@ export class AgentClient {
     this.connect();
     const key = Symbol('relaycast.subscription');
     const channelSet = new Set(normalized);
-    const invoke = (event: RelaycastMessageEvent): void => {
+    // The callback's outcome is handed back to the transport: on the node
+    // transport the `delivery.ack` waits for it, and a throw or rejection
+    // leaves the delivery unacked for re-delivery; on the workspace stream
+    // the transport logs it. Swallowing it here would ack while the
+    // application is still working, or after it failed.
+    const invoke = (event: RelaycastMessageEvent): Promise<void> | undefined => {
       if (!this.matchesSubscription(channelSet, event)) {
-        return;
+        return undefined;
       }
-      void Promise.resolve()
-        .then(() => onMessage(ensureRelaycastMessageEventId(event)))
-        .catch((err) => {
-          console.error('[relaycast] Subscription handler failed', err);
-        });
+      return Promise.resolve().then(() => onMessage(ensureRelaycastMessageEventId(event)));
     };
 
     const stops = [

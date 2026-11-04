@@ -588,15 +588,29 @@ export class WsClient {
     return this.isOpen;
   }
 
+  /**
+   * Dispatch synchronously; nothing waits for the handlers. A promise a
+   * handler returns is observed only to log its rejection (the workspace
+   * stream has no ack for it to hold back), never left unhandled.
+   */
   private emit(event: string, data: WsClientEvent): void {
-    this.handlers.get(event)?.forEach((h) => h(data));
-    this.handlers.get('*')?.forEach((h) => h(data));
+    const run = (handler: EventHandler) => {
+      const result = handler(data) as unknown;
+      if (result && typeof (result as Promise<unknown>).then === 'function') {
+        (result as Promise<unknown>).catch((err) => this.warn('event handler failed', { event, error: err }));
+      }
+    };
+    this.handlers.get(event)?.forEach(run);
+    this.handlers.get('*')?.forEach(run);
   }
 
   /**
    * Dispatch synchronously like {@link emit}, and resolve once every handler
-   * returned and every promise it returned settled; a throw or rejection
-   * rejects it. This is what a `delivery.ack` waits for.
+   * returned and every promise it returned settled; if any threw or
+   * rejected it rejects, but only once the others have settled too, so a
+   * failed delivery is not reported (and its agent's next delivery not
+   * started, nor a re-delivered copy re-run) while a sibling handler is
+   * still working on it. This is what a `delivery.ack` waits for.
    */
   private emitCollect(event: string, data: WsClientEvent): Promise<void> {
     const results: Promise<unknown>[] = [];
@@ -610,7 +624,10 @@ export class WsClient {
     };
     this.handlers.get(event)?.forEach(run);
     this.handlers.get('*')?.forEach(run);
-    return Promise.all(results).then(() => undefined);
+    return Promise.allSettled(results).then((settled) => {
+      const failed = settled.find((entry): entry is PromiseRejectedResult => entry.status === 'rejected');
+      if (failed) throw failed.reason;
+    });
   }
 
   private handleNodeMessage(parsed: unknown): boolean {
