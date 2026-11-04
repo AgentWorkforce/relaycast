@@ -26,8 +26,23 @@ export interface WsClientOptions {
   baseUrl?: string;
   path?: string;
   nodeRegistration?: () => Record<string, unknown> | Promise<Record<string, unknown>>;
-  /** Send `delivery.ack` (consumed) after each `deliver` frame is dispatched to handlers. */
-  autoAckDeliveries?: boolean;  /**
+  /**
+   * Send `delivery.ack` (consumed) for each `deliver` frame. With the default
+   * `ackMode: 'after-handlers'` the ack goes out only once every handler for
+   * that delivery has returned and every returned promise has resolved; a
+   * handler that throws or rejects leaves the delivery unacked, so the server
+   * re-delivers it on reconnect. Acks use a contiguous watermark: cumulative
+   * `up_to_seq` only while every lower seq on this connection was consumed,
+   * else the per-delivery `delivery_id` form.
+   */
+  autoAckDeliveries?: boolean;
+  /**
+   * `'after-handlers'` (default): ack after handlers complete, as above.
+   * `'on-receipt'`: the pre-12.8 behaviour — ack synchronously right after
+   * dispatch, whatever the handlers do. Only for clients that consume
+   * deliveries without durable handlers and accept the re-delivery loss.
+   */
+  ackMode?: 'after-handlers' | 'on-receipt';  /**
    * Send `delivery.accepted` — "the receiving software holds this delivery
    * and will process it" (not a socket write, not the later consumption
    * ack); the receipt a sender's `wait_ms` waits for and the only thing that
@@ -46,10 +61,11 @@ export interface WsClientOptions {
   /**
    * Persistence hook for {@link autoAcceptDeliveries}: write the delivery to
    * your durable inbox or store. `delivery.accepted` is sent only after it
-   * resolves. If it throws or rejects, no acceptance is sent, but the
-   * delivery is still dispatched to handlers and acked as usual: a failed
-   * acceptance is not a failed delivery, the sender merely never learns
-   * `delivered` for that row.
+   * resolves. If it throws or rejects, nothing is stored, so the delivery is
+   * neither accepted, dispatched nor acked: it stays unacked on the server and
+   * is re-delivered on reconnect. Later frames on the connection still
+   * process; acceptance then uses the per-delivery form until the gap is
+   * re-delivered and persisted.
    */
   acceptDelivery?: (delivery: AcceptedDelivery) => Promise<void> | void;
   maxReconnectAttempts?: number;
@@ -130,6 +146,36 @@ export interface AcceptedDelivery {
   payload: Record<string, unknown> | null;
 }
 
+/**
+ * A contiguous success watermark over a connection's `seq` stream. The first
+ * seq that arrives anchors it just below; a success extends it only while
+ * every lower seq since the anchor succeeded, so a cumulative `up_to_seq` is
+ * never claimed across a failed (unpersisted / unconsumed) row. Out-of-order
+ * successes are held and folded in once the gap closes.
+ */
+class SeqWatermark {
+  private high: number | null = null;
+  private readonly held = new Set<number>();
+
+  /** A seq arrived (whatever becomes of it): anchors the watermark on the first one. */
+  arrive(seq: number): void {
+    if (this.high === null) this.high = seq - 1;
+  }
+
+  /** Record a success; the new contiguous watermark when it moved, else `null` (a lower seq is still open). */
+  record(seq: number): number | null {
+    this.arrive(seq);
+    if (seq <= this.high!) return null;
+    this.held.add(seq);
+    if (seq !== this.high! + 1) return null;
+    while (this.held.has(this.high! + 1)) {
+      this.high! += 1;
+      this.held.delete(this.high!);
+    }
+    return this.high;
+  }
+}
+
 export class WsClient {
   private token: string | (() => string | Promise<string>);
   private baseUrl: string;
@@ -138,8 +184,13 @@ export class WsClient {
   private autoAckDeliveries: boolean;
   private autoAcceptDeliveries: boolean;
   private acceptDelivery?: (delivery: AcceptedDelivery) => Promise<void> | void;
-  /** `deliver` frames are processed in arrival order, even while an acceptance hook is pending. */
+  private ackMode: 'after-handlers' | 'on-receipt';
+  /** `deliver` frames are processed in arrival order; a failed step never stalls the next. */
   private deliverChain: Promise<void> = Promise.resolve();
+  private deliverPending = 0;
+  /** Per-connection contiguous watermarks for `delivery.accepted` and `delivery.ack`. */
+  private acceptWatermark = new SeqWatermark();
+  private ackWatermark = new SeqWatermark();
   private nodeMode: boolean;
   private lastNodeRegistration: Record<string, unknown> | null = null;
   /** The in-flight `node.register` request id, until its reply names the engine's capabilities. */
@@ -190,6 +241,7 @@ export class WsClient {
     this.nodeRegistration = options.nodeRegistration;
     this.autoAckDeliveries = options.autoAckDeliveries ?? false;
     this.acceptDelivery = options.acceptDelivery;
+    this.ackMode = options.ackMode ?? 'after-handlers';
     // Acceptance claims durable storage: only with a hook that provides it.
     this.autoAcceptDeliveries = options.autoAcceptDeliveries === true && typeof options.acceptDelivery === 'function';
     if (options.autoAcceptDeliveries === true && !this.autoAcceptDeliveries && options.debug) {
@@ -376,6 +428,9 @@ export class WsClient {
       const registration = await this.nodeRegistration();
       if (this.ws !== ws || this.closed) return;
       this.lastNodeRegistration = registration;
+      // A new connection replays from the server's cursor: watermarks restart.
+      this.acceptWatermark = new SeqWatermark();
+      this.ackWatermark = new SeqWatermark();
       // A new connection may reach a different engine: forget what the last
       // one announced until this registration's reply says.
       this.engineCapabilities = new Set();
@@ -484,55 +539,43 @@ export class WsClient {
     this.handlers.get('*')?.forEach((h) => h(data));
   }
 
+  /**
+   * Dispatch synchronously like {@link emit}, and resolve once every handler
+   * returned and every promise it returned settled; a throw or rejection
+   * rejects it. This is what a `delivery.ack` waits for.
+   */
+  private emitCollect(event: string, data: WsClientEvent): Promise<void> {
+    const results: Promise<unknown>[] = [];
+    const run = (handler: EventHandler) => {
+      try {
+        const result = handler(data) as unknown;
+        if (result && typeof (result as Promise<unknown>).then === 'function') results.push(result as Promise<unknown>);
+      } catch (err) {
+        results.push(Promise.reject(err));
+      }
+    };
+    this.handlers.get(event)?.forEach(run);
+    this.handlers.get('*')?.forEach(run);
+    return Promise.all(results).then(() => undefined);
+  }
+
   private handleNodeMessage(parsed: unknown): boolean {
     if (!isRecord(parsed) || typeof parsed.type !== 'string') return false;
 
     if (parsed.type === 'deliver') {
-      const addressed = typeof parsed.agent === 'string'
-        && typeof parsed.seq === 'number' && Number.isFinite(parsed.seq);
-      const hook = this.acceptDelivery;
-      const accepting = this.autoAcceptDeliveries && hook !== undefined && addressed
-        && typeof parsed.delivery_id === 'string' && this.engineCapabilities.has('delivery.accepted');
-      if (!accepting || hook === undefined) {
-        this.dispatchDeliver(parsed, addressed);
-        return true;
+      if (typeof parsed.seq === 'number' && Number.isFinite(parsed.seq)) {
+        this.acceptWatermark.arrive(parsed.seq);
+        this.ackWatermark.arrive(parsed.seq);
       }
-      // Durable acceptance first: the frame is stored by the application's
-      // hook, then the sender is told, then handlers (and the model behind
-      // them) run. Frames stay in arrival order behind a pending hook.
-      const delivery: AcceptedDelivery = {
-        deliveryId: parsed.delivery_id as string,
-        agent: parsed.agent as string,
-        agentId: typeof parsed.agent_id === 'string' ? parsed.agent_id : null,
-        messageId: typeof parsed.msg_id === 'string' ? parsed.msg_id : null,
-        seq: parsed.seq as number,
-        mode: typeof parsed.mode === 'string' ? parsed.mode : null,
-        payload: isRecord(parsed.payload) ? parsed.payload : null,
-      };
-      this.deliverChain = this.deliverChain.then(async () => {
-        try {
-          await hook(delivery);
-          this.sendJson({
-            v: 1,
-            type: 'delivery.accepted',
-            agent: delivery.agent,
-            delivery_id: delivery.deliveryId,
-            up_to_seq: delivery.seq,
-          });
-        } catch (err) {
-          // Not a delivery failure: the frame is still handled and acked; the
-          // sender simply never learns `delivered` for this row.
-          if (this.debug) console.warn('[relaycast] acceptDelivery failed; delivery.accepted not sent', err);
-        }
-        this.dispatchDeliver(parsed, addressed);
-      });
+      this.queueDeliver(parsed);
       return true;
     }
 
     if (parsed.type === 'context.update') {
       const eventType = typeof parsed.event === 'string' ? parsed.event : null;
       if (eventType) {
-        this.emitServerLikeEvent(eventType, isRecord(parsed.data) ? parsed.data : {});
+        this.emitServerLikeEvent(eventType, isRecord(parsed.data) ? parsed.data : {})
+          .catch((err) => this.warn('context handler failed', err));
       }
       return true;
     }
@@ -545,7 +588,7 @@ export class WsClient {
         handler_agent_id: typeof parsed.agent_id === 'string' ? parsed.agent_id : '',
         handler_agent_name: typeof parsed.agent_name === 'string' ? parsed.agent_name : undefined,
         input: isRecord(parsed.input) ? parsed.input : {},
-      });
+      }).catch((err) => this.warn('action handler failed', err));
       return true;
     }
 
@@ -575,24 +618,109 @@ export class WsClient {
     return parsed.type === 'reply' || parsed.type === 'error' || parsed.type === 'pong' || parsed.type === 'resync_ack';
   }
 
-  /** Hand a `deliver` frame's event to handlers, then send the consumed signal (`delivery.ack`). */
-  private dispatchDeliver(parsed: Record<string, unknown>, addressed: boolean): void {
-    const payload = isRecord(parsed.payload) ? parsed.payload : null;
-    if (payload && typeof payload.type === 'string') {
-      const data = isRecord(payload.data) ? payload.data : {};
-      this.emitServerLikeEvent(payload.type, data);
-    }
-    if (this.autoAckDeliveries && addressed) {
-      this.sendJson({
-        v: 1,
-        type: 'delivery.ack',
-        agent: parsed.agent,
-        up_to_seq: parsed.seq,
-      });
+  private warn(message: string, detail: unknown): void {
+    console.warn(`[relaycast] ${message}`, detail);
+  }
+
+  /**
+   * Queue a `deliver` frame behind the ones before it. An idle queue starts
+   * the frame at once, so handlers still see it synchronously; a step that
+   * fails is logged and the next frame still runs.
+   */
+  private queueDeliver(parsed: Record<string, unknown>): void {
+    const run = () => this.processDeliver(parsed);
+    const step = this.deliverPending === 0 ? run() : this.deliverChain.then(run);
+    this.deliverPending += 1;
+    this.deliverChain = step.catch((err) => this.warn('delivery processing failed', err)).finally(() => {
+      this.deliverPending -= 1;
+    });
+  }
+
+  /**
+   * One delivery, start to finish: persist (when accepting) -> `delivery.accepted`
+   * -> handlers -> `delivery.ack` once they all completed. Any failure leaves
+   * the row unacked on the server for re-delivery; nothing here throws.
+   */
+  private async processDeliver(parsed: Record<string, unknown>): Promise<void> {
+    const seq = typeof parsed.seq === 'number' && Number.isFinite(parsed.seq) ? parsed.seq : null;
+    const agent = typeof parsed.agent === 'string' ? parsed.agent : null;
+    const deliveryId = typeof parsed.delivery_id === 'string' ? parsed.delivery_id : null;
+    const hook = this.acceptDelivery;
+    try {
+      if (this.autoAcceptDeliveries && hook !== undefined && agent !== null && seq !== null && deliveryId !== null
+        && this.engineCapabilities.has('delivery.accepted')) {
+        const delivery: AcceptedDelivery = {
+          deliveryId,
+          agent,
+          agentId: typeof parsed.agent_id === 'string' ? parsed.agent_id : null,
+          messageId: typeof parsed.msg_id === 'string' ? parsed.msg_id : null,
+          seq,
+          mode: typeof parsed.mode === 'string' ? parsed.mode : null,
+          payload: isRecord(parsed.payload) ? parsed.payload : null,
+        };
+        try {
+          await hook(delivery);
+        } catch (err) {
+          // Nothing is stored: neither accept, dispatch nor ack. The server
+          // keeps the row and re-delivers it on reconnect.
+          this.warn('acceptDelivery failed; delivery left on the server for re-delivery', { deliveryId, seq, error: err });
+          return;
+        }
+        this.sendConfirmation('delivery.accepted', this.acceptWatermark, agent, deliveryId, seq);
+      }
+
+      const completed = this.dispatchDeliver(parsed);
+      if (!this.autoAckDeliveries || agent === null || seq === null) {
+        completed.catch((err) => this.warn('delivery handler failed', { deliveryId, seq, error: err }));
+        return;
+      }
+      if (this.ackMode === 'on-receipt') {
+        // Legacy: consumed means dispatched, whatever the handlers do.
+        this.sendJson({ v: 1, type: 'delivery.ack', agent, up_to_seq: seq });
+        completed.catch((err) => this.warn('delivery handler failed after on-receipt ack', { deliveryId, seq, error: err }));
+        return;
+      }
+      try {
+        await completed;
+      } catch (err) {
+        this.warn('delivery handler failed; delivery left unconsumed for re-delivery', { deliveryId, seq, error: err });
+        return;
+      }
+      this.sendConfirmation('delivery.ack', this.ackWatermark, agent, deliveryId, seq);
+    } catch (err) {
+      this.warn('delivery processing failed; delivery left unconsumed for re-delivery', { deliveryId, seq, error: err });
     }
   }
 
-  private emitServerLikeEvent(eventType: string, data: Record<string, unknown>): void {
+  /** Hand a `deliver` frame's event to handlers; resolves once they all completed. */
+  private dispatchDeliver(parsed: Record<string, unknown>): Promise<void> {
+    const payload = isRecord(parsed.payload) ? parsed.payload : null;
+    if (!payload || typeof payload.type !== 'string') return Promise.resolve();
+    const data = isRecord(payload.data) ? payload.data : {};
+    return this.emitServerLikeEvent(payload.type, data);
+  }
+
+  /**
+   * Report one success on the wire: cumulative `up_to_seq` while this
+   * connection's successes are contiguous, else the per-delivery
+   * `delivery_id` form (the engine applies a named row on its own).
+   */
+  private sendConfirmation(
+    type: 'delivery.accepted' | 'delivery.ack',
+    watermark: SeqWatermark,
+    agent: string,
+    deliveryId: string | null,
+    seq: number,
+  ): void {
+    const upTo = watermark.record(seq);
+    if (upTo !== null) {
+      this.sendJson({ v: 1, type, agent, up_to_seq: upTo });
+    } else if (deliveryId !== null) {
+      this.sendJson({ v: 1, type, agent, delivery_id: deliveryId });
+    }
+  }
+
+  private emitServerLikeEvent(eventType: string, data: Record<string, unknown>): Promise<void> {
     const transformed = this.transformServerLikeEvent(eventType, data);
     // Node delivery is at-least-once, so redelivered frames must be deduped
     // the same way the standard onmessage flow dedupes server events.
@@ -602,19 +730,20 @@ export class WsClient {
       typeof transformed.type === 'string'
     ) {
       const dedupeKey = `${transformed.type}:${transformed.id}`;
-      if (this.seenEventIds.has(dedupeKey)) return;
+      if (this.seenEventIds.has(dedupeKey)) return Promise.resolve();
       this.rememberEventId(dedupeKey);
     }
     const result = ServerEventSchema.safeParse(transformed);
     if (result.success) {
-      this.emit(result.data.type, camelizeKeys(result.data) as WsClientEvent);
-      return;
+      return this.emitCollect(result.data.type, camelizeKeys(result.data) as WsClientEvent);
     }
     if (typeof transformed.type === 'string') {
-      this.emit(transformed.type, camelizeKeys(transformed) as WsClientEvent);
-    } else if (this.debug) {
+      return this.emitCollect(transformed.type, camelizeKeys(transformed) as WsClientEvent);
+    }
+    if (this.debug) {
       console.warn('[relaycast] Dropped node event: missing or invalid "type" field', transformed);
     }
+    return Promise.resolve();
   }
 
   /** Normalize a direct-node delivery into the public workspace event shape. */

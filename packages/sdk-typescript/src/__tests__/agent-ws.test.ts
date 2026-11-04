@@ -245,6 +245,9 @@ describe('AgentClient WebSocket integration', () => {
         message: expect.objectContaining({ metadata: { relayflow: { version: 1 } } }),
       }),
     );
+    // The ack follows the handlers' completion, not the dispatch.
+    expect(ws.send.mock.calls.map(([p]) => JSON.parse(String(p)).type)).not.toContain('delivery.ack');
+    await settleDeliveries();
     expect(ws.send).toHaveBeenCalledWith(JSON.stringify({
       v: 1,
       type: 'delivery.ack',
@@ -376,7 +379,7 @@ describe('AgentClient WebSocket integration', () => {
     expect(framesWhenHandled).not.toContain('delivery.ack');
     const sent = ws.send.mock.calls.map(([payload]) => JSON.parse(String(payload)));
     expect(sent.filter((frame) => frame.type === 'delivery.accepted')).toEqual([
-      { v: 1, type: 'delivery.accepted', agent: 'worker', delivery_id: 'del_7', up_to_seq: 7 },
+      { v: 1, type: 'delivery.accepted', agent: 'worker', up_to_seq: 7 },
     ]);
     expect(sent.findIndex((frame) => frame.type === 'delivery.accepted'))
       .toBeLessThan(sent.findIndex((frame) => frame.type === 'delivery.ack'));
@@ -385,9 +388,13 @@ describe('AgentClient WebSocket integration', () => {
     ]);
   });
 
-  it('still dispatches and acks a delivery whose persistence hook rejected, without accepting it', async () => {
+  it('neither accepts, dispatches nor acks a delivery whose persistence hook rejected; later frames still flow per delivery', async () => {
     const handler = vi.fn();
-    const agent = createAgent({ ws: { autoAcceptDeliveries: true, acceptDelivery: async () => { throw new Error('disk full'); } } });
+    const failing = new Set([8]);
+    const acceptDelivery = vi.fn(async (delivery: { seq: number }) => {
+      if (failing.has(delivery.seq)) throw new Error('disk full');
+    });
+    const agent = createAgent({ ws: { autoAcceptDeliveries: true, acceptDelivery } });
     agent.on.dmReceived(handler);
     agent.connect();
     const ws = await nextSocket();
@@ -398,10 +405,102 @@ describe('AgentClient WebSocket integration', () => {
     ws.simulateMessage(deliverFrame(9));
     await settleDeliveries();
 
+    // 8 was never stored: the server keeps it for re-delivery. 9 was, but a
+    // gap is open below it, so both its receipts name the row, never a watermark.
+    expect(handler).toHaveBeenCalledTimes(1);
+    expect(handler.mock.calls[0]![0]).toMatchObject({ message: { id: 'm_9' } });
+    let sent = ws.send.mock.calls.map(([payload]) => JSON.parse(String(payload)));
+    expect(sent.filter((frame) => frame.type === 'delivery.accepted')).toEqual([
+      { v: 1, type: 'delivery.accepted', agent: 'worker', delivery_id: 'del_9' },
+    ]);
+    expect(sent.filter((frame) => frame.type === 'delivery.ack')).toEqual([
+      { v: 1, type: 'delivery.ack', agent: 'worker', delivery_id: 'del_9' },
+    ]);
+
+    // The server re-delivers 8; once it persists, the watermark closes over 9.
+    failing.clear();
+    ws.simulateMessage(deliverFrame(8));
+    await settleDeliveries();
     expect(handler).toHaveBeenCalledTimes(2);
-    const sent = ws.send.mock.calls.map(([payload]) => JSON.parse(String(payload)));
-    expect(sent.filter((frame) => frame.type === 'delivery.accepted')).toEqual([]);
-    expect(sent.filter((frame) => frame.type === 'delivery.ack').map((frame) => frame.up_to_seq)).toEqual([8, 9]);
+    sent = ws.send.mock.calls.map(([payload]) => JSON.parse(String(payload)));
+    expect(sent.filter((frame) => frame.type === 'delivery.accepted').at(-1)).toEqual(
+      { v: 1, type: 'delivery.accepted', agent: 'worker', up_to_seq: 9 },
+    );
+    expect(sent.filter((frame) => frame.type === 'delivery.ack').at(-1)).toEqual(
+      { v: 1, type: 'delivery.ack', agent: 'worker', up_to_seq: 9 },
+    );
+  });
+
+  it('acks only after every handler settled, never a delivery whose handler rejected', async () => {
+    let release!: () => void;
+    const working = new Promise<void>((resolve) => { release = resolve; });
+    const agent = createAgent();
+    agent.on.dmReceived(async (event) => {
+      if (event.message.id === 'm_2') throw new Error('model crashed');
+      await working;
+    });
+    agent.connect();
+    const ws = await nextSocket();
+    ws.simulateOpen();
+    await replyToRegistration(ws);
+
+    ws.simulateMessage(deliverFrame(1));
+    await settleDeliveries();
+    expect(sentTypes(ws)).not.toContain('delivery.ack');
+    release();
+    await settleDeliveries();
+    let acks = ws.send.mock.calls.map(([p]) => JSON.parse(String(p))).filter((f) => f.type === 'delivery.ack');
+    expect(acks).toEqual([{ v: 1, type: 'delivery.ack', agent: 'worker', up_to_seq: 1 }]);
+
+    // 2 rejects: unconsumed, held on the server. 3 succeeds behind the gap: per-delivery ack.
+    ws.simulateMessage(deliverFrame(2));
+    ws.simulateMessage(deliverFrame(3));
+    await settleDeliveries();
+    acks = ws.send.mock.calls.map(([p]) => JSON.parse(String(p))).filter((f) => f.type === 'delivery.ack');
+    expect(acks).toEqual([
+      { v: 1, type: 'delivery.ack', agent: 'worker', up_to_seq: 1 },
+      { v: 1, type: 'delivery.ack', agent: 'worker', delivery_id: 'del_3' },
+    ]);
+  });
+
+  it('keeps processing later deliveries when a handler throws synchronously, without acking the failed one', async () => {
+    const seen: string[] = [];
+    const agent = createAgent();
+    agent.on.dmReceived((event) => {
+      seen.push(event.message.id);
+      if (event.message.id === 'm_1') throw new Error('sync boom');
+    });
+    agent.connect();
+    const ws = await nextSocket();
+    ws.simulateOpen();
+    await replyToRegistration(ws);
+
+    ws.simulateMessage(deliverFrame(1));
+    ws.simulateMessage(deliverFrame(2));
+    ws.simulateMessage(deliverFrame(3));
+    await settleDeliveries();
+
+    expect(seen).toEqual(['m_1', 'm_2', 'm_3']);
+    const acks = ws.send.mock.calls.map(([p]) => JSON.parse(String(p))).filter((f) => f.type === 'delivery.ack');
+    expect(acks).toEqual([
+      { v: 1, type: 'delivery.ack', agent: 'worker', delivery_id: 'del_2' },
+      { v: 1, type: 'delivery.ack', agent: 'worker', delivery_id: 'del_3' },
+    ]);
+  });
+
+  it("ackMode 'on-receipt' keeps the legacy synchronous cumulative ack whatever the handler does", async () => {
+    const agent = createAgent({ ws: { ackMode: 'on-receipt' } });
+    agent.on.dmReceived(async () => { throw new Error('ignored by legacy mode'); });
+    agent.connect();
+    const ws = await nextSocket();
+    ws.simulateOpen();
+    await replyToRegistration(ws);
+
+    ws.simulateMessage(deliverFrame(5));
+    expect(ws.send.mock.calls.map(([p]) => JSON.parse(String(p))).filter((f) => f.type === 'delivery.ack')).toEqual([
+      { v: 1, type: 'delivery.ack', agent: 'worker', up_to_seq: 5 },
+    ]);
+    await settleDeliveries();
   });
 
   it('on.deliveryReplied fires with the sender-side delivery.replied context update', async () => {

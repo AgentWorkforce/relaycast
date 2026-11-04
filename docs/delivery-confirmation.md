@@ -145,8 +145,41 @@ frame is fire-and-forget (no reply); a malformed one gets the usual
 `error { code: invalid_message }`. It is admitted on a superseded socket and
 after workspace expiry, like `delivery.ack`.
 
-Then keep sending `delivery.ack { agent, up_to_seq }` once the delivery was
-handled, as today.
+Then send `delivery.ack` once the delivery was **consumed** — every handler
+for it completed — not when it was dispatched.
+
+### Per-delivery reports; watermarks only over contiguous successes
+
+Acceptance and consumption are reported **per delivery**. Both frames take
+either a cumulative `up_to_seq` or a single `delivery_id`:
+
+- `delivery_id` given → the engine applies the frame to that row only and
+  **ignores `up_to_seq`**. Rows are marked individually and may arrive out of
+  order (N+1 before N); nothing is ever inferred by range from a named row.
+- bare `up_to_seq` → every unsettled row with `seq <= up_to_seq` (acceptance),
+  or the cumulative ack cursor (consumption, as before).
+
+A client therefore keeps one contiguous watermark per connection and per
+frame type, anchored just below the first `seq` it receives on that
+connection: it sends `up_to_seq` only when every lower seq since the anchor
+succeeded (persisted, respectively consumed), and the `delivery_id` form
+otherwise. Persistence failing for N but succeeding for N+1 yields
+`{"type":"delivery.accepted","agent":"bob","delivery_id":"<N+1>"}` and
+nothing for N; when the server re-delivers N and it persists, the client
+sends `up_to_seq: N+1`. The same rule governs `delivery.ack` now that acks
+depend on handler success: a handler failure at N holds the ack watermark
+below N even if N+1 succeeded; N+1 is acked by `delivery_id` (the cursor
+does not move), and N stays unacked on the server until it is re-delivered
+and consumed, or the connection resets (a new connection replays from the
+server's cursor and starts fresh watermarks).
+
+TS SDK behaviour (`ws.ts`): with `autoAckDeliveries`, `delivery.ack` is sent
+only after every handler for the delivery returned and every promise it
+returned resolved (`ackMode: 'after-handlers'`, the default); a handler that
+throws or rejects leaves the delivery unacked (logged) and later deliveries
+keep flowing. With a persistence hook configured, a hook failure means
+neither accept, dispatch nor ack. `ackMode: 'on-receipt'` restores the
+earlier synchronous ack-after-dispatch for clients that accept the loss.
 
 Sender-side events (workspace stream + the sender's node `context.update`):
 
@@ -164,7 +197,7 @@ sent). Only `accepted: true` means the client has the message.
 
 ### Rust and Swift SDKs, Relay Desktop probe
 
-Neither SDK sends the frame yet; the engine treats them as legacy receivers
+Neither SDK sends the acceptance frame yet; the engine treats them as legacy receivers
 (socket-write `delivered`, `accepted_at: null`, `wait_ms` runs out). To adopt:
 remember `data.capabilities` from the `node.register` reply; if it contains
 `"delivery.accepted"`, then on receipt of a `deliver` frame, after storing it

@@ -474,6 +474,36 @@ async function ackRows(
   return ids.length > 0 ? results[results.length - 1] as DeliveryRow[] : [];
 }
 
+/**
+ * A node agent's per-delivery consumption (`delivery.ack { delivery_id }`):
+ * acks that row only, never moving the cumulative cursor (see
+ * {@link ackDelivery}), so an out-of-order success never hides an unconsumed
+ * lower seq from reconnect replay. `null` when the agent is not hosted by
+ * this node and provider.
+ */
+export async function ackNodeDelivery(
+  db: Db,
+  workspaceId: string,
+  nodeId: string,
+  providerName: string,
+  agentName: string,
+  deliveryId: string,
+): Promise<{ agent_id: string; agent_name: string; acked_delivery_ids: string[] } | null> {
+  const [agent] = await db
+    .select({ id: agents.id, name: agents.name })
+    .from(agents)
+    .where(and(
+      eq(agents.workspaceId, workspaceId),
+      eq(agents.name, agentName),
+      eq(agents.locationType, 'via_node'),
+      eq(agents.locationNodeId, nodeId),
+      eq(agents.providerName, providerName),
+    ));
+  if (!agent) return null;
+  const result = await ackDelivery(db, workspaceId, agent.id, deliveryId);
+  return { agent_id: agent.id, agent_name: agent.name, acked_delivery_ids: result?.changed ? [result.delivery.id] : [] };
+}
+
 export async function ackDeliveriesUpToSeq(
   db: Db,
   workspaceId: string,
@@ -575,8 +605,8 @@ export const DELIVERY_ACCEPT_BATCH_SIZE = DELIVERY_EXPIRY_BATCH_SIZE;
 
 /**
  * The receiving software's acceptance of a node agent's deliveries
- * (`delivery.accepted` frame): cumulative up to `upToSeq`, a single row by
- * `deliveryId`, or both. Every not-yet-accepted row that is still `queued` or
+ * (`delivery.accepted` frame): cumulative up to `upToSeq`, or a single row by
+ * `deliveryId` (which wins when both are given). Every not-yet-accepted row that is still `queued` or
  * `delivered` moves to `delivered` (`delivered_at` set if unset) and records
  * `accepted_at`. A row the recipient already consumed or that failed is left
  * alone. Returns the ids this call stamped, so the caller can tell their
@@ -607,11 +637,12 @@ export async function acceptDeliveries(
   if (!agent) return null;
 
   const accepted: string[] = [];
-  const rowMatch = target.deliveryId !== undefined && target.upToSeq !== undefined
-    ? sql`(${deliveries.id} = ${target.deliveryId} OR ${deliveries.seq} <= ${target.upToSeq})`
-    : target.deliveryId !== undefined
-      ? sql`${deliveries.id} = ${target.deliveryId}`
-      : sql`${deliveries.seq} <= ${target.upToSeq ?? 0}`;
+  // A named row is accepted on its own; `up_to_seq` is then ignored. A client
+  // whose persistence failed for N but succeeded for N+1 names N+1, and a
+  // cumulative watermark must never be inferred across that gap.
+  const rowMatch = target.deliveryId !== undefined
+    ? sql`${deliveries.id} = ${target.deliveryId}`
+    : sql`${deliveries.seq} <= ${target.upToSeq ?? 0}`;
   for (;;) {
     const page = await db
       .select({ id: deliveries.id })

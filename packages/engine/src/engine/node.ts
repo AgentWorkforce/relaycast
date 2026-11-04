@@ -68,7 +68,7 @@ import {
 } from './action.js';
 import { emitInvocationCompletionEffects, emitAgentExitedEffects, emitNodeStatusEffects, fleetInvocationId } from './invocationCompletion.js';
 import type { InvocationCompletionDeps, NodeOfflineReason } from './invocationCompletion.js';
-import { acceptDeliveries, ackDeliveriesUpToSeq, deliverPendingToNode, type DeliveryReplayDeps } from './delivery.js';
+import { acceptDeliveries, ackDeliveriesUpToSeq, ackNodeDelivery, deliverPendingToNode, type DeliveryReplayDeps } from './delivery.js';
 import { notifySenderDeliveryReceipts } from './deliveryReceipts.js';
 import { issueCredential } from '../auth/credentials.js';
 
@@ -4376,14 +4376,25 @@ export async function handleNodeControlMessage(args: HandleNodeControlMessageArg
         return;
       }
       case 'delivery.ack': {
-        const acked = await ackDeliveriesUpToSeq(
-          args.db,
-          args.workspaceId,
-          args.nodeId,
-          frameProviderName,
-          message.agent,
-          message.up_to_seq,
-        );
+        // A named row is consumed on its own (`up_to_seq` ignored, cursor
+        // untouched); only a bare `up_to_seq` moves the cumulative cursor.
+        const acked = message.delivery_id !== undefined
+          ? await ackNodeDelivery(
+            args.db,
+            args.workspaceId,
+            args.nodeId,
+            frameProviderName,
+            message.agent,
+            message.delivery_id,
+          )
+          : await ackDeliveriesUpToSeq(
+            args.db,
+            args.workspaceId,
+            args.nodeId,
+            frameProviderName,
+            message.agent,
+            message.up_to_seq ?? 0,
+          );
         // The senders of every row this cumulative ack settled learn of it in
         // one batch read. Best-effort: the ack itself has committed.
         if (acked && acked.acked_delivery_ids.length > 0 && args.completionDeps) {

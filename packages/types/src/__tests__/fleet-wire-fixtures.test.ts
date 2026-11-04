@@ -148,6 +148,14 @@ describe('fleet wire fixtures', () => {
     expect(() => parseFleetBrokerToRelaycastMessage({ ...accepted, up_to_seq: 1, extra: true })).toThrow();
   });
 
+  it('accepts a per-delivery delivery.ack and still requires one of delivery_id / up_to_seq', () => {
+    const ack = { v: 1 as const, type: 'delivery.ack' as const, agent: 'codex-builder-1' };
+    expect(parseFleetBrokerToRelaycastMessage({ ...ack, up_to_seq: 42 })).toEqual({ ...ack, up_to_seq: 42 });
+    expect(parseFleetBrokerToRelaycastMessage({ ...ack, delivery_id: 'del_1' })).toEqual({ ...ack, delivery_id: 'del_1' });
+    expect(() => parseFleetBrokerToRelaycastMessage(ack)).toThrow();
+    expect(() => parseFleetBrokerToRelaycastMessage({ ...ack, delivery_id: '' })).toThrow();
+  });
+
   it('accepts unreported heartbeat load and rejects values outside [0,1]', () => {
     const heartbeat = {
       v: 1 as const,

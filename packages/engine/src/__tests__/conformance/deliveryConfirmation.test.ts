@@ -164,6 +164,54 @@ describe('delivery confirmation', () => {
     expect(node.sock.ofType('error')).toHaveLength(0);
   });
 
+  it('applies a named delivery_id on its own (up_to_seq ignored) for acceptance and ack, so rows settle individually and out of order', async () => {
+    const ws = await createWorkspace(stack.app, 'confirm-named-row');
+    const alice = await registerAgent(stack.app, ws.workspaceKey, 'alice');
+    const node = await enrollBrokerNode(ws);
+    const bob = await registerViaNode(node, 'bob');
+    const stream = new FakeSocket();
+    stack.runtime.realtime.attachWorkspaceSocket(ws.workspaceId, stream);
+    const cursor = () => (stack.runtime.handle.sqlite.prepare('SELECT delivery_ack_seq AS c FROM agents WHERE id = ?').get(bob.agentId) as { c: number }).c;
+
+    const first = await sendDm(alice.token, { to: 'bob', text: 'one' });
+    const second = await sendDm(alice.token, { to: 'bob', text: 'two' });
+    await stack.settle();
+    expect(node.sock.ofType('deliver').map((f) => f.seq)).toEqual([1, 2]);
+
+    // The client persisted 2 but not 1: it names 2. A stray up_to_seq beside
+    // the name must not sweep 1 in.
+    await node.handle.handleMessage(JSON.stringify({ v: 1, type: 'delivery.accepted', agent: 'bob', delivery_id: second.data.delivery!.id, up_to_seq: 2 }));
+    await stack.settle();
+    expect((await receipts(alice.token, first.data.id))[0]).toMatchObject({ state: 'queued', accepted_at: null });
+    expect((await receipts(alice.token, second.data.id))[0]).toMatchObject({ state: 'delivered', accepted_at: expect.any(String) });
+    expect(stream.ofType('delivery.delivered').filter((e) => e.accepted === true).map((e) => e.delivery_id)).toEqual([second.data.delivery!.id]);
+
+    // 1 is re-delivered and persisted later: marked on its own, never by range.
+    await node.handle.handleMessage(JSON.stringify({ v: 1, type: 'delivery.accepted', agent: 'bob', delivery_id: first.data.delivery!.id }));
+    await stack.settle();
+    expect((await receipts(alice.token, first.data.id))[0]).toMatchObject({ state: 'delivered', accepted_at: expect.any(String) });
+
+    // Per-delivery consumption of 2 moves nothing else: 1 stays unconsumed and
+    // the cumulative cursor stays put, so a reconnect still replays 1.
+    await node.handle.handleMessage(JSON.stringify({ v: 1, type: 'delivery.ack', agent: 'bob', delivery_id: second.data.delivery!.id, up_to_seq: 2 }));
+    await stack.settle();
+    expect(stream.ofType('delivery.acked').map((e) => e.delivery_id)).toEqual([second.data.delivery!.id]);
+    expect((await receipts(alice.token, first.data.id))[0]).toMatchObject({ state: 'delivered', acked_at: null });
+    expect((await receipts(alice.token, second.data.id))[0]).toMatchObject({ state: 'consumed' });
+    expect(cursor()).toBe(0);
+    // A repeat names an already-consumed row: nothing new.
+    await node.handle.handleMessage(JSON.stringify({ v: 1, type: 'delivery.ack', agent: 'bob', delivery_id: second.data.delivery!.id }));
+    await stack.settle();
+    expect(stream.ofType('delivery.acked')).toHaveLength(1);
+
+    // Only a bare up_to_seq moves the cursor; it consumes what is left below it.
+    await node.handle.handleMessage(JSON.stringify({ v: 1, type: 'delivery.ack', agent: 'bob', up_to_seq: 2 }));
+    await stack.settle();
+    expect(stream.ofType('delivery.acked').map((e) => e.delivery_id).sort()).toEqual([first.data.delivery!.id, second.data.delivery!.id].sort());
+    expect(cursor()).toBe(2);
+    expect(node.sock.ofType('error')).toHaveLength(0);
+  });
+
   it('marks exactly the message a DM explicitly answers as replied, and nothing without reply_to_message_id', async () => {
     const ws = await createWorkspace(stack.app, 'confirm-reply');
     const alice = await registerAgent(stack.app, ws.workspaceKey, 'alice');

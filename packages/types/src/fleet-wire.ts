@@ -304,14 +304,26 @@ export const FleetAgentDeregisterMessageSchema = z
   .strict();
 export type FleetAgentDeregisterMessage = z.infer<typeof FleetAgentDeregisterMessageSchema>;
 
+/**
+ * Consumption (broker / SDK -> relaycast). Cumulative by `up_to_seq`, or a
+ * single row by `delivery_id` (an out-of-order success behind a row that is
+ * still unconsumed); at least one is required. When `delivery_id` is given it
+ * is applied to that row only and `up_to_seq` is ignored, so a watermark can
+ * never be inferred past a gap.
+ */
 export const FleetDeliveryAckMessageSchema = z
   .object({
     ...FleetRequestEnvelopeFields,
     type: z.literal('delivery.ack'),
     agent: z.string(),
-    up_to_seq: z.number().int().nonnegative(),
+    up_to_seq: z.number().int().nonnegative().optional(),
+    delivery_id: z.string().min(1).optional(),
   })
-  .strict();
+  .strict()
+  .refine((frame) => frame.delivery_id !== undefined || frame.up_to_seq !== undefined, {
+    message: 'delivery.ack requires delivery_id or up_to_seq',
+    path: ['up_to_seq'],
+  });
 export type FleetDeliveryAckMessage = z.infer<typeof FleetDeliveryAckMessageSchema>;
 
 /**
@@ -334,6 +346,8 @@ export const FleetDeliveryAcceptedMessageSchema = z
     message: 'delivery.accepted requires delivery_id or up_to_seq',
     path: ['up_to_seq'],
   });
+// When `delivery_id` is given it is applied to that row only and `up_to_seq`
+// is ignored (see `FleetDeliveryAckMessageSchema`).
 export type FleetDeliveryAcceptedMessage = z.infer<typeof FleetDeliveryAcceptedMessageSchema>;
 
 export const FleetTaskContextSchema = z.object({
@@ -608,7 +622,6 @@ export const FleetBrokerToRelaycastNonActionResultMessageSchema = z.discriminate
   FleetAgentRegisterMessageSchema,
   FleetAgentRecoverMessageSchema,
   FleetAgentDeregisterMessageSchema,
-  FleetDeliveryAckMessageSchema,
   FleetInventorySyncMessageSchema,
 ]);
 export type FleetBrokerToRelaycastNonActionResultMessage = z.infer<
@@ -618,8 +631,9 @@ export type FleetBrokerToRelaycastNonActionResultMessage = z.infer<
 export const FleetBrokerToRelaycastMessageSchema = z.union([
   FleetBrokerToRelaycastNonActionResultMessageSchema,
   FleetActionResultMessageSchema,
-  // Refined (one of `delivery_id` / `up_to_seq`), so it cannot join the discriminated union.
+  // Refined (one of `delivery_id` / `up_to_seq`), so they cannot join the discriminated union.
   FleetDeliveryAcceptedMessageSchema,
+  FleetDeliveryAckMessageSchema,
 ]);
 export type FleetBrokerToRelaycastMessage = z.infer<typeof FleetBrokerToRelaycastMessageSchema>;
 export type FleetBrokerToRelaycastMessageType = FleetBrokerToRelaycastMessage['type'];
