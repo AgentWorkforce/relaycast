@@ -23,7 +23,7 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 - `actorConfigFromEnv(env)` reads the actor's engine config from the self-host variables and throws `ConfigError` on a bad value; like `bin/serve.ts`, it trims `RELAYCAST_INTERNAL_SECRET` and treats blank as unset.
 - `InProcessRealtime.setBackgroundScheduler` hands the adapter's fire-and-forget work to the host; unset, it runs detached as before.
 - `loadActiveObserverToken(db, workspaceId, tokenId)` is exported from the node adapter.
-- `RateLimiter.checkMany` counts a batch of buckets in one decision: every bucket is accepted or every count stays unchanged. Authenticated requests call it, including workspace-admin traffic.
+- `RateLimiter.checkMany` counts a batch of buckets in one decision: every bucket is accepted or every count stays unchanged. Authenticated requests call it, including workspace-admin traffic. A limiter without `checkMany` is refused with `503 rate_limit_unavailable` instead of serving the request with no limit.
 - `@relaycast/engine/adapters/actor`: attached sockets are kept in the actor's `_actor_sockets` table (`ACTOR_SOCKETS_TABLE`, `ActorSocketTable`) and replayed on the next activation, so an actor's sleep costs its clients no reconnect.
 - `InProcessRealtime.attachNodeSocket` takes `{ connectionId, earlyDrain }`; `nodeConnectionState` / `restoreNodeConnectionState` / `providerConnectionId` expose a node connection's binding to hosts that persist it.
 - `ensureActorSchema(sql)` applies the engine migrations and the adapter's tables inside an actor call; read-only when current.

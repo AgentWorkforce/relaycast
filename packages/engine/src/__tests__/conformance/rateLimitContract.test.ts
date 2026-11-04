@@ -94,6 +94,34 @@ describe('rate limit contract', () => {
     expect((await get('/v1/agents', ws.workspaceKey)).status).toBe(200);
   });
 
+  it('refuses the request when the limiter has no checkMany', async () => {
+    stack = makeNodeStack();
+    const ws = await createWorkspace(stack.app, 'missing-check-many-ws');
+    const limiter = stack.runtime.deps.rateLimiter;
+    const check = vi.spyOn(limiter, 'check');
+    // Own property shadows the prototype method. A check() fallback would
+    // spend buckets one at a time, which is the race checkMany exists to prevent.
+    Object.defineProperty(limiter, 'checkMany', { value: undefined });
+
+    const refused = await get('/v1/agents', ws.workspaceKey);
+    expect(refused.status).toBe(503);
+    await expect(refused.json()).resolves.toMatchObject({
+      ok: false,
+      error: { code: 'rate_limit_unavailable' },
+    });
+    expect(check).not.toHaveBeenCalled();
+  });
+
+  it('still allows the request when the limiter backend throws', async () => {
+    stack = makeNodeStack();
+    const ws = await createWorkspace(stack.app, 'limiter-backend-down-ws');
+    stack.runtime.deps.rateLimiter.checkMany = async () => {
+      throw new Error('limiter backend down');
+    };
+
+    expect((await get('/v1/agents', ws.workspaceKey)).status).toBe(200);
+  });
+
   it('puts a bounded retry contract on a throttled response', async () => {
     stack = makeNodeStack({ rateLimitPerMinute: 1 });
     const ws = await createWorkspace(stack.app, 'retry-contract-ws');

@@ -61,7 +61,7 @@ try {
   const deps={...runtime.deps,db,
     config:{environment:'test',relayfileInboundSecret:'fixture-only',workspaceDelivery:{resolve:async workspace=>{await Promise.resolve();resolves++;assert.deepEqual(Object.keys(workspace),['id']);return policies.get(workspace.id);}}},
     kv:{get:async k=>kvMap.get(k)??null,put:async(k,v)=>{if(failCompletion&&!k.endsWith(':lock'))throw Error('fixture KV completion failure');kvMap.set(k,v);},delete:async k=>{kvMap.delete(k);}},
-    rateLimiter:{check:async()=>({allowed:true,remaining:10000,resetAt:Date.now()+1000})},
+    rateLimiter:{check:async()=>({allowed:true,remaining:10000,resetAt:Date.now()+1000}),checkMany:async checks=>checks.map(()=>({allowed:true,count:0,remaining:10000}))},
     webhookQueue:{send:async()=>{}},
   };
   const app=createEngine(deps);

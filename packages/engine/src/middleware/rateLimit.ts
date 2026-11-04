@@ -136,6 +136,16 @@ export const rateLimit = createMiddleware<AppEnv>(async (c, next) => {
       ]
     : [{ bucketKey: `${workspace.id}:${routeBucket}:${window}`, limit }];
 
+  // Every authenticated request, including a single workspace-admin bucket,
+  // uses checkMany. A limiter that only has check throws on the call and used
+  // to fall into the catch below, which serves the request with no limit.
+  // Sequential check() is not a fallback: spending one bucket before another
+  // is rejected is the race an atomic batch exists to prevent.
+  if (typeof rateLimiter.checkMany !== 'function') {
+    getRequestLogger(c, 'rate-limit').error('rate limiter missing checkMany; refusing request');
+    return jsonError(c, 'rate_limit_unavailable', 'Rate limiter is unavailable.', 503);
+  }
+
   try {
     const resetAt = rateLimitWindowResetAt(now);
     let tightestResult: { limit: number; count: number; remaining: number } | undefined;
