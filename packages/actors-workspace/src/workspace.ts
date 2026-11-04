@@ -22,8 +22,10 @@ export interface WorkspaceEnvConfig {
  * `RELAYCAST_FILE_SIGNING_SECRET` are required; the engine variables
  * (`RELAYCAST_MAX_UPLOAD_BYTES`, `RELAYCAST_MESSAGE_TTL_DAYS`,
  * `RELAYCAST_MAILBOX_*`, `RELAYCAST_RATE_LIMIT_PER_MINUTE`,
- * `RELAYCAST_INTERNAL_SECRET`, `RELAYCAST_ENV`) are read by the engine with
- * the self-host server's semantics. Throws on a missing or invalid value.
+ * `RELAYCAST_INTERNAL_SECRET`, `RELAYCAST_WORKSPACE_BOOTSTRAP_SECRET` (or
+ * `_FILE`), `RELAYCAST_WORKSPACE_BOOTSTRAP_PROOF_REQUIRED`, `RELAYCAST_ENV`)
+ * are read by the engine with the self-host server's semantics. Throws on a
+ * missing or invalid value.
  */
 export function workspaceConfigFromEnv(env: Record<string, string | undefined>): WorkspaceEnvConfig {
     return {

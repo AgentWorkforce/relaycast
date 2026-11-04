@@ -59,8 +59,15 @@ Values that must match across processes:
 - `RELAYCAST_PUBLIC_URL` (actor) must be the origin clients reach the gateways
   on; signed file URLs embed it.
 - `RELAYCAST_INTERNAL_SECRET`: actor and gateway, when `/internal/*` is enabled.
-- `RELAYCAST_WORKSPACE_BOOTSTRAP_SECRET` (optional): actor and gateway, verbatim;
-  keyed creates depend on it (the gateway README has the behaviour).
+- `RELAYCAST_WORKSPACE_BOOTSTRAP_SECRET` and
+  `RELAYCAST_WORKSPACE_BOOTSTRAP_PROOF_REQUIRED` (optional): both components
+  read the same two variables, with the single-process self-host's semantics
+  (`docs/self-hosting.md`, "Anonymous keyed workspace retries"). The secret
+  must be the same bytes on the actors and every gateway: the gateway derives
+  a keyed create's actor id from it, the actor's engine derives the replayed
+  credential from it. With proof required, the gateway refuses an anonymous
+  keyed create without `X-Workspace-Bootstrap-Secret` before any actor call
+  and forwards the header, so the actor's engine checks it too.
 - `DURABLE_ACTORS_CONTROL_PLANE_URL` and `DURABLE_ACTORS_PROJECT_ID`: gateway
   and deployer point at the same project (locally: `http://127.0.0.1:7100`,
   `local`).
@@ -85,8 +92,12 @@ npx tsx packages/actors-gateway/e2e/local.ts
 `local.ts` starts `durable-actors dev` for `packages/actors-workspace` (the
 native control-plane binary is downloaded into `~/.cache/durable-actors` on the
 first run), two gateways on 8787 and 8788 sharing one file directory, runs
-`packages/actors-gateway/e2e/smoke.ts`, and stops everything (SIGTERM, SIGKILL
-after 10 s). Exit code 1 on any failed check. State, files and logs go to a
+`packages/actors-gateway/e2e/smoke.ts`, then restarts the control plane and
+both gateways on the same state with
+`RELAYCAST_WORKSPACE_BOOTSTRAP_PROOF_REQUIRED=true` for the proof-required
+checks (`--skip-proof` leaves this phase out), and stops everything (SIGTERM,
+SIGKILL after 10 s). Exit code 1 on any failed check. The actors and the
+gateways get the same `RELAYCAST_WORKSPACE_BOOTSTRAP_SECRET` throughout. State, files and logs go to a
 temporary directory removed on success (`--keep-state` uses
 `packages/actors-workspace/.durable-actors` instead); ports are overridable with
 `RELAYCAST_E2E_CONTROL_PLANE_PORT`, `RELAYCAST_E2E_GATEWAY1_PORT`,
@@ -108,6 +119,16 @@ The smoke, with the unmodified TypeScript SDK:
    never drop, and a second exchange succeeds.
 6. `GET /v1/deliveries?wait=` through gateway 1 holds while empty and returns
    as soon as a delivery arrives.
+7. A keyed `POST /v1/workspaces` (`Idempotency-Key`) through gateway 1 is
+   replayed through gateway 2 with the same workspace and credential; another
+   body under the key is refused (409).
+
+With proof required, after the restart: an anonymous keyed create without
+`X-Workspace-Bootstrap-Secret`, or with a wrong one, is refused 401
+`workspace_create_bootstrap_secret_invalid` on both gateways; with the secret
+it is created through gateway 1 and replayed through gateway 2; the keyed
+create of step 7 replays with its original credential through the restarted
+control plane; an unkeyed create still needs no proof.
 
 ## Realtime semantics
 

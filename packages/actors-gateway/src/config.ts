@@ -46,6 +46,13 @@ export interface GatewayConfig {
    * same value. Unset: a keyed create fails closed (503), as on the engine.
    */
   workspaceBootstrapSecret: string | undefined;
+  /**
+   * The engine's self-host policy (`RELAYCAST_WORKSPACE_BOOTSTRAP_PROOF_REQUIRED`):
+   * an anonymous keyed create must send `X-Workspace-Bootstrap-Secret`. The
+   * gateway checks it at the edge before any actor call and forwards it, so
+   * the actor's engine (configured with the same two variables) checks it too.
+   */
+  workspaceBootstrapProofRequired: boolean;
   publicWorkspaceCreate: boolean;
   fileStore: FileStoreKind;
   fileDir: string;
@@ -125,6 +132,30 @@ const EnvSchema = z.object({
   RELAYCAST_ENV: z.string().min(1).default('production'),
 });
 
+/**
+ * A flag the actors read untrimmed (`exactly "true" or "false"`): the raw
+ * value, so the gateway refuses what an actor would refuse. Blank is unset.
+ */
+const ExactFlagSchema = z.preprocess((value) => (typeof value === 'string' && value.trim() === '' ? undefined : value), z.enum(['true', 'false']).optional());
+
+function exactFlag(env: Env, name: string): boolean {
+  const parsed = ExactFlagSchema.safeParse(env[name]);
+  if (!parsed.success) throw new ConfigError('invalid_config', `${name} must be exactly "true" or "false".`);
+  return parsed.data === 'true';
+}
+
+/**
+ * Whether a secret's exact bytes survive an HTTP header: the proof travels as
+ * `X-Workspace-Bootstrap-Secret`, where leading or trailing space or tab is
+ * stripped by any recipient, a control character is refused or splits the
+ * header, and a character outside ASCII is refused by Node's client (above
+ * U+00FF) or arrives latin1-decoded, so it never matches. Printable ASCII
+ * only. The secret is never trimmed (its bytes feed a derivation).
+ */
+export function isHeaderSafe(value: string): boolean {
+  return !/^[ \t]|[ \t]$|[^\x20-\x7e]/.test(value);
+}
+
 /** Trimmed, with empty values dropped, so a blank variable means "unset". */
 function present(env: Env, names: readonly string[]): Record<string, string> {
   const out: Record<string, string> = {};
@@ -183,6 +214,10 @@ export function loadConfig(env: Env = process.env, readFile?: (path: string) => 
   }
 
   const workspaceBootstrapSecret = secretFromEnv(env, 'RELAYCAST_WORKSPACE_BOOTSTRAP_SECRET', readFile, { exact: true });
+  const workspaceBootstrapProofRequired = exactFlag(env, 'RELAYCAST_WORKSPACE_BOOTSTRAP_PROOF_REQUIRED');
+  if (workspaceBootstrapProofRequired && workspaceBootstrapSecret !== undefined && !isHeaderSafe(workspaceBootstrapSecret)) {
+    throw new ConfigError('invalid_workspace_bootstrap_secret', 'RELAYCAST_WORKSPACE_BOOTSTRAP_SECRET must be carried in an HTTP header when RELAYCAST_WORKSPACE_BOOTSTRAP_PROOF_REQUIRED=true: printable ASCII only, with no leading or trailing space.');
+  }
 
   // DURABLE_ACTORS_API_KEY is the SDK's alias for DURABLE_ACTORS_SECRET.
   const controlPlaneSecret = secretFromEnv(env, 'DURABLE_ACTORS_SECRET', readFile) ?? secretFromEnv(env, 'DURABLE_ACTORS_API_KEY', readFile);
@@ -197,6 +232,8 @@ export function loadConfig(env: Env = process.env, readFile?: (path: string) => 
     credentialKeyring,
     internalSecret,
     workspaceBootstrapSecret,
+    // Accepted without a secret, as the engine's server is: a keyed create then fails closed (503) before any proof is asked.
+    workspaceBootstrapProofRequired,
     publicWorkspaceCreate: settings.RELAYCAST_PUBLIC_WORKSPACE_CREATE === 'true',
     fileStore: settings.RELAYCAST_FILE_STORE,
     fileDir: settings.RELAYCAST_FILE_DIR,

@@ -1,4 +1,7 @@
-import { describe, expect, it } from 'vitest';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { afterAll, describe, expect, it } from 'vitest';
 import { encodeArCredential } from '@relaycast/types';
 import { createCredentialTagSigner } from '../../../auth/credentialTags.js';
 import { ConfigError, DEFAULT_ACTOR_MAX_UPLOAD_BYTES, actorConfigFromEnv } from '../index.js';
@@ -8,6 +11,9 @@ const WORKSPACE_ID = '241764880589606912';
 const INTERNAL_SECRET = 'an-internal-secret-of-thirty-two-chars!!';
 
 describe('actorConfigFromEnv', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'relaycast-actor-config-'));
+  afterAll(() => rmSync(dir, { recursive: true, force: true }));
+
   it('defaults to production, a 64 MiB upload cap and messages kept forever', () => {
     expect(actorConfigFromEnv({})).toEqual({
       environment: 'production',
@@ -29,6 +35,8 @@ describe('actorConfigFromEnv', () => {
       RELAYCAST_MAILBOX_DEPTH_CAP: '50',
       RELAYCAST_RATE_LIMIT_PER_MINUTE: '120',
       RELAYCAST_INTERNAL_SECRET: INTERNAL_SECRET,
+      RELAYCAST_WORKSPACE_BOOTSTRAP_SECRET: 'bootstrap-secret-0123456789abcdef',
+      RELAYCAST_WORKSPACE_BOOTSTRAP_PROOF_REQUIRED: 'true',
     })).toEqual({
       environment: 'staging',
       maxUploadBytes: 1_048_576,
@@ -36,7 +44,45 @@ describe('actorConfigFromEnv', () => {
       mailbox: { deliveryTtlMs: 600_000, depthCap: 50 },
       rateLimitPerMinute: 120,
       internalSecret: INTERNAL_SECRET,
+      workspaceBootstrapSecret: 'bootstrap-secret-0123456789abcdef',
+      workspaceBootstrapProofRequired: true,
     });
+  });
+
+  it('reads the bootstrap secret as exact bytes and the proof flag as exactly "true" or "false", blank unset', () => {
+    // The secret's bytes feed a derivation: a direct value is verbatim, only an empty one is unset.
+    expect(actorConfigFromEnv({ RELAYCAST_WORKSPACE_BOOTSTRAP_SECRET: ' exact bytes ' }).workspaceBootstrapSecret).toBe(' exact bytes ');
+    expect(actorConfigFromEnv({ RELAYCAST_WORKSPACE_BOOTSTRAP_SECRET: '  ' }).workspaceBootstrapSecret).toBe('  ');
+    expect(actorConfigFromEnv({ RELAYCAST_WORKSPACE_BOOTSTRAP_SECRET: '' }).workspaceBootstrapSecret).toBeUndefined();
+    // `_FILE`: one trailing newline dropped, a direct value wins, an unreadable file is a refusal naming the variable.
+    const file = join(dir, 'bootstrap');
+    writeFileSync(file, ' from file \r\n');
+    expect(actorConfigFromEnv({ RELAYCAST_WORKSPACE_BOOTSTRAP_SECRET_FILE: file }).workspaceBootstrapSecret).toBe(' from file ');
+    expect(actorConfigFromEnv({ RELAYCAST_WORKSPACE_BOOTSTRAP_SECRET: 'direct', RELAYCAST_WORKSPACE_BOOTSTRAP_SECRET_FILE: file }).workspaceBootstrapSecret).toBe('direct');
+    expect(() => actorConfigFromEnv({ RELAYCAST_WORKSPACE_BOOTSTRAP_SECRET_FILE: join(dir, 'missing') })).toThrow(ConfigError);
+    expect(() => actorConfigFromEnv({ RELAYCAST_WORKSPACE_BOOTSTRAP_SECRET_FILE: join(dir, 'missing') })).toThrow(/RELAYCAST_WORKSPACE_BOOTSTRAP_SECRET_FILE/);
+    // The proof flag is the raw value, exactly "true" or "false" (not trimmed); blank is unset (false), anything else is refused by name.
+    expect(actorConfigFromEnv({}).workspaceBootstrapProofRequired).toBeUndefined();
+    expect(actorConfigFromEnv({ RELAYCAST_WORKSPACE_BOOTSTRAP_PROOF_REQUIRED: 'false' }).workspaceBootstrapProofRequired).toBeUndefined();
+    expect(actorConfigFromEnv({ RELAYCAST_WORKSPACE_BOOTSTRAP_PROOF_REQUIRED: '' }).workspaceBootstrapProofRequired).toBeUndefined();
+    expect(actorConfigFromEnv({ RELAYCAST_WORKSPACE_BOOTSTRAP_PROOF_REQUIRED: '  ' }).workspaceBootstrapProofRequired).toBeUndefined();
+    expect(actorConfigFromEnv({ RELAYCAST_WORKSPACE_BOOTSTRAP_PROOF_REQUIRED: 'true' }).workspaceBootstrapProofRequired).toBe(true);
+    // Like the server, the flag without a secret is accepted: keyed creates then fail closed (503) before any proof is checked.
+    expect(actorConfigFromEnv({ RELAYCAST_WORKSPACE_BOOTSTRAP_PROOF_REQUIRED: 'true' })).toEqual({ ...actorConfigFromEnv({}), workspaceBootstrapProofRequired: true });
+    expect(() => actorConfigFromEnv({ RELAYCAST_WORKSPACE_BOOTSTRAP_PROOF_REQUIRED: 'yes' })).toThrow(/RELAYCAST_WORKSPACE_BOOTSTRAP_PROOF_REQUIRED/);
+    expect(() => actorConfigFromEnv({ RELAYCAST_WORKSPACE_BOOTSTRAP_PROOF_REQUIRED: 'TRUE' })).toThrow(ConfigError);
+    expect(() => actorConfigFromEnv({ RELAYCAST_WORKSPACE_BOOTSTRAP_PROOF_REQUIRED: 'true ' })).toThrow(/RELAYCAST_WORKSPACE_BOOTSTRAP_PROOF_REQUIRED/);
+  });
+
+  it('refuses, with proof required, a bootstrap secret an HTTP header cannot carry; without it the secret is only a derivation input', () => {
+    for (const value of [' leading-space', 'trailing-tab\t', 'embedded\nnewline', 'nul\u0000byte', 'latin1-\u00e9', 'emoji-\u{1F511}']) {
+      expect(() => actorConfigFromEnv({ RELAYCAST_WORKSPACE_BOOTSTRAP_SECRET: value, RELAYCAST_WORKSPACE_BOOTSTRAP_PROOF_REQUIRED: 'true' }), JSON.stringify(value))
+        .toThrow(/RELAYCAST_WORKSPACE_BOOTSTRAP_SECRET: must be carried in an HTTP header/);
+      // Not trimmed, not refused: exact bytes.
+      expect(actorConfigFromEnv({ RELAYCAST_WORKSPACE_BOOTSTRAP_SECRET: value }).workspaceBootstrapSecret).toBe(value);
+      expect(actorConfigFromEnv({ RELAYCAST_WORKSPACE_BOOTSTRAP_SECRET: value, RELAYCAST_WORKSPACE_BOOTSTRAP_PROOF_REQUIRED: 'false' }).workspaceBootstrapSecret).toBe(value);
+    }
+    expect(actorConfigFromEnv({ RELAYCAST_WORKSPACE_BOOTSTRAP_SECRET: 'inner spaces are fine', RELAYCAST_WORKSPACE_BOOTSTRAP_PROOF_REQUIRED: 'true' }).workspaceBootstrapSecret).toBe('inner spaces are fine');
   });
 
   it('refuses bad values by name', () => {
@@ -47,10 +93,6 @@ describe('actorConfigFromEnv', () => {
     // Read as the self-host server reads it: trimmed, and blank is unset.
     expect(actorConfigFromEnv({ RELAYCAST_INTERNAL_SECRET: ` ${INTERNAL_SECRET} ` }).internalSecret).toBe(INTERNAL_SECRET);
     expect(actorConfigFromEnv({ RELAYCAST_INTERNAL_SECRET: '   ' }).internalSecret).toBeUndefined();
-    // The bootstrap secret's bytes feed a derivation: verbatim; only an empty value is unset.
-    expect(actorConfigFromEnv({ RELAYCAST_WORKSPACE_BOOTSTRAP_SECRET: ' exact bytes ' }).workspaceBootstrapSecret).toBe(' exact bytes ');
-    expect(actorConfigFromEnv({ RELAYCAST_WORKSPACE_BOOTSTRAP_SECRET: '  ' }).workspaceBootstrapSecret).toBe('  ');
-    expect(actorConfigFromEnv({ RELAYCAST_WORKSPACE_BOOTSTRAP_SECRET: '' }).workspaceBootstrapSecret).toBeUndefined();
     expect(() => actorConfigFromEnv({ RELAYCAST_MAX_UPLOAD_BYTES: 'x', RELAYCAST_RATE_LIMIT_PER_MINUTE: '-1' }))
       .toThrow(/RELAYCAST_MAX_UPLOAD_BYTES.*RELAYCAST_RATE_LIMIT_PER_MINUTE/);
   });

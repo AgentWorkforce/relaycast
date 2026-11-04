@@ -24,6 +24,8 @@ describe('configuration', () => {
       controlPlaneSecret: undefined,
       homeRegion: undefined,
       publicWorkspaceCreate: true,
+      workspaceBootstrapSecret: undefined,
+      workspaceBootstrapProofRequired: false,
       fileStore: 'local',
       fileDir: '/data/files',
       maxUploadBytes: 64 * 1024 * 1024,
@@ -119,6 +121,37 @@ describe('configuration', () => {
     expect(loadConfig(baseEnv(URL)).workspaceBootstrapSecret).toBeUndefined();
     expect(loadConfig(baseEnv(URL, { RELAYCAST_WORKSPACE_BOOTSTRAP_SECRET: ' exact bytes ' })).workspaceBootstrapSecret).toBe(' exact bytes ');
     expect(loadConfig({ ...baseEnv(URL), RELAYCAST_WORKSPACE_BOOTSTRAP_SECRET_FILE: '/secrets/bootstrap' }, () => 'from-file\n').workspaceBootstrapSecret).toBe('from-file');
+  });
+
+  it('refuses, with proof required, a bootstrap secret an HTTP header cannot carry; without it the secret is only a derivation input', () => {
+    const unsafe = [' leading-space-0123456789abcdef', 'trailing-tab-0123456789abcdef\t', 'embedded\nnewline-0123456789abcdef', 'carriage\rreturn-0123456789abcdef', 'nul\u0000-0123456789abcdef', 'latin1-\u00e9-0123456789abcdef', 'emoji-\u{1F511}-0123456789abcdef'];
+    for (const value of unsafe) {
+      const refused = refusal(baseEnv(URL, { RELAYCAST_WORKSPACE_BOOTSTRAP_SECRET: value, RELAYCAST_WORKSPACE_BOOTSTRAP_PROOF_REQUIRED: 'true' }));
+      expect(refused.code, JSON.stringify(value)).toBe('invalid_workspace_bootstrap_secret');
+      expect(refused.message).toMatch(/RELAYCAST_WORKSPACE_BOOTSTRAP_SECRET/);
+      // Not trimmed, not refused: exact bytes, as the derivation needs them.
+      expect(loadConfig(baseEnv(URL, { RELAYCAST_WORKSPACE_BOOTSTRAP_SECRET: value })).workspaceBootstrapSecret).toBe(value);
+      expect(loadConfig(baseEnv(URL, { RELAYCAST_WORKSPACE_BOOTSTRAP_SECRET: value, RELAYCAST_WORKSPACE_BOOTSTRAP_PROOF_REQUIRED: 'false' })).workspaceBootstrapSecret).toBe(value);
+    }
+    expect(loadConfig(baseEnv(URL, { RELAYCAST_WORKSPACE_BOOTSTRAP_SECRET: 'inner spaces are fine 0123456789', RELAYCAST_WORKSPACE_BOOTSTRAP_PROOF_REQUIRED: 'true' })).workspaceBootstrapSecret).toBe('inner spaces are fine 0123456789');
+  });
+
+  it('reads the bootstrap proof flag from its raw value, exactly "true" or "false", as the actor does', () => {
+    const secret = { RELAYCAST_WORKSPACE_BOOTSTRAP_SECRET: 'bootstrap-secret-0123456789abcdef' };
+    expect(loadConfig(baseEnv(URL, secret)).workspaceBootstrapProofRequired).toBe(false);
+    expect(loadConfig(baseEnv(URL, { ...secret, RELAYCAST_WORKSPACE_BOOTSTRAP_PROOF_REQUIRED: 'false' })).workspaceBootstrapProofRequired).toBe(false);
+    expect(loadConfig(baseEnv(URL, { ...secret, RELAYCAST_WORKSPACE_BOOTSTRAP_PROOF_REQUIRED: 'true' })).workspaceBootstrapProofRequired).toBe(true);
+    // Blank is unset.
+    expect(loadConfig(baseEnv(URL, { ...secret, RELAYCAST_WORKSPACE_BOOTSTRAP_PROOF_REQUIRED: '' })).workspaceBootstrapProofRequired).toBe(false);
+    expect(loadConfig(baseEnv(URL, { ...secret, RELAYCAST_WORKSPACE_BOOTSTRAP_PROOF_REQUIRED: '  ' })).workspaceBootstrapProofRequired).toBe(false);
+    // Not trimmed: the actor refuses "true ", so the gateway does too, rather than start a stack the actors will not.
+    for (const value of ['yes', '1', 'TRUE', 'required', 'true ', ' false']) {
+      const refused = refusal(baseEnv(URL, { ...secret, RELAYCAST_WORKSPACE_BOOTSTRAP_PROOF_REQUIRED: value }));
+      expect(refused.code).toBe('invalid_config');
+      expect(refused.message).toMatch(/RELAYCAST_WORKSPACE_BOOTSTRAP_PROOF_REQUIRED/);
+    }
+    // Like the engine's server, the flag without a secret starts: a keyed create then fails closed (503) before any proof is asked.
+    expect(loadConfig(baseEnv(URL, { RELAYCAST_WORKSPACE_BOOTSTRAP_PROOF_REQUIRED: 'true' }))).toMatchObject({ workspaceBootstrapSecret: undefined, workspaceBootstrapProofRequired: true });
   });
 
   it('reads secrets from _FILE variants and refuses unreadable files', () => {

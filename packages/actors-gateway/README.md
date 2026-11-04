@@ -41,6 +41,7 @@ so the gateway does not depend on it; replies are validated with zod.
 | `RELAYCAST_CREDENTIAL_KEYRING` (or `_FILE`) | required | `{"current":"a","keys":{"a":"<secret ≥16 chars>"}}`; signs new workspaces' tags, verifies every credential's tag. Rotate by adding a version and making it current; removing a version locks out its credentials |
 | `RELAYCAST_INTERNAL_SECRET` (or `_FILE`) | unset | Enables `/internal/*`; at least 32 characters, and the actors must be configured with the same value |
 | `RELAYCAST_WORKSPACE_BOOTSTRAP_SECRET` (or `_FILE`) | unset | Lets `POST /v1/workspaces` (and `POST /internal/workspaces`) with an `Idempotency-Key` be retried: the workspace id is derived from this secret, the key and the creating owner (anonymous, or the `ar_ws_` bearer's workspace), so a retry reaches the same actor. A direct value is used verbatim (not trimmed); a `_FILE` value loses one trailing newline. The actors must hold the same value; changing it changes the derived ids, so a retry after a change is a new create. Unset: such a create answers 503 `workspace_create_idempotency_unavailable`, as the engine does |
+| `RELAYCAST_WORKSPACE_BOOTSTRAP_PROOF_REQUIRED` | `false` | The engine's self-host policy (`docs/self-hosting.md`): `true` makes an anonymous keyed `POST /v1/workspaces` prove the bootstrap secret with `X-Workspace-Bootstrap-Secret`. The gateway checks it at the edge (constant time, after the 503 above, before an id is derived or an actor called): missing or mismatched answers 401 `workspace_create_bootstrap_secret_invalid`; a matching one travels on to the actor's engine, which checks it again. The actors must be configured with the same value. Blank is unset (`false`); any other non-blank value (`TRUE`, `yes`, `true ` with a space) is refused, as the actors refuse it. With `true`, a secret an HTTP header cannot carry (anything but printable ASCII, or a leading or trailing space or tab) is refused at startup rather than trimmed |
 | `RELAYCAST_PUBLIC_WORKSPACE_CREATE` | `true` | `false` hides `POST /v1/workspaces` behind a generic 404; any other value is refused |
 | `RELAYCAST_FILE_STORE` | `local` | `local`, `gcs` or `s3`; the object stores read `RELAYCAST_GCS_*` / `RELAYCAST_S3_*` (see [File store](#file-store)) |
 | `RELAYCAST_FILE_DIR` | `/data/files` | Where the `local` store keeps bytes (`<key>` plus a `<key>.type` sidecar) |
@@ -63,7 +64,20 @@ prints one line and exits with code 64. Secret values are never logged.
 - `OPTIONS *`: 204 CORS preflight (any origin, bearer credentials).
 - `POST /v1/workspaces`: mints a snowflake workspace id, signs its tag with the
   keyring and calls `create(request, tag)` on the new actor. 404 `not_found`
-  when `RELAYCAST_PUBLIC_WORKSPACE_CREATE=false`.
+  when `RELAYCAST_PUBLIC_WORKSPACE_CREATE=false`. With an `Idempotency-Key`
+  the id is derived from `RELAYCAST_WORKSPACE_BOOTSTRAP_SECRET` (503
+  `workspace_create_idempotency_unavailable` without it) and, when
+  `RELAYCAST_WORKSPACE_BOOTSTRAP_PROOF_REQUIRED=true`, one without an `ar_ws_`
+  bearer (no Authorization, or any other bearer, which the engine would refuse
+  anyway) must carry `X-Workspace-Bootstrap-Secret` (401
+  `workspace_create_bootstrap_secret_invalid` without it, no actor called);
+  an owner-keyed create (`ar_ws_` bearer) is authenticated through the owner's
+  actor instead, and with proof required the gateway supplies the proof to the
+  child actor itself. These edge checks come before the engine's own: a key
+  shorter than the engine's 32-character floor answers 401 at the gateway when
+  its proof is bad or missing, and 503 when no secret is configured, where the
+  engine alone would answer 400 `workspace_create_idempotency_key_too_weak`;
+  only a create the gateway admits reaches that answer in the actor.
 - Everything else (`/v1/*`, `/.well-known/*`, `/a2a/*`, …): requires
   `Authorization: Bearer ar_…`; the tag is verified, then the request goes to
   `handle` of the credential's workspace actor. A missing, legacy, forged or
@@ -79,7 +93,9 @@ prints one line and exits with code 64. Secret values are never logged.
   `GET /internal/capabilities` mirrors the engine's capability shape;
   `POST /internal/workspaces {name, metadata?}` mints the id and tag here and
   calls `create` with a synthesized `POST /v1/workspaces`, answering with the
-  actor's 201 and body; `DELETE /internal/workspaces/:id` and
+  actor's 201 and body (a keyed one is authenticated by the internal secret
+  alone, as the engine's own internal create is: with proof required, the
+  gateway adds the proof itself); `DELETE /internal/workspaces/:id` and
   `POST /internal/workspaces/:id/api-key` go to `handle` of actor `:id`
   (a 64-bit snowflake; others get 400) with the `Authorization` header intact,
   so the actor checks the same secret.

@@ -3,10 +3,12 @@
  * Local proof for relaycast on durable-actors: starts the control plane
  * (`durable-actors dev` for packages/actors-workspace) and two gateway
  * replicas sharing one file directory, runs `smoke.ts` (with a real restart
- * of gateway 1), optionally the repository's `scripts/e2e.ts`, then tears
- * everything down. Exit code 1 on any failed check.
+ * of gateway 1), optionally the repository's `scripts/e2e.ts`, then restarts
+ * the whole stack on the same state with
+ * `RELAYCAST_WORKSPACE_BOOTSTRAP_PROOF_REQUIRED=true` for the proof-required
+ * checks, and tears everything down. Exit code 1 on any failed check.
  *
- *   npx tsx packages/actors-gateway/e2e/local.ts [--keep-state] [--with-e2e] [--with-e2e-actions] [--skip-restart]
+ *   npx tsx packages/actors-gateway/e2e/local.ts [--keep-state] [--with-e2e] [--with-e2e-actions] [--skip-restart] [--skip-proof]
  *
  * `--with-e2e` / `--with-e2e-actions` also run `scripts/e2e.ts` /
  * `scripts/e2e-actions.ts` against gateway 1; their exit codes are reported
@@ -26,7 +28,9 @@
  *                                     packages/actors-workspace/.durable-actors)
  *   RELAYCAST_E2E_BUN                 Bun executable (default ~/.bun/bin/bun, else `bun` on PATH)
  *   DURABLE_ACTORS_SECRET             when set, the control plane requires it and the gateways send it
- *   RELAYCAST_E2E_FILE_SIGNING_SECRET, RELAYCAST_E2E_CREDENTIAL_KEYRING  override the local secrets
+ *   RELAYCAST_E2E_FILE_SIGNING_SECRET, RELAYCAST_E2E_CREDENTIAL_KEYRING, RELAYCAST_E2E_WORKSPACE_BOOTSTRAP_SECRET
+ *                                     override the local secrets (the bootstrap secret is given, verbatim, to the
+ *                                     actors and the gateways alike)
  */
 
 import { spawn, type ChildProcess } from 'node:child_process';
@@ -35,7 +39,7 @@ import net from 'node:net';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { runSmoke } from './smoke.js';
+import { runBootstrapProofChecks, runSmoke } from './smoke.js';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../..');
 const WORKSPACE_DIR = path.join(ROOT, 'packages/actors-workspace');
@@ -47,6 +51,7 @@ const KEEP_STATE = flags.has('--keep-state');
 const WITH_E2E = flags.has('--with-e2e');
 const WITH_E2E_ACTIONS = flags.has('--with-e2e-actions');
 const SKIP_RESTART = flags.has('--skip-restart');
+const SKIP_PROOF = flags.has('--skip-proof');
 
 const CONTROL_PLANE_PORT = Number(process.env.RELAYCAST_E2E_CONTROL_PLANE_PORT ?? 7100);
 const GATEWAY_PORTS = [
@@ -58,6 +63,7 @@ const GATEWAY_URLS = GATEWAY_PORTS.map((port) => `http://127.0.0.1:${port}`);
 const FILE_SIGNING_SECRET = process.env.RELAYCAST_E2E_FILE_SIGNING_SECRET ?? 'local-file-signing-secret-0123456789';
 const CREDENTIAL_KEYRING =
   process.env.RELAYCAST_E2E_CREDENTIAL_KEYRING ?? '{"current":"a","keys":{"a":"local-credential-tag-secret"}}';
+const WORKSPACE_BOOTSTRAP_SECRET = process.env.RELAYCAST_E2E_WORKSPACE_BOOTSTRAP_SECRET ?? 'local-workspace-bootstrap-secret-0123456789';
 const DURABLE_ACTORS_SECRET = process.env.DURABLE_ACTORS_SECRET?.trim() || undefined;
 
 const SIGTERM_GRACE_MS = 10_000;
@@ -243,13 +249,22 @@ function prepareDirs(): Dirs {
   return dirs;
 }
 
-function startControlPlane(bun: string, dirs: Dirs): Proc {
+/** The two variables the actors and the gateways read alike (same bytes). */
+function bootstrapEnv(proofRequired: boolean): NodeJS.ProcessEnv {
+  return {
+    RELAYCAST_WORKSPACE_BOOTSTRAP_SECRET: WORKSPACE_BOOTSTRAP_SECRET,
+    RELAYCAST_WORKSPACE_BOOTSTRAP_PROOF_REQUIRED: proofRequired ? 'true' : 'false',
+  };
+}
+
+function startControlPlane(bun: string, dirs: Dirs, proofRequired = false): Proc {
   const env: NodeJS.ProcessEnv = {
     ...process.env,
     PATH: `${path.dirname(bun)}${path.delimiter}${process.env.PATH ?? ''}`,
     // The Workspace actor's own configuration.
     RELAYCAST_PUBLIC_URL: GATEWAY_URLS[0],
     RELAYCAST_FILE_SIGNING_SECRET: FILE_SIGNING_SECRET,
+    ...bootstrapEnv(proofRequired),
     // `durable-actors dev` reads these; the secret becomes `--api-key`.
     DURABLE_ACTORS_PROJECT_ID: 'local',
     DURABLE_ACTORS_DATA_DIR: dirs.state,
@@ -270,7 +285,7 @@ function startControlPlane(bun: string, dirs: Dirs): Proc {
   );
 }
 
-function startGateway(index: 0 | 1, dirs: Dirs): Proc {
+function startGateway(index: 0 | 1, dirs: Dirs, proofRequired = false): Proc {
   const env: NodeJS.ProcessEnv = {
     ...process.env,
     PORT: String(GATEWAY_PORTS[index]),
@@ -278,6 +293,7 @@ function startGateway(index: 0 | 1, dirs: Dirs): Proc {
     DURABLE_ACTORS_PROJECT_ID: 'local',
     RELAYCAST_FILE_SIGNING_SECRET: FILE_SIGNING_SECRET,
     RELAYCAST_CREDENTIAL_KEYRING: CREDENTIAL_KEYRING,
+    ...bootstrapEnv(proofRequired),
     RELAYCAST_FILE_STORE: 'local',
     RELAYCAST_FILE_DIR: dirs.files,
     RELAYCAST_LOG_FORMAT: 'text',
@@ -322,6 +338,7 @@ async function teardown(dirs: Dirs | undefined, succeeded: boolean): Promise<voi
 async function main(): Promise<number> {
   let dirs: Dirs | undefined;
   let smokeFailed = 0;
+  let proofFailed = 0;
   let e2eExit: number | undefined;
   let e2eActionsExit: number | undefined;
   try {
@@ -337,7 +354,7 @@ async function main(): Promise<number> {
     dirs = prepareDirs();
     log(`       work dir ${dirs.work}${DURABLE_ACTORS_SECRET ? ' (control-plane auth on)' : ' (control-plane auth off)'}`);
 
-    const controlPlane = await step(`start control plane (durable-actors dev on ${CONTROL_PLANE_URL}) and wait for /healthz`, async () => {
+    let controlPlane = await step(`start control plane (durable-actors dev on ${CONTROL_PLANE_URL}) and wait for /healthz`, async () => {
       const proc = startControlPlane(bun, dirs!);
       await waitForHttp(`${CONTROL_PLANE_URL}/healthz`, CONTROL_PLANE_START_TIMEOUT_MS, proc, 'control plane');
       return proc;
@@ -370,6 +387,7 @@ async function main(): Promise<number> {
       gateway1: GATEWAY_URLS[0],
       gateway2: GATEWAY_URLS[1],
       restartGateway1: SKIP_RESTART ? undefined : restartGateway1,
+      keyedCreate: true,
       log,
     });
     smokeFailed = smoke.failed;
@@ -390,6 +408,33 @@ async function main(): Promise<number> {
 
     if (controlPlane.done) throw new Error('the control plane exited during the run');
     for (const gateway of gateways) if (gateway.done) throw new Error(`${gateway.name} exited during the run`);
+
+    if (!SKIP_PROOF) {
+      // Second phase: the same state, with proof of the bootstrap secret
+      // required by the actors and the gateways alike. The keyed create of
+      // the first phase is replayed through the restarted control plane.
+      log('--- proof required: the stack again, with RELAYCAST_WORKSPACE_BOOTSTRAP_PROOF_REQUIRED=true on the actors and the gateways ---');
+      await step('stop both gateways and the control plane, start them again with proof required on the same state', async () => {
+        for (const proc of [gateways[1], gateways[0], controlPlane]) log(`       stop ${proc.name}: ${await stopProcess(proc)}`);
+        controlPlane = startControlPlane(bun, dirs!, true);
+        await waitForHttp(`${CONTROL_PLANE_URL}/healthz`, CONTROL_PLANE_START_TIMEOUT_MS, controlPlane, 'control plane (proof required)');
+        gateways[0] = startGateway(0, dirs!, true);
+        gateways[1] = startGateway(1, dirs!, true);
+        await waitForHttp(`${GATEWAY_URLS[0]}/readyz`, GATEWAY_START_TIMEOUT_MS, gateways[0], 'gateway 1 (proof required)');
+        await waitForHttp(`${GATEWAY_URLS[1]}/readyz`, GATEWAY_START_TIMEOUT_MS, gateways[1], 'gateway 2 (proof required)');
+      });
+      const proof = await runBootstrapProofChecks({
+        gateway1: GATEWAY_URLS[0],
+        gateway2: GATEWAY_URLS[1],
+        secret: WORKSPACE_BOOTSTRAP_SECRET,
+        earlier: smoke.keyedCreate,
+        log,
+      });
+      proofFailed = proof.failed;
+      log(`--- proof required: ${proof.steps.length - proof.failed}/${proof.steps.length} passed ---`);
+      if (controlPlane.done) throw new Error('the control plane exited during the proof-required phase');
+      for (const gateway of gateways) if (gateway.done) throw new Error(`${gateway.name} exited during the proof-required phase`);
+    }
   } catch (error) {
     if (failures === 0) {
       failures += 1;
@@ -397,10 +442,10 @@ async function main(): Promise<number> {
     }
   }
 
-  const succeeded = failures === 0 && smokeFailed === 0;
+  const succeeded = failures === 0 && smokeFailed === 0 && proofFailed === 0;
   if (!succeeded) for (const proc of procs) if (!proc.name.startsWith('scripts-')) printTail(proc);
   await teardown(dirs, succeeded);
-  log(succeeded ? 'PASS' : `FAIL (${failures + smokeFailed} failed check(s))`);
+  log(succeeded ? 'PASS' : `FAIL (${failures + smokeFailed + proofFailed} failed check(s))`);
   if (e2eExit !== undefined) log(`scripts/e2e.ts exit code: ${e2eExit} (not counted above)`);
   if (e2eActionsExit !== undefined) log(`scripts/e2e-actions.ts exit code: ${e2eActionsExit} (not counted above)`);
   return succeeded ? 0 : 1;
