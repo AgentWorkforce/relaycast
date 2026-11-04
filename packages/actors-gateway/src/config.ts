@@ -144,6 +144,16 @@ function exactFlag(env: Env, name: string): boolean {
   return parsed.data === 'true';
 }
 
+/**
+ * Whether a secret's exact bytes survive an HTTP header: the proof travels as
+ * `X-Workspace-Bootstrap-Secret`, where leading or trailing space or tab is
+ * stripped by any recipient and a control character is refused or splits
+ * the header. The secret is never trimmed (its bytes feed a derivation).
+ */
+export function isHeaderSafe(value: string): boolean {
+  return !/^[ \t]|[ \t]$|[\x00-\x1f\x7f]/.test(value);
+}
+
 /** Trimmed, with empty values dropped, so a blank variable means "unset". */
 function present(env: Env, names: readonly string[]): Record<string, string> {
   const out: Record<string, string> = {};
@@ -202,6 +212,10 @@ export function loadConfig(env: Env = process.env, readFile?: (path: string) => 
   }
 
   const workspaceBootstrapSecret = secretFromEnv(env, 'RELAYCAST_WORKSPACE_BOOTSTRAP_SECRET', readFile, { exact: true });
+  const workspaceBootstrapProofRequired = exactFlag(env, 'RELAYCAST_WORKSPACE_BOOTSTRAP_PROOF_REQUIRED');
+  if (workspaceBootstrapProofRequired && workspaceBootstrapSecret !== undefined && !isHeaderSafe(workspaceBootstrapSecret)) {
+    throw new ConfigError('invalid_workspace_bootstrap_secret', 'RELAYCAST_WORKSPACE_BOOTSTRAP_SECRET must be carried in an HTTP header when RELAYCAST_WORKSPACE_BOOTSTRAP_PROOF_REQUIRED=true: no leading or trailing space or tab, and no control characters.');
+  }
 
   // DURABLE_ACTORS_API_KEY is the SDK's alias for DURABLE_ACTORS_SECRET.
   const controlPlaneSecret = secretFromEnv(env, 'DURABLE_ACTORS_SECRET', readFile) ?? secretFromEnv(env, 'DURABLE_ACTORS_API_KEY', readFile);
@@ -217,7 +231,7 @@ export function loadConfig(env: Env = process.env, readFile?: (path: string) => 
     internalSecret,
     workspaceBootstrapSecret,
     // Accepted without a secret, as the engine's server is: a keyed create then fails closed (503) before any proof is asked.
-    workspaceBootstrapProofRequired: exactFlag(env, 'RELAYCAST_WORKSPACE_BOOTSTRAP_PROOF_REQUIRED'),
+    workspaceBootstrapProofRequired,
     publicWorkspaceCreate: settings.RELAYCAST_PUBLIC_WORKSPACE_CREATE === 'true',
     fileStore: settings.RELAYCAST_FILE_STORE,
     fileDir: settings.RELAYCAST_FILE_DIR,

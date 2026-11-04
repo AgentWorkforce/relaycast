@@ -74,6 +74,17 @@ describe('actorConfigFromEnv', () => {
     expect(() => actorConfigFromEnv({ RELAYCAST_WORKSPACE_BOOTSTRAP_PROOF_REQUIRED: 'true ' })).toThrow(/RELAYCAST_WORKSPACE_BOOTSTRAP_PROOF_REQUIRED/);
   });
 
+  it('refuses, with proof required, a bootstrap secret an HTTP header cannot carry; without it the secret is only a derivation input', () => {
+    for (const value of [' leading-space', 'trailing-tab\t', 'embedded\nnewline', 'nul\u0000byte']) {
+      expect(() => actorConfigFromEnv({ RELAYCAST_WORKSPACE_BOOTSTRAP_SECRET: value, RELAYCAST_WORKSPACE_BOOTSTRAP_PROOF_REQUIRED: 'true' }), JSON.stringify(value))
+        .toThrow(/RELAYCAST_WORKSPACE_BOOTSTRAP_SECRET: must be carried in an HTTP header/);
+      // Not trimmed, not refused: exact bytes.
+      expect(actorConfigFromEnv({ RELAYCAST_WORKSPACE_BOOTSTRAP_SECRET: value }).workspaceBootstrapSecret).toBe(value);
+      expect(actorConfigFromEnv({ RELAYCAST_WORKSPACE_BOOTSTRAP_SECRET: value, RELAYCAST_WORKSPACE_BOOTSTRAP_PROOF_REQUIRED: 'false' }).workspaceBootstrapSecret).toBe(value);
+    }
+    expect(actorConfigFromEnv({ RELAYCAST_WORKSPACE_BOOTSTRAP_SECRET: 'inner spaces are fine', RELAYCAST_WORKSPACE_BOOTSTRAP_PROOF_REQUIRED: 'true' }).workspaceBootstrapSecret).toBe('inner spaces are fine');
+  });
+
   it('refuses bad values by name', () => {
     expect(() => actorConfigFromEnv({ RELAYCAST_MAX_UPLOAD_BYTES: 'lots' })).toThrow(ConfigError);
     expect(() => actorConfigFromEnv({ RELAYCAST_MAX_UPLOAD_BYTES: '0' })).toThrow(/RELAYCAST_MAX_UPLOAD_BYTES/);
