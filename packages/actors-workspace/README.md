@@ -108,7 +108,9 @@ S3 backend expects: a `PutObject` with `If-None-Match: *` and
 new). If the object already exists (412, e.g. a retried PUT that had
 landed), the deployer reads its `da-generation` with `HeadObject`, and fails
 when that metadata is absent; a 409 (a concurrent conditional write still
-settling) first retries the PUT with backoff. In s3 mode the bucket must
+settling) first retries the PUT with backoff (4 attempts in all), and a 409
+that persists reads `da-generation` with `HeadObject` the same way, failing
+when the object is absent. In s3 mode the bucket must
 follow S3's bucket naming rules. Credentials come from the AWS SDK's default
 chain; on EKS, give the Job's service account an EKS Pod Identity association
 with `s3:PutObject` and `s3:GetObject` (for the `HeadObject` fallback) on
