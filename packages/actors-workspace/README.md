@@ -105,13 +105,15 @@ With `DURABLE_ACTORS_ARTIFACT_STORE=s3` the deployer writes the same object
 names into the S3 bucket `DURABLE_ACTORS_ARTIFACT_BUCKET`, as durable-actors'
 S3 backend expects: a `PutObject` with `If-None-Match: *` and
 `x-amz-meta-da-generation: 1`, recording generation `1` (every object name is
-new). If the object already exists (412 or 409, e.g. a retried PUT that had
+new). If the object already exists (412, e.g. a retried PUT that had
 landed), the deployer reads its `da-generation` with `HeadObject`, and fails
-when that metadata is absent. Credentials come from the AWS SDK's default
+when that metadata is absent; a 409 (a concurrent conditional write still
+settling) first retries the PUT with backoff. In s3 mode the bucket must
+follow S3's bucket naming rules. Credentials come from the AWS SDK's default
 chain; on EKS, give the Job's service account an EKS Pod Identity association
 with `s3:PutObject` and `s3:GetObject` (for the `HeadObject` fallback) on
 `arn:aws:s3:::<bucket>/durable-actors/v3/artifacts/*`. No keys go in the
-deployer's configuration. Setting an `S3_*` variable without
+deployer's configuration. Setting a `DURABLE_ACTORS_S3_*` variable without
 `DURABLE_ACTORS_ARTIFACT_STORE=s3` is a configuration error.
 
 ### The actor's secrets

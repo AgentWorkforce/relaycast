@@ -27,6 +27,7 @@ Packages without a separate changelog are covered by the cross-package notes bel
 - Self-hosting on durable-actors (experimental; `docs/self-hosting-durable-actors.md`): `packages/actors-gateway` is a stateless Node gateway in front of the `Workspace` actors, and `packages/actors-workspace/deploy` compiles the actor and registers it with a self-hosted control plane. Both ship as images.
 - The gateway routes `ar_` credentials to their workspace actor, bridges `/v1/ws` and `/v1/node/ws` to actor sockets, long-polls `GET /v1/deliveries?wait` outside the actor, and serves the internal admin API behind `RELAYCAST_INTERNAL_SECRET`, with `/healthz`, `/readyz`, structured logs and graceful shutdown.
 - Signed `/_relayfiles` URLs are served from a `local` directory or a `gcs` / `s3` bucket (`RELAYCAST_FILE_STORE`). The object stores let several gateway replicas share files.
+- The actor deployer uploads bundles to S3 (AWS or MinIO) with `DURABLE_ACTORS_ARTIFACT_STORE=s3`, so relaycast runs on a durable-actors control plane with the S3 storage backend. It reads `DURABLE_ACTORS_S3_REGION` (or `AWS_REGION`), `DURABLE_ACTORS_S3_ENDPOINT` and `DURABLE_ACTORS_S3_FORCE_PATH_STYLE`, and takes credentials from the AWS SDK default chain (e.g. EKS Pod Identity). GCS stays the default.
 
 ## [12.7.0] - 2026-11-03
 
