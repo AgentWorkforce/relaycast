@@ -9,6 +9,8 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ## [Unreleased - Minor]
 
+- Prevent stalled webhook delivery attempts from overwriting a newer attempt’s status or retry deadline after their lease is reclaimed.
+
 ### Added
 
 - `GET /v1/messages/:id/deliveries`: `{ message_id, deliveries: [{ id, agent_id, agent_name, status, created_at, delivered_at, acked_at, dead_lettered_at, error, read_at }] }`, one read joining `deliveries` to `read_receipts`, creation order, capped at 500 (`MESSAGE_DELIVERIES_MAX`). An agent token must be the message's sender; any other message is `404 message_not_found`. A workspace key reads any message; an observer token is gated like `GET /v1/messages/:id` (`messages:read`, or `dms:read` with `include_dms`, plus filters); node tokens are refused.

@@ -1,0 +1,37 @@
+{
+  "id": "compact_dgd4v39tzrim",
+  "version": 1,
+  "type": "compacted",
+  "compactedAt": "2026-11-04T14:55:09.358Z",
+  "sourceTrajectories": [
+    "traj_xpx9g2ivbrti"
+  ],
+  "dateRange": {
+    "start": "2026-11-04T14:53:33.519Z",
+    "end": "2026-11-04T14:55:08.464Z"
+  },
+  "summary": {
+    "totalDecisions": 1,
+    "totalEvents": 1,
+    "uniqueAgents": [
+      "default"
+    ]
+  },
+  "decisionGroups": [
+    {
+      "category": "database",
+      "decisions": [
+        {
+          "question": "Fence every settlement using the claimed attempts and lease deadline",
+          "chosen": "Fence every settlement using the claimed attempts and lease deadline",
+          "reasoning": "Real SQLite race reproduces an old settlement moving a newer retry deadline151seconds backwards; id/status alone does not identify claim ownership",
+          "fromTrajectory": "traj_xpx9g2ivbrti"
+        }
+      ]
+    }
+  ],
+  "keyLearnings": [],
+  "keyFindings": [],
+  "filesAffected": [],
+  "commits": []
+}
