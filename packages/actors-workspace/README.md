@@ -61,8 +61,9 @@ bundle stored in its artifact bucket. `deploy/deploy.ts` does what the hosted
    `actors.mjs`, which keeps `durable-actors` external because the runtime
    image provides it, and validates the public contract;
 2. uploads it to `gs://<bucket>/durable-actors/v3/artifacts/<new uuid>/actors.mjs`
-   with Application Default Credentials, recording the object generation and
-   the sha256 (unpadded base64url) the host verifies on install;
+   with Application Default Credentials (or to `s3://` with
+   `DURABLE_ACTORS_ARTIFACT_STORE=s3`, see below), recording the object
+   generation and the sha256 (unpadded base64url) the host verifies on install;
 3. `PUT /v1/projects/<project>/deployment` with
    `{organizationId, bundle: {bucket, files}, contract, secretRefs}` and the
    admin key, and prints `{changed, artifact_prefix, files, contract_hash}`.
@@ -94,6 +95,29 @@ printed.
 | `DURABLE_ACTORS_ARTIFACT_BUCKET` | The control plane's artifact bucket, its own `DURABLE_ACTORS_ARTIFACT_BUCKET` (required for a bundle; a bundle in any other bucket is refused) |
 | `DURABLE_ACTORS_SECRET_REFS` | Comma-separated Kubernetes Secret names (DNS subdomains, at most 16) whose keys become the actor's environment; required for a bundle, since the actor needs `RELAYCAST_PUBLIC_URL` and `RELAYCAST_FILE_SIGNING_SECRET` from them |
 | `DURABLE_ACTORS_ARTIFACT_PREFIX` | Object prefix in the bucket; the control plane only accepts the default `durable-actors/v3/artifacts` |
+| `DURABLE_ACTORS_ARTIFACT_STORE` | `gcs` (default) or `s3`: the control plane's storage backend |
+| `DURABLE_ACTORS_S3_REGION` | The bucket's region (required for `s3`; falls back to `AWS_REGION`) |
+| `DURABLE_ACTORS_S3_ENDPOINT` | An S3-compatible endpoint such as MinIO (optional; unset for AWS) |
+| `DURABLE_ACTORS_S3_FORCE_PATH_STYLE` | `true` or `false`: path-style bucket addressing (optional; defaults to `true` with an endpoint, `false` without) |
+
+### S3 (AWS or MinIO)
+
+With `DURABLE_ACTORS_ARTIFACT_STORE=s3` the deployer writes the same object
+names into the S3 bucket `DURABLE_ACTORS_ARTIFACT_BUCKET`, as durable-actors'
+S3 backend expects: a `PutObject` with `If-None-Match: *` and
+`x-amz-meta-da-generation: 1`, recording generation `1` (every object name is
+new). If the object already exists (412, e.g. a retried PUT that had
+landed), the deployer reads its `da-generation` with `HeadObject`, and fails
+when that metadata is absent; a 409 (a concurrent conditional write still
+settling) first retries the PUT with backoff (4 attempts in all), and a 409
+that persists reads `da-generation` with `HeadObject` the same way, failing
+when the object is absent. In s3 mode the bucket must
+follow S3's bucket naming rules. Credentials come from the AWS SDK's default
+chain; on EKS, give the Job's service account an EKS Pod Identity association
+with `s3:PutObject` and `s3:GetObject` (for the `HeadObject` fallback) on
+`arn:aws:s3:::<bucket>/durable-actors/v3/artifacts/*`. No keys go in the
+deployer's configuration. Setting a `DURABLE_ACTORS_S3_*` variable without
+`DURABLE_ACTORS_ARTIFACT_STORE=s3` is a configuration error.
 
 ### The actor's secrets
 
@@ -169,5 +193,9 @@ bucket and credentials Secret from the durable-actors chart's values.
 
 - `npm run check`: type-check the actor and the deployer.
 - `npm test`: unit tests, including one that runs the real SDK compiler on
-  the actor (no network; about ten seconds).
+  the actor (no network; about ten seconds). With
+  `DURABLE_ACTORS_S3_TEST_ENDPOINT` (and optionally
+  `DURABLE_ACTORS_S3_TEST_BUCKET`, default `artifacts`) set, one more test
+  uploads to that S3-compatible server (e.g. MinIO) with the SDK's default
+  credentials.
 - `npm run lint`.

@@ -37,9 +37,16 @@ environment:
   DURABLE_ACTORS_PROJECT_ID          project id (required)
   DURABLE_ACTORS_SECRET              admin key, sent as a bearer token (required unless --local)
   DURABLE_ACTORS_ORGANIZATION_ID     organization id (required for a bundle; "local" with --local)
-  DURABLE_ACTORS_ARTIFACT_BUCKET     GCS artifact bucket of the control plane (required for a bundle)
+  DURABLE_ACTORS_ARTIFACT_BUCKET     artifact bucket of the control plane (required for a bundle)
   DURABLE_ACTORS_SECRET_REFS         comma-separated Kubernetes Secret names for the actor's env (required for a bundle; at most 16)
-  DURABLE_ACTORS_ARTIFACT_PREFIX     object prefix inside the bucket (default ${DEFAULT_ARTIFACT_PREFIX})`
+  DURABLE_ACTORS_ARTIFACT_PREFIX     object prefix inside the bucket (default ${DEFAULT_ARTIFACT_PREFIX})
+  DURABLE_ACTORS_ARTIFACT_STORE      gcs or s3: where the artifact bucket lives (default gcs)
+  DURABLE_ACTORS_S3_REGION           the bucket's region (required for s3; falls back to AWS_REGION)
+  DURABLE_ACTORS_S3_ENDPOINT         S3-compatible endpoint, e.g. MinIO (optional; unset for AWS)
+  DURABLE_ACTORS_S3_FORCE_PATH_STYLE true or false: path-style bucket addressing (optional; default true with an endpoint)
+
+  S3 credentials come from the AWS SDK's default chain (EKS Pod Identity, IRSA,
+  instance role, AWS_PROFILE, ...); GCS uses Application Default Credentials.`
 
 export function parseOptions(argv: readonly string[]): Options {
     let command: Command | undefined
@@ -81,6 +88,20 @@ const origin = z.string().trim().refine((value) => {
     }
 }, "must be an http(s) origin without credentials, path, query or fragment")
 
+const REGION = /^[a-z0-9]+(?:-[a-z0-9]+)*$/
+const region = z.string().trim().regex(REGION, "must be a region name such as us-east-1")
+
+/** An http(s) S3 endpoint without credentials, query or fragment (static keys never go in config). */
+const endpoint = z.string().trim().refine((value) => {
+    try {
+        const url = new URL(value)
+        // `URL` drops a bare trailing `?` or `#`, so the raw value is checked too, as for the control plane origin.
+        return /^https?:$/.test(url.protocol) && !!url.hostname && !url.username && !url.password && !/[?#]/.test(value)
+    } catch {
+        return false
+    }
+}, "must be an http(s) URL without credentials, query or fragment")
+
 const EnvSchema = z.object({
     DURABLE_ACTORS_CONTROL_PLANE_URL: z.preprocess(unsetIfBlank, origin),
     DURABLE_ACTORS_PROJECT_ID: z.preprocess(unsetIfBlank, component),
@@ -95,6 +116,12 @@ const EnvSchema = z.object({
         unsetIfBlank,
         z.string().trim().min(1).refine((prefix) => !/^\/|\/$|\/\//.test(prefix), "must be a relative object prefix").optional()
     ),
+    DURABLE_ACTORS_ARTIFACT_STORE: z.preprocess(unsetIfBlank, z.enum(["gcs", "s3"]).optional()),
+    DURABLE_ACTORS_S3_REGION: z.preprocess(unsetIfBlank, region.optional()),
+    // Only read as the S3 region's fallback, so a value the deployer never uses cannot fail a GCS deploy.
+    AWS_REGION: optionalText,
+    DURABLE_ACTORS_S3_ENDPOINT: z.preprocess(unsetIfBlank, endpoint.optional()),
+    DURABLE_ACTORS_S3_FORCE_PATH_STYLE: z.preprocess(unsetIfBlank, z.enum(["true", "false"]).optional()),
 })
 
 /** A DNS subdomain name, as Kubernetes requires of a Secret's name. */
@@ -108,11 +135,23 @@ export interface ConnectionConfig {
     secret: string | undefined
 }
 
+/** Where the artifact bucket lives. Credentials are never configured here: GCS uses ADC, S3 the AWS SDK's default chain. */
+export type ArtifactStoreConfig =
+    | { kind: "gcs" }
+    | {
+          kind: "s3"
+          region: string
+          /** An S3-compatible endpoint (MinIO); unset for AWS. */
+          endpoint?: string
+          forcePathStyle: boolean
+      }
+
 export interface BundleConfig extends ConnectionConfig {
     organizationId: string
     bucket: string
     secretRefs: string[]
     artifactPrefix: string
+    artifactStore: ArtifactStoreConfig
 }
 
 export interface LocalConfig extends ConnectionConfig {
@@ -168,7 +207,35 @@ export function bundleConfigFromEnv(env: Record<string, string | undefined>): Bu
         bucket: values.DURABLE_ACTORS_ARTIFACT_BUCKET!,
         secretRefs,
         artifactPrefix: values.DURABLE_ACTORS_ARTIFACT_PREFIX ?? DEFAULT_ARTIFACT_PREFIX,
+        artifactStore: artifactStoreConfig(values),
     }
+}
+
+/** S3's general purpose bucket naming rules (the checks that would otherwise fail only at upload). */
+function isS3BucketName(name: string): boolean {
+    return /^[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]$/.test(name) && !name.includes("..") && !/^\d+\.\d+\.\d+\.\d+$/.test(name)
+}
+
+function artifactStoreConfig(values: z.infer<typeof EnvSchema>): ArtifactStoreConfig {
+    const s3Settings = (["DURABLE_ACTORS_S3_REGION", "DURABLE_ACTORS_S3_ENDPOINT", "DURABLE_ACTORS_S3_FORCE_PATH_STYLE"] as const).filter(
+        (name) => values[name] !== undefined
+    )
+    if ((values.DURABLE_ACTORS_ARTIFACT_STORE ?? "gcs") === "gcs") {
+        // A half-configured S3 setup would otherwise upload to GCS without a word.
+        if (s3Settings.length > 0) throw new ConfigError(`${s3Settings.join(", ")} need DURABLE_ACTORS_ARTIFACT_STORE=s3`)
+        return { kind: "gcs" }
+    }
+    if (!isS3BucketName(values.DURABLE_ACTORS_ARTIFACT_BUCKET!))
+        throw new ConfigError(
+            "DURABLE_ACTORS_ARTIFACT_BUCKET must be an S3 bucket name: 3-63 lowercase letters, digits, '.' or '-', starting and ending with a letter or digit, without '..' or the form of an IP address"
+        )
+    const s3Region = values.DURABLE_ACTORS_S3_REGION ?? values.AWS_REGION
+    if (s3Region === undefined) throw new ConfigError("DURABLE_ACTORS_S3_REGION (or AWS_REGION) is required for DURABLE_ACTORS_ARTIFACT_STORE=s3")
+    if (!REGION.test(s3Region)) throw new ConfigError("AWS_REGION must be a region name such as us-east-1")
+    const s3Endpoint = values.DURABLE_ACTORS_S3_ENDPOINT
+    const forcePathStyle =
+        values.DURABLE_ACTORS_S3_FORCE_PATH_STYLE === undefined ? s3Endpoint !== undefined : values.DURABLE_ACTORS_S3_FORCE_PATH_STYLE === "true"
+    return { kind: "s3", region: s3Region, ...(s3Endpoint === undefined ? {} : { endpoint: s3Endpoint }), forcePathStyle }
 }
 
 /** `--local`: the dev control plane compiles the sources itself and runs as organization `local`. */

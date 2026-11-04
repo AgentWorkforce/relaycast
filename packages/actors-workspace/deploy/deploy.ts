@@ -12,7 +12,7 @@ import { realpathSync } from "node:fs"
 import path from "node:path"
 import { fileURLToPath } from "node:url"
 
-import { type ArtifactStore, gcsArtifactStore } from "./artifacts.ts"
+import { type ArtifactStore, artifactStoreFor, objectUrl } from "./artifacts.ts"
 import {
     type BundleFile,
     artifactPrefix,
@@ -24,6 +24,7 @@ import {
 } from "./bundle.ts"
 import { type ActorCompiler, compileActor } from "./compile.ts"
 import {
+    type ArtifactStoreConfig,
     ConfigError,
     USAGE,
     bundleConfigFromEnv,
@@ -44,7 +45,7 @@ export const EXIT_USAGE = 64
 
 export interface Dependencies {
     compile?: ActorCompiler
-    artifactStore?: (bucket: string) => ArtifactStore
+    artifactStore?: (bucket: string, config: ArtifactStoreConfig) => ArtifactStore
     fetch?: typeof fetch
     deploymentId?: () => string
     delay?: (attempt: number) => Promise<void>
@@ -110,10 +111,10 @@ export async function run(argv: readonly string[], env: Record<string, string | 
                     stdout(JSON.stringify({ dry_run: true, artifact_prefix: prefix, files: summaryFiles, contract_hash: hash, request }))
                     return 0
                 }
-                const store = (deps.artifactStore ?? gcsArtifactStore)(config.bucket)
+                const store = (deps.artifactStore ?? artifactStoreFor)(config.bucket, config.artifactStore)
                 const files: BundleFile[] = []
                 for (const file of planned) {
-                    stderr(`uploading gs://${config.bucket}/${file.object} (${file.bytes.byteLength} bytes)`)
+                    stderr(`uploading ${objectUrl(config.artifactStore, config.bucket, file.object)} (${file.bytes.byteLength} bytes)`)
                     const { generation } = await store.upload(file.object, file.bytes)
                     files.push({ path: file.path, object: file.object, generation: parseGeneration(generation), sha256: file.sha256 })
                 }
