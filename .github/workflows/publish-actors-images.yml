@@ -77,6 +77,11 @@ jobs:
             exit 1
           fi
           version="$(node -p "require('./packages/engine/package.json').version")"
+          # A tag dispatch must be the release tag of this engine version, not any v* tag.
+          if [[ "$GITHUB_REF" == refs/tags/* ]] && [ "$GITHUB_REF" != "refs/tags/v${version}" ]; then
+            echo "dispatch ref $GITHUB_REF is not the release tag v${version}" >&2
+            exit 1
+          fi
           suffixed=false
           case "$TAG" in
             "$version") ;;

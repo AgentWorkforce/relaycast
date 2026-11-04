@@ -33,9 +33,9 @@ CI run is required before merge.
 - Describe what changed and why, and how you tested it.
 - Never commit secrets, credentials, real customer data or production
   identifiers, including in tests and fixtures. Use obviously fake values.
-- Pull request CI runs without repository secrets, including on forks.
-  Workflows that use secrets (publishing and deploys) run only from `main`,
-  from release tags, or when a maintainer starts them.
+- Fork pull request CI runs without repository secrets. Workflows that use
+  secrets (publishing and deploys) run only from `main`, from release tags, or
+  when a maintainer with write access starts them.
 
 A maintainer reviews every pull request. We may ask for changes, or decline a
 change that doesn't fit the project's direction.
