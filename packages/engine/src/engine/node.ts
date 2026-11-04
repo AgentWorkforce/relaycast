@@ -3441,8 +3441,6 @@ export async function reconcileInventory(
         // node; if that fails too, keep the dispatch for a later sync or sweep.
         if (!await releaseSpawnReservationBeforeDetach(db, invocation, nodeId, [
           eq(actionInvocations.dispatchedProvider, providerName),
-          // Never detach a dispatch that still holds a slot nothing could then return.
-          isNull(actionInvocations.spawnReservedAt),
           inArray(actionInvocations.status, ['pending', 'dispatched']),
         ])) continue;
         await db
@@ -3455,13 +3453,15 @@ export async function reconcileInventory(
             retryAfterAt: new Date(Date.now() + 5_000),
             events: appendInvocationEvents(requeueEvent(invocation, 'inventory_missing')),
           })
-          // Only the dispatch this sync observed: a reschedule that threw after
-          // the row settled or moved must not clear (or vouch for) another one.
+          // Only the dispatch this sync observed, and only once it holds no
+          // slot: the release helper requires the reservation to be set, so
+          // this predicate cannot live in that claim.
           .where(and(
             eq(actionInvocations.workspaceId, workspaceId),
             eq(actionInvocations.id, invocation.id),
             eq(actionInvocations.dispatchedNodeId, nodeId),
             eq(actionInvocations.dispatchedProvider, providerName),
+            isNull(actionInvocations.spawnReservedAt),
             inArray(actionInvocations.status, ['pending', 'dispatched']),
           ));
       }

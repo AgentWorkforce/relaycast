@@ -3362,6 +3362,7 @@ async function dispatchNodeInvocation(args: {
           reservationHeld: args.reservationHeld,
           skipIncrementAttempts: args.skipIncrementAttempts,
           expectedNodeLivenessRevision: args.expectedNodeLivenessRevision,
+          leadingEvents: args.leadingEvents,
           claim: {
             status: claimStatus,
             retryAfterAt: observedRetryAfterAt,
@@ -4012,8 +4013,20 @@ export async function releaseSpawnReservationBeforeDetach(
 ): Promise<boolean> {
   if (!isSpawnInvocation(invocation.actionName)) return true;
   try {
-    await releaseHeldSpawnReservation(db, invocation.workspaceId, invocation.id, nodeId, where);
-    return true;
+    if (await releaseHeldSpawnReservation(db, invocation.workspaceId, invocation.id, nodeId, where)) return true;
+    // A missed claim is not "nothing to release". Detach only when this
+    // dispatch holds no slot; a slot the guards missed keeps its node.
+    const [held] = await db
+      .select({ id: actionInvocations.id })
+      .from(actionInvocations)
+      .where(and(
+        eq(actionInvocations.workspaceId, invocation.workspaceId),
+        eq(actionInvocations.id, invocation.id),
+        eq(actionInvocations.dispatchedNodeId, nodeId),
+        isNotNull(actionInvocations.spawnReservedAt),
+      ))
+      .limit(1);
+    return !held;
   } catch {
     return false;
   }
@@ -4107,7 +4120,12 @@ async function settleSpawnFromRegistration(
     .where(and(
       eq(actionInvocations.workspaceId, invocation.workspaceId),
       eq(actionInvocations.id, invocation.id),
+      eq(actionInvocations.status, invocation.status),
       inArray(actionInvocations.status, OPEN_INVOCATION_STATUSES),
+      invocation.dispatchedNodeId
+        ? eq(actionInvocations.dispatchedNodeId, invocation.dispatchedNodeId)
+        : isNull(actionInvocations.dispatchedNodeId),
+      eq(actionInvocations.dispatchAttempts, invocation.dispatchAttempts ?? 0),
       ...(opts.expectedNodeLivenessRevision !== undefined
         ? [eq(actionInvocations.nodeLivenessRevision, opts.expectedNodeLivenessRevision)]
         : []),
@@ -4238,10 +4256,23 @@ export async function rescheduleNodeInvocation(
         if (releasedHold) await releaseNodeCapacity(tx, invocation.workspaceId, nodeId);
       });
     } catch (error) {
-      await db
-        .update(actionInvocations)
-        .set({ spawnReservedAt: heldAt })
-        .where(and(holdWhere, isNull(actionInvocations.spawnReservedAt)));
+      // A transaction rolls the clear back with the failure, so the marker is
+      // still set and must not be written again. A handle without one can
+      // commit the clear first; only then put the marker back.
+      const [row] = await db
+        .select({ spawnReservedAt: actionInvocations.spawnReservedAt })
+        .from(actionInvocations)
+        .where(and(
+          eq(actionInvocations.workspaceId, invocation.workspaceId),
+          eq(actionInvocations.id, invocation.id),
+        ))
+        .limit(1);
+      if (!row?.spawnReservedAt) {
+        await db
+          .update(actionInvocations)
+          .set({ spawnReservedAt: heldAt })
+          .where(and(holdWhere, isNull(actionInvocations.spawnReservedAt)));
+      }
       throw error;
     }
   }
@@ -4272,6 +4303,8 @@ export async function rescheduleNodeInvocation(
         ))
         .returning({ id: actionInvocations.id });
       if (!reset) return false;
+      // Pinned to this shadow until its provider returns. The requeue is
+      // already on the row; this is not a new dispatch.
       return false;
     }
   }
@@ -4866,6 +4899,10 @@ export async function applyNodeInvocationResult(
           error: null,
           status: 'completed',
           completedAt: new Date(),
+          // Keep the node that finished the spawn. A resend then matches
+          // already_applied; a null dispatch reads as already_settled.
+          dispatchedNodeId: nodeId,
+          dispatchedProvider: providerName,
           spawnReservedAt: null,
           retryAfterAt: null,
           events: appendInvocationEvents(
@@ -4898,10 +4935,23 @@ export async function applyNodeInvocationResult(
     // Rescheduling releases capacity and may dispatch elsewhere; never repeat it.
     markMutated();
     try {
-      if (await rescheduleNodeInvocation(db, registry, existing, {
+      const accepted = await rescheduleNodeInvocation(db, registry, existing, {
         retryAfterAt: nextRetryAfter(existing.dispatchAttempts + 1),
         reason: 'handler_unavailable',
-      })) {
+      });
+      // A shadow pin and the no-placement reset write the requeue and return
+      // false. That is still a taken report: do not fail the invocation.
+      const [after] = await db
+        .select({ status: actionInvocations.status, events: actionInvocations.events })
+        .from(actionInvocations)
+        .where(and(
+          eq(actionInvocations.workspaceId, workspaceId),
+          eq(actionInvocations.id, invocationId),
+        ));
+      const lastEvent = Array.isArray(after?.events) ? after.events.at(-1) : undefined;
+      const requeued = lastEvent?.type === 'requeued' && lastEvent.reason === 'handler_unavailable';
+      const open = !!after && OPEN_INVOCATION_STATUSES.includes(after.status);
+      if (open && (accepted || requeued)) {
         return { completed: null, rejection: null, requeued: true };
       }
     } catch {
@@ -5210,6 +5260,7 @@ async function sweepTimedOutInvocationsUnlabeled(
         retryAfterAt: allowFallback ? null : nextRetryAfter(invocation.dispatchAttempts + 1),
         reason: allowFallback ? 'retry_due' : 'dispatch_timeout',
         completionDeps: sweepOpts.completionDeps,
+        expectedNodeLivenessRevision: invocation.nodeLivenessRevision,
       })) {
         rescheduled++;
       }

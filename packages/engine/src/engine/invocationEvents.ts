@@ -261,7 +261,10 @@ export function explainInvocation(input: ExplainInvocationInput): string {
     ? `Node ${nodeName(agentNode)} launched agent ${agentName} (registered ${clock(registeredAt)})`
     : null;
   const lastRequeue = lastOf(events, (event) => event.type === 'requeued');
-  const lastRejection = lastOf(events, (event) => event.type === 'result_rejected' && event.reason !== 'already_settled');
+  // A rejection from before the latest dispatch describes an earlier attempt.
+  const latestDispatchIndex = lastIndexOf(events, (event) => event.type === 'dispatched' || event.type === 'queued');
+  const rejectionIndex = lastIndexOf(events, (event) => event.type === 'result_rejected' && event.reason !== 'already_settled');
+  const lastRejection = rejectionIndex > latestDispatchIndex ? events[rejectionIndex] : undefined;
   const lastDispatch = lastOf(events, (event) => event.type === 'dispatched' || event.type === 'queued');
   const started = lastOf(events, (event) => event.type === 'started' && event.reason !== 'awaiting_readiness');
   // A readiness hold describes the current dispatch only if no later dispatch

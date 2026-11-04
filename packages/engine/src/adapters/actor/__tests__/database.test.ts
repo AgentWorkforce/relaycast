@@ -133,6 +133,12 @@ describe('bundled actor migrations', () => {
       fake.exec(`INSERT OR IGNORE INTO ${ACTOR_MIGRATIONS_TABLE} (name, applied_at) VALUES (?, 0)`, superseded);
     }
     expect(actorMigrationsCurrent(fake)).toBe(false);
+    // The newest file adds a column. A database that lacks that file lacks
+    // the column too; re-running the ALTER against the already-migrated
+    // schema is not the case this checks.
+    if (newest === '0084_action_invocation_events.sql') {
+      fake.exec('ALTER TABLE action_invocations DROP COLUMN events');
+    }
     expect(applyActorMigrations(fake, { trackingTableExists: true }).applied).toEqual([newest]);
     expect(actorMigrationsCurrent(fake)).toBe(true);
   });

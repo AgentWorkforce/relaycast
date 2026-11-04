@@ -169,6 +169,16 @@ describe('spawn invocation timeline', () => {
     expect(completed.events[3]).toMatchObject({ provider: 'default' });
     expect(completed.events[6]).toMatchObject({ reason: 'after_requeue', ok: true, node_id: 'node_alpha' });
     expect(alpha.sock.ofType('error')).toHaveLength(0);
+
+    // The late completion names the node, so a resend is already applied.
+    alpha.sock.received.length = 0;
+    await alpha.handle.handleMessage(JSON.stringify({
+      v: 1, id: 'late-resend', type: 'action.result', invocation_id: invocationId, output: { agent: 'worker-late' },
+    }));
+    expect(alpha.sock.ofType('reply').at(-1)).toMatchObject({
+      id: 'late-resend', ok: true, data: { invocation_id: invocationId, outcome: 'already_applied' },
+    });
+    expect(alpha.sock.ofType('error')).toHaveLength(0);
   });
 
   it('shows a registered agent whose result was rejected, and tells the node why', async () => {
@@ -701,6 +711,20 @@ describe('explainInvocation', () => {
         { at: '2026-10-15T07:30:40.000Z', type: 'requeued', node_id: 'node_a', reason: 'dispatch_timeout' },
       ],
     })).toBe('Requeued at 07:30:40 UTC after no result arrived within the dispatch timeout; waiting to be dispatched again.');
+  });
+
+  it('does not explain the current dispatch with a rejection from before it', () => {
+    expect(explainInvocation({
+      status: 'dispatched', error: null, actionName: 'spawn', dispatchedNodeId: 'node_b',
+      dispatchedAt: '2026-10-15T07:35:00.000Z', completedAt: null, retryAfterAt: null,
+      nodeNames: new Map([['node_a', 'alpha'], ['node_b', 'beta']]), registeredAgent: null,
+      events: [
+        { at: '2026-10-15T07:30:00.000Z', type: 'dispatched', node_id: 'node_a', attempt: 1 },
+        { at: '2026-10-15T07:31:00.000Z', type: 'result_rejected', node_id: 'node_a', reason: 'not_dispatched', ok: false },
+        { at: '2026-10-15T07:32:00.000Z', type: 'requeued', node_id: 'node_a', reason: 'dispatch_timeout' },
+        { at: '2026-10-15T07:35:00.000Z', type: 'dispatched', node_id: 'node_b', attempt: 2 },
+      ],
+    })).toBe('Dispatched to node beta at 07:35:00 UTC (attempt 2); waiting for the node to report a result.');
   });
 
   it('describes a never-dispatched spawn', () => {
