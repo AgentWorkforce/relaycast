@@ -899,15 +899,22 @@ describe('RelayCast', () => {
       expect(JSON.parse(init.body)).toEqual({ node_id: 'node_1', name: 'renamed', version: 'v2' });
     });
 
-    it('create() rejects a recovery key without current-token proof before sending', async () => {
+    it('create() sends a first-enrollment recovery key without current-token proof', async () => {
       const { RelayCast } = await import('../relay.js');
       const relay = new RelayCast({ apiKey: 'rk_live_test123' });
+      mockFetch.mockImplementation(() => mockResponse({
+        id: 'node_1', name: 'new-node', token: 'nt_live_new',
+      }, true, 201));
 
-      expect(() => relay.nodes.create(
-        { name: 'new-node' },
-        { idempotencyKey: 'node-rotation-00000000-0000-4000-8000-000000000001' },
-      )).toThrow('idempotencyKey requires currentToken');
-      expect(mockFetch).not.toHaveBeenCalled();
+      await relay.nodes.create(
+        { nodeId: 'node_1', name: 'new-node' },
+        { idempotencyKey: 'node-enroll-00000000-0000-4000-8000-000000000001' },
+      );
+
+      const [, init] = mockFetch.mock.calls[0]!;
+      expect(init.headers['Idempotency-Key']).toBe('node-enroll-00000000-0000-4000-8000-000000000001');
+      expect(init.headers['X-Relaycast-Node-Token']).toBeUndefined();
+      expect(JSON.parse(init.body)).toEqual({ node_id: 'node_1', name: 'new-node' });
     });
 
     it('create() rejects an empty recovery key before sending', async () => {

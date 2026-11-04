@@ -168,19 +168,13 @@ async function enrollNode(c: Context<AppEnv>, data: z.infer<typeof createNodeSch
     if (idempotencyError) {
       return jsonError(c, 'invalid_idempotency_key', idempotencyError, 400);
     }
-    if (idempotencyKey && !currentNodeToken) {
-      return jsonError(
-        c,
-        'node_rotation_idempotency_requires_current_token',
-        'Node rotation Idempotency-Key requires X-Relaycast-Node-Token proof',
-        400,
-      );
-    }
-    if (currentNodeToken && idempotencyKey && idempotencyKey.length < 32) {
+    // The key is the only secret a first enrollment's recovery rests on (a
+    // rotation also folds in the current token), so both demand real entropy.
+    if (idempotencyKey && idempotencyKey.length < 32) {
       return jsonError(
         c,
         'node_rotation_idempotency_key_too_weak',
-        'Node rotation Idempotency-Key must be at least 32 characters and generated with a CSPRNG',
+        'Node enrollment Idempotency-Key must be at least 32 characters and generated with a CSPRNG',
         400,
       );
     }
@@ -217,19 +211,19 @@ async function enrollNode(c: Context<AppEnv>, data: z.infer<typeof createNodeSch
     if (role === 'direct' && (data.max_agents ?? existing?.maxAgents ?? 1) !== 1) {
       return jsonError(c, 'direct_node_capacity_exceeded', 'direct nodes can bind at most one agent', 400);
     }
-    const rotationRecovery = existing && currentNodeToken && idempotencyKey
+    // A keyed rotation of an established row recovers its replacement; a
+    // keyed request without proof is a first enrollment whose minted token is
+    // recoverable the same way, seeded by the key alone. A keyed rotation that
+    // resolves no row stays an ordinary (unkeyed) create, as before.
+    const keyedRecovery = idempotencyKey && (currentNodeToken ? existing !== null : true)
       ? await (async () => {
           const requestDigest = await sha256Hex(canonicalJson(data));
-          const replacementDigest = await sha256Hex(canonicalJson([
-            'node-token-rotation-v1',
-            c.get('workspace').id,
-            currentNodeToken,
-            idempotencyKey,
-            requestDigest,
-          ]));
-          // The replacement is derived in every family the first attempt may
-          // have committed it in, so a retry after a family switch or a
-          // keyring rotation still recovers it.
+          const replacementDigest = await sha256Hex(canonicalJson(currentNodeToken
+            ? ['node-token-rotation-v1', c.get('workspace').id, currentNodeToken, idempotencyKey, requestDigest]
+            : ['node-token-enroll-v1', c.get('workspace').id, idempotencyKey, requestDigest]));
+          // The token is derived in every family the first attempt may have
+          // committed it in, so a retry after a family switch or a keyring
+          // rotation still recovers it.
           const db = c.get('db');
           const workspaceId = c.get('workspace').id;
           const families = await derivationFamilies(db, workspaceId);
@@ -246,7 +240,7 @@ async function enrollNode(c: Context<AppEnv>, data: z.infer<typeof createNodeSch
       kind,
       role,
       delivery: delivery && !('success' in delivery) ? delivery : null,
-    }, { expectedTokenHash, rotationRecovery, admitRegistration: registrationAdmission(c) });
+    }, { expectedTokenHash, keyedRecovery, admitRegistration: registrationAdmission(c) });
     return jsonCreated(c, result);
   } catch (err: unknown) {
     return errorResponse(c, err);

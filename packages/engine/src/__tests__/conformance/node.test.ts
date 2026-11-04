@@ -3611,21 +3611,149 @@ describe('node adapter conformance', () => {
       expect(rejected.body.error?.code).toBe('node_rotation_idempotency_key_too_weak');
     });
 
-    it('rejects a rotation recovery key without current-token proof', async () => {
-      const ws = await createWorkspace(stack.app, 'enroll-key-without-proof-ws');
-      const rejected = await enroll(
-        ws.workspaceKey,
-        { node_id: 'node_a', name: 'host' },
-        undefined,
-        'node-rotation-00000000-0000-4000-8000-000000000005',
-      );
+    it('recovers the same minted token when a keyed first enrollment reply is lost', async () => {
+      const ws = await createWorkspace(stack.app, 'enroll-idempotent-create-ws');
+      const request = { node_id: 'node_a', name: 'host', version: 'v1' };
+      const idempotencyKey = 'node-enroll-00000000-0000-4000-8000-000000000001';
+      const first = await enroll(ws.workspaceKey, request, undefined, idempotencyKey);
+      expect(first.status).toBe(201);
+      expect(first.body.data).toMatchObject({ id: 'node_a', name: 'host' });
+      expect(first.body.data?.token).toBeTruthy();
+      const [afterCommit] = await stack.runtime.deps.db.select().from(nodes).where(eq(nodes.id, 'node_a'));
+      expect(afterCommit.tokenHash).toBe(await sha256Hex(first.body.data!.token));
+      expect(afterCommit.previousTokenHash).toBeNull();
+      expect(afterCommit.rotationIdempotencyKeyHash).toBe(await sha256Hex(idempotencyKey));
+      expect(afterCommit.previousTokenExpiresAt!.getTime()).toBeGreaterThan(Date.now());
+
+      // The caller never observed the 201: the same key and body replay it.
+      const recovered = await enroll(ws.workspaceKey, request, undefined, idempotencyKey);
+      expect(recovered.status).toBe(201);
+      expect(recovered.body.data).toEqual(first.body.data);
+      const rows = await stack.runtime.deps.db.select().from(nodes).where(eq(nodes.workspaceId, ws.workspaceId));
+      expect(rows).toHaveLength(1);
+      expect(rows[0]).toEqual(afterCommit);
+
+      // The key is bound to the body: a drifted retry, a different key, and a
+      // proof-less retry without any key all meet today's proof requirement.
+      const drifted = await enroll(ws.workspaceKey, { ...request, version: 'v2' }, undefined, idempotencyKey);
+      expect(drifted.status).toBe(409);
+      expect(drifted.body.error?.code).toBe('node_token_proof_required');
+      const otherKey = await enroll(ws.workspaceKey, request, undefined, 'node-enroll-00000000-0000-4000-8000-000000000002');
+      expect(otherKey.status).toBe(409);
+      expect(otherKey.body.error?.code).toBe('node_token_proof_required');
+      const unkeyed = await enroll(ws.workspaceKey, request);
+      expect(unkeyed.status).toBe(409);
+      expect(unkeyed.body.error?.code).toBe('node_token_proof_required');
+      const [afterRejected] = await stack.runtime.deps.db.select().from(nodes).where(eq(nodes.id, 'node_a'));
+      expect(afterRejected).toEqual(afterCommit);
+    });
+
+    it('rejects a keyed first-enrollment replay after its recovery window expires', async () => {
+      const ws = await createWorkspace(stack.app, 'enroll-expired-create-recovery-ws');
+      const request = { node_id: 'node_a', name: 'host', version: 'v1' };
+      const idempotencyKey = 'node-enroll-00000000-0000-4000-8000-000000000003';
+      expect((await enroll(ws.workspaceKey, request, undefined, idempotencyKey)).status).toBe(201);
+
+      await stack.runtime.deps.db
+        .update(nodes)
+        .set({ previousTokenExpiresAt: new Date(Date.now() - 1_000) })
+        .where(eq(nodes.id, 'node_a'));
+      const [before] = await stack.runtime.deps.db.select().from(nodes).where(eq(nodes.id, 'node_a'));
+
+      const rejected = await enroll(ws.workspaceKey, request, undefined, idempotencyKey);
+      expect(rejected.status).toBe(409);
+      expect(rejected.body.error?.code).toBe('node_token_proof_required');
+      const [after] = await stack.runtime.deps.db.select().from(nodes).where(eq(nodes.id, 'node_a'));
+      expect(after).toEqual(before);
+    });
+
+    it('treats a keyed retry that carries the minted token as a rotation, not a create replay', async () => {
+      const ws = await createWorkspace(stack.app, 'enroll-keyed-create-then-rotate-ws');
+      const request = { node_id: 'node_a', name: 'host', version: 'v1' };
+      const idempotencyKey = 'node-enroll-00000000-0000-4000-8000-000000000004';
+      const first = await enroll(ws.workspaceKey, request, undefined, idempotencyKey);
+      expect(first.status).toBe(201);
+
+      const rotated = await enroll(ws.workspaceKey, request, first.body.data?.token, idempotencyKey);
+      expect(rotated.status).toBe(201);
+      expect(rotated.body.data?.token).not.toBe(first.body.data?.token);
+      const [row] = await stack.runtime.deps.db.select().from(nodes).where(eq(nodes.id, 'node_a'));
+      expect(row.tokenHash).toBe(await sha256Hex(rotated.body.data!.token));
+      expect(row.previousTokenHash).toBe(await sha256Hex(first.body.data!.token));
+
+      // The create binding was superseded by the rotation: the proof-less
+      // replay of the original create no longer recovers anything.
+      const stale = await enroll(ws.workspaceKey, request, undefined, idempotencyKey);
+      expect(stale.status).toBe(409);
+      expect(stale.body.error?.code).toBe('node_token_proof_required');
+      // The rotation itself stays recoverable with its proof.
+      const recovered = await enroll(ws.workspaceKey, request, first.body.data?.token, idempotencyKey);
+      expect(recovered.status).toBe(201);
+      expect(recovered.body.data?.token).toBe(rotated.body.data?.token);
+    });
+
+    it('leaves an unkeyed first enrollment without a recovery binding', async () => {
+      const ws = await createWorkspace(stack.app, 'enroll-unkeyed-create-ws');
+      const first = await enroll(ws.workspaceKey, { node_id: 'node_a', name: 'host' });
+      expect(first.status).toBe(201);
+      const [row] = await stack.runtime.deps.db.select().from(nodes).where(eq(nodes.id, 'node_a'));
+      expect(row.previousTokenHash).toBeNull();
+      expect(row.previousTokenExpiresAt).toBeNull();
+      expect(row.rotationIdempotencyKeyHash).toBeNull();
+      expect(row.rotationRequestDigest).toBeNull();
+
+      const retried = await enroll(ws.workspaceKey, { node_id: 'node_a', name: 'host' });
+      expect(retried.status).toBe(409);
+      expect(retried.body.error?.code).toBe('node_token_proof_required');
+    });
+
+    it('requires a high-entropy idempotency key for a keyed first enrollment', async () => {
+      const ws = await createWorkspace(stack.app, 'enroll-weak-create-key-ws');
+      const rejected = await enroll(ws.workspaceKey, { node_id: 'node_a', name: 'host' }, undefined, 'predictable-key');
       expect(rejected.status).toBe(400);
-      expect(rejected.body.error?.code).toBe('node_rotation_idempotency_requires_current_token');
-      const rows = await stack.runtime.deps.db
-        .select()
-        .from(nodes)
-        .where(eq(nodes.workspaceId, ws.workspaceId));
+      expect(rejected.body.error?.code).toBe('node_rotation_idempotency_key_too_weak');
+      const rows = await stack.runtime.deps.db.select().from(nodes).where(eq(nodes.workspaceId, ws.workspaceId));
       expect(rows).toEqual([]);
+    });
+
+    it('rejects a keyed first enrollment onto a held name without retaining a recovery record', async () => {
+      const ws = await createWorkspace(stack.app, 'enroll-keyed-name-conflict-ws');
+      expect((await enroll(ws.workspaceKey, { node_id: 'node_a', name: 'host' })).status).toBe(201);
+      const [before] = await stack.runtime.deps.db.select().from(nodes).where(eq(nodes.id, 'node_a'));
+
+      const idempotencyKey = 'node-enroll-00000000-0000-4000-8000-000000000005';
+      const conflict = await enroll(ws.workspaceKey, { node_id: 'node_b', name: 'host' }, undefined, idempotencyKey);
+      expect(conflict.status).toBe(409);
+      expect(conflict.body.error?.code).toBe('node_name_conflict');
+      const rows = await stack.runtime.deps.db.select().from(nodes).where(eq(nodes.workspaceId, ws.workspaceId));
+      expect(rows).toEqual([before]);
+    });
+
+    it('scopes a first-enrollment key to its node: reuse under another node_id is a new create', async () => {
+      const ws = await createWorkspace(stack.app, 'enroll-key-per-node-ws');
+      const idempotencyKey = 'node-enroll-00000000-0000-4000-8000-000000000006';
+      const a = await enroll(ws.workspaceKey, { node_id: 'node_a', name: 'alpha' }, undefined, idempotencyKey);
+      const b = await enroll(ws.workspaceKey, { node_id: 'node_b', name: 'beta' }, undefined, idempotencyKey);
+      expect(a.status).toBe(201);
+      expect(b.status).toBe(201);
+      expect(a.body.data?.token).not.toBe(b.body.data?.token);
+      const rows = await stack.runtime.deps.db.select().from(nodes).where(eq(nodes.workspaceId, ws.workspaceId));
+      expect(rows.map((row) => row.id).sort()).toEqual(['node_a', 'node_b']);
+    });
+
+    it('converges concurrent identical keyed first enrollments on one row and token', async () => {
+      const ws = await createWorkspace(stack.app, 'enroll-concurrent-keyed-create-ws');
+      const request = { node_id: 'node_a', name: 'host', version: 'v1' };
+      const idempotencyKey = 'node-enroll-00000000-0000-4000-8000-000000000007';
+      const results = await Promise.all([
+        enroll(ws.workspaceKey, request, undefined, idempotencyKey),
+        enroll(ws.workspaceKey, request, undefined, idempotencyKey),
+      ]);
+      expect(results.map((result) => result.status)).toEqual([201, 201]);
+      expect(results[0].body.data).toEqual(results[1].body.data);
+      const rows = await stack.runtime.deps.db.select().from(nodes).where(eq(nodes.workspaceId, ws.workspaceId));
+      expect(rows).toHaveLength(1);
+      expect(rows[0].tokenHash).toBe(await sha256Hex(results[0].body.data!.token));
     });
 
     it('rejects superseded-token recovery after its bounded replay window expires', async () => {

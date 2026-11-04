@@ -287,7 +287,9 @@ export const nodes = sqliteTable(
     // A successful idempotent rotation retains only the superseded token hash
     // and request binding for a bounded recovery window. This lets a caller
     // recover the replacement after a lost 201 without making the workspace
-    // key sufficient to rotate an established node.
+    // key sufficient to rotate an established node. A keyed first enrollment
+    // retains the same binding and window with no superseded hash (a rotation
+    // from nothing), so its minted token is recoverable by the same key.
     previousTokenHash: text('previous_token_hash'),
     previousTokenExpiresAt: integer('previous_token_expires_at', { mode: 'timestamp' }),
     rotationIdempotencyKeyHash: text('rotation_idempotency_key_hash'),
