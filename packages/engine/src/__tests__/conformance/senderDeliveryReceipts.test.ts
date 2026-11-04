@@ -12,6 +12,7 @@ import {
   type TestStack,
 } from './harness.js';
 import { fetchDeliveryFanoutRecords } from '../../engine/deliveryWrites.js';
+import { notifySenderDeliveryReceipts } from '../../engine/deliveryReceipts.js';
 import { routeDeliveryOutcomes } from '../../routes/deliveryRouting.js';
 
 type DeliveryReceipt = {
@@ -403,5 +404,39 @@ describe('sender-side delivery receipts', () => {
     const acked = stream.ofType('delivery.acked');
     expect(acked).toHaveLength(count);
     expect(new Set(acked.map((event) => event.delivery_id)).size).toBe(count);
+  });
+
+  it('drops a late delivered receipt for a row the recipient acked before the routing batch was reported', async () => {
+    const ws = await createWorkspace(stack.app, 'receipts-late-delivered');
+    const alice = await registerAgent(stack.app, ws.workspaceKey, 'alice');
+    const node = await enrollBrokerNode(ws, 'node_late_delivered');
+    const bob = await registerViaNode(node, 'bob');
+    const stream = new FakeSocket();
+    stack.runtime.realtime.attachWorkspaceSocket(ws.workspaceId, stream);
+
+    const post = await stack.app.request('/v1/channels/general/messages', authed(alice.token, {
+      method: 'POST', body: JSON.stringify({ text: 'ack fast' }),
+    }));
+    expect(post.status).toBe(201);
+    const posted = ((await post.json()) as { data: { id: string; deliveries: Array<{ id: string }> } }).data;
+    await stack.settle();
+    await node.handle.handleMessage(JSON.stringify({ v: 1, type: 'delivery.ack', agent: 'bob', up_to_seq: 1 }));
+    await stack.settle();
+    expect(stream.ofType('delivery.delivered')).toHaveLength(1);
+    expect(stream.ofType('delivery.acked')).toHaveLength(1);
+
+    // A routing pass reports the rows it moved `queued` -> `delivered` only
+    // after every recipient in the batch settles (an `http_push` sibling can
+    // hold that for seconds). If the recipient acked meanwhile, the batch must
+    // not tell the sender `delivered` after it already heard `acked`.
+    await notifySenderDeliveryReceipts(
+      { db: stack.runtime.deps.db, engine: stack.runtime.deps },
+      ws.workspaceId,
+      [posted.deliveries[0]!.id],
+      'delivered',
+    );
+    await stack.settle();
+    expect(stream.ofType('delivery.delivered')).toHaveLength(1);
+    expect(stream.ofType('delivery.acked')).toHaveLength(1);
   });
 });

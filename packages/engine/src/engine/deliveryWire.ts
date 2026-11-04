@@ -1,7 +1,7 @@
 import type { FleetWireJsonValue, SentDelivery } from '@relaycast/types';
 import type { DeliveryFanoutRecord } from './deliveryWrites.js';
 
-/** Cap on the per-recipient `deliveries` a channel/group/thread send response carries. */
+/** Cap on the per-recipient `deliveries` a channel message send response carries. */
 export const SENT_DELIVERIES_RESPONSE_MAX = 50;
 
 /**

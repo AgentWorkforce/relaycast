@@ -17,8 +17,12 @@ export type SenderDeliveryReceiptStatus = 'delivered' | 'acked';
  * One read resolves every row in the batch (sender, recipient name and the
  * transition timestamp), chunked under D1's bound-parameter cap; nothing is
  * read per row. Rows with no sender agent (workspace-key or system posts) and
- * self-addressed rows are skipped. Best-effort: a failure here never fails
- * the transition that triggered it.
+ * self-addressed rows are skipped. A `delivered` receipt is also dropped for a
+ * row that has already left `delivered` by the time the batch is read: a
+ * routing pass reports its batch only after every recipient settles, and a
+ * fast recipient can ack in between, so the late `delivered` would land after
+ * the sender's `delivery.acked` and roll its view back. Best-effort: a failure
+ * here never fails the transition that triggered it.
  */
 export async function notifySenderDeliveryReceipts(
   deps: EventDispatchDeps,
@@ -35,6 +39,7 @@ export async function notifySenderDeliveryReceipts(
       recipientId: deliveries.agentId,
       recipientName: agents.name,
       senderId: messages.agentId,
+      status: deliveries.status,
       deliveredAt: deliveries.deliveredAt,
       ackedAt: deliveries.ackedAt,
     })
@@ -46,6 +51,7 @@ export async function notifySenderDeliveryReceipts(
   const fallbackAt = new Date().toISOString();
   const events = rows
     .filter((row) => row.senderId !== null && row.senderId !== row.recipientId)
+    .filter((row) => status !== 'delivered' || row.status === 'delivered')
     .map((row) => ({
       workspaceId,
       agentId: row.senderId!,
