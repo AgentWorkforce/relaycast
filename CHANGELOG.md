@@ -16,7 +16,9 @@ This project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 Packages without a separate changelog are covered by the cross-package notes below.
 
-## [Unreleased - Minor]
+## [Unreleased]
+
+## [12.8.0] - 2026-11-04
 
 - Prevent stalled webhook delivery attempts from overwriting a newer attempt’s status or retry deadline after their lease is reclaimed.
 
@@ -1006,7 +1008,8 @@ Packages without a separate changelog are covered by the cross-package notes bel
 
 Earlier releases are available on the [GitHub releases page](https://github.com/AgentWorkforce/relaycast/releases).
 
-[Unreleased]: https://github.com/AgentWorkforce/relaycast/compare/v12.7.0...HEAD
+[Unreleased]: https://github.com/AgentWorkforce/relaycast/compare/v12.8.0...HEAD
+[12.8.0]: https://github.com/AgentWorkforce/relaycast/compare/v12.7.0...v12.8.0
 [12.7.0]: https://github.com/AgentWorkforce/relaycast/compare/v12.6.2...v12.7.0
 [12.6.2]: https://github.com/AgentWorkforce/relaycast/compare/v12.6.1...v12.6.2
 [12.6.1]: https://github.com/AgentWorkforce/relaycast/compare/v12.6.0...v12.6.1

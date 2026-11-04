@@ -1,6 +1,6 @@
 {
   "name": "relaycast",
-  "version": "12.7.0",
+  "version": "12.8.0",
   "license": "Apache-2.0",
   "type": "module",
   "main": "dist/index.js",
@@ -22,7 +22,7 @@
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.26.0",
-    "@relaycast/mcp": "12.7.0"
+    "@relaycast/mcp": "12.8.0"
   },
   "devDependencies": {
     "@types/node": "^20.0.0",

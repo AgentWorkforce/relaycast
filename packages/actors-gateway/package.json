@@ -1,6 +1,6 @@
 {
   "name": "@relaycast/actors-gateway",
-  "version": "12.7.0",
+  "version": "12.8.0",
   "license": "Apache-2.0",
   "private": true,
   "type": "module",
@@ -32,8 +32,8 @@
   "dependencies": {
     "@aws-sdk/client-s3": "^3.984.0",
     "@google-cloud/storage": "^8.4.0",
-    "@relaycast/engine": "12.7.0",
-    "@relaycast/types": "12.7.0",
+    "@relaycast/engine": "12.8.0",
+    "@relaycast/types": "12.8.0",
     "ws": "^8.18.0",
     "zod": "^4.3.6"
   },
