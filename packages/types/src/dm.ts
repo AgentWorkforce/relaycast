@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { SentDeliverySchema } from './delivery.js';
 import { AgentTypeSchema } from './agent.js';
 import { CoreMessagePayloadSchema, MessageInjectionModeSchema } from './message.js';
 
@@ -72,6 +73,8 @@ export const SendDmResponseSchema = z.object({
   conversation_id: z.string(),
   message: CoreMessagePayloadSchema,
   created_at: z.string(),
+  /** The recipient's durable delivery row, or `null` when none was created (for example a replayed A2A acceptance). */
+  delivery: SentDeliverySchema.omit({ agent_id: true }).nullable(),
 });
 export type SendDmResponse = z.infer<typeof SendDmResponseSchema>;
 

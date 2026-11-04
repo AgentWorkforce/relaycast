@@ -784,6 +784,7 @@ GET    /deliveries                   List queued deliveries for the agent (accep
 POST   /deliveries/:id/ack           Acknowledge a delivery (-> delivered)
 POST   /deliveries/:id/fail          Record a failed delivery (error + retryable)
 POST   /deliveries/:id/defer         Defer a delivery until available_at
+GET    /messages/:id/deliveries      Sender's view: each recipient's delivery + read state
 ```
 
 Relaycast creates a per-recipient delivery row for every channel message, DM, group DM, and
@@ -794,6 +795,22 @@ as `deliver` frames on its node socket and needs no polling; a client without a 
 `wait=<ms>` (up to 25000) so an empty answer waits for the next delivery instead of returning at once.
 The self-hosted server (`createNodeRuntime`) supports `wait`; an engine embedded without a
 `DeliveryWaiters` provider, including the workspace actor, answers at once.
+
+The sender can follow what happened to its message. `POST /dm` answers with
+`delivery: { id, status, expires_at } | null`; `POST /channels/:name/messages` answers with
+`deliveries: [{ id, agent_id, status, expires_at }]` (the first 50, plus `deliveries_truncated`).
+As each row moves, the sender receives `delivery.delivered` (the row reached the recipient's
+socket or push endpoint) and `delivery.acked` (the recipient acked it — through
+`POST /deliveries/:id/ack`, a node's cumulative `delivery.ack`, or an `http_push` node's
+`on_2xx` / `response` ack mode), each carrying `delivery_id`, `message_id`, the recipient's
+`agent_id` / `agent_name`, `status` and `at`; `delivery.failed` already reports rejected,
+expired and unreachable rows. `GET /messages/:id/deliveries` returns
+`{ message_id, deliveries: [{ id, agent_id, agent_name, status, created_at, delivered_at,
+acked_at, dead_lettered_at, error, read_at }] }` (creation order, at most 500; `read_at` comes
+from the read receipt, which an ack also records). An agent token sees only messages it sent —
+anything else is `404 message_not_found`; a workspace key sees any message; an observer token
+needs the scope and filters `GET /messages/:id` needs. The recipient's own `delivery.delivered`
+(emitted when it acks) is unchanged.
 Muted channel members do not receive durable delivery rows or realtime pushes for ordinary
 channel messages, so unmute does not backfill skipped queue entries. Explicit `@mentions`
 still create `mention` deliveries for muted members; channel history remains available
@@ -824,7 +841,7 @@ token-protected webhooks do.
 
 Canonical realtime/subscription event names are dotted and shared across WebSocket
 and outbound subscriptions: `message.created`, `message.reacted`, `message.read`,
-`delivery.accepted`, `delivery.delivered`, `delivery.deferred`, `delivery.failed`,
+`delivery.accepted`, `delivery.delivered`, `delivery.acked`, `delivery.deferred`, `delivery.failed`,
 `agent.status.changed`, `agent.status.active`, `agent.status.idle`,
 `agent.status.blocked`, `agent.status.waiting`, `agent.status.offline`,
 `agent.exited`, `node.status.online`, `node.status.offline`,
@@ -1260,6 +1277,10 @@ durable queue on reconnect instead of polling:
 // React to durable delivery state as it changes.
 agent.on.deliveryAccepted((e) => console.log(`queued ${e.deliveryId} for ${e.messageId}`));
 agent.on.deliveryDelivered((e) => console.log(`acked ${e.deliveryId}`));
+
+// As a sender: learn when each recipient acked, and read the full picture later.
+agent.on.deliveryAcked((e) => console.log(`${e.agentName} acked ${e.messageId} at ${e.at}`));
+const { deliveries } = await agent.messageDeliveries(sent.id); // or relay.messages.deliveries(id)
 
 // On (re)connect, drain anything queued while offline, then ack each item.
 agent.on.connected(async () => {

@@ -16,6 +16,7 @@ import { queryInChunks } from '../lib/queryChunks.js';
 import { isProviderAgentDeliveryReady, type EngineDb, type EngineDeps } from '../ports/index.js';
 import { fanoutToAgents } from './fanout.js';
 import { publishEvent, publishEventsToAgents } from '../engine/eventDispatch.js';
+import { notifySenderDeliveryReceipts, type SenderDeliveryReceiptStatus } from '../engine/deliveryReceipts.js';
 type HonoContext = Context<AppEnv>;
 type RoutingEngine = EngineRuntime | EngineDeps;
 type RoutingContext = {
@@ -222,7 +223,7 @@ async function dispatchHttpPush(args: {
   target: DeliveryTarget;
   eventType: string;
   eventData: Record<string, unknown>;
-}): Promise<'delivered' | 'acked' | 'failed'> {
+}): Promise<'delivered' | 'acked' | 'resent' | 'failed'> {
   const config = args.target.deliveryConfig ?? {};
   const url = typeof config.url === 'string' ? config.url : null;
   if (!url) {
@@ -327,12 +328,11 @@ async function dispatchHttpPush(args: {
         args.delivery.agentId,
         args.delivery.id,
       );
-      if (acked?.changed) {
-        await fanoutToAgentsForContext(args.ctx, [args.delivery.agentId], 'delivery.delivered', {
-          delivery_id: args.delivery.id,
-          message_id: args.delivery.messageId,
-        });
-      }
+      if (!acked?.changed) return 'resent';
+      await fanoutToAgentsForContext(args.ctx, [args.delivery.agentId], 'delivery.delivered', {
+        delivery_id: args.delivery.id,
+        message_id: args.delivery.messageId,
+      });
       return 'acked';
     }
 
@@ -347,12 +347,11 @@ async function dispatchHttpPush(args: {
             args.delivery.agentId,
             args.delivery.id,
           );
-          if (acked?.changed) {
-            await fanoutToAgentsForContext(args.ctx, [args.delivery.agentId], 'delivery.delivered', {
-              delivery_id: args.delivery.id,
-              message_id: args.delivery.messageId,
-            });
-          }
+          if (!acked?.changed) return 'resent';
+          await fanoutToAgentsForContext(args.ctx, [args.delivery.agentId], 'delivery.delivered', {
+            delivery_id: args.delivery.id,
+            message_id: args.delivery.messageId,
+          });
           return 'acked';
         }
       }
@@ -369,13 +368,46 @@ async function dispatchHttpPush(args: {
 
 /**
  * Result of routing a single delivery row.
- * - `delivered`: the row was sent and marked delivered.
+ * - `delivered`: the row was sent and this call moved it `queued` -> `delivered`.
+ * - `resent`: the row was sent but had already left `queued` (a concurrent
+ *   replay or ack settled it first), so there is no new transition to report
+ *   to the sender. An ordered ws redrive keeps draining past it.
+ * - `acked`: an `http_push` receiver acknowledged the row in its response
+ *   (`on_2xx` / `response` ack mode), so this call moved it `queued` -> `acked`
+ *   directly. A receiver ack that found the row already settled (the recipient
+ *   acked it over REST while the POST was in flight) is `resent`, not a second
+ *   `delivery.acked` for the sender.
  * - `deferred`: the row stayed queued and was stamped for a later retry (a
  *   readiness skip or a failed live send). An ordered ws redrive stops its
  *   agent's backlog here so a later seq never outruns this one.
  * - `noop`: no realtime target remained (legacy/unbound row); nothing to do.
  */
-type DeliveryDispatchOutcome = 'delivered' | 'deferred' | 'noop';
+type DeliveryDispatchOutcome = 'delivered' | 'resent' | 'acked' | 'deferred' | 'noop';
+
+/**
+ * Tell senders about the rows a routing pass transitioned, one read per
+ * status for the whole pass. Best-effort: routing already committed.
+ */
+async function notifySendersForOutcomes(
+  ctx: RoutingContext,
+  outcomes: ReadonlyArray<{ deliveryId: string; outcome: DeliveryDispatchOutcome }>,
+): Promise<void> {
+  const byStatus: Record<SenderDeliveryReceiptStatus, string[]> = { delivered: [], acked: [] };
+  for (const { deliveryId, outcome } of outcomes) {
+    if (outcome === 'delivered' || outcome === 'acked') byStatus[outcome].push(deliveryId);
+  }
+  for (const status of ['delivered', 'acked'] as const) {
+    if (byStatus[status].length === 0) continue;
+    try {
+      await notifySenderDeliveryReceipts({ db: ctx.db, engine: ctx.engine }, ctx.workspaceId, byStatus[status], status);
+    } catch (err) {
+      console.warn(`[delivery.route] sender delivery.${status} notify failed`, {
+        workspace_id: ctx.workspaceId,
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
+  }
+}
 
 async function routeOneDeliveryOutcome(
   ctx: RoutingContext,
@@ -427,8 +459,8 @@ async function routeOneDeliveryOutcome(
       payload: buildDeliverPayload(eventType, eventData),
     }));
     if (sent) {
-      await deliveryEngine.markDeliveriesDelivered(ctx.db, ctx.workspaceId, [delivery.id]);
-      return 'delivered';
+      const transitioned = await deliveryEngine.markDeliveriesDelivered(ctx.db, ctx.workspaceId, [delivery.id]);
+      return transitioned.length > 0 ? 'delivered' : 'resent';
     }
     // The provider was delivery-ready but the live send did not land (no open
     // socket, the provider detached mid-send, or `socket.send` threw). Leave the
@@ -450,9 +482,10 @@ async function routeOneDeliveryOutcome(
   if (locationType === 'via_node' && locationNodeId && nodeKind === 'http_push' && target) {
     const result = await dispatchHttpPush({ ctx, delivery, target, eventType, eventData });
     if (result === 'delivered') {
-      await deliveryEngine.markDeliveriesDelivered(ctx.db, ctx.workspaceId, [delivery.id]);
-      return 'delivered';
+      const transitioned = await deliveryEngine.markDeliveriesDelivered(ctx.db, ctx.workspaceId, [delivery.id]);
+      return transitioned.length > 0 ? 'delivered' : 'resent';
     }
+    if (result === 'acked' || result === 'resent') return result;
     return 'deferred';
   }
 
@@ -472,8 +505,11 @@ async function routeDeliveryOutcomesForContext(
 
   const liveLocations = await resolveLiveLocations(ctx, deliveries);
   const recordedTargets = await resolveRecordedTargets(ctx, deliveries);
-  await Promise.allSettled(deliveries.map((delivery) => (
+  const settled = await Promise.allSettled(deliveries.map((delivery) => (
     routeOneDeliveryOutcome(ctx, liveLocations, recordedTargets, delivery, eventType, eventData)
+  )));
+  await notifySendersForOutcomes(ctx, settled.flatMap((result, index) => (
+    result.status === 'fulfilled' ? [{ deliveryId: deliveries[index]!.id, outcome: result.value }] : []
   )));
 }
 
@@ -563,16 +599,22 @@ async function redriveWsBacklogForAgent(
   const liveLocations = await resolveLiveLocations(ctx, backlogDeliveries);
   const recordedTargets = await resolveRecordedTargets(ctx, backlogDeliveries);
 
-  for (const event of backlog) {
-    const outcome = await routeOneDeliveryOutcome(
-      ctx,
-      liveLocations,
-      recordedTargets,
-      event.delivery,
-      event.eventType,
-      event.eventData,
-    );
-    if (outcome !== 'delivered') break;
+  const outcomes: Array<{ deliveryId: string; outcome: DeliveryDispatchOutcome }> = [];
+  try {
+    for (const event of backlog) {
+      const outcome = await routeOneDeliveryOutcome(
+        ctx,
+        liveLocations,
+        recordedTargets,
+        event.delivery,
+        event.eventType,
+        event.eventData,
+      );
+      outcomes.push({ deliveryId: event.delivery.id, outcome });
+      if (outcome !== 'delivered' && outcome !== 'resent') break;
+    }
+  } finally {
+    await notifySendersForOutcomes(ctx, outcomes);
   }
 }
 

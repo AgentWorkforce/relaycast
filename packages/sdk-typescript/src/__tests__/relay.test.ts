@@ -2219,6 +2219,19 @@ describe('RelayCast', () => {
       expect(init.method).toBe('GET');
     });
 
+    it('deliveries() calls GET /v1/messages/:id/deliveries', async () => {
+      const { RelayCast } = await import('../relay.js');
+      const relay = new RelayCast({ apiKey: 'rk_live_test123' });
+
+      mockFetch.mockImplementation(() => mockResponse({ message_id: 'msg_1', deliveries: [{ id: 'del_1', agent_name: 'bob', read_at: null }] }));
+      const result = await relay.messages.deliveries('msg_1');
+
+      const [url, init] = mockFetch.mock.calls[0]!;
+      expect(url).toBe('https://cast.agentrelay.com/v1/messages/msg_1/deliveries');
+      expect(init.method).toBe('GET');
+      expect(result).toEqual({ messageId: 'msg_1', deliveries: [{ id: 'del_1', agentName: 'bob', readAt: null }] });
+    });
+
     it('thread() calls GET /v1/messages/:id/replies', async () => {
       const { RelayCast } = await import('../relay.js');
       const relay = new RelayCast({ apiKey: 'rk_live_test123' });

@@ -315,12 +315,39 @@ export const DeliveryAcceptedEventSchema = z.object({
 });
 export type DeliveryAcceptedEvent = z.infer<typeof DeliveryAcceptedEventSchema>;
 
+// `delivery.delivered` reaches two audiences. The recipient receives
+// `{ delivery_id, message_id }` when it acks (unchanged for compatibility).
+// The sender receives the sender-side fields when the row is handed to the
+// recipient's socket or push endpoint (`queued` -> `delivered`).
 export const DeliveryDeliveredEventSchema = z.object({
   type: z.literal('delivery.delivered'),
   delivery_id: z.string(),
   message_id: z.string(),
+  /** Recipient agent id (sender-side notifications only). */
+  agent_id: z.string().optional(),
+  /** Recipient agent name (sender-side notifications only). */
+  agent_name: z.string().optional(),
+  status: z.literal('delivered').optional(),
+  /** When the transition happened (sender-side notifications only). */
+  at: z.string().optional(),
 });
 export type DeliveryDeliveredEvent = z.infer<typeof DeliveryDeliveredEventSchema>;
+
+// Sent to the message sender when a recipient acknowledges a delivery: a
+// `POST /v1/deliveries/:id/ack`, a node's cumulative `delivery.ack`, or an
+// `http_push` node's `on_2xx` / `response` ack mode.
+export const DeliveryAckedEventSchema = z.object({
+  type: z.literal('delivery.acked'),
+  delivery_id: z.string(),
+  message_id: z.string(),
+  /** Recipient agent id. */
+  agent_id: z.string(),
+  /** Recipient agent name. */
+  agent_name: z.string(),
+  status: z.literal('acked'),
+  at: z.string(),
+});
+export type DeliveryAckedEvent = z.infer<typeof DeliveryAckedEventSchema>;
 
 export const DeliveryDeferredEventSchema = z.object({
   type: z.literal('delivery.deferred'),
@@ -409,6 +436,7 @@ export const ServerEventSchema = z.discriminatedUnion('type', [
   ActionDeniedEventSchema,
   DeliveryAcceptedEventSchema,
   DeliveryDeliveredEventSchema,
+  DeliveryAckedEventSchema,
   DeliveryDeferredEventSchema,
   DeliveryFailedEventSchema,
   PongEventSchema,
@@ -460,6 +488,7 @@ export const WsClientEventSchema = z.discriminatedUnion('type', [
   ActionDeniedEventSchema,
   DeliveryAcceptedEventSchema,
   DeliveryDeliveredEventSchema,
+  DeliveryAckedEventSchema,
   DeliveryDeferredEventSchema,
   DeliveryFailedEventSchema,
   PongEventSchema,
