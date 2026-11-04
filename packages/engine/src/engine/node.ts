@@ -67,7 +67,8 @@ import {
 } from './action.js';
 import { emitInvocationCompletionEffects, emitAgentExitedEffects, emitNodeStatusEffects, fleetInvocationId } from './invocationCompletion.js';
 import type { InvocationCompletionDeps, NodeOfflineReason } from './invocationCompletion.js';
-import { ackDeliveriesUpToSeq, deliverPendingToNode } from './delivery.js';
+import { ackDeliveriesUpToSeq, deliverPendingToNode, type DeliveryReplayDeps } from './delivery.js';
+import { notifySenderDeliveryReceipts } from './deliveryReceipts.js';
 import { issueCredential } from '../auth/credentials.js';
 
 type Db = ReturnType<typeof getDb>;
@@ -2176,6 +2177,7 @@ export async function completeBoundAgentDelivery(
   registry: NodeConnectionRegistry,
   workspaceId: string,
   move: { nodeId: string; agentId: string; providerName: string },
+  replayDeps?: DeliveryReplayDeps,
 ): Promise<void> {
   registry.markProviderAgentsDeliveryReady?.(
     workspaceId,
@@ -2187,7 +2189,7 @@ export async function completeBoundAgentDelivery(
   await deliverPendingToNode(db, registry, workspaceId, move.nodeId, {
     providerName: move.providerName,
     agentIds: [move.agentId],
-  });
+  }, replayDeps);
 }
 
 export async function unbindAgentFromNode(db: Db, workspaceId: string, nodeName: string, agentName: string) {
@@ -3983,6 +3985,7 @@ export async function handleNodeControlMessage(args: HandleNodeControlMessageArg
             args.workspaceId,
             args.nodeId,
             { providerName: provider.name },
+            args.completionDeps,
           ).catch(() => {});
         }
         return;
@@ -4131,6 +4134,7 @@ export async function handleNodeControlMessage(args: HandleNodeControlMessageArg
           args.workspaceId,
           args.nodeId,
           { providerName: frameProviderName, agentIds: [registered.agent_id] },
+          args.completionDeps,
         );
         return;
       }
@@ -4169,6 +4173,7 @@ export async function handleNodeControlMessage(args: HandleNodeControlMessageArg
           args.workspaceId,
           args.nodeId,
           { providerName: frameProviderName, agentIds: [recovered.agent_id] },
+          args.completionDeps,
         );
         return;
       }
@@ -4258,6 +4263,7 @@ export async function handleNodeControlMessage(args: HandleNodeControlMessageArg
             providerName: frameProviderName,
             agentIds: cursorGated ? result.reconciledAgentIds : result.newlyRoutedAgentIds,
           },
+          args.completionDeps,
         );
         return;
       }
@@ -4299,8 +4305,8 @@ export async function handleNodeControlMessage(args: HandleNodeControlMessageArg
         }
         return;
       }
-      case 'delivery.ack':
-        await ackDeliveriesUpToSeq(
+      case 'delivery.ack': {
+        const acked = await ackDeliveriesUpToSeq(
           args.db,
           args.workspaceId,
           args.nodeId,
@@ -4308,7 +4314,24 @@ export async function handleNodeControlMessage(args: HandleNodeControlMessageArg
           message.agent,
           message.up_to_seq,
         );
+        // The senders of every row this cumulative ack settled learn of it in
+        // one batch read. Best-effort: the ack itself has committed.
+        if (acked && acked.acked_delivery_ids.length > 0 && args.completionDeps) {
+          await notifySenderDeliveryReceipts(
+            { db: args.db, engine: args.completionDeps },
+            args.workspaceId,
+            acked.acked_delivery_ids,
+            'acked',
+          ).catch((err: unknown) => {
+            console.warn('[node.control] sender delivery.acked notify failed', {
+              workspaceId: args.workspaceId,
+              nodeId: args.nodeId,
+              message: err instanceof Error ? err.message : String(err),
+            });
+          });
+        }
         return;
+      }
     }
   } catch (err) {
     const error = err as Error & { code?: string };

@@ -90,3 +90,36 @@ export const DeferDeliveryRequestSchema = z.object({
   reason: z.string().optional(),
 });
 export type DeferDeliveryRequest = z.infer<typeof DeferDeliveryRequestSchema>;
+
+// A delivery row as reported to the sender in a send response: enough to
+// correlate later `delivery.*` events and `GET /v1/messages/:id/deliveries`.
+export const SentDeliverySchema = z.object({
+  id: z.string(),
+  agent_id: z.string(),
+  status: DeliveryStatusSchema,
+  expires_at: z.string().nullable(),
+});
+export type SentDelivery = z.infer<typeof SentDeliverySchema>;
+
+// One recipient's delivery and read state for a message, as the sender sees it
+// through `GET /v1/messages/:id/deliveries`.
+export const MessageDeliveryReceiptSchema = z.object({
+  id: z.string(),
+  agent_id: z.string(),
+  agent_name: z.string(),
+  status: DeliveryStatusSchema,
+  created_at: z.string(),
+  delivered_at: z.string().nullable(),
+  acked_at: z.string().nullable(),
+  dead_lettered_at: z.string().nullable(),
+  error: z.string().nullable(),
+  /** When the recipient marked the message read (or acked it, which also reads it); `null` until then. */
+  read_at: z.string().nullable(),
+});
+export type MessageDeliveryReceipt = z.infer<typeof MessageDeliveryReceiptSchema>;
+
+export const MessageDeliveriesResponseSchema = z.object({
+  message_id: z.string(),
+  deliveries: z.array(MessageDeliveryReceiptSchema),
+});
+export type MessageDeliveriesResponse = z.infer<typeof MessageDeliveriesResponseSchema>;

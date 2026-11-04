@@ -217,6 +217,8 @@ describe('node delivery contracts', () => {
     expect(
       (await bindAgent(ws.workspaceKey, node.data.name, 'bob')).status,
     ).toBe(201);
+    const stream = new FakeSocket();
+    stack.runtime.realtime.attachWorkspaceSocket(ws.workspaceId, stream);
 
     const post = await stack.app.request('/v1/channels/general/messages', {
       method: 'POST',
@@ -227,6 +229,7 @@ describe('node delivery contracts', () => {
       body: JSON.stringify({ text: 'ack me' }),
     });
     expect(post.status).toBe(201);
+    const posted = ((await post.json()) as { data: { id: string; deliveries: Array<{ id: string }> } }).data;
     await waitForAssertion(async () => {
       const defaultQueue = await stack.app.request('/v1/deliveries', {
         headers: { authorization: `Bearer ${bob.token}` },
@@ -242,6 +245,63 @@ describe('node delivery contracts', () => {
         ((await acked.json()) as { data: Array<{ status: string }> }).data,
       ).toEqual([expect.objectContaining({ status: 'acked' })]);
     });
+    // The row went queued -> acked in one step: the sender hears only the ack,
+    // and the only `delivery.delivered` on the stream is the recipient's compat
+    // frame (no sender-side `status`).
+    expect(stream.ofType('delivery.acked')).toEqual([expect.objectContaining({
+      delivery_id: posted.deliveries[0]!.id, message_id: posted.id, agent_id: bob.agentId, agent_name: 'bob', status: 'acked',
+    })]);
+    expect(stream.ofType('delivery.delivered').filter((event) => 'status' in event)).toHaveLength(0);
+  });
+
+  it('does not tell the sender acked twice when the recipient acks over REST while an on_2xx push is in flight', async () => {
+    const ws = await createWorkspace(stack.app, 'http-node-on-2xx-race');
+    const alice = await registerAgent(stack.app, ws.workspaceKey, 'alice');
+    const bob = await registerAgent(stack.app, ws.workspaceKey, 'bob');
+    // The receiver acks the row through REST before answering the push, so the
+    // push's own `on_2xx` ack finds the row already settled.
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async (_input, init) => {
+      const { delivery_id: deliveryId } = JSON.parse(String(init?.body)) as { delivery_id: string };
+      const ack = await stack.app.request(`/v1/deliveries/${deliveryId}/ack`, {
+        method: 'POST',
+        headers: { authorization: `Bearer ${bob.token}` },
+      });
+      expect(ack.status).toBe(200);
+      return new Response(null, { status: 204 });
+    });
+    const node = await createHttpNode(ws.workspaceKey, {
+      name: 'http-node-ack-race',
+      ackMode: 'on_2xx',
+    });
+    expect(
+      (await bindAgent(ws.workspaceKey, node.data.name, 'bob')).status,
+    ).toBe(201);
+    const stream = new FakeSocket();
+    stack.runtime.realtime.attachWorkspaceSocket(ws.workspaceId, stream);
+
+    const post = await stack.app.request('/v1/channels/general/messages', {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        authorization: `Bearer ${alice.token}`,
+      },
+      body: JSON.stringify({ text: 'ack me once' }),
+    });
+    expect(post.status).toBe(201);
+    const posted = ((await post.json()) as { data: { id: string; deliveries: Array<{ id: string }> } }).data;
+    await waitForAssertion(async () => {
+      const acked = await stack.app.request('/v1/deliveries?status=acked', {
+        headers: { authorization: `Bearer ${bob.token}` },
+      });
+      expect(
+        ((await acked.json()) as { data: Array<{ status: string }> }).data,
+      ).toEqual([expect.objectContaining({ status: 'acked' })]);
+    });
+    await stack.settle();
+    expect(stream.ofType('delivery.acked')).toEqual([expect.objectContaining({
+      delivery_id: posted.deliveries[0]!.id, message_id: posted.id, agent_id: bob.agentId, status: 'acked',
+    })]);
+    expect(stream.ofType('delivery.delivered').filter((event) => 'status' in event)).toHaveLength(0);
   });
 
   it('acks an http_push delivery when the node contract uses response body ack', async () => {

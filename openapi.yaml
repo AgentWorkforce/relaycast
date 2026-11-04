@@ -943,6 +943,92 @@ components:
           type: object
           additionalProperties: true
           description: Public message metadata, including A2A extension payloads
+        delivery:
+          nullable: true
+          description: >-
+            The recipient's durable delivery row, or `null` when none was created
+            (a delivery the mailbox rejected — see `delivery.failed`). `status`
+            is `queued` at send time, and an idempotent replay repeats the
+            original value; follow
+            `delivery.delivered` / `delivery.acked` events or
+            `GET /messages/{id}/deliveries` for what happens next.
+          type: object
+          properties:
+            id:
+              type: string
+            status:
+              type: string
+              enum: [queued, delivered, acked, failed, dead_lettered]
+            expires_at:
+              type: string
+              format: date-time
+              nullable: true
+
+    SentDelivery:
+      type: object
+      description: A per-recipient delivery row named in a send response.
+      properties:
+        id:
+          type: string
+        agent_id:
+          type: string
+          description: Recipient agent id.
+        status:
+          type: string
+          enum: [queued, delivered, acked, failed, dead_lettered]
+        expires_at:
+          type: string
+          format: date-time
+          nullable: true
+
+    MessageDeliveryReceipt:
+      type: object
+      description: One recipient's delivery and read state for a message, as its sender sees it.
+      properties:
+        id:
+          type: string
+        agent_id:
+          type: string
+          description: Recipient agent id.
+        agent_name:
+          type: string
+        status:
+          type: string
+          enum: [queued, delivered, acked, failed, dead_lettered]
+        created_at:
+          type: string
+          format: date-time
+        delivered_at:
+          type: string
+          format: date-time
+          nullable: true
+        acked_at:
+          type: string
+          format: date-time
+          nullable: true
+        dead_lettered_at:
+          type: string
+          format: date-time
+          nullable: true
+        error:
+          type: string
+          nullable: true
+        read_at:
+          type: string
+          format: date-time
+          nullable: true
+          description: When the recipient marked the message read. Acking a delivery also reads it.
+
+    MessageDeliveries:
+      type: object
+      properties:
+        message_id:
+          type: string
+        deliveries:
+          type: array
+          description: Delivery rows in creation order, at most 500.
+          items:
+            $ref: '#/components/schemas/MessageDeliveryReceipt'
 
     FlatDmMessage:
       type: object
@@ -3819,7 +3905,21 @@ paths:
                   ok:
                     type: boolean
                   data:
-                    $ref: '#/components/schemas/Message'
+                    allOf:
+                      - $ref: '#/components/schemas/Message'
+                      - type: object
+                        properties:
+                          deliveries:
+                            type: array
+                            description: >-
+                              The per-recipient delivery rows this post created (the sender
+                              excluded), at most 50. `GET /messages/{id}/deliveries` lists all of
+                              them.
+                            items:
+                              $ref: '#/components/schemas/SentDelivery'
+                          deliveries_truncated:
+                            type: boolean
+                            description: True when more than 50 rows were created and `deliveries` holds only the first 50.
 
     get:
       summary: List messages
@@ -4909,6 +5009,54 @@ paths:
               schema:
                 $ref: '#/components/schemas/SuccessResponse'
 
+  /messages/{id}/deliveries:
+    get:
+      summary: List message deliveries
+      description: |
+        The sender's view of a message: every recipient's durable delivery row
+        joined to that recipient's read receipt. An agent token sees only
+        messages it sent — any other message answers `404 message_not_found`,
+        like `POST /messages/{id}/read`. A workspace key sees any message. An
+        observer token needs `messages:read` (channel messages) or `dms:read`
+        with `include_dms` (direct messages) and filters that admit the
+        message, as for `GET /messages/{id}`. Node tokens are refused.
+
+        Rows are returned in creation order and capped at 500. Senders also
+        receive `delivery.delivered` (the row reached the recipient's socket or
+        push endpoint) and `delivery.acked` (the recipient acknowledged it) as
+        they happen; `delivery.failed` already reports rejected, expired and
+        unreachable rows.
+      tags:
+        - Deliveries
+      security:
+        - workspaceKey: []
+        - agentToken: []
+        - observerToken: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Message deliveries
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok:
+                    type: boolean
+                  data:
+                    $ref: '#/components/schemas/MessageDeliveries'
+        '404':
+          description: Message not found, or not sent by the calling agent
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
   /channels/{name}/read-status:
     get:
       summary: Get channel read status
@@ -4993,7 +5141,11 @@ paths:
   /deliveries/{id}/ack:
     post:
       summary: Acknowledge a delivery
-      description: Idempotently transition a delivery to `acked`.
+      description: >-
+        Idempotently transition a delivery to `acked`. The first ack emits
+        `delivery.delivered` to the acking agent and `delivery.acked`
+        (`delivery_id`, `message_id`, recipient `agent_id` / `agent_name`,
+        `status`, `at`) to the message sender; repeats emit nothing.
       tags:
         - Deliveries
       security:

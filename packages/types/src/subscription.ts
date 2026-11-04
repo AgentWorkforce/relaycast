@@ -26,6 +26,7 @@ export const SubscribableEventTypeSchema = z.enum([
   'webhook.received',
   'delivery.accepted',
   'delivery.delivered',
+  'delivery.acked',
   'delivery.deferred',
   'delivery.failed',
   'action.invoked',

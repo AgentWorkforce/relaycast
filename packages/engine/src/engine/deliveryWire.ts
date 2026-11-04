@@ -1,4 +1,44 @@
-import type { FleetWireJsonValue } from '@relaycast/types';
+import type { FleetWireJsonValue, SentDelivery } from '@relaycast/types';
+import type { DeliveryFanoutRecord } from './deliveryWrites.js';
+
+/** Cap on the per-recipient `deliveries` a channel message send response carries. */
+export const SENT_DELIVERIES_RESPONSE_MAX = 50;
+
+/**
+ * The sender-facing view of a delivery row just created by a send. A replayed
+ * idempotent response reads the record back from JSON, where `expiresAt` is
+ * already a string.
+ */
+export function sentDeliveryReceipt(
+  record: Pick<DeliveryFanoutRecord, 'id' | 'agentId' | 'status'> & { expiresAt?: Date | string | null },
+): SentDelivery {
+  const expiresAt = record.expiresAt;
+  return {
+    id: record.id,
+    agent_id: record.agentId,
+    status: record.status as SentDelivery['status'],
+    expires_at: expiresAt instanceof Date ? expiresAt.toISOString() : (expiresAt ?? null),
+  };
+}
+
+/** `delivery` for a DM send response: the one recipient is implied, so `agent_id` is omitted. */
+export function sentDmDeliveryReceipt(
+  record: Parameters<typeof sentDeliveryReceipt>[0],
+): Omit<SentDelivery, 'agent_id'> {
+  const { agent_id: _recipient, ...receipt } = sentDeliveryReceipt(record);
+  return receipt;
+}
+
+/** `deliveries` for a multi-recipient send response, capped with `deliveries_truncated`. */
+export function sentDeliveriesResponseFields(
+  records: readonly Parameters<typeof sentDeliveryReceipt>[0][] | undefined,
+): { deliveries: SentDelivery[]; deliveries_truncated: boolean } {
+  const all = records ?? [];
+  return {
+    deliveries: all.slice(0, SENT_DELIVERIES_RESPONSE_MAX).map(sentDeliveryReceipt),
+    deliveries_truncated: all.length > SENT_DELIVERIES_RESPONSE_MAX,
+  };
+}
 
 export function toFleetWireJson(value: unknown): FleetWireJsonValue {
   if (value === null) return null;

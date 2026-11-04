@@ -21,6 +21,23 @@ describe('AgentClient durable delivery', () => {
     me = new AgentClient(new HttpClient({ apiKey: 'at_live_test123' }));
   });
 
+  describe('messageDeliveries()', () => {
+    it('GETs /v1/messages/:id/deliveries and camelizes the receipts', async () => {
+      mockFetch.mockImplementation(() => mockResponse({
+        message_id: 'm 1',
+        deliveries: [{ id: 'del_1', agent_id: 'a_bob', agent_name: 'bob', status: 'acked', read_at: null, acked_at: '2026-06-01T00:00:02.000Z' }],
+      }));
+
+      const result = await me.messageDeliveries('m 1');
+
+      const [url, init] = mockFetch.mock.calls[0]!;
+      expect(url).toBe('https://cast.agentrelay.com/v1/messages/m%201/deliveries');
+      expect(init.method).toBe('GET');
+      expect(result.messageId).toBe('m 1');
+      expect(result.deliveries[0]).toMatchObject({ agentName: 'bob', status: 'acked', readAt: null, ackedAt: '2026-06-01T00:00:02.000Z' });
+    });
+  });
+
   describe('deliveries()', () => {
     it('GETs /v1/deliveries with no query by default', async () => {
       mockFetch.mockImplementation(() => mockResponse([]));

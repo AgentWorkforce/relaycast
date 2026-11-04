@@ -67,8 +67,10 @@ import type {
   DeferDeliveryRequest,
   DeliveryAcceptedEvent,
   DeliveryDeliveredEvent,
+  DeliveryAckedEvent,
   DeliveryDeferredEvent,
   DeliveryFailedEvent,
+  MessageDeliveriesResponse,
   WsReconnectingEvent,
   WsPermanentlyDisconnectedEvent,
   WsResyncedEvent,
@@ -489,6 +491,8 @@ export class AgentClient {
     // Durable delivery lifecycle
     deliveryAccepted:  (handler: (e: DeliveryAcceptedEvent) => void): (() => void)  => this.onEvent('delivery.accepted', handler),
     deliveryDelivered: (handler: (e: DeliveryDeliveredEvent) => void): (() => void) => this.onEvent('delivery.delivered', handler),
+    // Sender-side: a recipient acknowledged one of this agent's messages.
+    deliveryAcked:     (handler: (e: DeliveryAckedEvent) => void): (() => void)     => this.onEvent('delivery.acked', handler),
     deliveryDeferred:  (handler: (e: DeliveryDeferredEvent) => void): (() => void)  => this.onEvent('delivery.deferred', handler),
     deliveryFailed:    (handler: (e: DeliveryFailedEvent) => void): (() => void)    => this.onEvent('delivery.failed', handler),
     // Lifecycle
@@ -885,6 +889,17 @@ export class AgentClient {
   async readers(messageId: string): Promise<ReaderInfo[]> {
     return this.client.get(
       `/v1/messages/${encodeURIComponent(messageId)}/readers`,
+    );
+  }
+
+  /**
+   * Every recipient's delivery and read state for a message this agent sent
+   * (`GET /v1/messages/{id}/deliveries`). A message sent by another agent is
+   * not found.
+   */
+  async messageDeliveries(messageId: string): Promise<MessageDeliveriesResponse> {
+    return this.client.get(
+      `/v1/messages/${encodeURIComponent(messageId)}/deliveries`,
     );
   }
 
