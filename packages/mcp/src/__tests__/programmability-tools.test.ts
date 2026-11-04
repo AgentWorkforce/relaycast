@@ -51,7 +51,7 @@ describe('programmability tools', () => {
     await Promise.all([client.connect(ct), mcpServer.connect(st)]);
   });
 
-  it.each(['muse', 'devin', 'opencode', 'grok'])('agent.add accepts %s and forwards its CLI', async (cli) => {
+  it.each(['muse', 'devin', 'opencode', 'grok', 'cursor'])('agent.add accepts %s and forwards its CLI', async (cli) => {
     mockRelay.agents.spawn.mockResolvedValue({ invocationId: 'inv_spawn', status: 'invoked' });
     const result = await client.callTool({
       name: 'agent.add',
