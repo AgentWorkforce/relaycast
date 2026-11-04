@@ -331,8 +331,18 @@ describe('AgentClient WebSocket integration', () => {
     expect(handler).toHaveBeenCalledTimes(3);
   });
 
-  it('sends no delivery.accepted when the engine did not list the capability, but still acks', async () => {
-    const agent = createAgent({ ws: { autoAcceptDeliveries: true, acceptDelivery: async () => {} } });
+  it('still runs the persistence hook before the handlers against an engine that did not list the capability, sends no delivery.accepted, and acks after the handlers', async () => {
+    const order: string[] = [];
+    let release!: () => void;
+    const working = new Promise<void>((resolve) => { release = resolve; });
+    const acceptDelivery = vi.fn(async (delivery: { deliveryId: string; seq: number; agent: string }) => {
+      order.push(`hook:${delivery.deliveryId}`);
+    });
+    const agent = createAgent({ ws: { autoAcceptDeliveries: true, acceptDelivery } });
+    agent.on.dmReceived(async (event) => {
+      order.push(`handler:${event.message.id}`);
+      await working;
+    });
     agent.connect();
     const ws = await nextSocket();
     ws.simulateOpen();
@@ -341,11 +351,48 @@ describe('AgentClient WebSocket integration', () => {
     ws.simulateMessage(deliverFrame(3));
     await settleDeliveries();
 
-    const sent = ws.send.mock.calls.map(([payload]) => JSON.parse(String(payload)));
+    // The hook is the client's own durability: it ran, with the frame, before the handler.
+    expect(acceptDelivery).toHaveBeenCalledTimes(1);
+    expect(acceptDelivery.mock.calls[0]![0]).toMatchObject({ deliveryId: 'del_3', agent: 'worker', seq: 3, messageId: 'm_3' });
+    expect(order).toEqual(['hook:del_3', 'handler:m_3']);
+    // Only the wire frame is withheld from an engine that would reject it; the ack waits for the handler.
+    let sent = ws.send.mock.calls.map(([payload]) => JSON.parse(String(payload)));
+    expect(sent.filter((frame) => frame.type === 'delivery.accepted')).toEqual([]);
+    expect(sent.filter((frame) => frame.type === 'delivery.ack')).toEqual([]);
+
+    release();
+    await settleDeliveries();
+    sent = ws.send.mock.calls.map(([payload]) => JSON.parse(String(payload)));
     expect(sent.filter((frame) => frame.type === 'delivery.accepted')).toEqual([]);
     expect(sent.filter((frame) => frame.type === 'delivery.ack')).toEqual([
       { v: 1, type: 'delivery.ack', agent: 'worker', up_to_seq: 3 },
     ]);
+  });
+
+  it('neither dispatches nor acks a delivery whose persistence hook rejected against an engine that did not list the capability', async () => {
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    const handler = vi.fn();
+    const acceptDelivery = vi.fn(async () => { throw new Error('disk full'); });
+    const agent = createAgent({ ws: { autoAcceptDeliveries: true, acceptDelivery } });
+    agent.on.dmReceived(handler);
+    agent.connect();
+    const ws = await nextSocket();
+    ws.simulateOpen();
+    await replyToRegistration(ws);
+
+    ws.simulateMessage(deliverFrame(4));
+    await settleDeliveries();
+
+    // Nothing was stored, so nothing runs and nothing is confirmed: the server keeps the row.
+    expect(acceptDelivery).toHaveBeenCalledTimes(1);
+    expect(handler).not.toHaveBeenCalled();
+    expect(sentTypes(ws)).not.toContain('delivery.accepted');
+    expect(sentTypes(ws)).not.toContain('delivery.ack');
+    expect(warnSpy).toHaveBeenCalledWith(
+      expect.stringContaining('acceptDelivery failed; delivery left on the server for re-delivery'),
+      expect.objectContaining({ deliveryId: 'del_4', seq: 4 }),
+    );
+    warnSpy.mockRestore();
   });
 
   it('accepts only after the persistence hook resolved, before any handler runs, and acks after dispatch', async () => {

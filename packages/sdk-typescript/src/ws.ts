@@ -57,15 +57,19 @@ export interface WsClientOptions {
    * `delivered`. Defaults to `false`: set it only when you persist
    * deliveries durably before handlers run, and supply `acceptDelivery`.
    * Without the hook nothing is sent, so an in-memory client reports
-   * `queued` / `consumed` honestly rather than `delivered`. Also requires the
-   * engine's `node.register` reply to list the `delivery.accepted`
-   * capability, so an older engine never sees a frame it would reject.
+   * `queued` / `consumed` honestly rather than `delivered`. The frame itself
+   * goes out only when the engine's `node.register` reply listed the
+   * `delivery.accepted` capability, so an older engine never sees a frame it
+   * would reject; the hook still runs against such an engine (the frame is
+   * stored before any handler either way), it is just not reported.
    */
   autoAcceptDeliveries?: boolean;
   /**
    * Persistence hook for {@link autoAcceptDeliveries}: write the delivery to
-   * your durable inbox or store. `delivery.accepted` is sent only after it
-   * resolves. If it throws or rejects, nothing is stored, so the delivery is
+   * your durable inbox or store. It runs for every `deliver` frame, whatever
+   * the engine's capabilities; `delivery.accepted` is sent only after it
+   * resolves (and only to an engine that listed the capability). If it
+   * throws or rejects, nothing is stored, so the delivery is
    * neither accepted, dispatched nor acked: it stays unacked on the server and
    * is re-delivered on reconnect. Later frames on the connection still
    * process; acceptance then uses the per-delivery form until the gap is
@@ -713,7 +717,10 @@ export class WsClient {
 
   /**
    * Intake of one delivery: persist (when accepting) -> `delivery.accepted`
-   * -> hand it to its agent's dispatch queue. A failed hook leaves the row on
+   * (only to an engine that listed it) -> hand it to its agent's dispatch
+   * queue. The hook runs whatever the engine's capabilities: it is the
+   * client's own durability, and skipping it against an older engine would
+   * hand an unstored frame to the handlers. A failed hook leaves the row on
    * the server for re-delivery: neither accept, dispatch nor ack.
    */
   private async processDeliver(parsed: Record<string, unknown>, generation: number): Promise<void> {
@@ -721,8 +728,7 @@ export class WsClient {
     const agent = typeof parsed.agent === 'string' ? parsed.agent : null;
     const deliveryId = typeof parsed.delivery_id === 'string' ? parsed.delivery_id : null;
     const hook = this.acceptDelivery;
-    if (this.autoAcceptDeliveries && hook !== undefined && agent !== null && seq !== null && deliveryId !== null
-      && this.engineCapabilities.has('delivery.accepted')) {
+    if (this.autoAcceptDeliveries && hook !== undefined && agent !== null && seq !== null && deliveryId !== null) {
       const delivery: AcceptedDelivery = {
         deliveryId,
         agent,
@@ -740,7 +746,11 @@ export class WsClient {
         this.warn('acceptDelivery failed; delivery left on the server for re-delivery', { deliveryId, seq, error: err });
         return;
       }
-      this.sendConfirmation('delivery.accepted', this.acceptWatermarks, generation, agent, deliveryId, seq);
+      // Only the wire frame is gated on the capability: an older engine would
+      // reject it (`invalid_message`), while the row above is stored either way.
+      if (this.engineCapabilities.has('delivery.accepted')) {
+        this.sendConfirmation('delivery.accepted', this.acceptWatermarks, generation, agent, deliveryId, seq);
+      }
     }
 
     let queue = this.dispatchQueues.get(agent ?? '');

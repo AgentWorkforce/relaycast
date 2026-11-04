@@ -118,7 +118,10 @@ beyond the baseline in `data.capabilities` (`string[]`); this engine answers
 engine omits the field (or the entry) and would answer either frame with
 `error { code: invalid_message }` (its `delivery.ack` is strict and requires
 `up_to_seq`). Later frame types get their own entry. Re-read it on every
-connection: a reconnect may land on a different engine.
+connection: a reconnect may land on a different engine. The gate is on the
+wire frame only: the client's own durability (the `acceptDelivery` hook)
+runs for every frame whatever the engine lists, so an older engine never
+causes an unstored frame to reach the handlers; it just is not told.
 
 ```json
 {"v":1,"type":"reply","id":"r1","ok":true,"data":{"provider":{"name":"default","instance_id":"…"},"accepted_capabilities":[],"capabilities":["delivery.accepted","delivery.ack.delivery_id"],"…":"…"}}
@@ -185,8 +188,10 @@ The pre-12.8 ack and `ackMode: 'on-receipt'` send `up_to_seq: seq` for every
 frame and have exactly that exposure.
 
 Against an older engine, whose `node.register` reply lists neither
-capability, `delivery.accepted` is not sent at all and `delivery.ack` must be
-cumulative (its strict schema requires `up_to_seq`). For that case the SDK
+capability, `delivery.accepted` is not sent at all (the persistence hook
+still runs before the handlers, and its failure still withholds dispatch and
+ack) and `delivery.ack` must be cumulative (its strict schema requires
+`up_to_seq`). For that case the SDK
 keeps one contiguous watermark per agent (the engine numbers `seq` per agent
 row, so a client hosting several agents sees one independent stream each),
 per connection, anchored just below the first `seq` it receives for that
@@ -273,7 +278,10 @@ The TypeScript SDK sends `delivery.accepted` only when all three hold:
 `autoAcceptDeliveries: true` (default `false` — set it only when you persist
 deliveries durably before handlers run), an `acceptDelivery(delivery)`
 persistence hook is configured and has resolved for that frame, and the
-`node.register` reply listed the capability. A hook that throws or rejects
+`node.register` reply listed the capability. The first two alone make the
+hook run, before any handler, for every frame: an engine that did not list
+the capability changes only whether the frame is sent, never whether the
+delivery is stored. A hook that throws or rejects
 stored nothing, so that delivery is neither accepted, dispatched nor acked:
 it stays unacked on the server and is re-delivered on reconnect, when the
 hook and the handlers run again. Later frames on the connection still flow
