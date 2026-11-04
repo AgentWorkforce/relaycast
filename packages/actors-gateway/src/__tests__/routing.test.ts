@@ -291,19 +291,58 @@ describe('routing', () => {
     expect(forwarded).toContainEqual(['x-workspace-bootstrap-secret', secret]);
     expect(forwarded).toContainEqual(['idempotency-key', key]);
     expect(JSON.stringify(harness.logs)).not.toContain(secret);
-    // The gate is for anonymous keyed creates only: an unkeyed create needs no proof, and a keyed
-    // create with an Authorization header is the engine's to answer (its owner check, or its 401).
+    // The gate is for keyed creates: an unkeyed create needs no proof, and an owner-keyed create
+    // (an ar_ws_ bearer) is authenticated through the owner's actor instead.
     const unkeyed = await fetch(`${harness.baseUrl}/v1/workspaces`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ name: 'team' }) });
     expect(unkeyed.status).toBe(201);
-    const notOwner = await create({ authorization: 'Bearer not-a-workspace-key' });
-    expect(notOwner.status).toBe(201);
-    expect((harness.controlPlane.invocations.at(-1)!.args[0] as ActorHttpRequest).headers).toContainEqual(['authorization', 'Bearer not-a-workspace-key']);
     const owned = await create({ authorization: `Bearer ${await harness.credential(OTHER_WORKSPACE_ID, 'workspace')}` });
     expect(owned.status).toBe(201);
     expect(harness.controlPlane.invocations.slice(-2).map((call) => [call.method, call.actorId])).toEqual([
       ['handle', OTHER_WORKSPACE_ID],
       ['create', await deriveKeyedWorkspaceId(secret, key, OTHER_WORKSPACE_ID)],
     ]);
+  });
+
+  it('gates a keyed create with any bearer other than an ar_ws_ credential, so no actor is activated for one the engine would refuse', async () => {
+    const secret = 'bootstrap-secret-0123456789abcdef';
+    harness = await startHarness({ workspace: echoWorkspace, env: { RELAYCAST_WORKSPACE_BOOTSTRAP_SECRET: secret, RELAYCAST_WORKSPACE_BOOTSTRAP_PROOF_REQUIRED: 'true' } });
+    const key = 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa';
+    const create = (headers: Record<string, string>) => fetch(`${harness!.baseUrl}/v1/workspaces`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', 'idempotency-key': key, ...headers },
+      body: JSON.stringify({ name: 'team' }),
+    });
+    const bearers = ['Bearer junk', `Bearer at_live_${'0'.repeat(32)}`, `Bearer ${await harness.credential(OTHER_WORKSPACE_ID, 'agent')}`, 'Basic dXNlcjpwYXNz'];
+    // Without the proof: the engine's answer, before any actor call (the engine's own 401 would come after the key's actor was activated).
+    for (const authorization of bearers) {
+      const refused = await create({ authorization });
+      expect(refused.status, authorization.slice(0, 12)).toBe(401);
+      expect((await readJson(refused)).error).toMatchObject({ code: 'workspace_create_bootstrap_secret_invalid' });
+    }
+    expect(harness.controlPlane.invocations).toHaveLength(0);
+    // With the proof: the create goes to the anonymous key's actor with the bearer as sent, and the engine answers the bearer itself.
+    for (const authorization of bearers) {
+      const admitted = await create({ authorization, 'x-workspace-bootstrap-secret': secret });
+      expect(admitted.status).toBe(201);
+      const call = harness.controlPlane.invocations.at(-1)!;
+      expect(call).toMatchObject({ method: 'create', actorId: await deriveKeyedWorkspaceId(secret, key) });
+      const forwarded = (call.args[0] as ActorHttpRequest).headers;
+      expect(forwarded).toContainEqual(['authorization', authorization]);
+      expect(forwarded.filter(([name]) => name === 'x-workspace-bootstrap-secret')).toEqual([['x-workspace-bootstrap-secret', secret]]);
+    }
+    expect(harness.controlPlane.invocations).toHaveLength(bearers.length);
+    // The owner path is unchanged: an ar_ws_ bearer needs no proof here; it is verified through the owner's actor.
+    const owned = await create({ authorization: `Bearer ${await harness.credential(OTHER_WORKSPACE_ID, 'workspace')}` });
+    expect(owned.status).toBe(201);
+    expect(harness.controlPlane.invocations.slice(-2).map((call) => [call.method, call.actorId])).toEqual([
+      ['handle', OTHER_WORKSPACE_ID],
+      ['create', await deriveKeyedWorkspaceId(secret, key, OTHER_WORKSPACE_ID)],
+    ]);
+    // An ar_ws_ bearer this keyring did not tag is refused before any actor call, as before.
+    const forged = await create({ authorization: `Bearer ${await foreignCredential(OTHER_WORKSPACE_ID, 'workspace')}` });
+    expect(forged.status).toBe(401);
+    expect((await readJson(forged)).error).toMatchObject({ code: 'unauthorized' });
+    expect(harness.controlPlane.invocations).toHaveLength(bearers.length + 2);
   });
 
   it('proves the secret itself for an owner-keyed create when the deployment requires proof, in place of anything the client sent', async () => {

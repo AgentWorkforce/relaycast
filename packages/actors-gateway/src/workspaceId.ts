@@ -8,9 +8,10 @@
  * engine's own error. An owner-scoped keyed create (an `ar_ws_` bearer)
  * derives per owner, as the engine scopes its record. A deployment that
  * requires proof of the secret (`RELAYCAST_WORKSPACE_BOOTSTRAP_PROOF_REQUIRED`)
- * refuses an anonymous keyed create without it here, in the engine's order
- * (after the secret check, before any id is derived or actor called) and
- * with the engine's answer.
+ * refuses a keyed create without it here unless its bearer is an `ar_ws_`
+ * credential, in the engine's order (after the secret check, before any id
+ * is derived or actor called) and with the engine's answer, so no actor is
+ * activated for a create the engine would refuse.
  */
 import type { IncomingMessage } from 'node:http';
 import { deriveKeyedWorkspaceId, generateWorkspaceId, parseArCredential } from '@relaycast/engine/gateway';
@@ -60,17 +61,20 @@ export async function chooseWorkspaceId(req: IncomingMessage, policy: KeyedCreat
   if (!policy.bootstrapSecret) {
     return { error: { status: 503, code: 'workspace_create_idempotency_unavailable', message: 'Anonymous workspace create idempotency is not configured on this deployment' } };
   }
-  // The engine's anonymous keyed create is one with no Authorization header
-  // (any other non-owner bearer it answers 401 itself); a blank one is as
-  // good as none here, so the gate still applies. The proof is compared in
-  // constant time against the secret's exact bytes.
-  if (policy.proofRequired && !req.headers.authorization?.trim()) {
+  // Only an `ar_ws_` bearer makes the create an owner's (the router then
+  // verifies it through the owner's actor before any child is activated).
+  // Every other keyed create is gated here when proof is required: with no
+  // Authorization, a blank one, or any other bearer (which the engine would
+  // answer 401 itself, but only after the key's actor had been activated).
+  // The proof is compared in constant time against the secret's exact bytes.
+  const bearer = bearerToken(req);
+  const owner = bearer ? parseArCredential(bearer) : undefined;
+  const ownerWorkspaceId = owner?.kind === 'workspace' ? owner.workspaceId : undefined;
+  if (policy.proofRequired && ownerWorkspaceId === undefined) {
     const proof = presentedProof(req);
     if (!proof || !constantTimeEqual(proof, policy.bootstrapSecret)) {
       return { error: { status: 401, code: 'workspace_create_bootstrap_secret_invalid', message: 'A valid workspace bootstrap secret is required for anonymous idempotent workspace creation' } };
     }
   }
-  const bearer = bearerToken(req);
-  const owner = bearer ? parseArCredential(bearer) : undefined;
-  return { workspaceId: await deriveKeyedWorkspaceId(policy.bootstrapSecret, key, owner?.kind === 'workspace' ? owner.workspaceId : undefined), keyed: true };
+  return { workspaceId: await deriveKeyedWorkspaceId(policy.bootstrapSecret, key, ownerWorkspaceId), keyed: true };
 }
