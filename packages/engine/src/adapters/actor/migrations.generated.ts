@@ -839,6 +839,12 @@ export const ACTOR_MIGRATIONS: readonly (readonly [string, readonly string[]])[]
     [
       "CREATE INDEX IF NOT EXISTS idx_nodes_context_reachable\n  ON nodes(workspace_id, id)\n  WHERE kind = 'http_push' OR (kind IN ('ws', 'fleet_ws', 'direct_ws') AND status <> 'offline')"
     ]
+  ],
+  [
+    "0082_pending_events_settled_retention.sql",
+    [
+      "CREATE INDEX IF NOT EXISTS idx_pending_events_settled_retention\n  ON pending_events(status, completed_at, id)"
+    ]
   ]
 ];
 

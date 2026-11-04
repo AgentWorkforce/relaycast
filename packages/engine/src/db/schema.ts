@@ -1403,6 +1403,7 @@ export const pendingEvents = sqliteTable(
   },
   (table) => [
     index('idx_pending_events_status').on(table.status, table.processAfter),
+    index('idx_pending_events_settled_retention').on(table.status, table.completedAt, table.id),
     index('idx_pending_events_workspace').on(table.workspaceId),
   ],
 );
