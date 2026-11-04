@@ -11,6 +11,8 @@ import {
   registerAgent,
   type TestStack,
 } from './harness.js';
+import { fetchDeliveryFanoutRecords } from '../../engine/deliveryWrites.js';
+import { routeDeliveryOutcomes } from '../../routes/deliveryRouting.js';
 
 type DeliveryReceipt = {
   id: string;
@@ -319,6 +321,48 @@ describe('sender-side delivery receipts', () => {
     expect(receipts.body.data!.deliveries).toEqual([expect.objectContaining({
       agent_name: 'bob', status: 'acked', delivered_at: expect.any(String), acked_at: expect.any(String),
     })]);
+  });
+
+  it('does not re-report delivered to the sender when a live route resends a row another path already settled', async () => {
+    const ws = await createWorkspace(stack.app, 'receipts-stale-delivered');
+    const alice = await registerAgent(stack.app, ws.workspaceKey, 'alice');
+    const node = await enrollBrokerNode(ws, 'node_stale');
+    const bob = await registerViaNode(node, 'bob');
+    const stream = new FakeSocket();
+    stack.runtime.realtime.attachWorkspaceSocket(ws.workspaceId, stream);
+
+    const post = await stack.app.request('/v1/channels/general/messages', authed(alice.token, {
+      method: 'POST', body: JSON.stringify({ text: 'race me' }),
+    }));
+    expect(post.status).toBe(201);
+    const posted = ((await post.json()) as { data: { id: string; deliveries: Array<{ id: string }> } }).data;
+    await stack.settle();
+    await node.handle.handleMessage(JSON.stringify({ v: 1, type: 'delivery.ack', agent: 'bob', up_to_seq: 1 }));
+    await stack.settle();
+    expect(stream.ofType('delivery.delivered')).toHaveLength(1);
+    expect(stream.ofType('delivery.acked')).toHaveLength(1);
+
+    // A concurrent live route (or sweep) that sends the same row after it was
+    // settled elsewhere must not tell the sender `delivered` again, which would
+    // land after `acked` and roll the sender's view back.
+    const records = await fetchDeliveryFanoutRecords(stack.runtime.deps.db, posted.id);
+    expect(records).toHaveLength(1);
+    const ctx = {
+      get(key: string) {
+        if (key === 'workspace') return { id: ws.workspaceId };
+        if (key === 'db') return stack.runtime.deps.db;
+        if (key === 'engine') return stack.runtime.deps;
+        return undefined;
+      },
+    } as unknown as Parameters<typeof routeDeliveryOutcomes>[0];
+    await routeDeliveryOutcomes(ctx, records, 'message.created', { id: posted.id, channel_name: 'general', from_name: 'alice' });
+    await stack.settle();
+    expect(node.sock.ofType('deliver')).toHaveLength(2);
+    expect(stream.ofType('delivery.delivered')).toHaveLength(1);
+    expect(stream.ofType('delivery.acked')).toHaveLength(1);
+
+    const receipts = await messageDeliveries(alice.token, posted.id);
+    expect(receipts.body.data!.deliveries).toEqual([expect.objectContaining({ agent_name: 'bob', status: 'acked' })]);
   });
 
   it('keeps a cumulative ack wider than one IN-list chunk under the D1 cap while notifying the sender', async () => {

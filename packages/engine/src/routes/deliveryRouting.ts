@@ -370,7 +370,10 @@ async function dispatchHttpPush(args: {
 
 /**
  * Result of routing a single delivery row.
- * - `delivered`: the row was sent and marked delivered.
+ * - `delivered`: the row was sent and this call moved it `queued` -> `delivered`.
+ * - `resent`: the row was sent but had already left `queued` (a concurrent
+ *   replay or ack settled it first), so there is no new transition to report
+ *   to the sender. An ordered ws redrive keeps draining past it.
  * - `acked`: an `http_push` receiver acknowledged the row in its response
  *   (`on_2xx` / `response` ack mode), so it went `queued` -> `acked` directly.
  * - `deferred`: the row stayed queued and was stamped for a later retry (a
@@ -378,7 +381,7 @@ async function dispatchHttpPush(args: {
  *   agent's backlog here so a later seq never outruns this one.
  * - `noop`: no realtime target remained (legacy/unbound row); nothing to do.
  */
-type DeliveryDispatchOutcome = 'delivered' | 'acked' | 'deferred' | 'noop';
+type DeliveryDispatchOutcome = 'delivered' | 'resent' | 'acked' | 'deferred' | 'noop';
 
 /**
  * Tell senders about the rows a routing pass transitioned, one read per
@@ -455,8 +458,8 @@ async function routeOneDeliveryOutcome(
       payload: buildDeliverPayload(eventType, eventData),
     }));
     if (sent) {
-      await deliveryEngine.markDeliveriesDelivered(ctx.db, ctx.workspaceId, [delivery.id]);
-      return 'delivered';
+      const transitioned = await deliveryEngine.markDeliveriesDelivered(ctx.db, ctx.workspaceId, [delivery.id]);
+      return transitioned.length > 0 ? 'delivered' : 'resent';
     }
     // The provider was delivery-ready but the live send did not land (no open
     // socket, the provider detached mid-send, or `socket.send` threw). Leave the
@@ -478,8 +481,8 @@ async function routeOneDeliveryOutcome(
   if (locationType === 'via_node' && locationNodeId && nodeKind === 'http_push' && target) {
     const result = await dispatchHttpPush({ ctx, delivery, target, eventType, eventData });
     if (result === 'delivered') {
-      await deliveryEngine.markDeliveriesDelivered(ctx.db, ctx.workspaceId, [delivery.id]);
-      return 'delivered';
+      const transitioned = await deliveryEngine.markDeliveriesDelivered(ctx.db, ctx.workspaceId, [delivery.id]);
+      return transitioned.length > 0 ? 'delivered' : 'resent';
     }
     if (result === 'acked') return 'acked';
     return 'deferred';
@@ -607,7 +610,7 @@ async function redriveWsBacklogForAgent(
         event.eventData,
       );
       outcomes.push({ deliveryId: event.delivery.id, outcome });
-      if (outcome !== 'delivered') break;
+      if (outcome !== 'delivered' && outcome !== 'resent') break;
     }
   } finally {
     await notifySendersForOutcomes(ctx, outcomes);
