@@ -102,7 +102,7 @@ describe("bundleConfigFromEnv artifact store", () => {
         expect(() => bundleConfigFromEnv({ ...S3, DURABLE_ACTORS_S3_REGION: "US East" })).toThrow(/DURABLE_ACTORS_S3_REGION must be a region name/)
         expect(() => bundleConfigFromEnv({ ...S3, AWS_REGION: "us_east_1" })).toThrow("AWS_REGION must be a region name")
         expect(() => bundleConfigFromEnv({ ...S3, AWS_REGION: "us-east-1", DURABLE_ACTORS_S3_FORCE_PATH_STYLE: "yes" })).toThrow(/DURABLE_ACTORS_S3_FORCE_PATH_STYLE/)
-        for (const bad of ["minio:9000", "ftp://minio", "http://minio?x=1", "http://minio#f"]) {
+        for (const bad of ["minio:9000", "ftp://minio", "http://minio?x=1", "http://minio#f", "http://minio:9000?", "http://minio:9000/#"]) {
             expect(() => bundleConfigFromEnv({ ...S3, AWS_REGION: "us-east-1", DURABLE_ACTORS_S3_ENDPOINT: bad }), bad).toThrow(/DURABLE_ACTORS_S3_ENDPOINT/)
         }
         try {
@@ -114,7 +114,20 @@ describe("bundleConfigFromEnv artifact store", () => {
         }
     })
 
+    it("checks the bucket against S3's naming rules in s3 mode only", () => {
+        const s3 = { ...S3, AWS_REGION: "us-east-1" }
+        for (const good of ["abc", "acme-actors", "acme.actors.v1", "a".repeat(63)]) {
+            expect(bundleConfigFromEnv({ ...s3, DURABLE_ACTORS_ARTIFACT_BUCKET: good }).bucket, good).toBe(good)
+        }
+        for (const bad of ["ab", "a".repeat(64), "Acme", "acme_actors", "-acme", "acme-", "acme..actors", "192.168.1.1"]) {
+            expect(() => bundleConfigFromEnv({ ...s3, DURABLE_ACTORS_ARTIFACT_BUCKET: bad }), bad).toThrow("DURABLE_ACTORS_ARTIFACT_BUCKET must be an S3 bucket name")
+        }
+        // GCS names follow other rules (underscores are allowed there).
+        expect(bundleConfigFromEnv({ ...BASE, DURABLE_ACTORS_ARTIFACT_BUCKET: "acme_actors" }).bucket).toBe("acme_actors")
+    })
+
     it("refuses S3 settings without DURABLE_ACTORS_ARTIFACT_STORE=s3", () => {
+        expect(() => bundleConfigFromEnv({ ...BASE, DURABLE_ACTORS_S3_FORCE_PATH_STYLE: "true" })).toThrow("DURABLE_ACTORS_S3_FORCE_PATH_STYLE need DURABLE_ACTORS_ARTIFACT_STORE=s3")
         expect(() => bundleConfigFromEnv({ ...BASE, DURABLE_ACTORS_S3_REGION: "us-east-1", DURABLE_ACTORS_S3_ENDPOINT: "http://minio:9000" })).toThrow(
             "DURABLE_ACTORS_S3_REGION, DURABLE_ACTORS_S3_ENDPOINT need DURABLE_ACTORS_ARTIFACT_STORE=s3"
         )

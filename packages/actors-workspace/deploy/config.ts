@@ -95,7 +95,8 @@ const region = z.string().trim().regex(REGION, "must be a region name such as us
 const endpoint = z.string().trim().refine((value) => {
     try {
         const url = new URL(value)
-        return /^https?:$/.test(url.protocol) && !!url.hostname && !url.username && !url.password && !url.search && !url.hash
+        // `URL` drops a bare trailing `?` or `#`, so the raw value is checked too, as for the control plane origin.
+        return /^https?:$/.test(url.protocol) && !!url.hostname && !url.username && !url.password && !/[?#]/.test(value)
     } catch {
         return false
     }
@@ -210,6 +211,11 @@ export function bundleConfigFromEnv(env: Record<string, string | undefined>): Bu
     }
 }
 
+/** S3's general purpose bucket naming rules (the checks that would otherwise fail only at upload). */
+function isS3BucketName(name: string): boolean {
+    return /^[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]$/.test(name) && !name.includes("..") && !/^\d+\.\d+\.\d+\.\d+$/.test(name)
+}
+
 function artifactStoreConfig(values: z.infer<typeof EnvSchema>): ArtifactStoreConfig {
     const s3Settings = (["DURABLE_ACTORS_S3_REGION", "DURABLE_ACTORS_S3_ENDPOINT", "DURABLE_ACTORS_S3_FORCE_PATH_STYLE"] as const).filter(
         (name) => values[name] !== undefined
@@ -219,6 +225,10 @@ function artifactStoreConfig(values: z.infer<typeof EnvSchema>): ArtifactStoreCo
         if (s3Settings.length > 0) throw new ConfigError(`${s3Settings.join(", ")} need DURABLE_ACTORS_ARTIFACT_STORE=s3`)
         return { kind: "gcs" }
     }
+    if (!isS3BucketName(values.DURABLE_ACTORS_ARTIFACT_BUCKET!))
+        throw new ConfigError(
+            "DURABLE_ACTORS_ARTIFACT_BUCKET must be an S3 bucket name: 3-63 lowercase letters, digits, '.' or '-', starting and ending with a letter or digit, without '..' or the form of an IP address"
+        )
     const s3Region = values.DURABLE_ACTORS_S3_REGION ?? values.AWS_REGION
     if (s3Region === undefined) throw new ConfigError("DURABLE_ACTORS_S3_REGION (or AWS_REGION) is required for DURABLE_ACTORS_ARTIFACT_STORE=s3")
     if (!REGION.test(s3Region)) throw new ConfigError("AWS_REGION must be a region name such as us-east-1")
