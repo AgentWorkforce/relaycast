@@ -8,9 +8,9 @@ session data, so we treat security reports as a priority over feature work.
 Please report vulnerabilities privately. Do not open a public issue, pull
 request or discussion for a security problem.
 
-- **GitHub private vulnerability reporting (preferred):**
-  https://github.com/AgentWorkforce/relaycast/security/advisories/new
-- **Email:** security@agentrelay.com
+- **Email (preferred):** security@agentrelay.com
+- **GitHub private vulnerability reporting**, once it is enabled for this
+  repository: https://github.com/AgentWorkforce/relaycast/security/advisories/new
 
 Please include:
 
@@ -39,9 +39,9 @@ publicly. We do not run a paid bug bounty.
 
 ## Supported versions
 
-Fixes ship in the latest release (and, for container images, the next image
-published from `main`). We do not backport fixes to older releases; upgrade to
-the latest release to receive them.
+Fixes ship in the latest release and the next published artifacts listed under
+Scope. We do not backport fixes to older releases; upgrade to the latest
+release to receive them.
 
 ## Scope
 
