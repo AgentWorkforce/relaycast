@@ -124,7 +124,7 @@ describe('configuration', () => {
   });
 
   it('refuses, with proof required, a bootstrap secret an HTTP header cannot carry; without it the secret is only a derivation input', () => {
-    const unsafe = [' leading-space-0123456789abcdef', 'trailing-tab-0123456789abcdef\t', 'embedded\nnewline-0123456789abcdef', 'carriage\rreturn-0123456789abcdef', 'nul\u0000-0123456789abcdef'];
+    const unsafe = [' leading-space-0123456789abcdef', 'trailing-tab-0123456789abcdef\t', 'embedded\nnewline-0123456789abcdef', 'carriage\rreturn-0123456789abcdef', 'nul\u0000-0123456789abcdef', 'latin1-\u00e9-0123456789abcdef', 'emoji-\u{1F511}-0123456789abcdef'];
     for (const value of unsafe) {
       const refused = refusal(baseEnv(URL, { RELAYCAST_WORKSPACE_BOOTSTRAP_SECRET: value, RELAYCAST_WORKSPACE_BOOTSTRAP_PROOF_REQUIRED: 'true' }));
       expect(refused.code, JSON.stringify(value)).toBe('invalid_workspace_bootstrap_secret');

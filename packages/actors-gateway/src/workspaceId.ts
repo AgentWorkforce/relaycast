@@ -10,8 +10,10 @@
  * requires proof of the secret (`RELAYCAST_WORKSPACE_BOOTSTRAP_PROOF_REQUIRED`)
  * refuses a keyed create without it here unless its bearer is an `ar_ws_`
  * credential, in the engine's order (after the secret check, before any id
- * is derived or actor called) and with the engine's answer, so no actor is
- * activated for a create the engine would refuse.
+ * is derived or actor called) with the engine's proof error (401
+ * `workspace_create_bootstrap_secret_invalid`; for a non-owner bearer the
+ * engine itself would say `unauthorized`), so no actor is activated for a
+ * create the engine would refuse.
  */
 import type { IncomingMessage } from 'node:http';
 import { deriveKeyedWorkspaceId, generateWorkspaceId, parseArCredential } from '@relaycast/engine/gateway';

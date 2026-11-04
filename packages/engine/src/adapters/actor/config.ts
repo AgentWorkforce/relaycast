@@ -61,10 +61,11 @@ export function actorConfigFromEnv(env: Record<string, string | undefined>): Act
   const workspaceBootstrapSecret = secretFromEnv(env, 'RELAYCAST_WORKSPACE_BOOTSTRAP_SECRET', { exact: true });
   const proofRequired = values.RELAYCAST_WORKSPACE_BOOTSTRAP_PROOF_REQUIRED === 'true';
   // With proof required the secret also travels as `X-Workspace-Bootstrap-Secret`,
-  // which leading or trailing space or tab and control characters cannot
-  // survive; refuse such a secret (never trim it: its bytes feed a derivation).
-  if (proofRequired && workspaceBootstrapSecret !== undefined && /^[ \t]|[ \t]$|[\x00-\x1f\x7f]/.test(workspaceBootstrapSecret)) {
-    throw new ConfigError('Invalid relaycast actor configuration: RELAYCAST_WORKSPACE_BOOTSTRAP_SECRET: must be carried in an HTTP header when RELAYCAST_WORKSPACE_BOOTSTRAP_PROOF_REQUIRED=true (no leading or trailing space or tab, no control characters)');
+  // which only printable ASCII without leading or trailing space survives
+  // byte for byte; refuse anything else (never trim it: its bytes feed a
+  // derivation). The gateway applies the same rule.
+  if (proofRequired && workspaceBootstrapSecret !== undefined && /^[ \t]|[ \t]$|[^\x20-\x7e]/.test(workspaceBootstrapSecret)) {
+    throw new ConfigError('Invalid relaycast actor configuration: RELAYCAST_WORKSPACE_BOOTSTRAP_SECRET: must be carried in an HTTP header when RELAYCAST_WORKSPACE_BOOTSTRAP_PROOF_REQUIRED=true (printable ASCII only, no leading or trailing space)');
   }
   const mailbox = {
     ...(values.RELAYCAST_MAILBOX_TTL_MS !== undefined ? { deliveryTtlMs: values.RELAYCAST_MAILBOX_TTL_MS } : {}),

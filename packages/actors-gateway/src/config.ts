@@ -147,11 +147,13 @@ function exactFlag(env: Env, name: string): boolean {
 /**
  * Whether a secret's exact bytes survive an HTTP header: the proof travels as
  * `X-Workspace-Bootstrap-Secret`, where leading or trailing space or tab is
- * stripped by any recipient and a control character is refused or splits
- * the header. The secret is never trimmed (its bytes feed a derivation).
+ * stripped by any recipient, a control character is refused or splits the
+ * header, and a character outside ASCII is refused by Node's client (above
+ * U+00FF) or arrives latin1-decoded, so it never matches. Printable ASCII
+ * only. The secret is never trimmed (its bytes feed a derivation).
  */
 export function isHeaderSafe(value: string): boolean {
-  return !/^[ \t]|[ \t]$|[\x00-\x1f\x7f]/.test(value);
+  return !/^[ \t]|[ \t]$|[^\x20-\x7e]/.test(value);
 }
 
 /** Trimmed, with empty values dropped, so a blank variable means "unset". */
@@ -214,7 +216,7 @@ export function loadConfig(env: Env = process.env, readFile?: (path: string) => 
   const workspaceBootstrapSecret = secretFromEnv(env, 'RELAYCAST_WORKSPACE_BOOTSTRAP_SECRET', readFile, { exact: true });
   const workspaceBootstrapProofRequired = exactFlag(env, 'RELAYCAST_WORKSPACE_BOOTSTRAP_PROOF_REQUIRED');
   if (workspaceBootstrapProofRequired && workspaceBootstrapSecret !== undefined && !isHeaderSafe(workspaceBootstrapSecret)) {
-    throw new ConfigError('invalid_workspace_bootstrap_secret', 'RELAYCAST_WORKSPACE_BOOTSTRAP_SECRET must be carried in an HTTP header when RELAYCAST_WORKSPACE_BOOTSTRAP_PROOF_REQUIRED=true: no leading or trailing space or tab, and no control characters.');
+    throw new ConfigError('invalid_workspace_bootstrap_secret', 'RELAYCAST_WORKSPACE_BOOTSTRAP_SECRET must be carried in an HTTP header when RELAYCAST_WORKSPACE_BOOTSTRAP_PROOF_REQUIRED=true: printable ASCII only, with no leading or trailing space.');
   }
 
   // DURABLE_ACTORS_API_KEY is the SDK's alias for DURABLE_ACTORS_SECRET.

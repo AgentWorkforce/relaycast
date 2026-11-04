@@ -75,7 +75,7 @@ describe('actorConfigFromEnv', () => {
   });
 
   it('refuses, with proof required, a bootstrap secret an HTTP header cannot carry; without it the secret is only a derivation input', () => {
-    for (const value of [' leading-space', 'trailing-tab\t', 'embedded\nnewline', 'nul\u0000byte']) {
+    for (const value of [' leading-space', 'trailing-tab\t', 'embedded\nnewline', 'nul\u0000byte', 'latin1-\u00e9', 'emoji-\u{1F511}']) {
       expect(() => actorConfigFromEnv({ RELAYCAST_WORKSPACE_BOOTSTRAP_SECRET: value, RELAYCAST_WORKSPACE_BOOTSTRAP_PROOF_REQUIRED: 'true' }), JSON.stringify(value))
         .toThrow(/RELAYCAST_WORKSPACE_BOOTSTRAP_SECRET: must be carried in an HTTP header/);
       // Not trimmed, not refused: exact bytes.
