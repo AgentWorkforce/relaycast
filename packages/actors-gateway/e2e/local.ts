@@ -253,7 +253,7 @@ function prepareDirs(): Dirs {
 function bootstrapEnv(proofRequired: boolean): NodeJS.ProcessEnv {
   return {
     RELAYCAST_WORKSPACE_BOOTSTRAP_SECRET: WORKSPACE_BOOTSTRAP_SECRET,
-    ...(proofRequired ? { RELAYCAST_WORKSPACE_BOOTSTRAP_PROOF_REQUIRED: 'true' } : {}),
+    RELAYCAST_WORKSPACE_BOOTSTRAP_PROOF_REQUIRED: proofRequired ? 'true' : 'false',
   };
 }
 

@@ -185,9 +185,24 @@ function swapOrigin(url: string, origin: string): string {
   return target.toString();
 }
 
+/**
+ * A response described for a failure message without its body's credentials:
+ * an error body's code and message, a success body's `data` keys only.
+ */
+function describeBody(text: string): string {
+  try {
+    const parsed = JSON.parse(text) as { ok?: boolean; error?: { code?: string; message?: string }; data?: unknown };
+    if (parsed.error) return `${parsed.error.code ?? 'error'}: ${parsed.error.message ?? ''}`.slice(0, 300);
+    if (parsed.ok) return `a success body (${parsed.data && typeof parsed.data === 'object' ? Object.keys(parsed.data).join(', ') : typeof parsed.data})`;
+  } catch {
+    /* not JSON */
+  }
+  return text.slice(0, 300);
+}
+
 async function readError(response: Response): Promise<string> {
   const text = await response.text().catch(() => '');
-  return `HTTP ${response.status} ${text.slice(0, 300)}`;
+  return `HTTP ${response.status} ${describeBody(text)}`;
 }
 
 /** The response's `data`, when its status is `status`; the error otherwise. */
@@ -204,24 +219,27 @@ async function expectError(response: Response, status: number, code: string, lab
   } catch {
     /* not JSON */
   }
-  if (response.status !== status || got !== code) throw new Error(`${label}: expected ${status} ${code}, got HTTP ${response.status} ${text.slice(0, 300)}`);
+  if (response.status !== status || got !== code) throw new Error(`${label}: expected ${status} ${code}, got HTTP ${response.status} ${describeBody(text)}`);
 }
 
 /** A keyed `POST /v1/workspaces` (the engine's floor is 32 characters; 16 random bytes hex-encoded is the documented key). */
-function keyedCreate(base: string, key: string, name: string, proof?: string): Promise<Response> {
+function keyedCreate(base: string, key: string, name: string, proof?: string, bearer?: string): Promise<Response> {
   return fetch(`${base}/v1/workspaces`, {
     method: 'POST',
     headers: {
       'content-type': 'application/json',
       'idempotency-key': key,
       ...(proof === undefined ? {} : { 'x-workspace-bootstrap-secret': proof }),
+      ...(bearer === undefined ? {} : { authorization: `Bearer ${bearer}` }),
     },
     body: JSON.stringify({ name }),
   });
 }
 
+/** The replayed `data` equals the original's; a difference names the fields (the bodies carry the credential). */
 function sameData(a: Record<string, unknown>, b: Record<string, unknown>, label: string): void {
-  if (JSON.stringify(a) !== JSON.stringify(b)) throw new Error(`${label}: ${JSON.stringify(b)} differs from ${JSON.stringify(a)}`);
+  const fields = [...new Set([...Object.keys(a), ...Object.keys(b)])].filter((field) => JSON.stringify(a[field]) !== JSON.stringify(b[field]));
+  if (fields.length > 0) throw new Error(`${label}: differs from the original in ${fields.join(', ')}`);
 }
 
 type Step = <T>(name: string, fn: () => Promise<T>) => Promise<T>;
@@ -492,17 +510,31 @@ export async function runBootstrapProofChecks(options: BootstrapProofOptions): P
       }
     });
     await step('proof required: a wrong proof → 401 workspace_create_bootstrap_secret_invalid', async () => {
-      for (const proof of ['not-the-configured-secret', `${secret}x`]) {
-        await expectError(await keyedCreate(gateway1, key, name, proof), 401, 'workspace_create_bootstrap_secret_invalid', `wrong proof ${JSON.stringify(proof)}`);
+      const wrong: [string, string][] = [['an unrelated value', 'not-the-configured-secret'], ['the secret plus a character', `${secret}x`]];
+      for (const [label, proof] of wrong) {
+        await expectError(await keyedCreate(gateway1, key, name, proof), 401, 'workspace_create_bootstrap_secret_invalid', `wrong proof (${label})`);
       }
     });
-    await step('proof required: the proof via gateway 1 → 201; replayed with it via gateway 2 → 200, same credential; without it → 401', async () => {
+    const proven = await step('proof required: the proof via gateway 1 → 201; replayed with it via gateway 2 → 200, same credential; without it → 401', async () => {
       const created = await expectData(await keyedCreate(gateway1, key, name, secret), 201, 'proven keyed create via gateway 1');
       if (!String(created.api_key ?? '').startsWith('ar_ws_')) throw new Error(`expected an ar_ws_ key, got ${String(created.api_key).slice(0, 8)}…`);
       const replayed = await expectData(await keyedCreate(gateway2, key, name, secret), 200, 'proven replay via gateway 2');
       sameData(created, replayed, 'proven replay via gateway 2');
       await expectError(await keyedCreate(gateway2, key, name), 401, 'workspace_create_bootstrap_secret_invalid', 'replay without the proof');
       log(`       workspace ${String(created.workspace_id)} created with the proof via gateway 1, replayed via gateway 2`);
+      return created;
+    });
+    await step('proof required: an owner-keyed create (ar_ws_ bearer, no proof header) via gateway 1 → 201; replayed via gateway 2 → 200; a bogus proof header is replaced', async () => {
+      // The owner is authenticated in its own actor and the gateway proves the secret to the child actor itself.
+      const owner = String(proven.api_key);
+      const ownerKey = randomBytes(16).toString('hex');
+      const created = await expectData(await keyedCreate(gateway1, ownerKey, `${name}-child`, undefined, owner), 201, 'owner-keyed create via gateway 1');
+      if (!String(created.api_key ?? '').startsWith('ar_ws_')) throw new Error(`expected an ar_ws_ key, got ${String(created.api_key).slice(0, 8)}…`);
+      const replayed = await expectData(await keyedCreate(gateway2, ownerKey, `${name}-child`, undefined, owner), 200, 'owner-keyed replay via gateway 2');
+      sameData(created, replayed, 'owner-keyed replay via gateway 2');
+      const bogus = await expectData(await keyedCreate(gateway2, ownerKey, `${name}-child`, 'not-the-configured-secret', owner), 200, 'owner-keyed replay with a bogus proof header');
+      sameData(created, bogus, 'owner-keyed replay with a bogus proof header');
+      log(`       workspace ${String(created.workspace_id)} created under owner ${String(proven.workspace_id)} via gateway 1, replayed via gateway 2`);
     });
     if (options.earlier) {
       const earlier = options.earlier;
