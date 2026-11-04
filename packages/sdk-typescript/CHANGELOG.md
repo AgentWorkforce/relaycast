@@ -7,7 +7,11 @@ See the [root changelog](../../CHANGELOG.md) for cross-package release highlight
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [Unreleased - Minor]
+
+### Changed
+
+- `nodes.create(data, { idempotencyKey })` no longer requires `currentToken`: without it the key makes a first enrollment recoverable (persist it before the first call and reuse it on retries).
 
 ## [12.7.0] - 2026-11-03
 
