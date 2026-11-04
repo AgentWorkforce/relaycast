@@ -1,7 +1,8 @@
-import { and, eq, inArray } from 'drizzle-orm';
+import { and, eq, inArray, sql } from 'drizzle-orm';
 import type { getDb } from '../db/index.js';
 import { agentInboundPolicies, agents } from '../db/schema.js';
 import { codedError } from '../lib/httpError.js';
+import { queryInChunks } from '../lib/queryChunks.js';
 
 type Db = ReturnType<typeof getDb>;
 
@@ -28,12 +29,26 @@ export function policyAdmits(policy: InboundPolicy, senderId: string, recipientI
   return policy.allowedAgentIds.includes(senderId) || policy.pinnedAgentIds.includes(senderId);
 }
 
-export async function getInboundPolicy(db: Db, workspaceId: string, agentId: string): Promise<InboundPolicy> {
+interface StoredInboundPolicy {
+  /** False when the agent has no row and is therefore open. */
+  present: boolean;
+  policy: InboundPolicy;
+}
+
+async function readStoredInboundPolicy(db: Db, workspaceId: string, agentId: string): Promise<StoredInboundPolicy> {
   const [row] = await db
     .select()
     .from(agentInboundPolicies)
     .where(and(eq(agentInboundPolicies.workspaceId, workspaceId), eq(agentInboundPolicies.agentId, agentId)));
-  return row ? { mode: row.mode, allowedAgentIds: row.allowedAgentIds, pinnedAgentIds: row.pinnedAgentIds } : OPEN_POLICY;
+  if (!row) return { present: false, policy: OPEN_POLICY };
+  return {
+    present: true,
+    policy: { mode: row.mode, allowedAgentIds: row.allowedAgentIds, pinnedAgentIds: row.pinnedAgentIds },
+  };
+}
+
+export async function getInboundPolicy(db: Db, workspaceId: string, agentId: string): Promise<InboundPolicy> {
+  return (await readStoredInboundPolicy(db, workspaceId, agentId)).policy;
 }
 
 /** Policies for several agents at once; agents without a row are open. */
@@ -45,10 +60,11 @@ export async function getInboundPolicies(
   const unique = [...new Set(agentIds)];
   const policies = new Map<string, InboundPolicy>(unique.map((id) => [id, OPEN_POLICY]));
   if (unique.length === 0) return policies;
-  const rows = await db
+  // One allowlist can name 256 agents. Chunk so workspaceId plus the IN list stays under D1's bind cap.
+  const rows = await queryInChunks(unique, (chunk) => db
     .select()
     .from(agentInboundPolicies)
-    .where(and(eq(agentInboundPolicies.workspaceId, workspaceId), inArray(agentInboundPolicies.agentId, unique)));
+    .where(and(eq(agentInboundPolicies.workspaceId, workspaceId), inArray(agentInboundPolicies.agentId, chunk))));
   for (const row of rows) {
     policies.set(row.agentId, { mode: row.mode, allowedAgentIds: row.allowedAgentIds, pinnedAgentIds: row.pinnedAgentIds });
   }
@@ -113,10 +129,10 @@ export async function refusingMembers(
 async function resolveAgentNames(db: Db, workspaceId: string, names: readonly string[]): Promise<Map<string, string>> {
   const unique = [...new Set(names)];
   if (unique.length === 0) return new Map();
-  const rows = await db
+  const rows = await queryInChunks(unique, (chunk) => db
     .select({ id: agents.id, name: agents.name })
     .from(agents)
-    .where(and(eq(agents.workspaceId, workspaceId), inArray(agents.name, unique)));
+    .where(and(eq(agents.workspaceId, workspaceId), inArray(agents.name, chunk))));
   const byName = new Map(rows.map((row) => [row.name, row.id]));
   const missing = unique.filter((name) => !byName.has(name));
   if (missing.length > 0) {
@@ -127,10 +143,10 @@ async function resolveAgentNames(db: Db, workspaceId: string, names: readonly st
 
 async function namesFor(db: Db, workspaceId: string, ids: readonly string[]): Promise<{ id: string; name: string }[]> {
   if (ids.length === 0) return [];
-  const rows = await db
+  const rows = await queryInChunks([...ids], (chunk) => db
     .select({ id: agents.id, name: agents.name })
     .from(agents)
-    .where(and(eq(agents.workspaceId, workspaceId), inArray(agents.id, [...ids])));
+    .where(and(eq(agents.workspaceId, workspaceId), inArray(agents.id, chunk))));
   const byId = new Map(rows.map((row) => [row.id, row.name]));
   // An admitted agent that was deleted drops out of the view; its id stays
   // inert in the row because a new agent never reuses an id.
@@ -171,7 +187,8 @@ export async function setInboundPolicy(
   if (input.mode === 'open' && input.allowedAgents?.length) {
     throw codedError('An open policy admits everyone; omit allowed_agents', 'invalid_inbound_policy', 400);
   }
-  const current = await getInboundPolicy(db, workspaceId, agentId);
+  const stored = await readStoredInboundPolicy(db, workspaceId, agentId);
+  const current = stored.policy;
   const allowedByName = input.allowedAgents
     ? await resolveAgentNames(db, workspaceId, input.allowedAgents)
     : new Map<string, string>();
@@ -216,9 +233,58 @@ export async function setInboundPolicy(
     pinnedAgentIds: [...new Set(pinnedIds)],
     updatedAt: new Date(),
   };
-  await db
-    .insert(agentInboundPolicies)
-    .values({ agentId, workspaceId, ...values })
-    .onConflictDoUpdate({ target: agentInboundPolicies.agentId, set: values });
+  if (actor.kind === 'workspace') {
+    await db
+      .insert(agentInboundPolicies)
+      .values({ agentId, workspaceId, ...values })
+      .onConflictDoUpdate({ target: agentInboundPolicies.agentId, set: values });
+  } else {
+    // Commit only when the row is still the one this call read. A later narrow
+    // must not put back a name an earlier narrow removed. Pins are not part of
+    // the predicate and are not rewritten: an agent cannot change them.
+    await commitAgentNarrow(db, workspaceId, agentId, stored, values);
+  }
   return inboundPolicyView(db, workspaceId, agentId);
+}
+
+function inboundPolicyConflict() {
+  return codedError(
+    'Inbound policy changed; retry the narrow against the current allowlist',
+    'inbound_policy_conflict',
+    409,
+  );
+}
+
+/** Logical list equality. `json()` ignores stored whitespace; element order is the order that was read. */
+function sameAllowedList(ids: readonly string[]) {
+  return sql`json(${agentInboundPolicies.allowedAgentIds}) = json(${JSON.stringify([...ids])})`;
+}
+
+async function commitAgentNarrow(
+  db: Db,
+  workspaceId: string,
+  agentId: string,
+  stored: StoredInboundPolicy,
+  values: { mode: InboundPolicyMode; allowedAgentIds: string[]; pinnedAgentIds: string[]; updatedAt: Date },
+): Promise<void> {
+  if (!stored.present) {
+    const inserted = await db
+      .insert(agentInboundPolicies)
+      .values({ agentId, workspaceId, ...values })
+      .onConflictDoNothing()
+      .returning({ agentId: agentInboundPolicies.agentId });
+    if (inserted.length === 0) throw inboundPolicyConflict();
+    return;
+  }
+  const updated = await db
+    .update(agentInboundPolicies)
+    .set({ mode: values.mode, allowedAgentIds: values.allowedAgentIds, updatedAt: values.updatedAt })
+    .where(and(
+      eq(agentInboundPolicies.agentId, agentId),
+      eq(agentInboundPolicies.workspaceId, workspaceId),
+      eq(agentInboundPolicies.mode, stored.policy.mode),
+      sameAllowedList(stored.policy.allowedAgentIds),
+    ))
+    .returning({ agentId: agentInboundPolicies.agentId });
+  if (updated.length === 0) throw inboundPolicyConflict();
 }

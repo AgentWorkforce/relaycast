@@ -702,3 +702,51 @@ describe('invariant DM-1: a 1:1 conversation never has a departed participant', 
     expect(roster.map((r) => r.agentId).sort()).toEqual([alice, bob].sort());
   });
 });
+
+describe('inbound policy admission at commit', () => {
+  it('does not store a DM when the recipient narrows after the admission check', async () => {
+    const { db, ws, alice, bob } = seed();
+    const sqlite = handles.at(-1)!.sqlite;
+    const originalPrepare = sqlite.prepare.bind(sqlite);
+    let narrowed = false;
+    sqlite.prepare = ((source: string) => {
+      const stmt = originalPrepare(source);
+      const policyRead = /^\s*select\b/i.test(source) && /agent_inbound_policies/i.test(source);
+      if (!policyRead) return stmt;
+      const all = stmt.all.bind(stmt);
+      stmt.all = ((...args: unknown[]) => {
+        const rows = all(...args);
+        if (!narrowed) {
+          narrowed = true;
+          // The rows already in hand are the open policy. Narrow only after that
+          // read, so the pre-check passes and the insert is what must refuse.
+          originalPrepare(
+            `INSERT INTO agent_inbound_policies
+              (agent_id, workspace_id, mode, allowed_agent_ids, pinned_agent_ids, updated_at)
+             VALUES (?, ?, 'allowlist', '[]', '[]', unixepoch())`,
+          ).run(bob, ws);
+        }
+        return rows;
+      }) as typeof stmt.all;
+      return stmt;
+    }) as typeof sqlite.prepare;
+
+    try {
+      await expect(sendDm(db, ws, alice, { to: 'bob', text: 'too late' })).rejects.toMatchObject({
+        message: 'Agent "bob" not found',
+        code: 'agent_not_found',
+        status: 404,
+      });
+    } finally {
+      sqlite.prepare = originalPrepare as typeof sqlite.prepare;
+    }
+
+    expect(narrowed).toBe(true);
+    const stored = await db.select({ body: messages.body }).from(messages).where(eq(messages.workspaceId, ws));
+    expect(stored).toEqual([]);
+    // The conversation is created after the pre-check and before the insert.
+    // Its presence is what shows the pre-check passed and the insert recheck failed.
+    const conversations = await db.select().from(dmConversations).where(eq(dmConversations.workspaceId, ws));
+    expect(conversations).toHaveLength(1);
+  });
+});

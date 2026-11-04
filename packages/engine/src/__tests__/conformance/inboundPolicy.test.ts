@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { makeNodeStack, createWorkspace, registerAgent, type TestStack } from './harness.js';
+import { agents } from '../../db/schema.js';
+import { enforceD1ParameterLimit, makeNodeStack, createWorkspace, registerAgent, type TestStack } from './harness.js';
 
 type Json = Record<string, any>;
 
@@ -137,6 +138,99 @@ describe('inbound policy', () => {
     const missing = await setPolicy(z.token, 'z', { mode: 'allowlist', allowed_agents: ['nobody'] });
     expect(probe.status).toBe(404);
     expect(probe.body.error.code).toBe(missing.body.error.code);
+  });
+
+  it('resolves and reads an allowlist larger than one D1 IN-list chunk', async () => {
+    const ws = await createWorkspace(stack.app, 'chunk-ws');
+    const owner = await registerAgent(stack.app, ws.workspaceKey, 'owner');
+    const names = Array.from({ length: 256 }, (_, i) => `peer-${i}`);
+    const db = stack.runtime.deps.db;
+    for (let i = 0; i < names.length; i += 40) {
+      await db.insert(agents).values(names.slice(i, i + 40).map((name, j) => ({
+        id: `ag_peer_${i + j}`,
+        workspaceId: ws.workspaceId,
+        name,
+        tokenHash: `tok_peer_${ws.workspaceId}_${i + j}`,
+      })));
+    }
+    const guard = enforceD1ParameterLimit(stack);
+    try {
+      // From open, the agent's own token resolves every name, reads every target
+      // policy, and returns every admitted name. 256 ids plus workspaceId is 257
+      // binds, over D1's cap, unless each lookup is chunked.
+      const set = await setPolicy(owner.token, 'owner', { mode: 'allowlist', allowed_agents: names });
+      expect(set.status).toBe(200);
+      const listed = new Set((set.body.data.allowed_agents as { name: string }[]).map((agent) => agent.name));
+      expect(listed.size).toBe(names.length);
+      expect(listed.has('peer-0')).toBe(true);
+      expect(listed.has('peer-89')).toBe(true);
+      expect(listed.has('peer-90')).toBe(true);
+      expect(listed.has('peer-255')).toBe(true);
+      const read = await call(owner.token, 'GET', '/v1/agents/owner/inbound-policy');
+      expect(read.status).toBe(200);
+      expect(read.body.data.allowed_agents).toHaveLength(names.length);
+      expect(guard.maxObserved()).toBeLessThanOrEqual(100);
+    } finally {
+      guard.restore();
+    }
+  });
+
+  it('does not let a later agent narrow put back a name an earlier narrow removed', async () => {
+    const { ws, x, y, z, owner } = await seed();
+    expect((await setPolicy(ws.workspaceKey, 'x', {
+      mode: 'allowlist',
+      allowed_agents: ['y', 'z'],
+      pinned_agents: ['owner'],
+    })).status).toBe(200);
+
+    const sqlite = stack.runtime.handle.sqlite;
+    const originalPrepare = sqlite.prepare.bind(sqlite);
+    let snapshot: unknown[] | undefined;
+    let serveStale = false;
+    const policyReads: string[] = [];
+    sqlite.prepare = ((source: string) => {
+      const stmt = originalPrepare(source);
+      const pointRead = /^\s*select\b/i.test(source)
+        && /agent_inbound_policies/i.test(source)
+        && !/\bin\s*\(/i.test(source);
+      if (!pointRead) return stmt;
+      const all = stmt.all.bind(stmt);
+      stmt.all = ((...args: unknown[]) => {
+        const rows = all(...args) as unknown[];
+        policyReads.push(source);
+        if (snapshot === undefined) snapshot = rows.map((row) => Array.isArray(row) ? [...row] : row);
+        if (serveStale && snapshot) {
+          serveStale = false;
+          return snapshot;
+        }
+        return rows;
+      }) as typeof stmt.all;
+      return stmt;
+    }) as typeof sqlite.prepare;
+
+    try {
+      const first = await setPolicy(x.token, 'x', { mode: 'allowlist', allowed_agents: ['y'] });
+      expect(first.status, policyReads.join('\n---\n')).toBe(200);
+      expect(snapshot, policyReads.join('\n---\n')).toBeDefined();
+      serveStale = true;
+      const second = await setPolicy(x.token, 'x', { mode: 'allowlist', allowed_agents: ['z'] });
+      expect(second.status).toBe(409);
+      expect(second.body.error.code).toBe('inbound_policy_conflict');
+    } finally {
+      sqlite.prepare = originalPrepare as typeof sqlite.prepare;
+    }
+
+    const read = await call(x.token, 'GET', '/v1/agents/x/inbound-policy');
+    expect(read.body.data.allowed_agents).toEqual([{ id: y.agentId, name: 'y' }]);
+    expect(read.body.data.pinned_agents).toEqual([{ id: owner.agentId, name: 'owner' }]);
+
+    const retried = await setPolicy(x.token, 'x', { mode: 'allowlist', allowed_agents: [] });
+    expect(retried.status).toBe(200);
+    expect(retried.body.data.allowed_agents).toEqual([]);
+
+    const replaced = await setPolicy(ws.workspaceKey, 'x', { mode: 'allowlist', allowed_agents: ['z'] });
+    expect(replaced.status).toBe(200);
+    expect(replaced.body.data.allowed_agents).toEqual([{ id: z.agentId, name: 'z' }]);
   });
 
   it('refuses posts once a member narrows after the group formed', async () => {

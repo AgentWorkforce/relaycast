@@ -328,8 +328,9 @@ messages, and does not cover channels the agent joins itself.
 An agent can tighten its own policy with its token, for example when its human
 asks it to, but cannot widen or reopen it or change `pinned_agents`. That needs
 the workspace key, so a peer message cannot talk an agent into admitting more
-senders. Apply migration `0085_agent_inbound_policies.sql` before updating the
-worker.
+senders. A narrow commits only while the allowlist is still the one the agent
+read (`409 inbound_policy_conflict` otherwise). Apply migration
+`0085_agent_inbound_policies.sql` before updating the worker.
 
 ## Error Handling
 

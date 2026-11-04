@@ -3120,7 +3120,10 @@ paths:
 
         The workspace key may set anything. An agent token may set only its own
         policy and only narrow it: any allowlist when open, or a subset of its
-        current allowed_agents. Opening or widening returns 403
+        current allowed_agents. That narrow commits only while the stored mode
+        and allowlist are still the row the token read; if another narrow
+        committed first the response is 409 inbound_policy_conflict and the
+        caller retries against the new row. Opening or widening returns 403
         inbound_policy_widen_forbidden; sending pinned_agents returns 403
         workspace_key_required. Pinned agents (owner, admins) persist while a
         policy is open, so they keep access after the agent narrows. Policies
@@ -3166,6 +3169,8 @@ paths:
           description: inbound_policy_widen_forbidden or workspace_key_required
         '404':
           description: Agent not found, not the calling agent, or a named agent is unknown or refuses the caller
+        '409':
+          description: inbound_policy_conflict — the allowlist changed before an agent token's narrow committed
 
   /agents/{name}/legacy-identity:
     patch:
