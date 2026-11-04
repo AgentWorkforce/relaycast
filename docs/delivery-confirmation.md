@@ -78,6 +78,19 @@ Carried on: `POST /v1/dm` → `delivery`, `POST /v1/channels/:name/messages` →
 
 ## Wire contract: `delivery.accepted` (broker / SDK → relaycast)
 
+**Capability gate — never parse versions.** A successful `node.register`
+reply lists the inbound frames the engine understands beyond the baseline in
+`data.capabilities` (`string[]`); this engine answers
+`"capabilities": ["delivery.accepted"]`. Send `delivery.accepted` only when
+the `node.register` reply lists the capability; an older engine omits the
+field (or the entry) and would answer the frame with
+`error { code: invalid_message }`. Later frame types get their own entry.
+Re-read it on every connection: a reconnect may land on a different engine.
+
+```json
+{"v":1,"type":"reply","id":"r1","ok":true,"data":{"provider":{"name":"default","instance_id":"…"},"accepted_capabilities":[],"capabilities":["delivery.accepted"],"…":"…"}}
+```
+
 Send it the moment the delivery is durably held by the receiving client
 (persisted, or at least queued in process for dispatch) and **before** any
 handler or model runs. Cumulative by `up_to_seq` like `delivery.ack`, or a
@@ -119,11 +132,14 @@ accepted one is sent).
 
 Neither SDK sends the frame yet; the engine treats them as legacy receivers
 (socket-write `delivered`, `accepted_at: null`, `wait_ms` runs out). To adopt:
-on receipt of a `deliver` frame, after storing it and before invoking the
-handler, write the first JSON above with the frame's `agent`, `delivery_id`
-and `seq` as `up_to_seq`; keep `delivery.ack` after the handler. The Relay
-Desktop probe can assert the order on the socket: `deliver` in,
-`delivery.accepted` out, handler, `delivery.ack` out.
+remember `data.capabilities` from the `node.register` reply; if it contains
+`"delivery.accepted"`, then on receipt of a `deliver` frame, after storing it
+and before invoking the handler, write the first JSON above with the frame's
+`agent`, `delivery_id` and `seq` as `up_to_seq`; keep `delivery.ack` after
+the handler. The Relay Desktop probe can assert the order on the socket:
+`node.register` reply lists the capability, `deliver` in,
+`delivery.accepted` out, handler, `delivery.ack` out — and no
+`delivery.accepted` at all when the reply does not list it.
 
 ## Bounded wait on send: `wait_ms`
 
@@ -147,6 +163,9 @@ short enough to sit inside a tool call.
   at once; the client falls back to the events or
   `GET /v1/messages/:id/deliveries`.
 - `wait_ms` is not part of the idempotency fingerprint.
+
+The TypeScript SDK gates its `delivery.accepted` on the reply's list
+(`autoAcceptDeliveries` stays the master switch).
 
 TypeScript: `agent.dm('bob', text, { waitMs: 1000 })`,
 `agent.send('#general', text, { waitMs: 1000 })`; read `delivery.state` /

@@ -5,6 +5,7 @@ import { describe, expect, expectTypeOf, it } from 'vitest';
 import {
   AgentRegisterReplyDataSchema,
   NodeRegisterReplyDataSchema,
+  NODE_CAPABILITIES,
   FleetBrokerToRelaycastMessageSchema,
   FleetRelaycastToBrokerMessageSchema,
   parseFleetBrokerToRelaycastMessage,
@@ -24,6 +25,10 @@ it('validates server registration contracts while accepting legacy node replies'
   for (const contract of ['invented', 1, null, { version: 1 }]) {
     expect(NodeRegisterReplyDataSchema.safeParse({ ...legacy, registration_contract: contract }).success).toBe(false);
   }
+  // Engine capabilities: optional for older engines, a string list when present.
+  expect(NodeRegisterReplyDataSchema.safeParse({ ...legacy, capabilities: ['delivery.accepted', 'future.frame'] }).success).toBe(true);
+  expect(NodeRegisterReplyDataSchema.safeParse({ ...legacy, capabilities: [1] }).success).toBe(false);
+  expect(NODE_CAPABILITIES).toEqual(['delivery.accepted']);
 });
 
 const BROKER_TO_RELAYCAST_TYPES = new Set([

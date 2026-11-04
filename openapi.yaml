@@ -94,7 +94,10 @@ info:
     and `expected_token_hash` enforcement on `POST /v1/agents/release`. It is
     independent of client-advertised capabilities. Missing/unknown values do not
     establish support; clients must validate the current connection and provider.
-    Lost registration replies are not safe to retry automatically.
+    Lost registration replies are not safe to retry automatically. The reply also
+    lists the inbound frames the engine understands beyond the baseline in
+    `capabilities: string[]` (currently `["delivery.accepted"]`); a node sends
+    such a frame only when the reply lists it, never by parsing versions.
 
     Node action capabilities negotiate authenticated caller provenance with
     capability metadata `{ "relay.action-caller": "v1" }`. Only an exact

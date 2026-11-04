@@ -18,6 +18,7 @@ import {
   FLEET_ACTION_CALLER_METADATA_KEY,
   FLEET_ACTION_CALLER_METADATA_VERSION,
   FLEET_DELIVERY_CURSOR_CAPABILITY,
+  NODE_CAPABILITIES,
   NODE_REGISTRATION_CONTRACT_V1,
   parseFleetBrokerToRelaycastMessage,
 } from '@relaycast/types';
@@ -3988,6 +3989,9 @@ export async function handleNodeControlMessage(args: HandleNodeControlMessageArg
             ...registered.node,
             provider: registered.provider,
             accepted_capabilities: acceptance,
+            // Inbound frames this engine understands beyond the baseline, so a
+            // node sends e.g. `delivery.accepted` without parsing versions.
+            capabilities: [...NODE_CAPABILITIES],
             // Only claim authenticated provider registration when this adapter
             // actually bound the connection. Echoed client capabilities are not
             // evidence of a server contract; legacy adapters omit the field.

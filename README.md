@@ -1122,6 +1122,10 @@ assignment, `auto_join_general: false`, and `expected_token_hash` enforcement on
 Clients must correlate the acknowledgement to this connection and its expected
 provider before admitting fresh identities. Registration is not idempotent: a
 lost reply still requires retained ownership or name quarantine, not a retry.
+The same reply lists the inbound frames the engine understands beyond the
+baseline in `capabilities: string[]` (currently `["delivery.accepted"]`), so a
+node never parses versions: send `delivery.accepted` only when the reply lists
+it; older engines omit the field.
 
 Broker nodes can negotiate restart-safe delivery cursor recovery by including
 `{ "name": "relay:delivery-cursor-v1", "kind": "capacity" }` in every

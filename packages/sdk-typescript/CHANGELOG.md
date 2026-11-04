@@ -11,7 +11,7 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Added
 
-- The node transport sends `delivery.accepted` (`agent`, `delivery_id`, `up_to_seq`) the moment a `deliver` frame is parsed, before any handler runs, and `delivery.ack` after dispatch as before (`WsClientOptions.autoAcceptDeliveries`, defaulting to `autoAckDeliveries`).
+- The node transport sends `delivery.accepted` (`agent`, `delivery_id`, `up_to_seq`) the moment a `deliver` frame is parsed, before any handler runs, and `delivery.ack` after dispatch as before — only when the engine's `node.register` reply listed the `delivery.accepted` capability (`WsClientOptions.autoAcceptDeliveries` stays the master switch, defaulting to `autoAckDeliveries`).
 - `agent.dm(...)`, `agent.sendTo(...)`, `agent.send(...)` / `post(...)` take `waitMs` (0–2000; 1000 recommended) and return the delivery `state` the server answered with; `send` / `post` now return `PostMessageResponse` (`MessageWithMeta` plus `deliveries`, `deliveriesTruncated`). Types `SendDmOptions`, `SendMessageOptions`, `DeliveryState`, `DeliveryRepliedEvent`; `SentDelivery` / `MessageDeliveryReceipt` carry the new fields.
 - `on.deliveryReplied` (agent and relay) for the sender-side `delivery.replied` event; `on.deliveryDelivered` events carry `accepted`.
 - `AgentClient.messageDeliveries(messageId)` and `relay.messages.deliveries(messageId)` call `GET /v1/messages/:id/deliveries`; `on.deliveryAcked` (agent and relay) handles the sender-side `delivery.acked` event. New types `DeliveryAckedEvent`, `SentDelivery`, `MessageDeliveryReceipt`, `MessageDeliveriesResponse`; `SendDmResponse.delivery`.

@@ -253,35 +253,70 @@ describe('AgentClient WebSocket integration', () => {
     }));
   });
 
+  /** The engine's reply to this socket's `node.register`, listing the frames it understands. */
+  async function replyToRegistration(ws: MockWebSocket, capabilities?: string[]): Promise<void> {
+    for (let i = 0; i < 10 && !ws.send.mock.calls.some(([p]) => JSON.parse(String(p)).type === 'node.register'); i += 1) {
+      await Promise.resolve();
+    }
+    const register = ws.send.mock.calls.map(([p]) => JSON.parse(String(p))).find((frame) => frame.type === 'node.register');
+    expect(register).toBeDefined();
+    ws.simulateMessage({
+      v: 1, id: register.id, type: 'reply', ok: true,
+      data: {
+        provider: { name: 'default', instance_id: 'i1' }, accepted_capabilities: [],
+        ...(capabilities ? { capabilities } : {}),
+      },
+    });
+  }
+
+  const deliverFrame = (seq: number) => ({
+    v: 1,
+    type: 'deliver',
+    delivery_id: `del_${seq}`,
+    agent_id: 'agent_1',
+    agent: 'worker',
+    msg_id: `m_${seq}`,
+    seq,
+    mode: 'wait',
+    payload: {
+      type: 'dm.received',
+      data: {
+        conversation_id: 'dm_1', id: `m_${seq}`, from_agent_id: 'bot_1', from_name: 'Bot', to: 'worker',
+        text: 'confirm me', created_at: '2026-09-24T05:00:00.000Z', attachments: [], metadata: {},
+        message: { id: `m_${seq}`, agent_id: 'bot_1', agent_name: 'Bot', text: 'confirm me', attachments: [], metadata: {} },
+      },
+    },
+  });
+
+  it('sends no delivery.accepted when the engine did not list the capability, but still acks', async () => {
+    const agent = createAgent();
+    agent.connect();
+    const ws = await nextSocket();
+    ws.simulateOpen();
+    await replyToRegistration(ws);
+
+    ws.simulateMessage(deliverFrame(3));
+
+    const sent = ws.send.mock.calls.map(([payload]) => JSON.parse(String(payload)));
+    expect(sent.filter((frame) => frame.type === 'delivery.accepted')).toEqual([]);
+    expect(sent.filter((frame) => frame.type === 'delivery.ack')).toEqual([
+      { v: 1, type: 'delivery.ack', agent: 'worker', up_to_seq: 3 },
+    ]);
+  });
+
   it('accepts a deliver frame before any handler runs, and acks after dispatch', async () => {
     const agent = createAgent();
     agent.connect();
     const ws = await nextSocket();
     ws.simulateOpen();
+    await replyToRegistration(ws, ['delivery.accepted']);
 
     const framesWhenHandled: string[] = [];
     agent.on.dmReceived(() => {
       framesWhenHandled.push(...ws.send.mock.calls.map(([payload]) => JSON.parse(String(payload)).type as string));
     });
 
-    ws.simulateMessage({
-      v: 1,
-      type: 'deliver',
-      delivery_id: 'del_7',
-      agent_id: 'agent_1',
-      agent: 'worker',
-      msg_id: 'm_7',
-      seq: 7,
-      mode: 'wait',
-      payload: {
-        type: 'dm.received',
-        data: {
-          conversation_id: 'dm_1', id: 'm_7', from_agent_id: 'bot_1', from_name: 'Bot', to: 'worker',
-          text: 'confirm me', created_at: '2026-09-24T05:00:00.000Z', attachments: [], metadata: {},
-          message: { id: 'm_7', agent_id: 'bot_1', agent_name: 'Bot', text: 'confirm me', attachments: [], metadata: {} },
-        },
-      },
-    });
+    ws.simulateMessage(deliverFrame(7));
 
     // The acceptance was already on the wire when the handler ran; the ack was not.
     expect(framesWhenHandled).toContain('delivery.accepted');

@@ -32,7 +32,10 @@ describe('authenticated node registration contract', () => {
     await register();
     expect(socket.ofType('reply').find(frame => frame.id === 'node-request')).toMatchObject({
       data: { provider: { name: 'broker', instance_id: 'contract-instance' },
-        registration_contract: 'relay:node-registration-v1' },
+        registration_contract: 'relay:node-registration-v1',
+        // Inbound frames this engine understands beyond the baseline; a node
+        // sends `delivery.accepted` only when this lists it.
+        capabilities: ['delivery.accepted'] },
     });
     await send({ id: 'create-request', type: 'agent.register', name: 'contract-worker', auto_join_general: false });
     const reply = socket.ofType('reply').find(frame => frame.id === 'create-request') as

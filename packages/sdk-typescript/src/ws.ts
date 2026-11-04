@@ -30,8 +30,10 @@ export interface WsClientOptions {
   autoAckDeliveries?: boolean;
   /**
    * Send `delivery.accepted` the moment a `deliver` frame is parsed, before
-   * any handler runs: the receipt the sender's `wait_ms` waits for. Defaults
-   * to `autoAckDeliveries`.
+   * any handler runs: the receipt the sender's `wait_ms` waits for. Sent only
+   * when the engine's `node.register` reply lists the `delivery.accepted`
+   * capability, so an older engine never sees a frame it would reject.
+   * Defaults to `autoAckDeliveries`.
    */
   autoAcceptDeliveries?: boolean;
   maxReconnectAttempts?: number;
@@ -109,6 +111,10 @@ export class WsClient {
   private autoAcceptDeliveries: boolean;
   private nodeMode: boolean;
   private lastNodeRegistration: Record<string, unknown> | null = null;
+  /** The in-flight `node.register` request id, until its reply names the engine's capabilities. */
+  private pendingRegistrationId: string | null = null;
+  /** Inbound frame types the engine announced in its `node.register` reply (this connection). */
+  private engineCapabilities = new Set<string>();
   private ws: WebSocket | null = null;
   private connecting = false;
   private handlers: Map<string, Set<EventHandler>> = new Map();
@@ -334,6 +340,10 @@ export class WsClient {
       const registration = await this.nodeRegistration();
       if (this.ws !== ws || this.closed) return;
       this.lastNodeRegistration = registration;
+      // A new connection may reach a different engine: forget what the last
+      // one announced until this registration's reply says.
+      this.engineCapabilities = new Set();
+      this.pendingRegistrationId = typeof registration.id === 'string' ? registration.id : null;
       this.sendJson(registration);
     }
 
@@ -447,7 +457,7 @@ export class WsClient {
       // The frame is held in this process now: tell the sender before any
       // handler (or the model behind it) runs. `delivery.ack` below stays the
       // consumed signal, sent once handlers were dispatched.
-      if (this.autoAcceptDeliveries && addressed) {
+      if (this.autoAcceptDeliveries && addressed && this.engineCapabilities.has('delivery.accepted')) {
         this.sendJson({
           v: 1,
           type: 'delivery.accepted',
@@ -490,6 +500,16 @@ export class WsClient {
         input: isRecord(parsed.input) ? parsed.input : {},
       });
       return true;
+    }
+
+    if (this.pendingRegistrationId !== null && parsed.id === this.pendingRegistrationId) {
+      this.pendingRegistrationId = null;
+      const capabilities = parsed.type === 'reply' && parsed.ok === true && isRecord(parsed.data)
+        ? parsed.data.capabilities
+        : undefined;
+      this.engineCapabilities = new Set(
+        Array.isArray(capabilities) ? capabilities.filter((value): value is string => typeof value === 'string') : [],
+      );
     }
 
     const pending = this.pendingPresence;

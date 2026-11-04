@@ -459,11 +459,22 @@ export type AgentRegisterReplyData = z.infer<typeof AgentRegisterReplyDataSchema
  */
 export const NODE_REGISTRATION_CONTRACT_V1 = 'relay:node-registration-v1' as const;
 
+/**
+ * Inbound frames the engine understands beyond the v5 baseline, announced in
+ * the `node.register` reply so a node never parses versions: send a listed
+ * frame only when the reply lists it. Older engines omit the field.
+ */
+export const NODE_CAPABILITY_DELIVERY_ACCEPTED = 'delivery.accepted' as const;
+export const NODE_CAPABILITIES = [NODE_CAPABILITY_DELIVERY_ACCEPTED] as const;
+export type NodeCapability = (typeof NODE_CAPABILITIES)[number];
+
 export const NodeRegisterReplyDataSchema = z
   .object({
     provider: FleetProviderIdentitySchema,
     accepted_capabilities: z.array(FleetCapabilityAcceptanceSchema),
     registration_contract: z.literal(NODE_REGISTRATION_CONTRACT_V1).optional(),
+    /** Engine-supported inbound frame types (see `NODE_CAPABILITIES`); unknown entries are ignored. */
+    capabilities: z.array(z.string()).optional(),
   })
   .passthrough();
 export type NodeRegisterReplyData = z.infer<typeof NodeRegisterReplyDataSchema>;
