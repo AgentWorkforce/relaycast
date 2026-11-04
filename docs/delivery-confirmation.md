@@ -110,16 +110,18 @@ it sends the acceptance only behind the `acceptDelivery` persist hook; an
 in-memory handler client reports `queued` → `consumed`, never `delivered`.
 
 **Capability gate — never parse versions.** A successful `node.register`
-reply lists the inbound frames the engine understands beyond the baseline in
-`data.capabilities` (`string[]`); this engine answers
-`"capabilities": ["delivery.accepted"]`. Send `delivery.accepted` only when
-the `node.register` reply lists the capability; an older engine omits the
-field (or the entry) and would answer the frame with
-`error { code: invalid_message }`. Later frame types get their own entry.
-Re-read it on every connection: a reconnect may land on a different engine.
+reply lists the inbound frames (and frame forms) the engine understands
+beyond the baseline in `data.capabilities` (`string[]`); this engine answers
+`"capabilities": ["delivery.accepted", "delivery.ack.delivery_id"]`. Send
+`delivery.accepted` only when the reply lists it, and `delivery.ack` with a
+`delivery_id` only when the reply lists `delivery.ack.delivery_id`; an older
+engine omits the field (or the entry) and would answer either frame with
+`error { code: invalid_message }` (its `delivery.ack` is strict and requires
+`up_to_seq`). Later frame types get their own entry. Re-read it on every
+connection: a reconnect may land on a different engine.
 
 ```json
-{"v":1,"type":"reply","id":"r1","ok":true,"data":{"provider":{"name":"default","instance_id":"…"},"accepted_capabilities":[],"capabilities":["delivery.accepted"],"…":"…"}}
+{"v":1,"type":"reply","id":"r1","ok":true,"data":{"provider":{"name":"default","instance_id":"…"},"accepted_capabilities":[],"capabilities":["delivery.accepted","delivery.ack.delivery_id"],"…":"…"}}
 ```
 
 Send it only once the delivery is held as defined above (a durable inbox,
@@ -175,7 +177,12 @@ and consumed, or the connection resets (a new connection replays from the
 server's cursor and starts fresh watermarks; a delivery still being handled
 when the socket dropped sends no confirmation at all on the new connection,
 since the server replays it there and the stale frame's success could
-otherwise anchor the fresh watermark above an unconsumed lower seq).
+otherwise anchor the fresh watermark above an unconsumed lower seq). Against
+an engine whose `node.register` reply did not list `delivery.ack.delivery_id`
+the client withholds the named ack (the older strict schema rejects it) and
+keeps the success in its watermark: N+1 is reported by `up_to_seq` once N is
+re-delivered and consumed, or replayed on the next connection and deduped
+there (its handlers do not run again). It never acks across the gap.
 
 TS SDK behaviour (`ws.ts`): with `autoAckDeliveries`, `delivery.ack` is sent
 only after every handler for the delivery returned and every promise it

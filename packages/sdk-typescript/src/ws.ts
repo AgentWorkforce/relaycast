@@ -33,7 +33,11 @@ export interface WsClientOptions {
    * handler that throws or rejects leaves the delivery unacked, so the server
    * re-delivers it on reconnect. Acks use a contiguous watermark: cumulative
    * `up_to_seq` only while every lower seq on this connection was consumed,
-   * else the per-delivery `delivery_id` form.
+   * else the per-delivery `delivery_id` form, which is sent only when the
+   * engine's `node.register` reply listed the `delivery.ack.delivery_id`
+   * capability (an older engine rejects it); without it a success behind a
+   * failed delivery stays unacked until the gap closes or the connection
+   * resets, and is replayed, not re-handled.
    */
   autoAckDeliveries?: boolean;
   /**
@@ -780,9 +784,14 @@ export class WsClient {
    * Report one success on the wire: cumulative `up_to_seq` while this
    * connection's successes for the agent are contiguous, else the
    * per-delivery `delivery_id` form (the engine applies a named row on its
-   * own). A success from a previous connection is dropped: that connection's
-   * unacked rows are replayed on this one, and confirming a stale row here
-   * (even by `delivery_id`) could race this connection's own dispatch of it.
+   * own). The named form goes out only when the engine listed the capability
+   * for it (`delivery.ack.delivery_id`; `delivery.accepted` is gated as a
+   * whole): an older engine rejects the frame, so the success is kept in the
+   * watermark and reported cumulatively once the gap closes, else the row is
+   * replayed on the next connection and deduped there. A success from a
+   * previous connection is dropped: that connection's unacked rows are
+   * replayed on this one, and confirming a stale row here (even by
+   * `delivery_id`) could race this connection's own dispatch of it.
    */
   private sendConfirmation(
     type: 'delivery.accepted' | 'delivery.ack',
@@ -799,7 +808,11 @@ export class WsClient {
     const upTo = this.watermarkFor(watermarks, agent).record(seq);
     if (upTo !== null) {
       this.sendJson({ v: 1, type, agent, up_to_seq: upTo });
-    } else if (deliveryId !== null) {
+    } else if (deliveryId === null) {
+      return;
+    } else if (type === 'delivery.ack' && !this.engineCapabilities.has('delivery.ack.delivery_id')) {
+      this.warn('delivery.ack by delivery_id withheld: the engine did not list the capability; the row stays unacked until the gap below it closes or it is replayed', { deliveryId, seq });
+    } else {
       this.sendJson({ v: 1, type, agent, delivery_id: deliveryId });
     }
   }
@@ -936,6 +949,7 @@ export class WsClient {
             text: message.text ?? data.text,
             ...((message.injection_mode ?? data.injection_mode) ? { injection_mode: message.injection_mode ?? data.injection_mode } : {}),
             ...(attachments.length ? { attachments } : {}),
+            ...(typeof message.reply_to_message_id === 'string' ? { reply_to_message_id: message.reply_to_message_id } : {}),
           },
         };
       }

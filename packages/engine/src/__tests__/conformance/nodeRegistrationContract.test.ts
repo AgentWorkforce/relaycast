@@ -34,8 +34,9 @@ describe('authenticated node registration contract', () => {
       data: { provider: { name: 'broker', instance_id: 'contract-instance' },
         registration_contract: 'relay:node-registration-v1',
         // Inbound frames this engine understands beyond the baseline; a node
-        // sends `delivery.accepted` only when this lists it.
-        capabilities: ['delivery.accepted'] },
+        // sends `delivery.accepted`, or a `delivery.ack` naming a `delivery_id`,
+        // only when this lists it.
+        capabilities: ['delivery.accepted', 'delivery.ack.delivery_id'] },
     });
     await send({ id: 'create-request', type: 'agent.register', name: 'contract-worker', auto_join_general: false });
     const reply = socket.ofType('reply').find(frame => frame.id === 'create-request') as

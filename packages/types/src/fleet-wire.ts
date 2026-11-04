@@ -474,12 +474,19 @@ export type AgentRegisterReplyData = z.infer<typeof AgentRegisterReplyDataSchema
 export const NODE_REGISTRATION_CONTRACT_V1 = 'relay:node-registration-v1' as const;
 
 /**
- * Inbound frames the engine understands beyond the v5 baseline, announced in
- * the `node.register` reply so a node never parses versions: send a listed
- * frame only when the reply lists it. Older engines omit the field.
+ * Inbound frames (and frame forms) the engine understands beyond the v5
+ * baseline, announced in the `node.register` reply so a node never parses
+ * versions: send a listed frame only when the reply lists it. Older engines
+ * omit the field.
  */
 export const NODE_CAPABILITY_DELIVERY_ACCEPTED = 'delivery.accepted' as const;
-export const NODE_CAPABILITIES = [NODE_CAPABILITY_DELIVERY_ACCEPTED] as const;
+/**
+ * `delivery.ack { agent, delivery_id }`: one row consumed on its own, cursor
+ * untouched. Older engines accept only the cumulative `{ agent, up_to_seq }`
+ * form and reject the frame outright.
+ */
+export const NODE_CAPABILITY_DELIVERY_ACK_BY_ID = 'delivery.ack.delivery_id' as const;
+export const NODE_CAPABILITIES = [NODE_CAPABILITY_DELIVERY_ACCEPTED, NODE_CAPABILITY_DELIVERY_ACK_BY_ID] as const;
 export type NodeCapability = (typeof NODE_CAPABILITIES)[number];
 
 export const NodeRegisterReplyDataSchema = z

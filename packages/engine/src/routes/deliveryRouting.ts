@@ -368,7 +368,12 @@ async function dispatchHttpPush(args: {
 
 /**
  * Result of routing a single delivery row.
- * - `delivered`: the row was sent and this call moved it `queued` -> `delivered`.
+ * - `delivered`: the row was sent and this call moved it `queued` -> `delivered`
+ *   (a ws socket write: `accepted_at` stays unset).
+ * - `accepted`: an `http_push` receiver answered 2xx without an ack signal
+ *   (`manual` ack mode), so this call moved the row `queued` -> `delivered`
+ *   and stamped `accepted_at`: the receiving software's own answer, the
+ *   sender's authoritative `delivered` (`accepted: true`).
  * - `resent`: the row was sent but had already left `queued` (a concurrent
  *   replay or ack settled it first), so there is no new transition to report
  *   to the sender. An ordered ws redrive keeps draining past it.
@@ -382,7 +387,7 @@ async function dispatchHttpPush(args: {
  *   agent's backlog here so a later seq never outruns this one.
  * - `noop`: no realtime target remained (legacy/unbound row); nothing to do.
  */
-type DeliveryDispatchOutcome = 'delivered' | 'resent' | 'acked' | 'deferred' | 'noop';
+type DeliveryDispatchOutcome = 'delivered' | 'accepted' | 'resent' | 'acked' | 'deferred' | 'noop';
 
 /**
  * Tell senders about the rows a routing pass transitioned, one read per
@@ -392,16 +397,26 @@ async function notifySendersForOutcomes(
   ctx: RoutingContext,
   outcomes: ReadonlyArray<{ deliveryId: string; outcome: DeliveryDispatchOutcome }>,
 ): Promise<void> {
-  const byStatus: Record<Extract<SenderDeliveryReceiptStatus, 'delivered' | 'acked'>, string[]> = { delivered: [], acked: [] };
-  for (const { deliveryId, outcome } of outcomes) {
-    if (outcome === 'delivered' || outcome === 'acked') byStatus[outcome].push(deliveryId);
-  }
-  for (const status of ['delivered', 'acked'] as const) {
-    if (byStatus[status].length === 0) continue;
+  // A ws `delivered` is a socket write (`accepted: false`, and dropped if the
+  // row was accepted or acked meanwhile); an `http_push` 2xx stamped
+  // `accepted_at` in the same transition and is reported as `accepted: true`.
+  const batches: Array<{ outcome: DeliveryDispatchOutcome; status: SenderDeliveryReceiptStatus; accepted?: boolean }> = [
+    { outcome: 'delivered', status: 'delivered' },
+    { outcome: 'accepted', status: 'delivered', accepted: true },
+    { outcome: 'acked', status: 'acked' },
+  ];
+  for (const batch of batches) {
+    const ids = outcomes.filter((entry) => entry.outcome === batch.outcome).map((entry) => entry.deliveryId);
+    if (ids.length === 0) continue;
+    const status = batch.status;
     try {
-      // An http_push `delivered` stamped `accepted_at`; a ws `delivered` did
-      // not. The batch read tells them apart, so `accepted` is left unset.
-      await notifySenderDeliveryReceipts({ db: ctx.db, engine: ctx.engine }, ctx.workspaceId, byStatus[status], status);
+      await notifySenderDeliveryReceipts(
+        { db: ctx.db, engine: ctx.engine },
+        ctx.workspaceId,
+        ids,
+        status,
+        batch.accepted ? { accepted: true } : {},
+      );
     } catch (err) {
       console.warn(`[delivery.route] sender delivery.${status} notify failed`, {
         workspace_id: ctx.workspaceId,
@@ -485,9 +500,10 @@ async function routeOneDeliveryOutcome(
     const result = await dispatchHttpPush({ ctx, delivery, target, eventType, eventData });
     if (result === 'delivered') {
       // A 2xx is the receiving software's own answer, not a socket write: it
-      // counts as acceptance (`accepted_at`), so a parked send is answered.
+      // counts as acceptance (`accepted_at`), so a parked send is answered
+      // and the sender hears `delivered` with `accepted: true`.
       const transitioned = await deliveryEngine.markDeliveriesDelivered(ctx.db, ctx.workspaceId, [delivery.id], { accepted: true });
-      return transitioned.length > 0 ? 'delivered' : 'resent';
+      return transitioned.length > 0 ? 'accepted' : 'resent';
     }
     if (result === 'acked' || result === 'resent') return result;
     return 'deferred';
@@ -615,7 +631,7 @@ async function redriveWsBacklogForAgent(
         event.eventData,
       );
       outcomes.push({ deliveryId: event.delivery.id, outcome });
-      if (outcome !== 'delivered' && outcome !== 'resent') break;
+      if (outcome !== 'delivered' && outcome !== 'accepted' && outcome !== 'resent') break;
     }
   } finally {
     await notifySendersForOutcomes(ctx, outcomes);

@@ -405,7 +405,7 @@ describe('AgentClient WebSocket integration', () => {
     agent.connect();
     const ws = await nextSocket();
     ws.simulateOpen();
-    await replyToRegistration(ws, ['delivery.accepted']);
+    await replyToRegistration(ws, ['delivery.accepted', 'delivery.ack.delivery_id']);
 
     ws.simulateMessage(deliverFrame(8));
     ws.simulateMessage(deliverFrame(9));
@@ -448,7 +448,7 @@ describe('AgentClient WebSocket integration', () => {
     agent.connect();
     const ws = await nextSocket();
     ws.simulateOpen();
-    await replyToRegistration(ws);
+    await replyToRegistration(ws, ['delivery.ack.delivery_id']);
 
     ws.simulateMessage(deliverFrame(1));
     await settleDeliveries();
@@ -469,6 +469,39 @@ describe('AgentClient WebSocket integration', () => {
     ]);
   });
 
+  it('withholds the per-delivery ack from an engine that did not list the capability, and reports the row cumulatively once the gap closes', async () => {
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    const calls: string[] = [];
+    const agent = createAgent();
+    agent.on.dmReceived(async (event) => {
+      calls.push(event.message.id);
+      if (event.message.id === 'm_2' && calls.filter((id) => id === 'm_2').length === 1) throw new Error('model crashed');
+    });
+    agent.connect();
+    const ws = await nextSocket();
+    ws.simulateOpen();
+    // An older engine: `delivery.ack` must carry `up_to_seq`; a `delivery_id` frame is rejected.
+    await replyToRegistration(ws, ['delivery.accepted']);
+
+    ws.simulateMessage(deliverFrame(1));
+    ws.simulateMessage(deliverFrame(2));
+    ws.simulateMessage(deliverFrame(3));
+    await settleDeliveries();
+    // 3 succeeded behind the gap at 2, but the named form would be rejected, so nothing is sent for it.
+    expect(sentFrames(ws, 'delivery.ack')).toEqual([ack('worker', { up_to_seq: 1 })]);
+    expect(warnSpy).toHaveBeenCalledWith(
+      expect.stringContaining('delivery.ack by delivery_id withheld'),
+      expect.objectContaining({ deliveryId: 'del_3', seq: 3 }),
+    );
+
+    // The server re-delivers 2; once it is consumed the watermark covers 3 too.
+    ws.simulateMessage(deliverFrame(2));
+    await settleDeliveries();
+    expect(calls).toEqual(['m_1', 'm_2', 'm_3', 'm_2']);
+    expect(sentFrames(ws, 'delivery.ack')).toEqual([ack('worker', { up_to_seq: 1 }), ack('worker', { up_to_seq: 3 })]);
+    warnSpy.mockRestore();
+  });
+
   it('keeps processing later deliveries when a handler throws synchronously, without acking the failed one', async () => {
     const seen: string[] = [];
     const agent = createAgent();
@@ -479,7 +512,7 @@ describe('AgentClient WebSocket integration', () => {
     agent.connect();
     const ws = await nextSocket();
     ws.simulateOpen();
-    await replyToRegistration(ws);
+    await replyToRegistration(ws, ['delivery.ack.delivery_id']);
 
     ws.simulateMessage(deliverFrame(1));
     ws.simulateMessage(deliverFrame(2));
@@ -572,7 +605,7 @@ describe('AgentClient WebSocket integration', () => {
     agent.connect();
     const ws = await nextSocket();
     ws.simulateOpen();
-    await replyToRegistration(ws);
+    await replyToRegistration(ws, ['delivery.ack.delivery_id']);
 
     ws.simulateMessage(deliverFrame(6));
     await settleDeliveries();
@@ -731,7 +764,7 @@ describe('AgentClient WebSocket integration', () => {
     agent.connect();
     const ws = await nextSocket();
     ws.simulateOpen();
-    await replyToRegistration(ws);
+    await replyToRegistration(ws, ['delivery.ack.delivery_id']);
 
     ws.simulateMessage(deliverFrameFor('alice', 1, 'a1'));
     ws.simulateMessage(deliverFrameFor('bob', 1, 'b1'));
@@ -882,7 +915,7 @@ describe('AgentClient WebSocket integration', () => {
     agent.connect();
     const ws = await nextSocket();
     ws.simulateOpen();
-    await replyToRegistration(ws);
+    await replyToRegistration(ws, ['delivery.ack.delivery_id']);
 
     ws.simulateMessage(deliverFrameFor('alice', 1, 'a1', 'm_shared'));
     await settleDeliveries();
@@ -1000,14 +1033,19 @@ describe('AgentClient WebSocket integration', () => {
         type: 'dm.received',
         data: {
           conversation_id: 'conv_1',
-          message: { id: 'dm_1', agent_name: 'Alice', text: 'hello' },
+          message: { id: 'dm_1', agent_name: 'Alice', text: 'hello', reply_to_message_id: 'dm_0' },
         },
       },
     });
 
     expect(handler).toHaveBeenCalledTimes(1);
     expect(handler).toHaveBeenCalledWith(
-      expect.objectContaining({ type: 'dm.received', conversationId: 'conv_1' }),
+      expect.objectContaining({
+        type: 'dm.received',
+        conversationId: 'conv_1',
+        // The message this DM explicitly answers reaches the handler, as it does REST history.
+        message: expect.objectContaining({ id: 'dm_1', text: 'hello', replyToMessageId: 'dm_0' }),
+      }),
     );
   });
 

@@ -28,7 +28,7 @@ it('validates server registration contracts while accepting legacy node replies'
   // Engine capabilities: optional for older engines, a string list when present.
   expect(NodeRegisterReplyDataSchema.safeParse({ ...legacy, capabilities: ['delivery.accepted', 'future.frame'] }).success).toBe(true);
   expect(NodeRegisterReplyDataSchema.safeParse({ ...legacy, capabilities: [1] }).success).toBe(false);
-  expect(NODE_CAPABILITIES).toEqual(['delivery.accepted']);
+  expect(NODE_CAPABILITIES).toEqual(['delivery.accepted', 'delivery.ack.delivery_id']);
 });
 
 const BROKER_TO_RELAYCAST_TYPES = new Set([
