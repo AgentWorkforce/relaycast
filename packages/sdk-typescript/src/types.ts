@@ -391,9 +391,11 @@ export interface CreateNodeOptions {
    */
   currentToken?: string;
   /**
-   * CSPRNG-generated operation key (at least 32 characters). Reuse it with the
-   * same current token and request body to recover the replacement token after
-   * a lost response.
+   * CSPRNG-generated operation key (at least 32 characters). With
+   * `currentToken`, reuse it with the same token and request body to recover
+   * the replacement token after a lost response. Without `currentToken`, it
+   * makes a first enrollment recoverable: persist it before the first call and
+   * reuse it with the same request to get the original token back for 24 hours.
    */
   idempotencyKey?: string;
 }
