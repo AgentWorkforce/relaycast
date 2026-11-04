@@ -1325,7 +1325,12 @@ export const deliveries = sqliteTable(
     lastDispatchError: text('last_dispatch_error'),
     expiresAt: integer('expires_at', { mode: 'timestamp' }),
     deliveredAt: integer('delivered_at', { mode: 'timestamp' }),
+    // The receiving software's acceptance (`delivery.accepted` / http_push 2xx).
+    acceptedAt: integer('accepted_at', { mode: 'timestamp' }),
     ackedAt: integer('acked_at', { mode: 'timestamp' }),
+    // The recipient's DM reply in the same conversation (DMs only).
+    repliedAt: integer('replied_at', { mode: 'timestamp' }),
+    replyMessageId: text('reply_message_id'),
     deadLetteredAt: integer('dead_lettered_at', { mode: 'timestamp' }),
     retryable: integer('retryable', { mode: 'boolean' }),
     availableAt: integer('available_at', { mode: 'timestamp' }),

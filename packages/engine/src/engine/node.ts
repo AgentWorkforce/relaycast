@@ -67,7 +67,7 @@ import {
 } from './action.js';
 import { emitInvocationCompletionEffects, emitAgentExitedEffects, emitNodeStatusEffects, fleetInvocationId } from './invocationCompletion.js';
 import type { InvocationCompletionDeps, NodeOfflineReason } from './invocationCompletion.js';
-import { ackDeliveriesUpToSeq, deliverPendingToNode, type DeliveryReplayDeps } from './delivery.js';
+import { acceptDeliveries, ackDeliveriesUpToSeq, deliverPendingToNode, type DeliveryReplayDeps } from './delivery.js';
 import { notifySenderDeliveryReceipts } from './deliveryReceipts.js';
 import { issueCredential } from '../auth/credentials.js';
 
@@ -3819,12 +3819,13 @@ function sendControl(socket: NodeSocketLike | undefined, payload: Record<string,
  */
 /** Control frames still admitted after the workspace expires (see the gate below). */
 /** Frames that only settle work already dispatched to the socket; a superseded socket may still finish those. */
-const IN_FLIGHT_SETTLING_FRAMES: ReadonlySet<string> = new Set(['action.accept', 'action.result', 'delivery.ack']);
+const IN_FLIGHT_SETTLING_FRAMES: ReadonlySet<string> = new Set(['action.accept', 'action.result', 'delivery.ack', 'delivery.accepted']);
 
 const SETTLING_CONTROL_FRAMES: ReadonlySet<string> = new Set([
   'action.accept',
   'action.result',
   'delivery.ack',
+  'delivery.accepted',
   'node.deregister',
   'agent.deregister',
 ]);
@@ -4338,6 +4339,35 @@ export async function handleNodeControlMessage(args: HandleNodeControlMessageArg
         );
         if (completed && args.completionDeps) {
           await emitInvocationCompletionEffects(args.completionDeps, args.workspaceId, completed);
+        }
+        return;
+      }
+      case 'delivery.accepted': {
+        // The receiving software durably holds the rows: the authoritative
+        // `delivered`. Senders learn it with `accepted: true`; a send parked on
+        // one of these rows (`wait_ms`) is answered. Best-effort after commit.
+        const accepted = await acceptDeliveries(
+          args.db,
+          args.workspaceId,
+          args.nodeId,
+          frameProviderName,
+          message.agent,
+          { upToSeq: message.up_to_seq, deliveryId: message.delivery_id },
+        );
+        if (accepted && accepted.accepted_delivery_ids.length > 0 && args.completionDeps) {
+          await notifySenderDeliveryReceipts(
+            { db: args.db, engine: args.completionDeps },
+            args.workspaceId,
+            accepted.accepted_delivery_ids,
+            'delivered',
+            { accepted: true },
+          ).catch((err: unknown) => {
+            console.warn('[node.control] sender delivery.delivered (accepted) notify failed', {
+              workspaceId: args.workspaceId,
+              nodeId: args.nodeId,
+              message: err instanceof Error ? err.message : String(err),
+            });
+          });
         }
         return;
       }

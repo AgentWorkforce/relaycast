@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { SentDeliverySchema } from './delivery.js';
 import { FileAttachmentSchema } from './file.js';
 import { ReactionGroupSchema } from './reaction.js';
 import { AgentTypeSchema } from './agent.js';
@@ -114,8 +115,19 @@ export const PostMessageRequestSchema = z.object({
   data: z.record(z.string(), z.unknown()).nullable().optional(),
   content_type: z.string().optional(),
   mode: MessageInjectionModeSchema.default('wait'),
+  /** Confirmation budget in ms (0–2000; 1000 recommended): the response parks for the recipients' acceptance. */
+  wait_ms: z.number().int().min(0).max(2000).optional(),
 });
 export type PostMessageRequest = z.infer<typeof PostMessageRequestSchema>;
+
+/** `POST /v1/channels/:name/messages`: the message plus the sender's delivery handles. */
+export const PostMessageResponseSchema = MessageWithMetaSchema.extend({
+  /** The per-recipient delivery rows this post created (the sender excluded), at most 50. */
+  deliveries: z.array(SentDeliverySchema),
+  /** True when more than 50 rows were created and `deliveries` holds only the first 50. */
+  deliveries_truncated: z.boolean(),
+});
+export type PostMessageResponse = z.infer<typeof PostMessageResponseSchema>;
 
 export const MessageListQuerySchema = z.object({
   limit: z.number().optional(),

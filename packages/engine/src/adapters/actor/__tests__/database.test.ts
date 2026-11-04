@@ -125,9 +125,12 @@ describe('bundled actor migrations', () => {
     const fake = new FakeActorDatabase();
     const { applied } = applyActorMigrations(fake);
     expect(actorMigrationsCurrent(fake)).toBe(true);
-    // A database that recorded the two superseded files and lacks the newest
-    // one has more rows than the plan needs, and is not current.
-    const newest = applied[applied.length - 1];
+    // A database that recorded the two superseded files and lacks one of
+    // the newest has more rows than the plan needs, and is not current. The
+    // missing file must be re-applicable: an index with IF NOT EXISTS, not an
+    // ALTER TABLE ADD COLUMN, which SQLite refuses to replay.
+    const newest = '0080_nodes_context_reachable_index.sql';
+    expect(applied).toContain(newest);
     fake.exec(`DELETE FROM ${ACTOR_MIGRATIONS_TABLE} WHERE name = ?`, newest);
     for (const superseded of ['0048_bounded_maintenance.sql', '0049_redrive_review_hardening.sql']) {
       fake.exec(`INSERT OR IGNORE INTO ${ACTOR_MIGRATIONS_TABLE} (name, applied_at) VALUES (?, 0)`, superseded);

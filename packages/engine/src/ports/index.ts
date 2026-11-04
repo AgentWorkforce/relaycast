@@ -1,7 +1,13 @@
 export type { NodeLivenessAuthority, NodeLivenessSnapshot } from './nodeLiveness.js';
 import type { NodeLivenessAuthority } from './nodeLiveness.js';
-export type { DeliveryWaiters, DeliveryWaitArgs } from './deliveryWaiters.js';
-export { InProcessDeliveryWaiters, MAX_DELIVERY_WAIT_MS, DELIVERY_NOTIFY_MEMORY_MS } from './deliveryWaiters.js';
+export type { DeliveryWaiters, DeliveryWaitArgs, DeliveryStateWaitArgs } from './deliveryWaiters.js';
+export {
+  InProcessDeliveryWaiters,
+  MAX_DELIVERY_WAIT_MS,
+  MAX_SEND_WAIT_MS,
+  RECOMMENDED_SEND_WAIT_MS,
+  DELIVERY_NOTIFY_MEMORY_MS,
+} from './deliveryWaiters.js';
 import type { DeliveryWaiters } from './deliveryWaiters.js';
 /**
  * The complete dependency contract for the Relaycast engine.

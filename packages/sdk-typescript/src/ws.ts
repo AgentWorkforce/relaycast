@@ -26,7 +26,14 @@ export interface WsClientOptions {
   baseUrl?: string;
   path?: string;
   nodeRegistration?: () => Record<string, unknown> | Promise<Record<string, unknown>>;
+  /** Send `delivery.ack` (consumed) after each `deliver` frame is dispatched to handlers. */
   autoAckDeliveries?: boolean;
+  /**
+   * Send `delivery.accepted` the moment a `deliver` frame is parsed, before
+   * any handler runs: the receipt the sender's `wait_ms` waits for. Defaults
+   * to `autoAckDeliveries`.
+   */
+  autoAcceptDeliveries?: boolean;
   maxReconnectAttempts?: number;
   reconnectJitter?: boolean;
   reconnectBaseDelayMs?: number;
@@ -99,6 +106,7 @@ export class WsClient {
   private path: string;
   private nodeRegistration?: () => Record<string, unknown> | Promise<Record<string, unknown>>;
   private autoAckDeliveries: boolean;
+  private autoAcceptDeliveries: boolean;
   private nodeMode: boolean;
   private lastNodeRegistration: Record<string, unknown> | null = null;
   private ws: WebSocket | null = null;
@@ -144,6 +152,7 @@ export class WsClient {
     this.path = options.path ?? '/v1/ws';
     this.nodeRegistration = options.nodeRegistration;
     this.autoAckDeliveries = options.autoAckDeliveries ?? false;
+    this.autoAcceptDeliveries = options.autoAcceptDeliveries ?? this.autoAckDeliveries;
     this.nodeMode = this.path === '/v1/node/ws' || !!options.nodeRegistration;
     this.debug = options.debug ?? false;
     this.maxReconnectAttempts = Number.isFinite(options.maxReconnectAttempts)
@@ -433,17 +442,26 @@ export class WsClient {
     if (!isRecord(parsed) || typeof parsed.type !== 'string') return false;
 
     if (parsed.type === 'deliver') {
+      const addressed = typeof parsed.agent === 'string'
+        && typeof parsed.seq === 'number' && Number.isFinite(parsed.seq);
+      // The frame is held in this process now: tell the sender before any
+      // handler (or the model behind it) runs. `delivery.ack` below stays the
+      // consumed signal, sent once handlers were dispatched.
+      if (this.autoAcceptDeliveries && addressed) {
+        this.sendJson({
+          v: 1,
+          type: 'delivery.accepted',
+          agent: parsed.agent,
+          ...(typeof parsed.delivery_id === 'string' ? { delivery_id: parsed.delivery_id } : {}),
+          up_to_seq: parsed.seq,
+        });
+      }
       const payload = isRecord(parsed.payload) ? parsed.payload : null;
       if (payload && typeof payload.type === 'string') {
         const data = isRecord(payload.data) ? payload.data : {};
         this.emitServerLikeEvent(payload.type, data);
       }
-      if (
-        this.autoAckDeliveries &&
-        typeof parsed.agent === 'string' &&
-        typeof parsed.seq === 'number' &&
-        Number.isFinite(parsed.seq)
-      ) {
+      if (this.autoAckDeliveries && addressed) {
         this.sendJson({
           v: 1,
           type: 'delivery.ack',

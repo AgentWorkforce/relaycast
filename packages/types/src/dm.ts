@@ -34,6 +34,8 @@ export const SendDmRequestSchema = z.object({
   attachments: z.array(z.string()).optional(),
   data: z.record(z.string(), z.unknown()).nullable().optional(),
   mode: DmInjectionModeSchema.default('wait'),
+  /** Confirmation budget in ms (0–2000; 1000 recommended): the response parks for the recipient's acceptance. */
+  wait_ms: z.number().int().min(0).max(2000).optional(),
 });
 export type SendDmRequest = z.infer<typeof SendDmRequestSchema>;
 

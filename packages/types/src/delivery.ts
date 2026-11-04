@@ -11,6 +11,18 @@ import { FileAttachmentSchema } from './file.js';
 export const DeliveryStatusSchema = z.enum(['queued', 'delivered', 'acked', 'failed', 'dead_lettered']);
 export type DeliveryStatus = z.infer<typeof DeliveryStatusSchema>;
 
+// The sender-facing delivery state, derived from the stored row (the raw
+// `status` is kept beside it for compatibility):
+//   failed    -> status failed / dead_lettered (`error` says why)
+//   replied   -> the recipient sent a DM back in the conversation (`replied_at`)
+//   consumed  -> the recipient acked (status acked)
+//   delivered -> the receiving software accepted it (`accepted_at`), or the
+//                host wrote it to the recipient's socket / push endpoint
+//                (`delivered_at`); `accepted_at` tells the two apart
+//   queued    -> the row exists and delivery continues
+export const DeliveryStateSchema = z.enum(['queued', 'delivered', 'consumed', 'replied', 'failed']);
+export type DeliveryState = z.infer<typeof DeliveryStateSchema>;
+
 // The message payload carried alongside a queued delivery item so an offline
 // consumer can recover what it missed without a second round-trip.
 export const DeliveryMessageSchema = z.object({
@@ -97,6 +109,12 @@ export const SentDeliverySchema = z.object({
   id: z.string(),
   agent_id: z.string(),
   status: DeliveryStatusSchema,
+  /** Derived sender-facing state; `queued` at send time unless the send waited (`wait_ms`). */
+  state: DeliveryStateSchema,
+  /** When the receiving software accepted the row (`delivery.accepted`); `null` until then. */
+  accepted_at: z.string().nullable(),
+  /** Failure reason once `state` is `failed`. */
+  error: z.string().nullable(),
   expires_at: z.string().nullable(),
 });
 export type SentDelivery = z.infer<typeof SentDeliverySchema>;
@@ -108,9 +126,17 @@ export const MessageDeliveryReceiptSchema = z.object({
   agent_id: z.string(),
   agent_name: z.string(),
   status: DeliveryStatusSchema,
+  /** Derived sender-facing state (see `DeliveryStateSchema`). */
+  state: DeliveryStateSchema,
   created_at: z.string(),
   delivered_at: z.string().nullable(),
+  /** When the receiving software accepted the row (`delivery.accepted`, or an `http_push` 2xx). */
+  accepted_at: z.string().nullable(),
   acked_at: z.string().nullable(),
+  /** When the recipient replied in the DM conversation; `null` until then (DMs only). */
+  replied_at: z.string().nullable(),
+  /** The recipient's reply message once `replied_at` is set. */
+  reply_message_id: z.string().nullable(),
   dead_lettered_at: z.string().nullable(),
   error: z.string().nullable(),
   /** When the recipient marked the message read (or acked it, which also reads it); `null` until then. */

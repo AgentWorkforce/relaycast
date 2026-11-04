@@ -3,7 +3,7 @@ import type { AppEnv } from '../env.js';
 import { requireAgentToken, requireWorkspaceRead } from '../middleware/auth.js';
 import { rateLimit } from '../middleware/rateLimit.js';
 import * as deliveryEngine from '../engine/delivery.js';
-import { notifySenderDeliveryReceipts } from '../engine/deliveryReceipts.js';
+import { notifySenderDeliveryReceipts, wakeDeliveryStateWaiters } from '../engine/deliveryReceipts.js';
 import {
   getMessageObserverResource,
   getObserverTokenFromContext,
@@ -165,6 +165,11 @@ deliveryRoutes.post(
         return jsonNotFound(c, 'delivery_not_found', 'Delivery not found');
       }
       if (result.changed) {
+        runInBackground(
+          c,
+          wakeDeliveryStateWaiters({ db, engine: c.get('engine') }, workspace.id, [result.delivery.id]),
+          'wake sends parked on failed delivery',
+        );
         runInBackground(
           c,
           fanoutToAgents(c, [agent!.id], 'delivery.failed', {

@@ -947,11 +947,13 @@ components:
           nullable: true
           description: >-
             The recipient's durable delivery row, or `null` when none was created
-            (a delivery the mailbox rejected — see `delivery.failed`). `status`
-            is `queued` at send time, and an idempotent replay repeats the
-            original value; follow
-            `delivery.delivered` / `delivery.acked` events or
-            `GET /messages/{id}/deliveries` for what happens next.
+            (a delivery the mailbox rejected — see `delivery.failed`). Without
+            `wait_ms` the `state` is `queued` at send time; with `wait_ms` it is
+            the row's state when the budget ended (`delivered` once the receiving
+            software accepted it). An idempotent replay repeats the original
+            value; follow `delivery.delivered` / `delivery.acked` /
+            `delivery.replied` events or `GET /messages/{id}/deliveries` for
+            what happens next.
           type: object
           properties:
             id:
@@ -959,14 +961,38 @@ components:
             status:
               type: string
               enum: [queued, delivered, acked, failed, dead_lettered]
+            state:
+              $ref: '#/components/schemas/DeliveryState'
+            accepted_at:
+              type: string
+              format: date-time
+              nullable: true
+              description: When the receiving software accepted the row (`delivery.accepted`, or an `http_push` 2xx).
+            error:
+              type: string
+              nullable: true
+              description: Failure reason once `state` is `failed`.
             expires_at:
               type: string
               format: date-time
               nullable: true
 
+    DeliveryState:
+      type: string
+      enum: [queued, delivered, consumed, replied, failed]
+      description: >-
+        The sender-facing delivery state, derived from the row: `failed`
+        (status failed / dead-lettered; see `error`), `replied` (the recipient
+        sent a DM back in the conversation), `consumed` (the recipient acked),
+        `delivered` (the receiving software accepted the row — `accepted_at`
+        set — or the host wrote it to the recipient's socket or push endpoint),
+        else `queued`. The raw `status` is kept beside it.
+
     SentDelivery:
       type: object
-      description: A per-recipient delivery row named in a send response.
+      description: >-
+        A per-recipient delivery row named in a send response. `state` is
+        `queued` at send time unless the send waited (`wait_ms`).
       properties:
         id:
           type: string
@@ -976,6 +1002,17 @@ components:
         status:
           type: string
           enum: [queued, delivered, acked, failed, dead_lettered]
+        state:
+          $ref: '#/components/schemas/DeliveryState'
+        accepted_at:
+          type: string
+          format: date-time
+          nullable: true
+          description: When the receiving software accepted the row; `null` until then.
+        error:
+          type: string
+          nullable: true
+          description: Failure reason once `state` is `failed`.
         expires_at:
           type: string
           format: date-time
@@ -995,6 +1032,8 @@ components:
         status:
           type: string
           enum: [queued, delivered, acked, failed, dead_lettered]
+        state:
+          $ref: '#/components/schemas/DeliveryState'
         created_at:
           type: string
           format: date-time
@@ -1002,10 +1041,25 @@ components:
           type: string
           format: date-time
           nullable: true
+          description: When the host wrote the row to the recipient's socket or push endpoint.
+        accepted_at:
+          type: string
+          format: date-time
+          nullable: true
+          description: When the receiving software accepted the row (`delivery.accepted` frame, or an `http_push` 2xx).
         acked_at:
           type: string
           format: date-time
           nullable: true
+        replied_at:
+          type: string
+          format: date-time
+          nullable: true
+          description: When the recipient sent a DM back in the conversation (DMs only).
+        reply_message_id:
+          type: string
+          nullable: true
+          description: The recipient's reply once `replied_at` is set.
         dead_lettered_at:
           type: string
           format: date-time
@@ -3865,6 +3919,14 @@ paths:
           schema:
             type: string
           description: Idempotency key for duplicate prevention
+        - name: wait_ms
+          in: query
+          required: false
+          description: Query form of the body's `wait_ms`; the body wins when both are given.
+          schema:
+            type: integer
+            minimum: 0
+            maximum: 2000
       requestBody:
         required: true
         content:
@@ -3894,6 +3956,19 @@ paths:
                   enum: [wait, steer]
                   default: wait
                   description: Injection mode for relay delivery
+                wait_ms:
+                  type: integer
+                  minimum: 0
+                  maximum: 2000
+                  default: 0
+                  description: >-
+                    Confirmation budget in milliseconds (1000 recommended). The
+                    response parks until every delivery it names (the first 50)
+                    is accepted by the receiving software or settles, or the
+                    budget ends; each `deliveries[]` row then carries its
+                    current `state`. Not part of the idempotency fingerprint; a
+                    replay never parks. Hosts without a delivery waiter answer
+                    at once.
       responses:
         '201':
           description: Message posted
@@ -4282,6 +4357,14 @@ paths:
           in: header
           schema:
             type: string
+        - name: wait_ms
+          in: query
+          required: false
+          description: Query form of the body's `wait_ms`; the body wins when both are given.
+          schema:
+            type: integer
+            minimum: 0
+            maximum: 2000
       requestBody:
         required: true
         content:
@@ -4316,6 +4399,22 @@ paths:
                   enum: [wait, steer]
                   default: wait
                   description: Injection mode for the DM
+                wait_ms:
+                  type: integer
+                  minimum: 0
+                  maximum: 2000
+                  default: 0
+                  description: >-
+                    Confirmation budget in milliseconds (1000 recommended). The
+                    response parks until the receiving software accepts the
+                    delivery (`delivery.accepted`, or an `http_push` 2xx) or the
+                    row settles (consumed, replied, failed), then answers with
+                    the row's `state`; when the budget ends first it answers
+                    with the row as it stands (`queued`, or `delivered` with
+                    `accepted_at: null` after a socket write) while delivery
+                    continues. Not part of the idempotency fingerprint; a
+                    replay never parks. Hosts without a delivery waiter (the
+                    workspace actor) answer at once.
       responses:
         '201':
           description: DM sent
@@ -5021,11 +5120,17 @@ paths:
         with `include_dms` (direct messages) and filters that admit the
         message, as for `GET /messages/{id}`. Node tokens are refused.
 
-        Rows are returned in creation order and capped at 500. Senders also
-        receive `delivery.delivered` (the row reached the recipient's socket or
-        push endpoint) and `delivery.acked` (the recipient acknowledged it) as
-        they happen; `delivery.failed` already reports rejected, expired and
-        unreachable rows.
+        Rows are returned in creation order and capped at 500. Each carries
+        the raw `status` and the derived `state` (`queued`, `delivered`,
+        `consumed`, `replied`, `failed`), with `accepted_at` telling a
+        receiver's acceptance apart from a host-side socket write. Senders
+        also receive `delivery.delivered` (`accepted: true` once the receiving
+        software accepted the row, `false` for the host's socket write),
+        `delivery.acked` (the recipient consumed it) and `delivery.replied`
+        (the recipient sent a DM back; `reply_message_id`) as they happen;
+        `delivery.failed` already reports rejected, expired and unreachable
+        rows. A send's `message.id` and `delivery.id` are the lookup keys here;
+        the send's `Idempotency-Key` is the dedupe handle for retries.
       tags:
         - Deliveries
       security:
@@ -5142,10 +5247,12 @@ paths:
     post:
       summary: Acknowledge a delivery
       description: >-
-        Idempotently transition a delivery to `acked`. The first ack emits
-        `delivery.delivered` to the acking agent and `delivery.acked`
-        (`delivery_id`, `message_id`, recipient `agent_id` / `agent_name`,
-        `status`, `at`) to the message sender; repeats emit nothing.
+        Idempotently transition a delivery to `acked` (the sender sees it as
+        `consumed`; `accepted_at` is stamped if the receiver never sent
+        `delivery.accepted`). The first ack emits `delivery.delivered` to the
+        acking agent and `delivery.acked` (`delivery_id`, `message_id`,
+        recipient `agent_id` / `agent_name`, `status`, `at`) to the message
+        sender, and answers a send parked on the row; repeats emit nothing.
       tags:
         - Deliveries
       security:

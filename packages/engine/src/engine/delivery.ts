@@ -3,7 +3,7 @@ import { parseMessageMentions } from './mentions.js';
 import { eq, and, asc, exists, isNull, isNotNull, inArray, lt, ne, not, notInArray, lte, gt, sql, getTableColumns, type SQL } from 'drizzle-orm';
 import type { getDb } from '../db/index.js';
 import { deliveries, messages, agents, nodes, readReceipts, channelMembers, channels, dmConversations } from '../db/schema.js';
-import type { DeliveryStatus } from '@relaycast/types';
+import type { DeliveryState, DeliveryStatus } from '@relaycast/types';
 import { runAtomicWrites, type AtomicWrite } from '../ports/database.js';
 import type { NodeConnectionRegistry } from '../ports/realtime.js';
 import { isProviderAgentDeliveryReady } from '../ports/realtime.js';
@@ -25,6 +25,8 @@ import { withEngineOperation } from '../lib/engineDiagnostics.js';
 import { advanceDmParticipantReadCursor } from './receipt.js';
 import { notifySenderDeliveryReceipts } from './deliveryReceipts.js';
 import type { EventDispatchEngine } from './eventDispatch.js';
+import { deliveryStateOf } from './deliveryState.js';
+export { deliveryStateOf } from './deliveryState.js';
 
 type Db = ReturnType<typeof getDb>;
 
@@ -452,6 +454,8 @@ async function ackRows(
           status: TERMINAL_SUCCESS_STATUS,
           nextAttemptAt: null,
           lastDispatchError: null,
+          // Consuming a row implies the receiving software held it.
+          acceptedAt: sql`coalesce(${deliveries.acceptedAt}, unixepoch())`,
           ackedAt: new Date(),
           updatedAt: new Date(),
         })
@@ -532,16 +536,20 @@ export async function ackDeliveriesUpToSeq(
 /**
  * Mark still-queued rows delivered using bounded, explicit ID-index writes.
  * Returns the ids that transitioned (`queued` -> `delivered`), so the caller
- * can tell their senders.
+ * can tell their senders. `accepted` also stamps `accepted_at`: the transport
+ * itself proved the receiving software took the row (an `http_push` 2xx),
+ * which a socket write does not.
  */
 export async function markDeliveriesDelivered(
   db: Db,
   workspaceId: string,
   deliveryIds: string[],
+  opts: { accepted?: boolean } = {},
 ): Promise<string[]> {
   const delivered: string[] = [];
   const ids = [...new Set(deliveryIds)];
   const now = Math.floor(Date.now() / 1000);
+  const acceptedAt = opts.accepted ? sql`${now}` : sql`accepted_at`;
   // Force primary-key writes too: a bounded replay read is not enough if its
   // status UPDATE chooses a workspace/status index and scans retained history.
   for (let offset = 0; offset < ids.length; offset += 50) {
@@ -549,7 +557,7 @@ export async function markDeliveriesDelivered(
     const updated = await db.all<{ id: string }>(sql`
       UPDATE deliveries INDEXED BY idx_deliveries_id_lookup
       SET status = 'delivered', next_attempt_at = NULL, last_dispatch_error = NULL,
-          delivered_at = ${now}, updated_at = ${now}
+          delivered_at = ${now}, accepted_at = ${acceptedAt}, updated_at = ${now}
       WHERE workspace_id = ${workspaceId}
         AND id IN (${sql.join(page.map(id => sql`${id}`), sql`, `)})
         AND status = 'queued'
@@ -558,6 +566,174 @@ export async function markDeliveriesDelivered(
     for (const row of updated) delivered.push(row.id);
   }
   return delivered;
+}
+
+/** Rows one `delivery.accepted` frame settles per statement (D1-safe: no IN list, a seq range). */
+export const DELIVERY_ACCEPT_BATCH_SIZE = DELIVERY_EXPIRY_BATCH_SIZE;
+
+/**
+ * The receiving software's acceptance of a node agent's deliveries
+ * (`delivery.accepted` frame): cumulative up to `upToSeq`, a single row by
+ * `deliveryId`, or both. Every not-yet-accepted row that is still `queued` or
+ * `delivered` moves to `delivered` (`delivered_at` set if unset) and records
+ * `accepted_at`. A row the recipient already consumed or that failed is left
+ * alone. Returns the ids this call stamped, so the caller can tell their
+ * senders; `null` when the agent is not hosted by this node and provider.
+ *
+ * Bounded like a cumulative ack: `up_to_seq` is caller-supplied, so the
+ * range is settled in id-indexed pages of {@link DELIVERY_ACCEPT_BATCH_SIZE}
+ * rather than one unbounded UPDATE.
+ */
+export async function acceptDeliveries(
+  db: Db,
+  workspaceId: string,
+  nodeId: string,
+  providerName: string,
+  agentName: string,
+  target: { upToSeq?: number; deliveryId?: string },
+): Promise<{ agent_id: string; agent_name: string; accepted_delivery_ids: string[] } | null> {
+  const [agent] = await db
+    .select({ id: agents.id, name: agents.name })
+    .from(agents)
+    .where(and(
+      eq(agents.workspaceId, workspaceId),
+      eq(agents.name, agentName),
+      eq(agents.locationType, 'via_node'),
+      eq(agents.locationNodeId, nodeId),
+      eq(agents.providerName, providerName),
+    ));
+  if (!agent) return null;
+
+  const accepted: string[] = [];
+  const rowMatch = target.deliveryId !== undefined && target.upToSeq !== undefined
+    ? sql`(${deliveries.id} = ${target.deliveryId} OR ${deliveries.seq} <= ${target.upToSeq})`
+    : target.deliveryId !== undefined
+      ? sql`${deliveries.id} = ${target.deliveryId}`
+      : sql`${deliveries.seq} <= ${target.upToSeq ?? 0}`;
+  for (;;) {
+    const page = await db
+      .select({ id: deliveries.id })
+      .from(deliveries)
+      .where(and(
+        eq(deliveries.workspaceId, workspaceId),
+        eq(deliveries.agentId, agent.id),
+        inArray(deliveries.status, ['queued', 'delivered']),
+        isNull(deliveries.acceptedAt),
+        rowMatch,
+      ))
+      .orderBy(asc(deliveries.seq))
+      .limit(DELIVERY_ACCEPT_BATCH_SIZE);
+    if (page.length === 0) break;
+    const now = Math.floor(Date.now() / 1000);
+    const updated = await db.all<{ id: string }>(sql`
+      UPDATE deliveries INDEXED BY idx_deliveries_id_lookup
+      SET status = 'delivered', next_attempt_at = NULL, last_dispatch_error = NULL,
+          delivered_at = coalesce(delivered_at, ${now}), accepted_at = ${now}, updated_at = ${now}
+      WHERE workspace_id = ${workspaceId}
+        AND id IN (${sql.join(page.map((row) => sql`${row.id}`), sql`, `)})
+        AND status IN ('queued', 'delivered')
+        AND accepted_at IS NULL
+      RETURNING id
+    `);
+    for (const row of updated) accepted.push(row.id);
+    // A concurrent ack can settle a selected row first; the page then shrinks
+    // without emptying. Stop once nothing in it was ours to stamp.
+    if (updated.length === 0 || page.length < DELIVERY_ACCEPT_BATCH_SIZE) break;
+  }
+  return { agent_id: agent.id, agent_name: agent.name, accepted_delivery_ids: accepted };
+}
+
+/** The current sender-facing state of each of `deliveryIds`, read in D1-safe chunks. */
+export async function readDeliveryStates(
+  db: Db,
+  workspaceId: string,
+  deliveryIds: readonly string[],
+): Promise<Map<string, {
+  id: string;
+  agentId: string;
+  status: DeliveryStatus;
+  state: DeliveryState;
+  acceptedAt: Date | null;
+  error: string | null;
+  expiresAt: Date | null;
+}>> {
+  const ids = [...new Set(deliveryIds)];
+  const rows = await queryInChunks(ids, (chunk) => db
+    .select({
+      id: deliveries.id,
+      agentId: deliveries.agentId,
+      status: deliveries.status,
+      deliveredAt: deliveries.deliveredAt,
+      acceptedAt: deliveries.acceptedAt,
+      repliedAt: deliveries.repliedAt,
+      error: deliveries.error,
+      expiresAt: deliveries.expiresAt,
+    })
+    .from(deliveries)
+    .where(and(eq(deliveries.workspaceId, workspaceId), inArray(deliveries.id, chunk))));
+  return new Map(rows.map((row) => [row.id, {
+    id: row.id,
+    agentId: row.agentId,
+    status: row.status as DeliveryStatus,
+    state: deliveryStateOf(row),
+    acceptedAt: row.acceptedAt,
+    error: row.error,
+    expiresAt: row.expiresAt,
+  }]));
+}
+
+/** Whether a sender waiting on this row has anything left to wait for. */
+export function deliveryStateSettled(row: { state: DeliveryState; acceptedAt: Date | null }): boolean {
+  return row.state !== 'queued' && (row.state !== 'delivered' || row.acceptedAt !== null);
+}
+
+/** Most unreplied rows one DM reply marks `replied` (newest first). */
+export const DELIVERY_REPLY_MARK_MAX = 200;
+
+/**
+ * A DM in `conversationId` from `replierAgentId` answers every delivery that
+ * conversation's other party addressed to the replier and that nobody
+ * answered yet: those rows get `replied_at` and `reply_message_id`. Rows that
+ * failed or dead-lettered are not answered (they never reached the replier).
+ * One bounded read, then id-indexed updates in D1-safe chunks. Returns the
+ * ids marked, so the caller can tell their senders.
+ */
+export async function markDeliveriesReplied(
+  db: Db,
+  workspaceId: string,
+  input: { conversationId: string; replierAgentId: string; replyMessageId: string },
+): Promise<string[]> {
+  const candidates = await db
+    .select({ id: deliveries.id })
+    .from(deliveries)
+    .innerJoin(messages, eq(deliveries.messageId, messages.id))
+    .innerJoin(dmConversations, eq(dmConversations.channelId, messages.channelId))
+    .where(and(
+      eq(deliveries.workspaceId, workspaceId),
+      eq(dmConversations.id, input.conversationId),
+      eq(deliveries.agentId, input.replierAgentId),
+      ne(messages.agentId, input.replierAgentId),
+      ne(deliveries.messageId, input.replyMessageId),
+      isNull(deliveries.repliedAt),
+      inArray(deliveries.status, ['queued', 'delivered', 'acked']),
+    ))
+    .orderBy(sql`${deliveries.seq} DESC`)
+    .limit(DELIVERY_REPLY_MARK_MAX);
+  if (candidates.length === 0) return [];
+
+  const now = new Date();
+  const replied: string[] = [];
+  const updated = await queryInChunks(candidates.map((row) => row.id), (chunk) => db
+    .update(deliveries)
+    .set({ repliedAt: now, replyMessageId: input.replyMessageId, updatedAt: now })
+    .where(and(
+      eq(deliveries.workspaceId, workspaceId),
+      inArray(deliveries.id, chunk),
+      isNull(deliveries.repliedAt),
+    ))
+    .returning({ id: deliveries.id }));
+  for (const row of updated) replied.push(row.id);
+  return replied;
 }
 
 /** Most delivery rows `getMessageDeliveries` returns for one message. */
@@ -582,9 +758,13 @@ export async function getMessageDeliveries(
     agent_id: string;
     agent_name: string;
     status: DeliveryStatus;
+    state: DeliveryState;
     created_at: string;
     delivered_at: string | null;
+    accepted_at: string | null;
     acked_at: string | null;
+    replied_at: string | null;
+    reply_message_id: string | null;
     dead_lettered_at: string | null;
     error: string | null;
     read_at: string | null;
@@ -604,7 +784,10 @@ export async function getMessageDeliveries(
       status: deliveries.status,
       createdAt: deliveries.createdAt,
       deliveredAt: deliveries.deliveredAt,
+      acceptedAt: deliveries.acceptedAt,
       ackedAt: deliveries.ackedAt,
+      repliedAt: deliveries.repliedAt,
+      replyMessageId: deliveries.replyMessageId,
       deadLetteredAt: deliveries.deadLetteredAt,
       error: deliveries.error,
       readAt: readReceipts.readAt,
@@ -627,9 +810,13 @@ export async function getMessageDeliveries(
       agent_id: row.agentId,
       agent_name: row.agentName,
       status: row.status as DeliveryStatus,
+      state: deliveryStateOf(row),
       created_at: toIso(row.createdAt) ?? new Date(0).toISOString(),
       delivered_at: toIso(row.deliveredAt),
+      accepted_at: toIso(row.acceptedAt),
       acked_at: toIso(row.ackedAt),
+      replied_at: toIso(row.repliedAt),
+      reply_message_id: row.replyMessageId,
       dead_lettered_at: toIso(row.deadLetteredAt),
       error: row.error,
       read_at: toIso(row.readAt),

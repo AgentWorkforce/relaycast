@@ -27,7 +27,7 @@ it('seeds DM read cursors from the newest read receipt, ordered numerically', ()
       INSERT INTO read_receipts(message_id,agent_id) VALUES
         ('${older}','bob'),('${newer}','bob'),('2${'0'.repeat(17)}','alice');`);
 
-    expect(runMigrations(handle).applied).toEqual(['0078_dm_participant_read_cursor.sql', '0079_credential_upgrades.sql', '0080_nodes_context_reachable_index.sql', '0082_pending_events_settled_retention.sql']);
+    expect(runMigrations(handle).applied).toEqual(['0078_dm_participant_read_cursor.sql', '0079_credential_upgrades.sql', '0080_nodes_context_reachable_index.sql', '0081_delivery_confirmation.sql', '0082_pending_events_settled_retention.sql']);
 
     const cursors = db.prepare('SELECT agent_id, last_read_id FROM dm_participants ORDER BY agent_id').all();
     // A receipt in another channel does not seed a DM cursor.

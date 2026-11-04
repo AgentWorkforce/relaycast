@@ -38,6 +38,70 @@ describe('AgentClient durable delivery', () => {
     });
   });
 
+  describe('messageDeliveries() confirmation fields', () => {
+    it('camelizes state, accepted_at, replied_at and reply_message_id', async () => {
+      mockFetch.mockImplementation(() => mockResponse({
+        message_id: 'm_1',
+        deliveries: [{
+          id: 'del_1', agent_id: 'a_bob', agent_name: 'bob', status: 'acked', state: 'replied',
+          accepted_at: '2026-06-01T00:00:01.000Z', acked_at: '2026-06-01T00:00:02.000Z',
+          replied_at: '2026-06-01T00:00:03.000Z', reply_message_id: 'm_2', read_at: null, error: null,
+        }],
+      }));
+
+      const { deliveries } = await me.messageDeliveries('m_1');
+
+      expect(deliveries[0]).toMatchObject({
+        state: 'replied', acceptedAt: '2026-06-01T00:00:01.000Z', repliedAt: '2026-06-01T00:00:03.000Z', replyMessageId: 'm_2',
+      });
+    });
+  });
+
+  describe('send confirmation (waitMs)', () => {
+    it('dm() posts wait_ms and returns the delivery state the server answered with', async () => {
+      mockFetch.mockImplementation(() => mockResponse({
+        conversation_id: 'dm_1', created_at: '2026-06-01T00:00:00.000Z',
+        message: { id: 'm_1', agent_id: 'a_me', agent_name: 'me', text: 'hi' },
+        delivery: { id: 'del_1', status: 'delivered', state: 'delivered', accepted_at: '2026-06-01T00:00:00.500Z', error: null, expires_at: null },
+      }));
+
+      const sent = await me.dm('bob', 'hi', { waitMs: 1000, idempotencyKey: 'k1' });
+
+      const [url, init] = mockFetch.mock.calls[0]!;
+      expect(url).toBe('https://cast.agentrelay.com/v1/dm');
+      expect(JSON.parse(init.body as string)).toEqual({ to: 'bob', text: 'hi', mode: 'wait', wait_ms: 1000 });
+      expect(new Headers(init.headers).get('Idempotency-Key')).toBe('k1');
+      expect(sent.delivery).toMatchObject({ id: 'del_1', state: 'delivered', acceptedAt: '2026-06-01T00:00:00.500Z' });
+    });
+
+    it('dm() omits wait_ms unless asked', async () => {
+      mockFetch.mockImplementation(() => mockResponse({ conversation_id: 'dm_1', message: { id: 'm_1' }, delivery: null }));
+
+      await me.dm('bob', 'hi');
+
+      expect(JSON.parse(mockFetch.mock.calls[0]![1].body as string)).toEqual({ to: 'bob', text: 'hi', mode: 'wait' });
+    });
+
+    it('send() posts wait_ms and returns the per-recipient delivery states', async () => {
+      mockFetch.mockImplementation(() => mockResponse({
+        id: 'm_1', channel_id: 'c_1', agent_id: 'a_me', agent_name: 'me', text: 'hello all',
+        deliveries: [
+          { id: 'del_1', agent_id: 'a_bob', status: 'delivered', state: 'delivered', accepted_at: '2026-06-01T00:00:00.500Z', error: null, expires_at: null },
+          { id: 'del_2', agent_id: 'a_cara', status: 'queued', state: 'queued', accepted_at: null, error: null, expires_at: null },
+        ],
+        deliveries_truncated: false,
+      }));
+
+      const posted = await me.send('#general', 'hello all', { waitMs: 500 });
+
+      const [url, init] = mockFetch.mock.calls[0]!;
+      expect(url).toBe('https://cast.agentrelay.com/v1/channels/general/messages');
+      expect(JSON.parse(init.body as string)).toEqual({ text: 'hello all', mode: 'wait', wait_ms: 500 });
+      expect(posted.deliveries.map((d) => [d.agentId, d.state])).toEqual([['a_bob', 'delivered'], ['a_cara', 'queued']]);
+      expect(posted.deliveriesTruncated).toBe(false);
+    });
+  });
+
   describe('deliveries()', () => {
     it('GETs /v1/deliveries with no query by default', async () => {
       mockFetch.mockImplementation(() => mockResponse([]));

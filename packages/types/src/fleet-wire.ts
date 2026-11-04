@@ -314,6 +314,28 @@ export const FleetDeliveryAckMessageSchema = z
   .strict();
 export type FleetDeliveryAckMessage = z.infer<typeof FleetDeliveryAckMessageSchema>;
 
+/**
+ * Receiver-software acceptance (broker / SDK -> relaycast): the receiving
+ * client durably stored the delivery in its inbox, before any handler or model
+ * ran. Cumulative by `up_to_seq` like `delivery.ack`, or a single row by
+ * `delivery_id`; at least one is required. It moves the row to `delivered`
+ * and stamps `accepted_at`; `delivery.ack` remains the consumed signal.
+ */
+export const FleetDeliveryAcceptedMessageSchema = z
+  .object({
+    ...FleetRequestEnvelopeFields,
+    type: z.literal('delivery.accepted'),
+    agent: z.string(),
+    delivery_id: z.string().min(1).optional(),
+    up_to_seq: z.number().int().nonnegative().optional(),
+  })
+  .strict()
+  .refine((frame) => frame.delivery_id !== undefined || frame.up_to_seq !== undefined, {
+    message: 'delivery.accepted requires delivery_id or up_to_seq',
+    path: ['up_to_seq'],
+  });
+export type FleetDeliveryAcceptedMessage = z.infer<typeof FleetDeliveryAcceptedMessageSchema>;
+
 export const FleetTaskContextSchema = z.object({
   run_id: z.string().min(1).max(512).refine(value => value.trim() === value),
   step_id: z.string().min(1).max(512).refine(value => value.trim() === value),
@@ -585,6 +607,8 @@ export type FleetBrokerToRelaycastNonActionResultMessage = z.infer<
 export const FleetBrokerToRelaycastMessageSchema = z.union([
   FleetBrokerToRelaycastNonActionResultMessageSchema,
   FleetActionResultMessageSchema,
+  // Refined (one of `delivery_id` / `up_to_seq`), so it cannot join the discriminated union.
+  FleetDeliveryAcceptedMessageSchema,
 ]);
 export type FleetBrokerToRelaycastMessage = z.infer<typeof FleetBrokerToRelaycastMessageSchema>;
 export type FleetBrokerToRelaycastMessageType = FleetBrokerToRelaycastMessage['type'];

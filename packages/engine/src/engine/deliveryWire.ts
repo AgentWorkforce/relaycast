@@ -1,5 +1,6 @@
 import type { FleetWireJsonValue, SentDelivery } from '@relaycast/types';
 import type { DeliveryFanoutRecord } from './deliveryWrites.js';
+import { deliveryStateOf } from './deliveryState.js';
 
 /** Cap on the per-recipient `deliveries` a channel message send response carries. */
 export const SENT_DELIVERIES_RESPONSE_MAX = 50;
@@ -10,23 +11,38 @@ export const SENT_DELIVERIES_RESPONSE_MAX = 50;
  * already a string.
  */
 export function sentDeliveryReceipt(
-  record: Pick<DeliveryFanoutRecord, 'id' | 'agentId' | 'status'> & { expiresAt?: Date | string | null },
+  record: Pick<DeliveryFanoutRecord, 'id' | 'agentId' | 'status'> & {
+    expiresAt?: Date | string | null;
+    acceptedAt?: Date | string | null;
+    error?: string | null;
+  },
 ): SentDelivery {
-  const expiresAt = record.expiresAt;
   return {
     id: record.id,
     agent_id: record.agentId,
     status: record.status as SentDelivery['status'],
-    expires_at: expiresAt instanceof Date ? expiresAt.toISOString() : (expiresAt ?? null),
+    state: deliveryStateOf(record),
+    accepted_at: isoOrNull(record.acceptedAt),
+    error: record.error ?? null,
+    expires_at: isoOrNull(record.expiresAt),
   };
+}
+
+function isoOrNull(value: Date | string | null | undefined): string | null {
+  return value instanceof Date ? value.toISOString() : (value ?? null);
 }
 
 /** `delivery` for a DM send response: the one recipient is implied, so `agent_id` is omitted. */
 export function sentDmDeliveryReceipt(
   record: Parameters<typeof sentDeliveryReceipt>[0],
 ): Omit<SentDelivery, 'agent_id'> {
-  const { agent_id: _recipient, ...receipt } = sentDeliveryReceipt(record);
-  return receipt;
+  return withoutRecipient(sentDeliveryReceipt(record));
+}
+
+/** Drop `agent_id` from a receipt whose recipient the response already implies. */
+export function withoutRecipient(receipt: SentDelivery): Omit<SentDelivery, 'agent_id'> {
+  const { agent_id: _recipient, ...rest } = receipt;
+  return rest;
 }
 
 /** `deliveries` for a multi-recipient send response, capped with `deliveries_truncated`. */

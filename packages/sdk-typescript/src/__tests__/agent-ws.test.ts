@@ -253,6 +253,75 @@ describe('AgentClient WebSocket integration', () => {
     }));
   });
 
+  it('accepts a deliver frame before any handler runs, and acks after dispatch', async () => {
+    const agent = createAgent();
+    agent.connect();
+    const ws = await nextSocket();
+    ws.simulateOpen();
+
+    const framesWhenHandled: string[] = [];
+    agent.on.dmReceived(() => {
+      framesWhenHandled.push(...ws.send.mock.calls.map(([payload]) => JSON.parse(String(payload)).type as string));
+    });
+
+    ws.simulateMessage({
+      v: 1,
+      type: 'deliver',
+      delivery_id: 'del_7',
+      agent_id: 'agent_1',
+      agent: 'worker',
+      msg_id: 'm_7',
+      seq: 7,
+      mode: 'wait',
+      payload: {
+        type: 'dm.received',
+        data: {
+          conversation_id: 'dm_1', id: 'm_7', from_agent_id: 'bot_1', from_name: 'Bot', to: 'worker',
+          text: 'confirm me', created_at: '2026-09-24T05:00:00.000Z', attachments: [], metadata: {},
+          message: { id: 'm_7', agent_id: 'bot_1', agent_name: 'Bot', text: 'confirm me', attachments: [], metadata: {} },
+        },
+      },
+    });
+
+    // The acceptance was already on the wire when the handler ran; the ack was not.
+    expect(framesWhenHandled).toContain('delivery.accepted');
+    expect(framesWhenHandled).not.toContain('delivery.ack');
+    const sent = ws.send.mock.calls.map(([payload]) => JSON.parse(String(payload)));
+    expect(sent.filter((frame) => frame.type === 'delivery.accepted')).toEqual([
+      { v: 1, type: 'delivery.accepted', agent: 'worker', delivery_id: 'del_7', up_to_seq: 7 },
+    ]);
+    expect(sent.findIndex((frame) => frame.type === 'delivery.accepted'))
+      .toBeLessThan(sent.findIndex((frame) => frame.type === 'delivery.ack'));
+    expect(sent.filter((frame) => frame.type === 'delivery.ack')).toEqual([
+      { v: 1, type: 'delivery.ack', agent: 'worker', up_to_seq: 7 },
+    ]);
+  });
+
+  it('on.deliveryReplied fires with the sender-side delivery.replied context update', async () => {
+    const agent = createAgent();
+    agent.connect();
+    const ws = await nextSocket();
+    ws.simulateOpen();
+
+    const handler = vi.fn();
+    agent.on.deliveryReplied(handler);
+
+    ws.simulateMessage({
+      v: 1,
+      type: 'context.update',
+      event: 'delivery.replied',
+      data: {
+        delivery_id: 'del_1', message_id: 'm_1', agent_id: 'a_bob', agent_name: 'bob',
+        status: 'replied', reply_message_id: 'm_2', at: '2026-06-01T00:00:03.000Z',
+      },
+    });
+
+    expect(handler).toHaveBeenCalledTimes(1);
+    expect(handler).toHaveBeenCalledWith(expect.objectContaining({
+      type: 'delivery.replied', deliveryId: 'del_1', agentName: 'bob', replyMessageId: 'm_2',
+    }));
+  });
+
   it('on.messageReacted fires with message.reacted event', async () => {
     const agent = createAgent();
     agent.connect();

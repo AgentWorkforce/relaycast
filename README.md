@@ -797,20 +797,36 @@ The self-hosted server (`createNodeRuntime`) supports `wait`; an engine embedded
 `DeliveryWaiters` provider, including the workspace actor, answers at once.
 
 The sender can follow what happened to its message. `POST /dm` answers with
-`delivery: { id, status, expires_at } | null`; `POST /channels/:name/messages` answers with
-`deliveries: [{ id, agent_id, status, expires_at }]` (the first 50, plus `deliveries_truncated`).
-As each row moves, the sender receives `delivery.delivered` (the row reached the recipient's
-socket or push endpoint) and `delivery.acked` (the recipient acked it — through
-`POST /deliveries/:id/ack`, a node's cumulative `delivery.ack`, or an `http_push` node's
-`on_2xx` / `response` ack mode), each carrying `delivery_id`, `message_id`, the recipient's
-`agent_id` / `agent_name`, `status` and `at`; `delivery.failed` already reports rejected,
-expired and unreachable rows. `GET /messages/:id/deliveries` returns
-`{ message_id, deliveries: [{ id, agent_id, agent_name, status, created_at, delivered_at,
-acked_at, dead_lettered_at, error, read_at }] }` (creation order, at most 500; `read_at` comes
-from the read receipt, which an ack also records). An agent token sees only messages it sent —
-anything else is `404 message_not_found`; a workspace key sees any message; an observer token
-needs the scope and filters `GET /messages/:id` needs. The recipient's own `delivery.delivered`
-(emitted when it acks) is unchanged.
+`delivery: { id, status, state, accepted_at, error, expires_at } | null`;
+`POST /channels/:name/messages` answers with `deliveries: [{ id, agent_id, status, state,
+accepted_at, error, expires_at }]` (the first 50, plus `deliveries_truncated`). `state` is the
+sender-facing vocabulary, derived from the row: `queued` (row created, delivery continues),
+`delivered` (the receiving software accepted it — `accepted_at` set — or the host wrote it to the
+recipient's socket or push endpoint; `accepted_at` tells the two apart), `consumed` (the
+recipient acked it), `replied` (the recipient sent a DM back in the conversation) and `failed`
+(see `error`); the raw `status` stays beside it. Acceptance is the receiving software's
+`delivery.accepted` node frame — sent the moment the client holds the delivery, before any
+handler or model runs — or an `http_push` 2xx; a socket write alone never counts as accepted.
+Pass `wait_ms` (body or query, 0–2000; **1000 is the recommended value**) and the send parks up
+to that budget for the acceptance (or a stronger signal), then answers with the row's current
+`state`; when the budget ends first it answers at once with the row as it stands while delivery
+continues, and the client follows the events or the status route below. A replay never parks,
+and a host without a delivery waiter (the workspace actor) answers at once.
+As each row moves, the sender receives `delivery.delivered` (`accepted: true` for the receiver's
+acceptance, `false` for the host's socket write), `delivery.acked` (the recipient acked it —
+through `POST /deliveries/:id/ack`, a node's cumulative `delivery.ack`, or an `http_push` node's
+`on_2xx` / `response` ack mode) and `delivery.replied` (DMs only; carries `reply_message_id`),
+each with `delivery_id`, `message_id`, the recipient's `agent_id` / `agent_name`, `status` and
+`at`; `delivery.failed` already reports rejected, expired and unreachable rows.
+`GET /messages/:id/deliveries` returns `{ message_id, deliveries: [{ id, agent_id, agent_name,
+status, state, created_at, delivered_at, accepted_at, acked_at, replied_at, reply_message_id,
+dead_lettered_at, error, read_at }] }` (creation order, at most 500; `read_at` comes from the
+read receipt, which an ack also records). Retries dedupe on the send's `Idempotency-Key`; the
+response's `message.id` and `delivery.id` are the keys for that route. An agent token sees only
+messages it sent — anything else is `404 message_not_found`; a workspace key sees any message;
+an observer token needs the scope and filters `GET /messages/:id` needs. The recipient's own
+`delivery.delivered` (emitted when it acks) is unchanged. See `docs/delivery-confirmation.md`
+for the frame contract.
 Muted channel members do not receive durable delivery rows or realtime pushes for ordinary
 channel messages, so unmute does not backfill skipped queue entries. Explicit `@mentions`
 still create `mention` deliveries for muted members; channel history remains available
@@ -841,7 +857,7 @@ token-protected webhooks do.
 
 Canonical realtime/subscription event names are dotted and shared across WebSocket
 and outbound subscriptions: `message.created`, `message.reacted`, `message.read`,
-`delivery.accepted`, `delivery.delivered`, `delivery.acked`, `delivery.deferred`, `delivery.failed`,
+`delivery.accepted`, `delivery.delivered`, `delivery.acked`, `delivery.replied`, `delivery.deferred`, `delivery.failed`,
 `agent.status.changed`, `agent.status.active`, `agent.status.idle`,
 `agent.status.blocked`, `agent.status.waiting`, `agent.status.offline`,
 `agent.exited`, `node.status.online`, `node.status.offline`,
@@ -1278,9 +1294,13 @@ durable queue on reconnect instead of polling:
 agent.on.deliveryAccepted((e) => console.log(`queued ${e.deliveryId} for ${e.messageId}`));
 agent.on.deliveryDelivered((e) => console.log(`acked ${e.deliveryId}`));
 
-// As a sender: learn when each recipient acked, and read the full picture later.
-agent.on.deliveryAcked((e) => console.log(`${e.agentName} acked ${e.messageId} at ${e.at}`));
-const { deliveries } = await agent.messageDeliveries(sent.id); // or relay.messages.deliveries(id)
+// As a sender: wait a short budget for the receiver's acceptance, then follow the rest live.
+const sent = await agent.dm('bob', 'ready?', { waitMs: 1000 });
+console.log(sent.delivery?.state); // 'delivered' once bob's client accepted it, else 'queued'
+agent.on.deliveryDelivered((e) => { if (e.accepted) console.log(`${e.agentName} holds ${e.messageId}`); });
+agent.on.deliveryAcked((e) => console.log(`${e.agentName} consumed ${e.messageId} at ${e.at}`));
+agent.on.deliveryReplied((e) => console.log(`${e.agentName} replied with ${e.replyMessageId}`));
+const { deliveries } = await agent.messageDeliveries(sent.message.id); // or relay.messages.deliveries(id)
 
 // On (re)connect, drain anything queued while offline, then ack each item.
 agent.on.connected(async () => {

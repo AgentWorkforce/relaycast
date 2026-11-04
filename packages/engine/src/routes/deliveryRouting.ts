@@ -392,13 +392,15 @@ async function notifySendersForOutcomes(
   ctx: RoutingContext,
   outcomes: ReadonlyArray<{ deliveryId: string; outcome: DeliveryDispatchOutcome }>,
 ): Promise<void> {
-  const byStatus: Record<SenderDeliveryReceiptStatus, string[]> = { delivered: [], acked: [] };
+  const byStatus: Record<Extract<SenderDeliveryReceiptStatus, 'delivered' | 'acked'>, string[]> = { delivered: [], acked: [] };
   for (const { deliveryId, outcome } of outcomes) {
     if (outcome === 'delivered' || outcome === 'acked') byStatus[outcome].push(deliveryId);
   }
   for (const status of ['delivered', 'acked'] as const) {
     if (byStatus[status].length === 0) continue;
     try {
+      // An http_push `delivered` stamped `accepted_at`; a ws `delivered` did
+      // not. The batch read tells them apart, so `accepted` is left unset.
       await notifySenderDeliveryReceipts({ db: ctx.db, engine: ctx.engine }, ctx.workspaceId, byStatus[status], status);
     } catch (err) {
       console.warn(`[delivery.route] sender delivery.${status} notify failed`, {
@@ -482,7 +484,9 @@ async function routeOneDeliveryOutcome(
   if (locationType === 'via_node' && locationNodeId && nodeKind === 'http_push' && target) {
     const result = await dispatchHttpPush({ ctx, delivery, target, eventType, eventData });
     if (result === 'delivered') {
-      const transitioned = await deliveryEngine.markDeliveriesDelivered(ctx.db, ctx.workspaceId, [delivery.id]);
+      // A 2xx is the receiving software's own answer, not a socket write: it
+      // counts as acceptance (`accepted_at`), so a parked send is answered.
+      const transitioned = await deliveryEngine.markDeliveriesDelivered(ctx.db, ctx.workspaceId, [delivery.id], { accepted: true });
       return transitioned.length > 0 ? 'delivered' : 'resent';
     }
     if (result === 'acked' || result === 'resent') return result;
@@ -793,6 +797,22 @@ export async function sweepUnreachableDeliveries(
     if (batch.expiredCount < deliveryEngine.DELIVERY_EXPIRY_BATCH_SIZE) break;
   }
   return expiredCount;
+}
+
+/**
+ * A DM the recipient sent back answers the sender's earlier deliveries in that
+ * conversation: mark them `replied` and tell their senders
+ * (`delivery.replied` with the reply's id). Best-effort after the reply
+ * committed; DMs only (a channel post has no single party it answers).
+ */
+export async function notifyDmReply(
+  c: HonoContext,
+  input: { conversationId: string; replierAgentId: string; replyMessageId: string },
+): Promise<void> {
+  const ctx = routingContextFromHono(c);
+  const replied = await deliveryEngine.markDeliveriesReplied(ctx.db, ctx.workspaceId, input);
+  if (replied.length === 0) return;
+  await notifySenderDeliveryReceipts({ db: ctx.db, engine: ctx.engine }, ctx.workspaceId, replied, 'replied');
 }
 
 export async function notifyDeliveryRejections(

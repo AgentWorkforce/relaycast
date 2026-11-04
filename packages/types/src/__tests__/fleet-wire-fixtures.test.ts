@@ -34,6 +34,7 @@ const BROKER_TO_RELAYCAST_TYPES = new Set([
   'agent.recover',
   'agent.deregister',
   'delivery.ack',
+  'delivery.accepted',
   'action.result',
   'inventory.sync',
 ]);
@@ -49,6 +50,7 @@ const EXPECTED_FIXTURES = [
   'agent.register.json',
   'context.update.json',
   'deliver.json',
+  'delivery.accepted.json',
   'delivery.ack.json',
   'error.json',
   'inventory.sync.json',
@@ -131,6 +133,15 @@ describe('fleet wire fixtures', () => {
       }
     });
   }
+
+  it('requires delivery_id or up_to_seq on delivery.accepted', () => {
+    const accepted = { v: 1 as const, type: 'delivery.accepted' as const, agent: 'codex-builder-1' };
+    expect(parseFleetBrokerToRelaycastMessage({ ...accepted, up_to_seq: 3 })).toEqual({ ...accepted, up_to_seq: 3 });
+    expect(parseFleetBrokerToRelaycastMessage({ ...accepted, delivery_id: 'del_1' })).toEqual({ ...accepted, delivery_id: 'del_1' });
+    expect(() => parseFleetBrokerToRelaycastMessage(accepted)).toThrow();
+    expect(() => parseFleetBrokerToRelaycastMessage({ ...accepted, up_to_seq: -1 })).toThrow();
+    expect(() => parseFleetBrokerToRelaycastMessage({ ...accepted, up_to_seq: 1, extra: true })).toThrow();
+  });
 
   it('accepts unreported heartbeat load and rejects values outside [0,1]', () => {
     const heartbeat = {

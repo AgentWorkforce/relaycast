@@ -46,6 +46,8 @@ export type EventDispatchScope =
 /** The subset of the engine runtime the dispatcher needs. */
 export type EventDispatchEngine = Pick<EngineDeps, 'realtime' | 'nodeConnections'> & {
   config?: EngineConfig;
+  /** Wakes sends parked on a delivery state (`wait_ms`); absent on hosts that answer at once. */
+  deliveryWaiters?: EngineDeps['deliveryWaiters'];
 };
 
 /** Everything {@link publishEvent} needs: the database plus the engine ports. */

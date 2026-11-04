@@ -139,6 +139,36 @@ describe('workspace actor realtime', () => {
     expect(actor.sockets.violations).toEqual([]);
   });
 
+  it('records a delivery.accepted frame through onMessage and answers a wait_ms send at once', async () => {
+    const actor = new FakeWorkspaceActor(WORKSPACE_ID);
+    const { alice, bob } = await workspaceWithAgents(actor);
+    const node = await nodeGrant(actor, alice);
+    const socket = await actor.connect(node.principal);
+    await actor.message(socket, nodeRegister(node));
+
+    // No DeliveryWaiters inside an actor call: the send answers at once,
+    // whatever budget it asked for, and the client follows the status route.
+    const started = Date.now();
+    const sent = await call<{ id: string; delivery: { id: string; state: string; accepted_at: string | null } }>(
+      actor, 'POST', '/v1/dm', { to: 'alice', text: 'confirm over the actor socket', wait_ms: 2000 }, bob,
+    );
+    expect(sent.status).toBe(201);
+    expect(Date.now() - started).toBeLessThan(500);
+    expect(sent.json.data.delivery).toMatchObject({ state: 'queued', accepted_at: null });
+    const [delivered] = socket.ofType('deliver');
+    expect(delivered.delivery_id).toBe(sent.json.data.delivery.id);
+
+    // The receiving software's acceptance lands through the engine's node control.
+    await actor.message(socket, { v: 1, type: 'delivery.accepted', agent: 'alice', delivery_id: delivered.delivery_id, up_to_seq: delivered.seq });
+    expect(rows(actor, 'SELECT status, accepted_at IS NOT NULL AS accepted FROM deliveries WHERE id = ?', delivered.delivery_id as string))
+      .toEqual([{ status: 'delivered', accepted: 1 }]);
+    const receipts = await call<{ deliveries: Array<{ state: string; accepted_at: string | null }> }>(
+      actor, 'GET', `/v1/messages/${sent.json.data.id}/deliveries`, undefined, bob,
+    );
+    expect(receipts.json.data.deliveries).toEqual([expect.objectContaining({ state: 'delivered', accepted_at: expect.any(String) })]);
+    expect(actor.sockets.violations).toEqual([]);
+  });
+
   it('publishes workspace-stream events to an observer socket and refuses a revoked token at connect', async () => {
     const actor = new FakeWorkspaceActor(WORKSPACE_ID);
     const { key, alice } = await workspaceWithAgents(actor);
