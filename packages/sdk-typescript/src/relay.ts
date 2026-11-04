@@ -665,7 +665,7 @@ export class RelayCast {
       // unproven caller can no longer take over an existing identity), so a
       // collision needs to point callers at the real replacement instead of
       // just repeating the server's generic "already exists" message.
-      if (err instanceof RelayError && err.code === 'name_conflict') {
+      if (err instanceof RelayError && err.rawCode === 'agent_already_exists') {
         throw new RelayError(
           err.code,
           `${err.message} "registerOrRotate" no longer rotates an existing agent's token; it is a fail-closed alias of "register". Use "agents.recover()" to resume an identity you previously registered, or choose a different name.`,

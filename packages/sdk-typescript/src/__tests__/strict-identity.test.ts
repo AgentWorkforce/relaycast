@@ -128,6 +128,21 @@ describe('strict identity APIs', () => {
       expect(mockFetch).toHaveBeenCalledTimes(1);
     });
 
+    it('leaves a different 409 on the server message', async () => {
+      const { RelayCast } = await import('../relay.js');
+      const { RelayError } = await import('../errors.js');
+      const relay = new RelayCast({ apiKey: 'rk_live_test123' });
+
+      mockFetch.mockImplementation(() =>
+        mockResponse({ code: 'agent_recovery_proof_conflict', message: 'verifier taken' }, false, 409),
+      );
+
+      const err = await relay.registerOrRotate({ name: 'Bot' }).catch((e: unknown) => e);
+      expect(err).toBeInstanceOf(RelayError);
+      expect((err as RelayError).code).toBe('name_conflict');
+      expect((err as RelayError).message).toBe('verifier taken');
+    });
+
     it('rethrows non-conflict errors verbatim', async () => {
       const { RelayCast } = await import('../relay.js');
       const { RelayError } = await import('../errors.js');
