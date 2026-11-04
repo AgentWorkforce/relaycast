@@ -10,7 +10,7 @@ import type {
 } from '../../ports/realtime.js';
 import type { PresenceTracker } from '../../ports/presence.js';
 import type { ObserverToken } from '../../ports/auth.js';
-import { and, eq, gt, inArray, isNull, or, sql } from 'drizzle-orm';
+import { and, eq, exists, gt, inArray, isNull, ne, or, sql } from 'drizzle-orm';
 import { exclusiveClaimWrite, retryAfterAtMatches } from '../../engine/invocationClaim.js';
 import type { EngineDb } from '../../ports/database.js';
 import {
@@ -20,7 +20,8 @@ import {
   agents,
   observerTokens,
 } from '../../db/schema.js';
-import { handleNodeControlMessage, handleProviderDisconnect, markNodeOffline } from '../../engine/node.js';
+import { handleNodeControlMessage, handleProviderDisconnect, IMPLICIT_DIRECT_NODE_ID_PREFIX, markNodeOffline } from '../../engine/node.js';
+import { agentLivenessRefresh, RELEASED_AGENT_STATUS } from '../../engine/agent.js';
 import { serializeNodeOp } from '../../engine/nodeLock.js';
 import { DEFAULT_PROVIDER_NAME } from '../../engine/nodeProvider.js';
 import { providerAttachDecision } from '../../engine/placement.js';
@@ -66,6 +67,26 @@ interface NodeConn {
   /** Exact actions that negotiated authenticated caller provenance on this socket. */
   callerAwareActions?: ReadonlySet<string>;
   lastSeen: number;
+  /** Accepted `node.register` frames on this socket (each binds the provider). */
+  attaches: number;
+  /**
+   * Set when a reconnect's `node.register` moved this connection's provider
+   * to a newer socket. Lives on the object the socket's handle holds, so a
+   * frame that reaches the node lock after this connection's close was
+   * processed still knows (the registry forgets the connection at close).
+   */
+  superseded: boolean;
+  /** The provider this connection held before a reconnect superseded it; settling frames resolve to it. */
+  supersededProviderName?: string;
+}
+
+/** See {@link InProcessRealtime.nodeConnectionState}. */
+export interface NodeConnectionState {
+  readonly providerName?: string;
+  readonly instanceId?: string;
+  readonly deliveryReadyAgentIds: readonly string[] | null | undefined;
+  readonly callerAwareActions: readonly string[];
+  readonly lastSeen: number;
 }
 
 interface WorkspaceConn {
@@ -94,6 +115,30 @@ interface ActionCallerSnapshot {
 }
 
 /**
+ * Load the current, still-active observer token row by id, mirroring the
+ * active/expiry checks the auth provider applies at connect time. Returns
+ * `undefined` when the token has been revoked, has expired, or no longer
+ * exists, so callers can fail closed.
+ */
+export async function loadActiveObserverToken(
+  db: EngineDb,
+  workspaceId: string,
+  tokenId: string,
+): Promise<ObserverToken | undefined> {
+  const now = new Date();
+  const [row] = await db
+    .select()
+    .from(observerTokens)
+    .where(and(
+      eq(observerTokens.workspaceId, workspaceId),
+      eq(observerTokens.id, tokenId),
+      eq(observerTokens.status, 'active'),
+      or(isNull(observerTokens.expiresAt), gt(observerTokens.expiresAt, now)),
+    ));
+  return row;
+}
+
+/**
  * Single-process, in-memory implementation of the workspace observer stream and
  * node-control stream. Agent runtime traffic is intentionally node-only:
  * direct agents and broker-hosted agents both connect through `/v1/node/ws`.
@@ -106,6 +151,8 @@ export class InProcessRealtime implements RealtimeBus, ConnectionRegistry, NodeC
   private readonly nodeConnIndex = new Map<string, Set<string>>();
   /** Per node, the connection id currently bound to each provider name. */
   private readonly providerIndex = new Map<string, Map<string, string>>();
+  /** Connections a reconnect's `node.register` superseded, until their socket's close is processed. */
+  private readonly supersededConnections = new Set<string>();
   /** Per-provider queued `action.invoke` frames (`workspace:node::provider`). */
   private readonly nodeQueues = new Map<string, QueuedNodeMessage[]>();
   /** Serializes drains per node so concurrent triggers never overlap. */
@@ -130,6 +177,23 @@ export class InProcessRealtime implements RealtimeBus, ConnectionRegistry, NodeC
   /** Admit `agent.register` frames through the host's admission hooks. */
   setAdmission(admission: AdmissionHooks | undefined): void {
     this.admission = admission;
+  }
+
+  /**
+   * Receive every fire-and-forget promise the adapter starts (the early drain
+   * after {@link attachNodeSocket}). A host whose sockets are usable only
+   * while its call runs (a durable actor) awaits them before returning;
+   * unset, they run detached as on the Node server.
+   */
+  setBackgroundScheduler(schedule: ((promise: Promise<unknown>) => void) | undefined): void {
+    this.scheduleBackground = schedule;
+  }
+
+  private scheduleBackground: ((promise: Promise<unknown>) => void) | undefined;
+
+  private background(promise: Promise<unknown>): void {
+    if (this.scheduleBackground) this.scheduleBackground(promise);
+    else void promise;
   }
 
   private nodeKey(workspaceId: string, nodeId: string): string {
@@ -193,7 +257,7 @@ export class InProcessRealtime implements RealtimeBus, ConnectionRegistry, NodeC
       // authoritative forever.
       if (conn.observerToken && (conn.observerCheckedAt === undefined || now - conn.observerCheckedAt >= OBSERVER_TOKEN_REVALIDATE_MS)) {
         try {
-          const fresh = await this.loadActiveObserverToken(args.workspaceId, conn.observerToken.id);
+          const fresh = await loadActiveObserverToken(this.db, args.workspaceId, conn.observerToken.id);
           if (!fresh) {
             set.delete(conn);
             try {
@@ -217,29 +281,6 @@ export class InProcessRealtime implements RealtimeBus, ConnectionRegistry, NodeC
         // Socket may have closed between enumeration and send.
       }
     }
-  }
-
-  /**
-   * Load the current, still-active observer token row by id, mirroring the
-   * active/expiry checks the auth provider applies at connect time. Returns
-   * `undefined` when the token has been revoked, has expired, or no longer
-   * exists, so callers can fail closed.
-   */
-  private async loadActiveObserverToken(
-    workspaceId: string,
-    tokenId: string,
-  ): Promise<ObserverToken | undefined> {
-    const now = new Date();
-    const [row] = await this.db
-      .select()
-      .from(observerTokens)
-      .where(and(
-        eq(observerTokens.workspaceId, workspaceId),
-        eq(observerTokens.id, tokenId),
-        eq(observerTokens.status, 'active'),
-        or(isNull(observerTokens.expiresAt), gt(observerTokens.expiresAt, now)),
-      ));
-    return row;
   }
 
   /* ------------------------- ConnectionRegistry ------------------------ */
@@ -614,6 +655,55 @@ export class InProcessRealtime implements RealtimeBus, ConnectionRegistry, NodeC
     return this.nodeConnections.get(connectionId)?.providerName;
   }
 
+  /** The connection currently bound to a node's provider. */
+  providerConnectionId(workspaceId: string, nodeId: string, providerName: string): string | undefined {
+    return this.providerConnId(this.nodeKey(workspaceId, nodeId), providerName);
+  }
+
+  /** Whether a reconnect's `node.register` moved this connection's provider to a newer socket (its close may still be in flight). */
+  isConnectionSuperseded(connectionId: string): boolean {
+    return this.supersededConnections.has(connectionId);
+  }
+
+  /**
+   * The registry's state for one node connection, for a host that persists
+   * it across its own restarts (the actor adapter). `deliveryReadyAgentIds`
+   * is undefined before `node.register` negotiated a mode, null for
+   * immediate readiness, and the ready identities when agent-scoped.
+   */
+  nodeConnectionState(connectionId: string): NodeConnectionState | undefined {
+    const conn = this.nodeConnections.get(connectionId);
+    if (!conn) return undefined;
+    return {
+      providerName: conn.providerName,
+      instanceId: conn.instanceId,
+      deliveryReadyAgentIds: conn.deliveryReadyAgentIds instanceof Set ? [...conn.deliveryReadyAgentIds] : conn.deliveryReadyAgentIds,
+      callerAwareActions: conn.callerAwareActions ? [...conn.callerAwareActions] : [],
+      lastSeen: conn.lastSeen,
+    };
+  }
+
+  /**
+   * Re-apply a state {@link nodeConnectionState} returned to an attached
+   * connection: the provider binding and readiness `node.register` made, and
+   * the liveness timestamp as it was (a rebuild is not activity).
+   */
+  restoreNodeConnectionState(connectionId: string, state: NodeConnectionState): void {
+    const conn = this.nodeConnections.get(connectionId);
+    if (!conn) return;
+    const { workspaceId, nodeId } = conn;
+    if (state.providerName) {
+      this.attachProvider(workspaceId, nodeId, state.providerName, state.instanceId ?? '', connectionId, state.callerAwareActions);
+      if (state.deliveryReadyAgentIds !== undefined) {
+        this.setProviderDeliveryReadiness(workspaceId, nodeId, state.providerName, connectionId, state.deliveryReadyAgentIds === null ? 'immediate' : 'agent_scoped');
+      }
+      if (state.deliveryReadyAgentIds) {
+        this.markProviderAgentsDeliveryReady(workspaceId, nodeId, state.providerName, connectionId, state.deliveryReadyAgentIds);
+      }
+    }
+    conn.lastSeen = state.lastSeen;
+  }
+
   providerAttachConflict(
     workspaceId: string,
     nodeId: string,
@@ -664,12 +754,15 @@ export class InProcessRealtime implements RealtimeBus, ConnectionRegistry, NodeC
     if (existingConnId && existingConnId !== connectionId) {
       const superseded = this.nodeConnections.get(existingConnId);
       this.nodeConnections.delete(existingConnId);
+      this.supersededConnections.add(existingConnId);
       const conns = this.nodeConnIndex.get(nodeKey);
       if (conns) {
         conns.delete(existingConnId);
         if (conns.size === 0) this.nodeConnIndex.delete(nodeKey);
       }
       if (superseded) {
+        superseded.superseded = true;
+        superseded.supersededProviderName = superseded.providerName;
         superseded.providerName = undefined;
         try {
           superseded.socket.close(1000, 'superseded');
@@ -697,6 +790,7 @@ export class InProcessRealtime implements RealtimeBus, ConnectionRegistry, NodeC
       providers.delete(previousProviderName);
     }
     conn.providerName = providerName;
+    conn.attaches += 1;
     conn.instanceId = instanceId;
     conn.callerAwareActions = new Set(callerAwareActions);
     conn.lastSeen = Date.now();
@@ -844,16 +938,33 @@ export class InProcessRealtime implements RealtimeBus, ConnectionRegistry, NodeC
     };
   }
 
-  /** Register a live fleet node control socket; returns handlers the transport drives. */
-  attachNodeSocket(workspaceId: string, nodeId: string, socket: EngineSocket): SocketHandle {
-    const connectionId = `nconn_${++this.connectionSeq}`;
+  /**
+   * Register a live fleet node control socket; returns handlers the transport drives.
+   *
+   * `options.connectionId` names the connection instead of the next
+   * `nconn_N`: a host whose sockets outlive its memory (a durable actor)
+   * rebuilds the registry under the ids the provider bindings were made with
+   * (see {@link restoreNodeConnectionState}). `options.earlyDrain: false`
+   * skips the best-effort drain after attach (for a connection attached only
+   * to be torn down).
+   */
+  attachNodeSocket(
+    workspaceId: string,
+    nodeId: string,
+    socket: EngineSocket,
+    options: { connectionId?: string; earlyDrain?: boolean } = {},
+  ): SocketHandle {
+    const connectionId = options.connectionId ?? `nconn_${++this.connectionSeq}`;
     const nodeKey = this.nodeKey(workspaceId, nodeId);
-    this.nodeConnections.set(connectionId, {
+    const conn: NodeConn = {
       socket,
       workspaceId,
       nodeId,
       lastSeen: Date.now(),
-    });
+      attaches: 0,
+      superseded: false,
+    };
+    this.nodeConnections.set(connectionId, conn);
     let conns = this.nodeConnIndex.get(nodeKey);
     if (!conns) {
       conns = new Set();
@@ -863,9 +974,9 @@ export class InProcessRealtime implements RealtimeBus, ConnectionRegistry, NodeC
     const handle: SocketHandle = {
       connectionId,
       handleMessage: async (raw) => {
-        const conn = this.nodeConnections.get(connectionId);
-        if (conn) conn.lastSeen = Date.now();
-        return handleNodeControlMessage({
+        conn.lastSeen = Date.now();
+        const attachesBefore = conn.attaches;
+        await handleNodeControlMessage({
           db: this.db,
           registry: this,
           completionDeps: this.nodeCompletionDeps,
@@ -874,20 +985,66 @@ export class InProcessRealtime implements RealtimeBus, ConnectionRegistry, NodeC
           nodeId,
           socket,
           connectionId,
+          // Read under the node lock from the handle's own connection object:
+          // outlives the registry's marker, which goes with the close.
+          connectionSuperseded: () => conn.superseded,
+          supersededProviderName: conn.supersededProviderName,
           admitRegistration: createRegistrationAdmission({ db: this.db, admission: this.admission, workspace: workspaceId }),
           raw,
         });
+        // An accepted `node.register` on an implicit direct node certifies its
+        // bound agent's presence the way the node's heartbeat does: the
+        // teardown of the previous socket marked the agent offline with the
+        // node, and the reconnect would otherwise leave it offline (and its
+        // actions `handler_unavailable`) until the first heartbeat, ~30 s later.
+        // Only an accepted register (one that bound the provider): a refused
+        // one answered an error and must not certify anything.
+        const after = this.nodeConnections.get(connectionId);
+        if (after?.providerName && after.attaches > attachesBefore && nodeId.startsWith(IMPLICIT_DIRECT_NODE_ID_PREFIX)) {
+          await this.refreshDirectAgentLiveness(workspaceId, nodeId, after.providerName);
+        }
       },
       handleClose: async () => this.onNodeConnectionClose(connectionId),
     };
     // Best-effort early flush (covers non-spawn frames that need no capacity);
     // the authoritative drain fires after node.register and after heartbeat
     // liveness/capacity transitions once the node is dispatchable. See drainNode.
-    void this.drainNode(workspaceId, nodeId);
+    if (options.earlyDrain !== false) this.background(this.drainNode(workspaceId, nodeId));
     return handle;
   }
 
+  /**
+   * Renew the durable liveness of the one agent bound to an implicit direct
+   * node, as the node's heartbeat does (same conditional write: the active
+   * binding to this authenticated node, the bound provider, never a released
+   * identity). The presence port is left alone: a direct agent's presence
+   * rides its node's liveness, which the register just established.
+   */
+  private async refreshDirectAgentLiveness(workspaceId: string, nodeId: string, providerName: string): Promise<void> {
+    await serializeNodeOp(workspaceId, nodeId, async () => {
+      await this.db
+        .update(agents)
+        .set(agentLivenessRefresh())
+        .where(and(
+          eq(agents.id, nodeId.slice(IMPLICIT_DIRECT_NODE_ID_PREFIX.length)),
+          eq(agents.workspaceId, workspaceId),
+          eq(agents.locationNodeId, nodeId),
+          ne(agents.status, RELEASED_AGENT_STATUS),
+          eq(agents.providerName, providerName),
+          exists(this.db.select({ id: agentNodeBindings.id }).from(agentNodeBindings).where(and(
+            eq(agentNodeBindings.workspaceId, workspaceId),
+            eq(agentNodeBindings.agentId, agents.id),
+            eq(agentNodeBindings.nodeId, nodeId),
+            eq(agentNodeBindings.status, 'active'),
+          ))),
+        ));
+    }).catch((err) => {
+      console.error('[node.register] direct agent liveness refresh failed', { workspace_id: workspaceId, node_id: nodeId }, err);
+    });
+  }
+
   private async onNodeConnectionClose(connectionId: string): Promise<void> {
+    this.supersededConnections.delete(connectionId);
     const conn = this.nodeConnections.get(connectionId);
     if (!conn) return;
     this.nodeConnections.delete(connectionId);
@@ -899,9 +1056,16 @@ export class InProcessRealtime implements RealtimeBus, ConnectionRegistry, NodeC
       if (conns.size === 0) this.nodeConnIndex.delete(nodeKey);
     }
     const providers = this.providerIndex.get(nodeKey);
-    if (providerName && providers?.get(providerName) === connectionId) {
-      providers.delete(providerName);
-      if (providers.size === 0) this.providerIndex.delete(nodeKey);
+    // The provider is this connection's to take offline only while the index
+    // still names it. A reconnect's `node.register` moves the binding to the
+    // newer socket (`attachProvider`), so a close that finds its provider
+    // bound elsewhere is stale: the presence it carried has been re-certified
+    // on the live socket, and it must not touch that binding, the provider's
+    // rows, its agents or the node.
+    const heldBinding = providerName !== undefined && providers?.get(providerName) === connectionId;
+    if (heldBinding) {
+      providers!.delete(providerName);
+      if (providers!.size === 0) this.providerIndex.delete(nodeKey);
       this.nodeQueues.delete(this.providerQueueKey(nodeKey, providerName));
     }
     const hasRemaining = this.isNodeConnected(workspaceId, nodeId);
@@ -909,18 +1073,24 @@ export class InProcessRealtime implements RealtimeBus, ConnectionRegistry, NodeC
     // silently dropped the provider-offline / aggregate recompute the node roster
     // would keep stale capabilities with no signal. Log it; a close still must
     // not throw.
-    if (providerName) {
-      await handleProviderDisconnect(this.db, this, workspaceId, nodeId, providerName, hasRemaining, this.nodeCompletionDeps).catch((err) => {
+    if (heldBinding) {
+      await handleProviderDisconnect(this.db, this, workspaceId, nodeId, providerName, hasRemaining, this.nodeCompletionDeps, {
+        // Decided under the node lock: a reconnect whose register was queued
+        // ahead of this teardown found the provider free (unbound just above)
+        // and bound its own socket; this close is then stale.
+        superseded: () => this.isProviderAttached(workspaceId, nodeId, providerName),
+      }).catch((err) => {
         // Pass the error object so the runtime logs its stack, not just the message.
         console.error('[node.teardown] provider disconnect failed', { workspace_id: workspaceId, node_id: nodeId, provider: providerName }, err);
       });
     } else if (!hasRemaining) {
-      // Connection dropped before it bound a provider and it was the node's last.
-      // Serialize with node-control ops (register/heartbeat) and re-check
-      // connectivity under the lock: a reconnect racing this close may have bound
-      // a fresh socket, in which case the node must stay online. Without this a
-      // stale close could append node.status.offline after the reconnect's online
-      // event and leave the node marked offline despite a live socket.
+      // Connection dropped without holding a provider binding and it was the
+      // node's last. Serialize with node-control ops (register/heartbeat) and
+      // re-check connectivity under the lock: a reconnect racing this close may
+      // have bound a fresh socket, in which case the node must stay online.
+      // Without this a stale close could append node.status.offline after the
+      // reconnect's online event and leave the node marked offline despite a
+      // live socket.
       await serializeNodeOp(workspaceId, nodeId, async () => {
         if (this.isNodeConnected(workspaceId, nodeId)) return;
         await markNodeOffline(this.db, this, workspaceId, nodeId, { deps: this.nodeCompletionDeps, reason: 'disconnected' });

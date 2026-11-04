@@ -208,6 +208,19 @@ export interface NodeConnectionRegistry {
 
   /** The provider name bound to a registry connection, once it has registered. */
   providerNameForConnection?(connectionId: string): string | undefined;
+  /**
+   * True when a reconnect's `node.register` moved this connection's provider
+   * binding to a newer socket. The engine refuses the frames such a socket
+   * still had queued (other than those settling work already in flight), so
+   * a stale `node.deregister` cannot remove the live socket's provider.
+   *
+   * Optional only for a registry that never re-binds a provider to a newer
+   * connection. Every registry that does (the in-process one, and an
+   * out-of-process socket owner such as the cloud NodeDO) MUST implement it,
+   * or pass `connectionSuperseded` with each frame: without either, a frame
+   * the old socket had queued is applied to the live socket's provider.
+   */
+  isConnectionSuperseded?(connectionId: string): boolean;
 
   /**
    * Read-only pre-check for a provider registration: returns a conflict when the

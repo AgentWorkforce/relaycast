@@ -2,7 +2,7 @@ import { nodeLivenessAuthority, inspectNodeLiveness, inspectNodesLiveness, inval
 import type { NodeLivenessSnapshot } from '../ports/nodeLiveness.js';
 import { eq, and, exists, gt, lt, ne, sql, inArray, type SQL } from 'drizzle-orm';
 import type { getDb } from '../db/index.js';
-import { agents, agentNodeBindings, agentRecoveryCredentials, channels, channelMembers, dmParticipants, actions, deliveries, nodes } from '../db/schema.js';
+import { agents, agentNodeBindings, agentRecoveryCredentials, channels, channelMembers, dmParticipants, deliveries, nodes } from '../db/schema.js';
 import { randomHex, sha256Hex } from '../lib/crypto.js';
 import { generateId } from './snowflake.js';
 import { invalidateChannelCache } from './cache.js';
@@ -563,8 +563,8 @@ export async function getAgentByName(db: Db, workspaceId: string, name: string) 
   if (!row) return null;
   const { agent, node } = row;
 
-  // Get channels, actions, and pending deliveries in parallel
-  const [memberships, allActions, pendingDeliveryRows] = await Promise.all([
+  // Get channels and pending deliveries in parallel
+  const [memberships, pendingDeliveryRows] = await Promise.all([
     db
       .select({
         channelId: channelMembers.channelId,
@@ -575,18 +575,6 @@ export async function getAgentByName(db: Db, workspaceId: string, name: string) 
       .from(channelMembers)
       .innerJoin(channels, eq(channelMembers.channelId, channels.id))
       .where(eq(channelMembers.agentId, agent.id)),
-    db
-      .select({
-        id: actions.id,
-        name: actions.name,
-        description: actions.description,
-        handlerAgentId: actions.handlerAgentId,
-        availableTo: actions.availableTo,
-        isActive: actions.isActive,
-      })
-      .from(actions)
-      .where(and(eq(actions.workspaceId, workspaceId), eq(actions.isActive, true)))
-      .limit(500),
     db
       .select({
         id: deliveries.id,
@@ -611,17 +599,6 @@ export async function getAgentByName(db: Db, workspaceId: string, name: string) 
       .limit(50),
   ]);
 
-  const actionsProvided = allActions
-    .filter((a) => a.handlerAgentId === agent.id)
-    .map((a) => ({ id: a.id, name: a.name, description: a.description }));
-
-  const actionsAvailableTo = allActions
-    .filter((a) =>
-      a.handlerAgentId !== agent.id &&
-      (!a.availableTo || a.availableTo.length === 0 || a.availableTo.includes(agent.name)),
-    )
-    .map((a) => ({ id: a.id, name: a.name, description: a.description }));
-
   return {
     id: agent.id,
     workspace_id: workspaceId,
@@ -645,8 +622,6 @@ export async function getAgentByName(db: Db, workspaceId: string, name: string) 
       role: m.role,
       joined_at: m.joinedAt.toISOString(),
     })),
-    actions_provided: actionsProvided,
-    actions_available_to: actionsAvailableTo,
     pending_deliveries: pendingDeliveryRows.map((d) => ({
       id: d.id,
       message_id: d.messageId,

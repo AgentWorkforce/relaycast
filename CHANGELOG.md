@@ -20,9 +20,24 @@ Packages without a separate changelog are covered by the cross-package notes bel
 
 - A sender can follow its message. `POST /v1/dm` answers with `delivery: { id, status, expires_at } | null` and `POST /v1/channels/:name/messages` with `deliveries: [{ id, agent_id, status, expires_at }]` (first 50, plus `deliveries_truncated`). The sender then receives `delivery.delivered` when a row reaches the recipient's socket or push endpoint and the new `delivery.acked` when the recipient acks it (REST ack, node cumulative ack, or `http_push` `on_2xx` / `response`), each with the recipient's `agent_id` / `agent_name`, `status` and `at`. `GET /v1/messages/:id/deliveries` lists every recipient's delivery and read state (`read_at`) for a message the caller sent; a workspace key or an admitted observer reads any message. Recipient-side events are unchanged.
 - SDKs: TypeScript `agent.messageDeliveries(id)`, `relay.messages.deliveries(id)` and `on.deliveryAcked`. Rust and Swift SDKs do not yet wrap the new route or event.
+- The workspace actor (`@relaycast/engine/adapters/actor`) serves realtime: `GET /v1/ws` and `GET /v1/node/ws` answer an authenticated upgrade with a socket grant (`x-relaycast-socket-grant: 1`, body `{ ok: true, data: { metadata } }`) that the gateway opens an actor socket with, and the actor's `onConnect` / `onMessage` / `onDisconnect` drive the engine's node and observer streams. A socket that outlived the actor's memory is closed with `4012 actor restarted` so its client reconnects.
+- The workspace actor reads `RELAYCAST_MAX_UPLOAD_BYTES`, `RELAYCAST_MESSAGE_TTL_DAYS`, `RELAYCAST_MAILBOX_TTL_MS`, `RELAYCAST_MAILBOX_DEPTH_CAP`, `RELAYCAST_RATE_LIMIT_PER_MINUTE`, `RELAYCAST_INTERNAL_SECRET` and `RELAYCAST_ENV` with the self-host server's semantics (`actorConfigFromEnv`). Inside an actor, `/internal/workspaces/:id` routes serve that actor's workspace only (another id is a 404) and `POST /internal/workspaces` is not served.
+- The Terse example moved: the `Workspace` actor is `packages/actors-workspace` (durable-actors 0.14.6) and the gateway `packages/actors-gateway`; `examples/terse` only points there.
+- Self-hosting on durable-actors (experimental; `docs/self-hosting-durable-actors.md`): `packages/actors-gateway` is a stateless Node gateway in front of the `Workspace` actors, and `packages/actors-workspace/deploy` compiles the actor and registers it with a self-hosted control plane. Both ship as images.
+- The gateway routes `ar_` credentials to their workspace actor, bridges `/v1/ws` and `/v1/node/ws` to actor sockets, long-polls `GET /v1/deliveries?wait` outside the actor, and serves the internal admin API behind `RELAYCAST_INTERNAL_SECRET`, with `/healthz`, `/readyz`, structured logs and graceful shutdown.
+- Signed `/_relayfiles` URLs are served from a `local` directory or a `gcs` / `s3` bucket (`RELAYCAST_FILE_STORE`). The object stores let several gateway replicas share files.
+
+## [12.7.0] - 2026-11-03
+
+- **Removed:** agent detail (`GET /v1/agent`, `GET /v1/agents/:name`) no longer returns `actions_provided` or `actions_available_to`. List actions with `GET /v1/actions`.
+- Node heartbeats no longer read action rows to check them; only a change to a provider's action capabilities rewrites them.
+- An action's workspace-global alias passes to another node's default provider as soon as its owner (an agent-hosted action, or another node's alias) is deleted or stops being offered.
+- `DELETE /v1/actions/:name` deletes only actions registered through the API; a name only node providers offer returns `409 action_provider_owned`.
 - `GET /v1/deliveries?wait=<ms>` long-polls (0–25000 ms): an empty answer waits until a matching delivery is created for the agent or the wait expires, and reads nothing while it waits.
 - SDKs pass `wait`: TypeScript `deliveries({ waitMs })`, Rust `wait_for_deliveries(opts, wait_ms)`, Swift `ListDeliveriesOptions(waitMs:)`.
 - The self-hosted server wakes waiters in process; other hosts supply a `DeliveryWaiters` provider, and an engine without one answers `wait` at once.
+- `GET /v1/nodes?status=online` answers promptly in hosted workspaces with many historical nodes instead of timing out.
+- `GET /v1/nodes` honors `limit` on a `status` selection without `history`, returning the first matches in `id` order.
 - `GET /v1/inbox` returns mentions for agents with long names (about 47 bytes or more) on Cloudflare D1 instead of `500 internal_error`.
 - An `inventory.sync` that drops more than 90 agents from a node offlines all of them in one atomic batch. It no longer fails on D1's 100-parameter statement limit.
 - Server error logs for failed database queries include the underlying cause (constraint, bind limit, D1 overload), not only the `Failed query` text.
@@ -986,7 +1001,8 @@ Packages without a separate changelog are covered by the cross-package notes bel
 
 Earlier releases are available on the [GitHub releases page](https://github.com/AgentWorkforce/relaycast/releases).
 
-[Unreleased]: https://github.com/AgentWorkforce/relaycast/compare/v12.6.2...HEAD
+[Unreleased]: https://github.com/AgentWorkforce/relaycast/compare/v12.7.0...HEAD
+[12.7.0]: https://github.com/AgentWorkforce/relaycast/compare/v12.6.2...v12.7.0
 [12.6.2]: https://github.com/AgentWorkforce/relaycast/compare/v12.6.1...v12.6.2
 [12.6.1]: https://github.com/AgentWorkforce/relaycast/compare/v12.6.0...v12.6.1
 [12.6.0]: https://github.com/AgentWorkforce/relaycast/compare/v12.5.0...v12.6.0

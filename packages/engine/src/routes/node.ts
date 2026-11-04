@@ -258,10 +258,11 @@ const nodeStatusSchema = z.enum(['online', 'offline']);
 // GET /v1/nodes?capability=&name=&status=&history=&cursor=&limit= - node roster
 //
 // Default (no `history`): a bare array, matching every caller written before
-// this selector existed. `status=online` (or `offline`) now pushes a
-// liveness predicate into SQL instead of fetching the whole table and
-// filtering in JS — this is the server-filtered live-Fleet path a default
-// `fleet nodes` call should use so it never downloads history.
+// this selector existed. `status` selects on liveness in SQL; under a
+// liveness authority only checkpoint-recent candidates are probed
+// (`status=online` bounds them in SQL; `offline` lists the rest unprobed).
+// `status=online` is the server-filtered live-Fleet path a default
+// `fleet nodes` call should use. With `status`, `limit` caps the matches.
 //
 // `history=true`: switches to the bounded, paginated contract
 // (`{ nodes, next_cursor }`) for an explicit full-roster read (`--all`).

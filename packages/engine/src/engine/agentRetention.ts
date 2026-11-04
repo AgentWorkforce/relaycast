@@ -31,7 +31,9 @@ const requiredIndexes = [
  * Deliberately requires absence of ALL ownership evidence. An offline broker,
  * inactive binding, dangling location, or old inventory is not proof of release.
  * Direct-node identities are also retained: remote socket absence cannot be
- * inferred from durable status. No remote liveness RPC can fail open here.
+ * inferred from durable status. No remote liveness RPC can fail open here. An
+ * agent that handles a registered action is retained: deleting it would
+ * cascade the action and leave its name's alias without a claimant.
  *
  * Keep this expression identical in preview and DELETE. The latter evaluates it
  * inside the write statement, after any concurrent heartbeat/register/bind.
@@ -46,6 +48,7 @@ function reason(cutoff: number, indexesReady: boolean): SQL {
       OR a.location_node_id IS NOT NULL OR a.origin_node_id IS NOT NULL
       OR EXISTS (SELECT 1 FROM agent_node_bindings b WHERE b.agent_id = a.id)
       OR EXISTS (SELECT 1 FROM nodes n WHERE n.id = 'node_direct_' || a.id)
+      OR EXISTS (SELECT 1 FROM actions h WHERE h.handler_agent_id = a.id)
       THEN 'ownership_protected'
     WHEN a.metadata IS NOT NULL AND NOT json_valid(a.metadata) THEN 'ownership_protected'
     WHEN json_type(COALESCE(a.metadata, '{}')) IS NOT 'object'

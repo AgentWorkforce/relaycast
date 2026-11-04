@@ -1,8 +1,19 @@
 import Database from 'better-sqlite3';
-import { createActorRuntime, type ActorRuntime, type ActorRuntimeOptions } from '../index.js';
+import {
+  createActorRuntime,
+  type ActorBroadcastOptionsLike,
+  type ActorRuntime,
+  type ActorRuntimeOptions,
+  type ActorSocketLike,
+  type ActorSocketSource,
+} from '../index.js';
 import { SQLITE_CONSTRAINT_CODES, type ActorSql, type SqliteValue } from '../database.js';
 import type { ActorHttpRequest, ActorHttpResponse } from '../http.js';
 import { createCredentialTagSigner } from '../../../auth/credentialTags.js';
+import { SocketPrincipalSchema, signSocketPrincipal } from '../socket-grant.js';
+
+/** The file-signing secret the fake runtime signs grants with. */
+export const FAKE_FILE_SECRET = 'file-secret-of-at-least-32-characters';
 
 /** The keyring the fake gateway signs workspace tags with. */
 export const TEST_CREDENTIAL_TAGS = createCredentialTagSigner({ current: 'a', keys: { a: 'actor-test-tag-secret' } });
@@ -21,6 +32,8 @@ const ALLOWED_PRAGMA = /^\s*PRAGMA\s+(table_info|table_xinfo|index_info|index_xi
 export class FakeActorDatabase implements ActorSql {
   readonly raw = new Database(':memory:');
   statements = 0;
+  /** Every statement run through `exec` / `query`, in order. */
+  readonly log: string[] = [];
   private savepoints = 0;
 
   constructor() {
@@ -72,6 +85,7 @@ export class FakeActorDatabase implements ActorSql {
     if (RUNTIME_OWNED.test(sql)) throw new Error(`The actor runtime owns transactions: ${sql.slice(0, 40)}`);
     if (/^\s*PRAGMA\b/i.test(sql) && !ALLOWED_PRAGMA.test(sql)) throw new Error('PRAGMA not allowed');
     this.statements += 1;
+    this.log.push(sql);
     try {
       // better-sqlite3 refuses multi-statement strings in prepare(), like exec.
       return body(this.raw.prepare(sql));
@@ -105,47 +119,233 @@ export class FakeAlarm {
   set(timestampMs: number): void { this.at = timestampMs; }
 }
 
-/** A `Workspace` actor as the example and armadillo define it, over the fake runtime. */
+function assertActorClose(code: number, reason: string): void {
+  if (!Number.isInteger(code) || !(code === 1000 || (code >= 3000 && code <= 4999))) {
+    throw new Error(`socket close code must be 1000 or between 3000 and 4999, got ${code}`);
+  }
+  if (Buffer.byteLength(reason) > 123) throw new Error('socket close reason must not exceed 123 bytes');
+}
+
+/**
+ * A control-plane socket as durable-actors 0.14.6 presents it to the actor:
+ * JSON in and out, `reject` only while connecting, close codes 1000 or
+ * 3000–4999, at most 10 tags.
+ */
+export class FakeActorSocket implements ActorSocketLike {
+  tags: readonly string[] = [];
+  state: 'connecting' | 'open' | 'closed' = 'connecting';
+  /** Frames the client received. */
+  readonly sent: Record<string, unknown>[] = [];
+  closed: { code: number; reason: string } | null = null;
+  rejected: { code: number; reason: string } | null = null;
+
+  constructor(readonly id: string, readonly metadata: unknown, private readonly source: FakeSocketSource) {}
+
+  send(message: unknown): void {
+    this.source.touch('send');
+    if (this.state === 'closed') throw new Error('cannot send on a closed actor socket');
+    this.sent.push(message as Record<string, unknown>);
+  }
+
+  close(code = 1000, reason = ''): void {
+    this.source.touch('close');
+    assertActorClose(code, reason);
+    if (this.state === 'closed') return;
+    this.state = 'closed';
+    this.closed = { code, reason };
+    this.source.connections.delete(this.id);
+  }
+
+  reject(code = 4008, reason = 'connection rejected'): void {
+    this.source.touch('reject');
+    if (this.state !== 'connecting') throw new Error('only a connecting actor socket can be rejected');
+    assertActorClose(code, reason);
+    this.state = 'closed';
+    this.rejected = { code, reason };
+    this.source.connections.delete(this.id);
+  }
+
+  setTags(...tags: string[]): void {
+    this.source.touch('setTags');
+    const unique = [...new Set(tags)];
+    if (unique.length > 10 || unique.some((tag) => tag.length === 0 || tag.length > 256)) {
+      throw new Error('socket tags must be at most 10 of 1-256 characters');
+    }
+    this.tags = unique;
+  }
+
+  /** Frames of a given `type`. */
+  ofType(type: string): Record<string, unknown>[] {
+    return this.sent.filter((frame) => frame.type === type);
+  }
+}
+
+/**
+ * The control plane's view of an actor's sockets. Like the runtime, it
+ * answers `getConnections` / `broadcast` only while an actor call runs
+ * (`during`); any socket use outside one is recorded in `violations`.
+ */
+export class FakeSocketSource implements ActorSocketSource {
+  readonly connections = new Map<string, FakeActorSocket>();
+  active = false;
+  /** Socket operations attempted outside an actor call. */
+  readonly violations: string[] = [];
+  private seq = 0;
+
+  touch(operation: string): void {
+    if (!this.active) this.violations.push(operation);
+  }
+
+  async getConnections(tag?: string): Promise<readonly ActorSocketLike[]> {
+    this.touch('getConnections');
+    if (!this.active) throw new Error('actor connections are available only during an actor invocation');
+    return [...this.connections.values()].filter((socket) => tag === undefined || socket.tags.includes(tag));
+  }
+
+  broadcast(message: unknown, options: ActorBroadcastOptionsLike = {}): void {
+    this.touch('broadcast');
+    if (!this.active) throw new Error('actor connections are available only during an actor invocation');
+    const except = new Set((Array.isArray(options.except) ? options.except : options.except ? [options.except] : [])
+      .map((socket: Pick<ActorSocketLike, 'id'>) => socket.id));
+    const tags = options.tags ?? [];
+    for (const socket of this.connections.values()) {
+      if (except.has(socket.id)) continue;
+      const matches = options.tagMatch === 'any'
+        ? tags.some((tag) => socket.tags.includes(tag))
+        : tags.every((tag) => socket.tags.includes(tag));
+      if (matches) socket.send(message);
+    }
+  }
+
+  /** A connection the gateway opened with `metadata`; the actor has not been told yet. */
+  connecting(metadata: unknown): FakeActorSocket {
+    const socket = new FakeActorSocket(`sock_${++this.seq}`, metadata, this);
+    this.connections.set(socket.id, socket);
+    return socket;
+  }
+
+  /** A connection the control plane holds open that the actor never saw (its memory was lost). */
+  open(metadata: unknown): FakeActorSocket {
+    const socket = this.connecting(metadata);
+    socket.state = 'open';
+    return socket;
+  }
+
+  /** The control plane lost a socket without waking the actor for `onDisconnect`. */
+  drop(socket: FakeActorSocket): void {
+    this.connections.delete(socket.id);
+    socket.state = 'closed';
+  }
+
+  async during<T>(work: () => Promise<T>): Promise<T> {
+    this.active = true;
+    try {
+      return await work();
+    } finally {
+      this.active = false;
+    }
+  }
+}
+
+/** What an activation of the fake actor shares with the next one: its database, alarm and control-plane sockets. */
+export interface FakeActorState {
+  sql: FakeActorDatabase;
+  alarm: FakeAlarm;
+  sockets: FakeSocketSource;
+}
+
+/** A `Workspace` actor as `@relaycast/actors-workspace` defines it, over the fake runtime. */
 export class FakeWorkspaceActor {
-  readonly sql = new FakeActorDatabase();
-  readonly alarm = new FakeAlarm();
+  readonly sql: FakeActorDatabase;
+  readonly alarm: FakeAlarm;
+  readonly sockets: FakeSocketSource;
   readonly runtime: ActorRuntime;
   calls = 0;
 
-  constructor(readonly id: string, options: Partial<ActorRuntimeOptions> = {}) {
+  constructor(readonly id: string, private readonly options: Partial<ActorRuntimeOptions> = {}, state?: FakeActorState) {
+    this.sql = state?.sql ?? new FakeActorDatabase();
+    this.alarm = state?.alarm ?? new FakeAlarm();
+    this.sockets = state?.sockets ?? new FakeSocketSource();
     this.runtime = createActorRuntime({
       sql: this.sql,
       workspaceId: id,
       baseUrl: 'https://armadillo.test',
-      fileSigningSecret: 'file-secret',
+      fileSigningSecret: FAKE_FILE_SECRET,
       outboundFetch: () => Promise.reject(new Error('no network in tests')),
       alarm: this.alarm,
+      sockets: this.sockets,
       ...options,
       config: { environment: 'test', ...options.config },
     });
   }
 
   /**
-   * One actor call, routed as the example gateway does: `POST /v1/workspaces`
+   * The actor restarted (evicted, redeployed, stopped idle): a new runtime
+   * over the same database, with the control plane still holding the sockets.
+   */
+  restart(): FakeWorkspaceActor {
+    return new FakeWorkspaceActor(this.id, this.options, { sql: this.sql, alarm: this.alarm, sockets: this.sockets });
+  }
+
+  /**
+   * One actor call: the runtime's transaction with the method body in
+   * `db.transaction` as the `Workspace` actor wraps it, and the sockets
+   * reachable for its duration.
+   */
+  private call<T>(work: () => Promise<T>): Promise<T> {
+    this.calls += 1;
+    return this.sockets.during(() => this.sql.atomic(() => this.sql.transaction(work)));
+  }
+
+  /**
+   * One actor call, routed as the gateway does: `POST /v1/workspaces`
    * goes to `create` with the tag the gateway's keyring signs for this id.
    */
   async handle(request: ActorHttpRequest): Promise<ActorHttpResponse> {
-    this.calls += 1;
     if (request.method === 'POST' && new URL(request.url).pathname === '/v1/workspaces') {
-      const tag = await TEST_CREDENTIAL_TAGS.tag(this.id);
-      return this.sql.atomic(() => this.runtime.create(request, tag));
+      return this.create(request, await TEST_CREDENTIAL_TAGS.tag(this.id));
     }
-    return this.sql.atomic(() => this.runtime.handle(request));
+    return this.call(() => this.runtime.handle(request));
+  }
+
+  /** `create` with the tag the gateway hands over (one call, as `handle`). */
+  create(request: ActorHttpRequest, tag: string): Promise<ActorHttpResponse> {
+    return this.call(() => this.runtime.create(request, tag));
   }
 
   /** `onAlarm`: the firing alarm reads as set during the call and is consumed after it unless re-armed. */
   async maintain(): Promise<void> {
     const firing = this.alarm.at;
     try {
-      await this.sql.atomic(() => this.runtime.maintain());
+      await this.call(() => this.runtime.maintain());
     } finally {
       if (this.alarm.at === firing) this.alarm.at = null;
     }
+  }
+
+  /** `onConnect` for a socket the gateway opened with `metadata` (a grant's principal). */
+  /**
+   * `onConnect` with `metadata`. A signed principal is re-signed with a fresh
+   * nonce and issue time (as every real upgrade gets its own grant), so tests
+   * may reuse one grant for several sockets; `asIs` sends it untouched.
+   */
+  async connect(metadata: unknown, options: { asIs?: boolean } = {}): Promise<FakeActorSocket> {
+    const parsed = options.asIs ? undefined : SocketPrincipalSchema.safeParse(metadata);
+    const socket = this.sockets.connecting(parsed?.success && parsed.data.sig !== undefined ? await signSocketPrincipal(FAKE_FILE_SECRET, parsed.data) : metadata);
+    await this.call(() => this.runtime.onConnect(socket));
+    if (socket.state === 'connecting') socket.state = 'open';
+    return socket;
+  }
+
+  /** `onMessage`: a JSON frame the client sent. */
+  message(socket: FakeActorSocket, message: unknown): Promise<void> {
+    return this.call(() => this.runtime.onMessage(socket, message));
+  }
+
+  /** `onDisconnect`: the control plane has already dropped the socket. */
+  disconnect(socket: FakeActorSocket): Promise<void> {
+    this.sockets.drop(socket);
+    return this.call(() => this.runtime.onDisconnect(socket));
   }
 }
 

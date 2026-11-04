@@ -3,7 +3,8 @@ import { verifyFileToken } from '../../../lib/fileTokens.js';
 import { sha256Hex } from '../../../lib/crypto.js';
 import { createActorRuntime, nextMaintenanceAt } from '../index.js';
 import { SignedUrlFileStorage } from '../files.js';
-import { FakeAlarm, FakeWorkspaceActor, TEST_CREDENTIAL_TAGS, jsonRequest } from './fakeActor.js';
+import type { ActorHttpRequest } from '../http.js';
+import { FAKE_FILE_SECRET, FakeAlarm, FakeWorkspaceActor, TEST_CREDENTIAL_TAGS, jsonRequest } from './fakeActor.js';
 
 const WORKSPACE_ID = '241764880589606912';
 
@@ -56,6 +57,44 @@ describe('workspace actor runtime', () => {
     expect(search.json.data.map((hit) => hit.text)).toContain('hello from a durable actor');
   });
 
+  it('applies the schema inside the first call and only reads it on later activations', async () => {
+    const actor = new FakeWorkspaceActor(WORKSPACE_ID);
+    // The constructor runs no SQL: nothing commits outside a call.
+    expect(actor.sql.log).toEqual([]);
+    const { key } = await workspaceWithAgents(actor);
+    const cold = actor.sql.log.filter((statement) => /^\s*(CREATE|ALTER|DROP|INSERT INTO _engine_migrations)/i.test(statement));
+    expect(cold.length).toBeGreaterThan(100);
+    expect(rows(actor, "SELECT COUNT(*) AS n FROM sqlite_master WHERE type = 'table' AND name = '_actor_sockets'")).toEqual([{ n: 1 }]);
+
+    // A later activation finds the schema current with two reads and no DDL.
+    const woken = actor.restart();
+    woken.sql.log.length = 0;
+    expect((await call(woken, 'GET', '/v1/agents', undefined, key)).status).toBe(200);
+    const schema = woken.sql.log.filter((statement) => /sqlite_master|_engine_migrations/.test(statement));
+    expect(schema).toEqual([
+      expect.stringMatching(/^SELECT name FROM sqlite_master WHERE type = 'table' AND name IN/),
+      'SELECT name FROM _engine_migrations',
+    ]);
+    expect(woken.sql.log.filter((statement) => /^\s*(CREATE|ALTER|DROP)/i.test(statement))).toEqual([]);
+
+    // The rest of the activation skips the check.
+    woken.sql.log.length = 0;
+    expect((await call(woken, 'GET', '/v1/agents', undefined, key)).status).toBe(200);
+    expect(woken.sql.log.filter((statement) => /sqlite_master|_engine_migrations/.test(statement))).toEqual([]);
+  });
+
+  it('rolls the schema back with a failed first call, leaving no orphan', async () => {
+    const actor = new FakeWorkspaceActor(WORKSPACE_ID);
+    const request = jsonRequest('POST', '/v1/workspaces', { name: 'doomed' });
+    await expect(actor.sql.atomic(() => actor.sql.transaction(() => actor.runtime.create(request, 'not-a-tag'))))
+      .rejects.toThrow(/credential tag/);
+    expect(rows(actor, "SELECT name FROM sqlite_master WHERE type = 'table'")).toEqual([]);
+    // The next activation applies it again, nested in the call's transaction and the engine's write groups.
+    const again = actor.restart();
+    const { key } = await workspaceWithAgents(again);
+    expect(key).toMatch(/^ar_ws_/);
+  });
+
   it('accepts only ar_ credentials: legacy ones get 401 and there is no upgrade route', async () => {
     const actor = new FakeWorkspaceActor(WORKSPACE_ID);
     const { key, alice } = await workspaceWithAgents(actor);
@@ -73,12 +112,44 @@ describe('workspace actor runtime', () => {
     expect(new Headers(ok.headers).get('deprecation')).toBeNull();
   });
 
-  it('keeps the credential tag its gateway handed over at create', async () => {
+  it('refuses a file-signing secret shorter than 32 characters at construction', () => {
+    expect(() => new FakeWorkspaceActor(WORKSPACE_ID, { fileSigningSecret: 'x'.repeat(31) })).toThrow(/fileSigningSecret must be at least 32 characters/);
+    expect(() => new FakeWorkspaceActor(WORKSPACE_ID, { fileSigningSecret: 'x'.repeat(32) })).not.toThrow();
+  });
+
+  it('keeps the credential tag its gateway handed over at create, also when a keyed replay carries a rotated one', async () => {
     const actor = new FakeWorkspaceActor(WORKSPACE_ID);
-    await workspaceWithAgents(actor);
-    const other = jsonRequest('POST', '/v1/workspaces', { name: 'again' });
-    await expect(actor.sql.atomic(() => actor.runtime.create(other, 'bAAAAAAAAAA'))).rejects.toThrow(/different credential tag/);
+    const { key } = await workspaceWithAgents(actor);
+    const original = actor.sql.exec('SELECT tag FROM _actor_credential_tag') as { tag: string }[];
+    expect(original).toHaveLength(1);
+    // The gateway's keyring rotated: the retry of a keyed create reaches this
+    // actor with the now-current tag. The create is not refused for it, the
+    // workspace's tag stands, and credentials keep carrying it.
+    const again = jsonRequest('POST', '/v1/workspaces', { name: 'again' });
+    const refused = await actor.create(again, 'bAAAAAAAAAA');
+    expect(refused.status).toBe(409);
+    expect(JSON.parse(refused.body).error.code).toBe('workspace_exists');
+    expect(actor.sql.exec('SELECT tag FROM _actor_credential_tag')).toEqual(original);
+    const minted = await call<{ token: string }>(actor, 'POST', '/v1/agents', { name: 'carol' }, key);
+    expect(minted.status).toBe(201);
+    expect(minted.json.data.token).toContain(`_${original[0].tag}_`);
     expect(() => new FakeWorkspaceActor('ws_not_a_snowflake')).toThrow(/64-bit snowflake/);
+
+    // The keyed replay itself: the same keyed create, carrying the rotated
+    // tag, is answered with the original 201 body by the engine's record.
+    const keyed = new FakeWorkspaceActor('241764880589606914', { config: { workspaceBootstrapSecret: 'bootstrap-secret-0123456789abcdef' } });
+    const keyedCreate: ActorHttpRequest = {
+      method: 'POST',
+      url: 'https://armadillo.test/v1/workspaces',
+      headers: [['content-type', 'application/json'], ['idempotency-key', 'kkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkk']],
+      body: JSON.stringify({ name: 'keyed' }),
+    };
+    const created = await keyed.create(keyedCreate, 'aBBBBBBBBBB');
+    expect(created.status).toBe(201);
+    const replayed = await keyed.create(keyedCreate, 'bBBBBBBBBBB');
+    expect(replayed.status).toBe(200); // the engine's keyed replay: the recorded answer, revealed again
+    expect(JSON.parse(replayed.body).data).toEqual(JSON.parse(created.body).data);
+    expect(keyed.sql.exec('SELECT tag FROM _actor_credential_tag')).toEqual([{ tag: 'aBBBBBBBBBB' }]);
   });
 
   it('refuses a second workspace in the same actor', async () => {
@@ -273,7 +344,7 @@ describe('workspace actor runtime', () => {
       sql: { exec: () => [] } as never,
       workspaceId: WORKSPACE_ID,
       baseUrl: 'https://armadillo.test',
-      fileSigningSecret: 'file-secret',
+      fileSigningSecret: 'file-secret-of-at-least-32-characters',
       outboundFetch: fetch,
       alarm: new FakeAlarm(),
     })).toThrow('the relaycast actor adapter requires durable-actors >= 0.14.5');
@@ -405,10 +476,11 @@ describe('workspace actor runtime', () => {
         return new Response(null, { status: 204 });
       },
     });
+    await call(actor, 'POST', '/v1/workspaces', { name: 'blobs' });
     const { files } = actor.runtime.deps;
     const { uploadUrl } = await files.createUploadUrl({ storageKey: `${WORKSPACE_ID}/f1/a.txt`, contentType: 'text/plain', sizeBytes: 5 });
     const token = new URL(uploadUrl).searchParams.get('token');
-    expect(await verifyFileToken('file-secret', token)).toMatchObject({ op: 'put', size: 5, type: 'text/plain' });
+    expect(await verifyFileToken(FAKE_FILE_SECRET, token)).toMatchObject({ op: 'put', size: 5, type: 'text/plain' });
 
     await expect(files.deleteObjects!({ storageKeys: [`${WORKSPACE_ID}/f1/a.txt`] })).rejects.toThrow(/deferred/);
     expect(requests).toEqual([]);
@@ -416,7 +488,7 @@ describe('workspace actor runtime', () => {
     await actor.maintain();
     expect(requests.map((request) => request.method)).toEqual(['DELETE']);
     const deleteToken = new URL(requests[0].url).searchParams.get('token');
-    expect(await verifyFileToken('file-secret', deleteToken)).toMatchObject({ op: 'delete', key: `${WORKSPACE_ID}/f1/a.txt` });
+    expect(await verifyFileToken(FAKE_FILE_SECRET, deleteToken)).toMatchObject({ op: 'delete', key: `${WORKSPACE_ID}/f1/a.txt` });
   });
 
   it('defers outbound HTTP to maintenance and arms the alarm', async () => {

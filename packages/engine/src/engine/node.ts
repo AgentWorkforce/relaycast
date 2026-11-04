@@ -35,6 +35,7 @@ import { chunkValues } from '../lib/queryChunks.js';
 import type { AtomicWrite, BatchCapability, EngineDb } from '../ports/database.js';
 import type { PresenceTracker } from '../ports/presence.js';
 import type { NodeConnectionRegistry } from '../ports/realtime.js';
+import { NODE_LIVENESS_CHECKPOINT_INTERVAL_MS } from '../ports/nodeLiveness.js';
 import { generateId } from './snowflake.js';
 import { assertRegistrableAgentName, agentLivenessLoss, agentLivenessRefresh, RELEASED_AGENT_STATUS } from './agent.js';
 import { rotateAgentIdentity } from './agentIdentity.js';
@@ -43,11 +44,12 @@ import {
   DEFAULT_PROVIDER_NAME,
   assertActionTaskMode,
   capabilityKind,
+  claimOrphanedGlobalAliases,
+  effectiveActionCapabilities,
   heartbeatProvider,
   isProviderLive,
   markProviderOffline,
   materializeProviderActions,
-  providerActionsMaterialized,
   recomputeNodeAggregate,
   refreshNodeAggregate,
   removeProvider,
@@ -109,6 +111,21 @@ export interface HandleNodeControlMessageArgs {
    */
   workspaceDeadline?: WorkspaceDeadlineHolder;
   /**
+   * Read inside the serialized callback: true when a reconnect's
+   * `node.register` superseded this frame's connection, even if that
+   * connection's close has since been processed (the registry's own
+   * `isConnectionSuperseded` forgets a closed connection). Either source
+   * refuses the frame.
+   */
+  connectionSuperseded?: () => boolean;
+  /**
+   * The provider the connection held before a reconnect superseded it. A
+   * settling frame it still sends (`action.result` for work dispatched to
+   * it) resolves to this provider, which the invocation row names, rather
+   * than to the cleared binding's `default` fallback.
+   */
+  supersededProviderName?: string;
+  /**
    * Set by a socket owner that verified this `node.heartbeat` is identical to
    * the last heartbeat the engine accepted on this connection, in the same
    * liveness generation, under `role`: a durable checkpoint of unchanged
@@ -133,9 +150,18 @@ export interface WorkspaceDeadlineHolder {
 
 function resolveProviderIdentity(
   message: { provider?: FleetProviderIdentity },
+  nodeId: string,
   connectionId: string | undefined,
 ): FleetProviderIdentity {
   if (message.provider) return message.provider;
+  // An implicit direct node is one agent's own delivery host, reached by one
+  // client with that agent's credential; it never names a provider instance.
+  // Its identity is the node itself, stable across sockets, so the attach
+  // arbitration reads a reconnect as the same instance (the new socket
+  // supersedes the old one) rather than a live duplicate. The connection id
+  // would make every reconnect a conflict whenever the old socket's close
+  // reaches the server after the new socket's register.
+  if (nodeId.startsWith(IMPLICIT_DIRECT_NODE_ID_PREFIX)) return { name: DEFAULT_PROVIDER_NAME, instance_id: nodeId };
   return { name: DEFAULT_PROVIDER_NAME, instance_id: connectionId ?? generateId() };
 }
 
@@ -956,6 +982,10 @@ export async function registerNode(
 
   const capabilities = normalizeCapabilities(message.capabilities);
   await runAtomic(db, async (tx) => {
+    // Actions first: if materialization fails (D1 has no rollback), the
+    // provider's persisted capabilities still differ and its next heartbeat
+    // retries it.
+    await materializeProviderActions(tx, workspaceId, authenticatedNodeId, provider.name, capabilities);
     await upsertProvider(tx, workspaceId, authenticatedNodeId, {
       name: provider.name,
       instanceId: provider.instance_id,
@@ -964,7 +994,6 @@ export async function registerNode(
       version: message.version,
       handlersLive: capabilities.length > 0,
     });
-    await materializeProviderActions(tx, workspaceId, authenticatedNodeId, provider.name, capabilities);
     await tx
       .update(nodes)
       .set({ name: message.name, kind: 'ws', role: 'broker', deliveryAdapter: 'ws.node.v1', deliveryConfig: null, tags: brokerTagsPreservingServerOwned(tags) })
@@ -1062,6 +1091,23 @@ export async function heartbeatNode(
       const reportedLoad = message.load_reported === true && typeof message.load === 'number'
         ? message.load
         : undefined;
+      // Only action capabilities materialize into rows, so only a change to
+      // that subset re-runs the prune/upsert pass. Capacity entries feed
+      // placement: the broker's live-agent roster rides in one of them and
+      // changes on every spawn and exit, which must not rewrite action rows.
+      // The rows need no re-check: every other write that touches them keeps
+      // them in the state materialization would produce. It runs before the
+      // provider write, so if it fails (D1 has no rollback) the persisted
+      // capabilities still differ and the next frame retries it.
+      if (
+        existingProvider === undefined
+        || !sameCapabilities(
+          effectiveActionCapabilities(existingProvider.capabilities ?? []),
+          effectiveActionCapabilities(caps),
+        )
+      ) {
+        await materializeProviderActions(tx, workspaceId, nodeId, providerName, caps);
+      }
       // One write carries both the roster refresh (capabilities/max_agents/
       // version) and the liveness signal (load/active_agents/handlers_live)
       // that upsertProvider + heartbeatProvider used to write separately.
@@ -1091,23 +1137,6 @@ export async function heartbeatNode(
           createdAt: now,
           ...providerWrite,
         });
-      }
-      // Only action capabilities materialize into rows, so only a change to
-      // that subset re-runs the prune/upsert pass. Capacity entries feed
-      // placement: the broker's live-agent roster rides in one of them and
-      // changes on every spawn and exit, which must not rewrite action rows.
-      // The one-read drift check keeps the heartbeat self-healing; every
-      // node.register still materializes unconditionally.
-      const actionCaps = caps.filter((cap) => capabilityKind(cap) === 'action');
-      if (
-        existingProvider === undefined
-        || !sameCapabilities(
-          (existingProvider.capabilities ?? []).filter((cap) => capabilityKind(cap) === 'action'),
-          actionCaps,
-        )
-        || !(await providerActionsMaterialized(tx, workspaceId, nodeId, providerName, actionCaps))
-      ) {
-        await materializeProviderActions(tx, workspaceId, nodeId, providerName, caps);
       }
     } else {
       await heartbeatProvider(tx, workspaceId, nodeId, providerName, {
@@ -1341,11 +1370,21 @@ export async function handleProviderDisconnect(
   providerName: string,
   hasRemainingConnections: boolean,
   deps?: InvocationCompletionDeps,
+  options: {
+    /**
+     * Read under the node lock, right before the first write: true when a
+     * newer connection re-bound the provider while this teardown waited
+     * its turn (a reconnect whose register was queued ahead of the old
+     * socket's close). The close is then stale and nothing is written.
+     */
+    superseded?: () => boolean;
+  } = {},
 ) {
   // Serialized with node-control operations so a teardown can't race a
   // concurrent register's provider upsert / aggregate recompute (or, on
   // better-sqlite3, deadlock its isolated transaction).
   return serializeNodeOp(workspaceId, nodeId, async () => {
+    if (options.superseded?.()) return;
     if (!hasRemainingConnections) {
       await markNodeOffline(db, registry, workspaceId, nodeId, { deps, reason: 'disconnected' });
       return;
@@ -2360,6 +2399,8 @@ export async function deleteNode(
     // actually removed.
     w.delete(actions).where(and(hostedActions, nodeStillDeletable)).returning({ id: actions.id }),
     w.delete(nodes).where(deletable).returning({ id: nodes.id }),
+    // A deleted global alias passes to another node's default provider.
+    claimOrphanedGlobalAliases(w, workspaceId),
   ], { requireAtomic: true });
   const [failed, , removedActions, deleted] = results as [
     Array<typeof actionInvocations.$inferSelect>, unknown, Array<{ id: string }>, Array<{ id: string }>,
@@ -2659,6 +2700,7 @@ export async function registerAgentViaNode(
                 .delete(agents)
                 .where(and(eq(agents.workspaceId, workspaceId), eq(agents.id, agentId))),
               ...releaseNodeAgentSlotWrites(tx, workspaceId, [nodeId]),
+              claimOrphanedGlobalAliases(tx, workspaceId),
             ], []);
             throw landingErr;
           }
@@ -2669,6 +2711,8 @@ export async function registerAgentViaNode(
         compensations.push(tx
           .delete(agents)
           .where(and(eq(agents.workspaceId, workspaceId), eq(agents.id, agentId))));
+        // An action registered for the agent meanwhile cascades with it.
+        compensations.push(claimOrphanedGlobalAliases(tx, workspaceId));
       }
       if ((admissionResults[0] as { id: string }[] | undefined)?.[0]) {
         compensations.push(...releaseNodeAgentSlotWrites(tx, workspaceId, [nodeId]));
@@ -3385,9 +3429,12 @@ export interface ListNodesFilters {
   capability?: string;
   name?: string;
   /**
-   * Selects on computed liveness (persisted `status` plus a fresh heartbeat
-   * within `NODE_LIVENESS_TTL_MS`), pushed into SQL rather than applied after
-   * a full-table fetch. Omitted: no liveness selection (legacy behavior).
+   * Selects on computed liveness. Without a liveness authority: persisted
+   * `status` plus a fresh heartbeat within `NODE_LIVENESS_TTL_MS`, in SQL.
+   * Under an authority: the authority's answer per node, with `online`
+   * candidates bounded in SQL by {@link NODE_ONLINE_CANDIDATE_RECENCY_MS};
+   * `offline` rows outside that bound are offline without a probe.
+   * Omitted: no liveness selection (legacy behavior).
    */
   status?: 'online' | 'offline';
   /**
@@ -3399,7 +3446,11 @@ export interface ListNodesFilters {
   history?: boolean;
   /** Resume point for `history`: the `id` of the last row already consumed. */
   cursor?: string | null;
-  /** Page size for `history`, clamped to [1, NODE_LIST_HISTORY_MAX_LIMIT]. */
+  /**
+   * Page size for `history`, clamped to [1, NODE_LIST_HISTORY_MAX_LIMIT].
+   * Without `history`, caps a `status` selection: rows are taken in `id`
+   * order and the first `limit` matches are returned. Ignored without either.
+   */
   limit?: number;
   /**
    * Restricts the result to nodes with at least one active binding to one of
@@ -3494,6 +3545,44 @@ async function visibleActiveAgentCounts(
   return counts;
 }
 
+/**
+ * Margin for an online node's durable checkpoint to land after it is due. The
+ * hosted authority sheds a checkpoint whose write is refused under database
+ * pressure and does not retry it: the next heartbeat (at most 30 s later) is
+ * the next attempt, and each attempt holds the owner's 5 s D1 deadline first.
+ * Overload episodes run for minutes, so this covers a three-minute run of shed
+ * or timed-out checkpoints (six attempts at the 30 s cadence), the 30 s wait
+ * for the attempt that lands and its 5 s deadline, and 25 s of clock skew
+ * between the owner and this reader. A node shed for longer than that drops
+ * out of `status=online` until a checkpoint lands, while the authority may
+ * still report it online.
+ */
+const NODE_CHECKPOINT_LANDING_SLACK_MS = 240_000;
+
+/**
+ * How recent a node row's checkpoint must be for a liveness authority to be
+ * able to report the node online. An authority reports online only from a
+ * receipt within the lease (`NODE_LIVENESS_TTL_MS`), and it checkpoints a node
+ * whose receipts keep arriving at least every
+ * `NODE_LIVENESS_CHECKPOINT_INTERVAL_MS`, anchored at a receipt time no later
+ * than the stamp. So an online node's row holds a `last_heartbeat_at` no older
+ * than interval + lease, plus landing slack. Rows outside it are left unprobed
+ * for `status=online`. The stored `status` is not part of the bound: it is a
+ * projection the authority overrides.
+ */
+export const NODE_ONLINE_CANDIDATE_RECENCY_MS =
+  NODE_LIVENESS_TTL_MS + NODE_LIVENESS_CHECKPOINT_INTERVAL_MS + NODE_CHECKPOINT_LANDING_SLACK_MS;
+
+/** SQL upper bound on the rows an authority can report online. */
+function onlineCandidateCondition(now: Date) {
+  return gte(nodes.lastHeartbeatAt, new Date(now.getTime() - NODE_ONLINE_CANDIDATE_RECENCY_MS));
+}
+
+/** {@link onlineCandidateCondition} over a fetched row. */
+function isOnlineCandidate(row: Pick<NodeRow, 'lastHeartbeatAt'>, now: number): boolean {
+  return row.lastHeartbeatAt !== null && row.lastHeartbeatAt.getTime() >= now - NODE_ONLINE_CANDIDATE_RECENCY_MS;
+}
+
 /** Liveness predicate mirroring {@link isNodeLive}, pushed into SQL. */
 function livenessCondition(status: 'online' | 'offline', now: Date) {
   const staleBefore = new Date(now.getTime() - NODE_LIVENESS_TTL_MS);
@@ -3522,6 +3611,7 @@ export async function listNodes(
   if (filters.name) conditions.push(eq(nodes.name, filters.name));
   if (filters.capability) conditions.push(capabilityMatchCondition(filters.capability));
   if (filters.status && !nodeLivenessAuthority(db)) conditions.push(livenessCondition(filters.status, now));
+  else if (filters.status === 'online') conditions.push(onlineCandidateCondition(now));
   // Observer authorization is a WHERE condition, evaluated in the same query
   // as every other filter and therefore before pagination/cursor computation
   // below — a hidden node is excluded from row selection entirely, so it can
@@ -3530,13 +3620,20 @@ export async function listNodes(
   if (filters.observerAgentIds) conditions.push(observerNodeVisibilityCondition(filters.observerAgentIds));
 
   if (!filters.history) {
-    // Legacy/default shape: a bare array, unpaginated, matching every caller
-    // that predates the history/status selector. `name`/`capability`/`status`
-    // are still evaluated in SQL instead of after a full-table fetch.
-    const rows = await db.select().from(nodes).where(and(...conditions));
-    const page = await publicNodes(db, rows, now.getTime(), filters.status);
+    // Legacy/default shape: a bare array, matching every caller that predates
+    // the history/status selector. `name`/`capability`/`status` are still
+    // evaluated in SQL instead of after a full-table fetch. A `status`
+    // selection honors `limit` over rows in `id` order.
+    const limit = filters.status && filters.limit !== undefined ? Math.max(1, filters.limit) : undefined;
+    // Without an authority the SQL predicate is the whole selection, so the
+    // limit goes into SQL too; under one, probing stops at `limit` matches.
+    const query = db.select().from(nodes).where(and(...conditions));
+    const rows = !filters.status ? await query
+      : limit !== undefined && !nodeLivenessAuthority(db) ? await query.orderBy(asc(nodes.id)).limit(limit)
+      : await query.orderBy(asc(nodes.id));
+    const page = await publicNodes(db, rows, now.getTime(), filters.status, limit);
     if (!filters.observerAgentIds) return { nodes: page, nextCursor: null };
-    const counts = await visibleActiveAgentCounts(db, workspaceId, rows.map((row) => row.id), filters.observerAgentIds);
+    const counts = await visibleActiveAgentCounts(db, workspaceId, page.map((node) => node.id), filters.observerAgentIds);
     return {
       nodes: page.map((node) => ({ ...node, active_agents: counts.get(node.id) ?? 0 })),
       nextCursor: null,
@@ -3685,6 +3782,9 @@ function sendControl(socket: NodeSocketLike | undefined, payload: Record<string,
  * otherwise a connected node registers agents into a workspace being deleted.
  */
 /** Control frames still admitted after the workspace expires (see the gate below). */
+/** Frames that only settle work already dispatched to the socket; a superseded socket may still finish those. */
+const IN_FLIGHT_SETTLING_FRAMES: ReadonlySet<string> = new Set(['action.accept', 'action.result', 'delivery.ack']);
+
 const SETTLING_CONTROL_FRAMES: ReadonlySet<string> = new Set([
   'action.accept',
   'action.result',
@@ -3741,7 +3841,7 @@ export async function handleNodeControlMessage(args: HandleNodeControlMessageArg
   // connection's provider binding synchronously, and a lookup inside the callback
   // would then fall back to `default` and act on the wrong provider.
   const boundProviderName = args.connectionId
-    ? args.registry.providerNameForConnection?.(args.connectionId)
+    ? (args.registry.providerNameForConnection?.(args.connectionId) ?? args.supersededProviderName)
     : undefined;
   // The connection's registered identity is authoritative — a provider can't act
   // on another provider by putting a different name in the frame. The frame's
@@ -3755,6 +3855,25 @@ export async function handleNodeControlMessage(args: HandleNodeControlMessageArg
   // check, the provider-row upsert, or the aggregate recompute.
   return serializeNodeOp(args.workspaceId, args.nodeId, async () => {
   try {
+    // Decided under the node lock: a frame queued on a socket that a
+    // reconnect's `node.register` has since superseded would act on the live
+    // socket's provider (its own binding is gone, and the fallback is the
+    // same `default`). Only frames that settle work already in flight pass.
+    if (
+      args.connectionId
+      && !IN_FLIGHT_SETTLING_FRAMES.has(message.type)
+      && (args.connectionSuperseded?.() || args.registry.isConnectionSuperseded?.(args.connectionId))
+    ) {
+      sendControl(args.socket, {
+        v: 1,
+        id: requestId(message),
+        type: 'error',
+        ok: false,
+        code: 'connection_superseded',
+        message: 'A newer socket registered this provider; this socket is closed',
+      });
+      return;
+    }
     // A socket outlives its workspace's deletion, and every other frame writes
     // durable state (a heartbeat can insert provider and action rows). Only
     // frames that settle work already in flight or tear identity down pass.
@@ -3770,7 +3889,7 @@ export async function handleNodeControlMessage(args: HandleNodeControlMessageArg
     }
     switch (message.type) {
       case 'node.register': {
-        const provider = resolveProviderIdentity(message, args.connectionId);
+        const provider = resolveProviderIdentity(message, args.nodeId, args.connectionId);
         if (args.connectionId && args.registry.providerAttachConflict) {
           const conflict = args.registry.providerAttachConflict(
             args.workspaceId,
@@ -4246,24 +4365,41 @@ export async function handleNodeControlMessage(args: HandleNodeControlMessageArg
   });
 }
 
-async function publicNodes(db: Db, rows: NodeRow[], now: number, status?: 'online' | 'offline') {
+async function publicNodes(db: Db, rows: NodeRow[], now: number, status?: 'online' | 'offline', limit?: number) {
   if (!nodeLivenessAuthority(db)) return rows.map(row => publicNode(row, now));
-  const result: ReturnType<typeof publicNode>[] = [];
-  await filterAsync(rows, async row => {
-    const snapshot = await inspectNodeLiveness(db, row.workspaceId, row.id);
-    const live = !!snapshot && snapshotOnline(snapshot);
-    const item = publicNode(row, now, live, snapshot?.status ?? 'unknown');
-    // Readiness is owned by the fresh lease, independently of checkpointed
-    // catalog metadata in nodes.handlers_live.
-    const receivedAt = Date.now();
-    item.handlers_live = live && !!snapshot?.providers.some(p =>
-      p.live && p.handlers_live && p.expires_at > receivedAt && p.last_received_at <= receivedAt);
-    if (!status || item.status === status) result.push(item);
-    return true;
-  });
-  // Concurrent probes must not scramble stable list ordering.
-  const positions = new Map(rows.map((row, index) => [row.id, index]));
-  return result.sort((a,b) => positions.get(a.id)! - positions.get(b.id)!);
+  // At most eight probes in flight, issued in row order. Once `limit` rows
+  // match, no new probe starts; every row before the last one taken has been
+  // decided, so the result is exactly the first matches in row order. A `status=offline` row outside the online
+  // candidate bound cannot be reported online, so it is offline unprobed.
+  const items: Array<ReturnType<typeof publicNode> | undefined> = new Array(rows.length);
+  let next = 0;
+  let matched = 0;
+  const worker = async () => {
+    while (next < rows.length && (limit === undefined || matched < limit)) {
+      const index = next++;
+      const row = rows[index];
+      if (status === 'offline' && !isOnlineCandidate(row, now)) {
+        items[index] = publicNode(row, now, false, 'offline');
+        matched += 1;
+        continue;
+      }
+      const snapshot = await inspectNodeLiveness(db, row.workspaceId, row.id);
+      const live = !!snapshot && snapshotOnline(snapshot);
+      const item = publicNode(row, now, live, snapshot?.status ?? 'unknown');
+      // Readiness is owned by the fresh lease, independently of checkpointed
+      // catalog metadata in nodes.handlers_live.
+      const receivedAt = Date.now();
+      item.handlers_live = live && !!snapshot?.providers.some(p =>
+        p.live && p.handlers_live && p.expires_at > receivedAt && p.last_received_at <= receivedAt);
+      if (!status || item.status === status) {
+        items[index] = item;
+        matched += 1;
+      }
+    }
+  };
+  await Promise.all(Array.from({ length: Math.min(8, rows.length) }, worker));
+  const result = items.filter((item): item is ReturnType<typeof publicNode> => item !== undefined);
+  return limit === undefined ? result : result.slice(0, limit);
 }
 
 async function reusableMachineNode(db: Db, node: NodeRow): Promise<boolean> {

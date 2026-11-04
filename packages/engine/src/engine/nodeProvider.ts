@@ -1,10 +1,11 @@
-import { and, eq, inArray, isNull, notInArray, or, sql } from 'drizzle-orm';
+import { and, eq, notInArray, sql, type SQL } from 'drizzle-orm';
 import type { FleetCapability, FleetCapabilityKind } from '@relaycast/types';
 import type { getDb } from '../db/index.js';
 import { actions, nodeProviders, nodes } from '../db/schema.js';
 import { generateId } from './snowflake.js';
 import { codedError } from '../lib/httpError.js';
 import { NODE_LIVENESS_TTL_MS } from './placement.js';
+import { runAtomicWrites, type AtomicWrite, type BatchCapability, type TransactionCapability } from '../ports/database.js';
 
 type Db = ReturnType<typeof getDb>;
 type ProviderRow = typeof nodeProviders.$inferSelect;
@@ -178,20 +179,19 @@ export async function markProviderOffline(db: Db, workspaceId: string, nodeId: s
 
 /** Remove a provider and the actions it materialized (provider-scoped deregister / prune). */
 export async function removeProvider(db: Db, workspaceId: string, nodeId: string, name: string): Promise<void> {
-  await db
-    .delete(actions)
-    .where(and(
+  await runAtomicWrites(db, (w) => [
+    w.delete(actions).where(and(
       eq(actions.workspaceId, workspaceId),
       eq(actions.handlerNodeId, nodeId),
       eq(actions.handlerProvider, name),
-    ));
-  await db
-    .delete(nodeProviders)
-    .where(and(
+    )),
+    w.delete(nodeProviders).where(and(
       eq(nodeProviders.workspaceId, workspaceId),
       eq(nodeProviders.nodeId, nodeId),
       eq(nodeProviders.name, name),
-    ));
+    )),
+    claimOrphanedGlobalAliases(w, workspaceId),
+  ]);
 }
 
 /** `task` execution is only meaningful on a dispatchable action capability. */
@@ -202,69 +202,64 @@ export function assertActionTaskMode(capabilities: FleetCapability[]): void {
 }
 
 /**
- * Whether the provider's materialized action set is already in the state
- * `materializeProviderActions` would produce for `actionCaps` — same names,
- * all active, matching queue/execution modes and the global-alias claim the
- * materializer would compute. Two indexed reads let an unchanged heartbeat
- * skip re-materialization while still self-healing drift the capability set
- * cannot see: a row deleted out-of-band, a flag flip, or a global alias that
- * became claimable (the agent-hosted action that shadowed it was deleted,
- * or the node that owned the alias released it).
+ * Settle the workspace-global alias of every action name that has no claimant:
+ * no agent-hosted row and no global row. The oldest default-provider node row
+ * of such a name claims it, as `materializeProviderActions` would have had the
+ * claimant been absent when that row was written. Every write that removes an
+ * agent-hosted row or a global row runs it in the same atomic unit, so an
+ * alias never waits for another provider's next registration.
  */
-export async function providerActionsMaterialized(
-  db: Db,
-  workspaceId: string,
-  nodeId: string,
-  providerName: string,
-  actionCaps: FleetCapability[],
-): Promise<boolean> {
-  const rows = await db
-    .select({
-      name: actions.name,
-      isActive: actions.isActive,
-      isGlobal: actions.isGlobal,
-      queue: actions.queue,
-      executionMode: actions.executionMode,
-    })
-    .from(actions)
-    .where(and(
-      eq(actions.workspaceId, workspaceId),
-      eq(actions.handlerNodeId, nodeId),
-      eq(actions.handlerProvider, providerName),
-    ));
-  if (rows.length !== actionCaps.length) return false;
+export function claimOrphanedGlobalAliases(db: Db, workspaceId: string) {
+  return db
+    .update(actions)
+    .set({ isGlobal: true })
+    .where(sql`${actions.id} IN (${orphanedAliasClaimants(workspaceId)})`);
+}
 
-  // For the default provider the materializer derives `is_global` from rows
-  // outside this provider's own set: an agent-hosted action of the same name
-  // (handler_node_id IS NULL) or a global alias owned by another node both
-  // keep the node row non-global. Mirror that derivation so its drift — an
-  // alias that became claimable since the last materialize — is detected
-  // rather than skipped.
-  const isDefault = providerName === DEFAULT_PROVIDER_NAME;
-  let globalBlockedByName = new Set<string>();
-  if (isDefault && actionCaps.length > 0) {
-    const blockers = await db
-      .select({ name: actions.name, handlerNodeId: actions.handlerNodeId })
-      .from(actions)
-      .where(and(
-        eq(actions.workspaceId, workspaceId),
-        inArray(actions.name, actionCaps.map((cap) => cap.name)),
-        or(isNull(actions.handlerNodeId), eq(actions.isGlobal, true)),
-      ));
-    globalBlockedByName = new Set(
-      blockers.filter((row) => row.handlerNodeId !== nodeId).map((row) => row.name),
-    );
+function orphanedAliasClaimants(workspaceId: string): SQL {
+  return sql`
+    SELECT (
+      SELECT c.id FROM actions c
+      WHERE c.workspace_id = n.workspace_id AND c.name = n.name
+        AND c.handler_node_id IS NOT NULL AND c.handler_provider = ${DEFAULT_PROVIDER_NAME}
+      ORDER BY c.created_at, c.id LIMIT 1
+    )
+    FROM (
+      SELECT DISTINCT workspace_id, name FROM actions
+      WHERE workspace_id = ${workspaceId}
+        AND handler_node_id IS NOT NULL AND handler_provider = ${DEFAULT_PROVIDER_NAME} AND is_global = 0
+    ) n
+    WHERE NOT EXISTS (
+      SELECT 1 FROM actions b
+      WHERE b.workspace_id = n.workspace_id AND b.name = n.name
+        AND (b.handler_node_id IS NULL OR b.is_global = 1)
+    )`;
+}
+
+/**
+ * A provider's action capabilities, one per name: a name listed twice counts
+ * by its last entry, so materialization and the change check never depend on
+ * the order of duplicates.
+ */
+export function effectiveActionCapabilities(capabilities: FleetCapability[]): FleetCapability[] {
+  return [...new Map(capabilities
+    .filter((cap) => capabilityKind(cap) === 'action')
+    .map((cap) => [cap.name, cap] as const)).values()];
+}
+
+/**
+ * Run `write` and {@link claimOrphanedGlobalAliases} as one unit: in order
+ * inside an interactive transaction, as one batch on a handle that only
+ * batches (D1).
+ */
+async function withAliasSettlement(db: Db, workspaceId: string, write: AtomicWrite): Promise<void> {
+  const handle = db as Db & Partial<TransactionCapability> & Partial<BatchCapability>;
+  if (typeof handle.batch === 'function' && typeof handle.withTransaction !== 'function') {
+    await runAtomicWrites(db, [write, claimOrphanedGlobalAliases(db, workspaceId)], { requireAtomic: true });
+    return;
   }
-
-  const expected = new Map(actionCaps.map((cap) => [cap.name, cap]));
-  return rows.every((row) => {
-    const cap = expected.get(row.name);
-    return cap !== undefined
-      && row.isActive
-      && row.queue === (cap.queue === true)
-      && row.executionMode === (cap.execution_mode ?? 'short')
-      && row.isGlobal === (isDefault ? !globalBlockedByName.has(row.name) : cap.global === true);
-  });
+  await write;
+  await claimOrphanedGlobalAliases(db, workspaceId);
 }
 
 /**
@@ -281,7 +276,7 @@ export async function materializeProviderActions(
   providerName: string,
   capabilities: FleetCapability[],
 ): Promise<void> {
-  const actionCaps = capabilities.filter((cap) => capabilityKind(cap) === 'action');
+  const actionCaps = effectiveActionCapabilities(capabilities);
   assertActionTaskMode(capabilities);
   const keepNames = actionCaps.map((cap) => cap.name);
 
@@ -291,10 +286,14 @@ export async function materializeProviderActions(
     eq(actions.handlerNodeId, nodeId),
     eq(actions.handlerProvider, providerName),
   ];
-  await db.delete(actions).where(and(
+  // A pruned or demoted row that held a global alias leaves the name to
+  // another node's default provider. Each release commits with its settlement:
+  // without rollback (D1), a retry no longer sees a release that committed
+  // alone.
+  await withAliasSettlement(db, workspaceId, db.delete(actions).where(and(
     ...pruneConditions,
     keepNames.length > 0 ? notInArray(actions.name, keepNames) : sql`1 = 1`,
-  ));
+  )));
 
   const isDefault = providerName === DEFAULT_PROVIDER_NAME;
   for (const cap of actionCaps) {
@@ -352,10 +351,12 @@ export async function materializeProviderActions(
 
     const wantQueue = cap.queue === true;
     if (existing) {
-      await db
+      const refresh = db
         .update(actions)
         .set({ handlerProvider: providerName, handlerAgentId: null, isGlobal: wantGlobal, queue: wantQueue, executionMode: cap.execution_mode ?? 'short', isActive: true })
         .where(eq(actions.id, existing.id));
+      if (existing.isGlobal && !wantGlobal) await withAliasSettlement(db, workspaceId, refresh);
+      else await refresh;
     } else {
       await db.insert(actions).values({
         id: `act_${generateId()}`,

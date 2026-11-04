@@ -12,7 +12,7 @@ import {
 } from './agent.js';
 import { randomHex, sha256Hex } from '../lib/crypto.js';
 import { codedError } from '../lib/httpError.js';
-import { D1_SAFE_IN_QUERY_CHUNK_SIZE } from '../lib/queryChunks.js';
+import { D1_SAFE_IN_QUERY_CHUNK_SIZE, chunkValues, queryInChunks } from '../lib/queryChunks.js';
 import { toFleetWireJson } from './deliveryWire.js';
 import {
   emitAgentExitedEffects,
@@ -24,7 +24,7 @@ import type { NodeConnectionRegistry, NodeDrainOptions } from '../ports/realtime
 import { runAtomic, runAtomicWrites, type AtomicWrite } from '../ports/database.js';
 import { exclusiveClaimWrite, retryAfterAtMatches, type InvocationClaimStatus } from './invocationClaim.js';
 import { claimSpawnNode, chooseNodeForAction, releaseNodeCapacity, reserveNodeCapacity } from './placement.js';
-import { DEFAULT_PROVIDER_NAME, capacityProviderName, getProvider } from './nodeProvider.js';
+import { DEFAULT_PROVIDER_NAME, capacityProviderName, claimOrphanedGlobalAliases, getProvider } from './nodeProvider.js';
 import { AGENT_TOKEN_HASH_PATTERN } from '@relaycast/types';
 import { createTaskState, expireTaskInvocation, expireTaskInvocations, taskExecution } from './taskInvocation.js';
 import { withEngineOperation } from '../lib/engineDiagnostics.js';
@@ -435,6 +435,19 @@ export async function registerAction(
             : { target: [actions.workspaceId, actions.name], targetWhere: isNull(actions.handlerNodeId), set: refresh },
         )
         .returning();
+      // An agent-hosted action outranks a node's alias for the same name, and
+      // a default provider claims the alias only while no agent hosts it.
+      if (!handlerNodeId) {
+        await tx
+          .update(actions)
+          .set({ isGlobal: false })
+          .where(and(
+            eq(actions.workspaceId, workspaceId),
+            eq(actions.name, data.name),
+            eq(actions.handlerProvider, DEFAULT_PROVIDER_NAME),
+            eq(actions.isGlobal, true),
+          ));
+      }
 
       // A refresh that moves the handler to a DIFFERENT agent strands
       // invocations still waiting for provider acceptance. Once the previous
@@ -554,19 +567,43 @@ export async function deleteAction(
   // null on action delete, which would orphan them outside every
   // handler-resolution join (the TTL sweep included) so they retry forever and
   // the caller never hears back. Atomicity closes the window where an invoke
-  // lands between the stranded snapshot and the delete.
+  // lands between the stranded snapshot and the delete. Rows a node provider
+  // materialized belong to its advertised capabilities and are left to it.
+  const hasInteractiveTransaction = typeof (db as Db & { withTransaction?: unknown }).withTransaction === 'function';
   const { deleted, stranded } = await runAtomic(db, async (tx) => {
     const rows = await tx
-      .select({ id: actions.id })
+      .select({ id: actions.id, handlerProvider: actions.handlerProvider })
       .from(actions)
       .where(and(eq(actions.workspaceId, workspaceId), eq(actions.name, name)));
-    const strandedIds = await openInvocationIdsForActions(tx, workspaceId, rows.map((row) => row.id));
+    const ids = rows.filter((row) => row.handlerProvider === null).map((row) => row.id);
+    if (ids.length === 0 && rows.length > 0) {
+      throw codedError(
+        `Action "${name}" is provided by a node provider; it is removed when the provider stops advertising it`,
+        'action_provider_owned',
+        409,
+      );
+    }
+    const strandedIds = await openInvocationIdsForActions(tx, workspaceId, ids);
     const strandedRows = await failOpenInvocationRows(tx, workspaceId, strandedIds, 'action_deleted');
-    const result = await tx
-      .delete(actions)
-      .where(and(eq(actions.workspaceId, workspaceId), eq(actions.name, name)))
-      .returning();
-    return { deleted: result.length > 0, stranded: strandedRows };
+    if (ids.length === 0) return { deleted: false, stranded: strandedRows };
+    // The deletes (chunked under D1's bind cap) and the alias settlement a
+    // deleted agent-hosted action calls for commit as one unit, so neither a
+    // partial delete nor an unsettled alias can outlive a failure.
+    const writes = (w: Db) => [
+      ...chunkValues(ids).map((chunk) => w
+        .delete(actions)
+        .where(and(eq(actions.workspaceId, workspaceId), inArray(actions.id, chunk), isNull(actions.handlerProvider)))
+        .returning({ id: actions.id })),
+      claimOrphanedGlobalAliases(w, workspaceId),
+    ];
+    const results: unknown[] = [];
+    if (hasInteractiveTransaction) {
+      for (const write of writes(tx)) results.push(await write);
+    } else {
+      results.push(...await runAtomicWrites(tx, writes, { requireAtomic: true }));
+    }
+    const deletedRows = (results.slice(0, -1) as Array<Array<{ id: string }>>).flat();
+    return { deleted: deletedRows.length > 0, stranded: strandedRows };
   });
   if (options.completionDeps) {
     await emitFailedInvocationEffects(options.completionDeps, workspaceId, stranded);
@@ -1006,19 +1043,18 @@ async function failOpenInvocations(
 
 /** Ids of open invocations pointing at any of the given action rows. */
 async function openInvocationIdsForActions(db: Db, workspaceId: string, actionIds: string[]): Promise<string[]> {
-  if (actionIds.length === 0) return [];
-  const rows = await db
+  const rows = await queryInChunks(actionIds, (ids) => db
     .select({ id: actionInvocations.id })
     .from(actionInvocations)
     .where(and(
       eq(actionInvocations.workspaceId, workspaceId),
-      inArray(actionInvocations.actionId, actionIds),
+      inArray(actionInvocations.actionId, ids),
       inArray(actionInvocations.status, OPEN_INVOCATION_STATUSES),
       or(
         isNull(actionInvocations.providerAcceptedAttempt),
         sql`${actionInvocations.providerAcceptedAttempt} <> ${actionInvocations.dispatchAttempts}`,
       ),
-    ));
+    )));
   return rows.map((row) => row.id);
 }
 

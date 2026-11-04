@@ -1,0 +1,25 @@
+{
+  "name": "@relaycast/actors-workspace",
+  "version": "12.7.0",
+  "private": true,
+  "description": "The relaycast Workspace actor: one workspace per TerseAI durable actor, served by the engine's actor adapter",
+  "type": "module",
+  "scripts": {
+    "dev": "durable-actors dev",
+    "deploy": "bun deploy/deploy.ts",
+    "check": "tsc --noEmit",
+    "lint": "eslint src/ deploy/",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@google-cloud/storage": "^8.4.0",
+    "@relaycast/engine": "12.7.0",
+    "durable-actors": "0.14.6",
+    "zod": "^4.6.7"
+  },
+  "devDependencies": {
+    "@types/node": "^25.2.1",
+    "typescript": "^5.9.3",
+    "vitest": "^4.0.18"
+  }
+}

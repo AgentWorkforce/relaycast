@@ -1424,17 +1424,18 @@ describe('node providers', () => {
       .select({ actionId: actionInvocations.actionId })
       .from(actionInvocations)
       .where(eq(actionInvocations.id, invocationId));
-    await stack.runtime.handle.db
-      .delete(actions)
-      .where(and(eq(actions.workspaceId, ws.workspaceId), eq(actions.id, claimed.actionId!)));
-    await beta.handle.handleMessage(JSON.stringify({
-      v: 1,
-      type: 'node.heartbeat',
-      load: 0,
-      active_agents: 0,
-      handlers_live: true,
-      capabilities: [{ name: 'release', kind: 'action' }],
-    }));
+    // The provider drops and re-offers the capability: the prune removes the
+    // claimed row and re-materialization writes a new identity.
+    for (const capabilities of [[], [{ name: 'release', kind: 'action' }]]) {
+      await beta.handle.handleMessage(JSON.stringify({
+        v: 1,
+        type: 'node.heartbeat',
+        load: 0,
+        active_agents: 0,
+        handlers_live: true,
+        capabilities,
+      }));
+    }
     const [replacement] = await stack.runtime.handle.db
       .select({ id: actions.id })
       .from(actions)

@@ -459,6 +459,7 @@ Be honest with yourself about what self-host is and isn't:
   WebSocket stream with `PUT /v1/workspace/stream`, repeat that call after restart.
 - **Restart resets live realtime sequences.** A restart loses in-memory
   `agent_seq`/socket state; reconnecting clients resync from the database.
+- **Need more than one process?** See [Self-hosting on TerseAI durable-actors](self-hosting-durable-actors.md): one actor per workspace behind stateless gateway replicas. That path is experimental and not yet release-grade.
 
 ### What you DON'T get vs the hosted product
 
