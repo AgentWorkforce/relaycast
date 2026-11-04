@@ -223,7 +223,7 @@ async function dispatchHttpPush(args: {
   target: DeliveryTarget;
   eventType: string;
   eventData: Record<string, unknown>;
-}): Promise<'delivered' | 'acked' | 'failed'> {
+}): Promise<'delivered' | 'acked' | 'resent' | 'failed'> {
   const config = args.target.deliveryConfig ?? {};
   const url = typeof config.url === 'string' ? config.url : null;
   if (!url) {
@@ -328,12 +328,11 @@ async function dispatchHttpPush(args: {
         args.delivery.agentId,
         args.delivery.id,
       );
-      if (acked?.changed) {
-        await fanoutToAgentsForContext(args.ctx, [args.delivery.agentId], 'delivery.delivered', {
-          delivery_id: args.delivery.id,
-          message_id: args.delivery.messageId,
-        });
-      }
+      if (!acked?.changed) return 'resent';
+      await fanoutToAgentsForContext(args.ctx, [args.delivery.agentId], 'delivery.delivered', {
+        delivery_id: args.delivery.id,
+        message_id: args.delivery.messageId,
+      });
       return 'acked';
     }
 
@@ -348,12 +347,11 @@ async function dispatchHttpPush(args: {
             args.delivery.agentId,
             args.delivery.id,
           );
-          if (acked?.changed) {
-            await fanoutToAgentsForContext(args.ctx, [args.delivery.agentId], 'delivery.delivered', {
-              delivery_id: args.delivery.id,
-              message_id: args.delivery.messageId,
-            });
-          }
+          if (!acked?.changed) return 'resent';
+          await fanoutToAgentsForContext(args.ctx, [args.delivery.agentId], 'delivery.delivered', {
+            delivery_id: args.delivery.id,
+            message_id: args.delivery.messageId,
+          });
           return 'acked';
         }
       }
@@ -375,7 +373,10 @@ async function dispatchHttpPush(args: {
  *   replay or ack settled it first), so there is no new transition to report
  *   to the sender. An ordered ws redrive keeps draining past it.
  * - `acked`: an `http_push` receiver acknowledged the row in its response
- *   (`on_2xx` / `response` ack mode), so it went `queued` -> `acked` directly.
+ *   (`on_2xx` / `response` ack mode), so this call moved it `queued` -> `acked`
+ *   directly. A receiver ack that found the row already settled (the recipient
+ *   acked it over REST while the POST was in flight) is `resent`, not a second
+ *   `delivery.acked` for the sender.
  * - `deferred`: the row stayed queued and was stamped for a later retry (a
  *   readiness skip or a failed live send). An ordered ws redrive stops its
  *   agent's backlog here so a later seq never outruns this one.
@@ -484,7 +485,7 @@ async function routeOneDeliveryOutcome(
       const transitioned = await deliveryEngine.markDeliveriesDelivered(ctx.db, ctx.workspaceId, [delivery.id]);
       return transitioned.length > 0 ? 'delivered' : 'resent';
     }
-    if (result === 'acked') return 'acked';
+    if (result === 'acked' || result === 'resent') return result;
     return 'deferred';
   }
 
