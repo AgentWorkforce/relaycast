@@ -31,13 +31,13 @@ export interface WsClientOptions {
    * `ackMode: 'after-handlers'` the ack goes out only once every handler for
    * that delivery has returned and every returned promise has resolved; a
    * handler that throws or rejects leaves the delivery unacked, so the server
-   * re-delivers it on reconnect. Acks use a contiguous watermark: cumulative
-   * `up_to_seq` only while every lower seq on this connection was consumed,
-   * else the per-delivery `delivery_id` form, which is sent only when the
-   * engine's `node.register` reply listed the `delivery.ack.delivery_id`
-   * capability (an older engine rejects it); without it a success behind a
-   * failed delivery stays unacked until the gap closes or the connection
-   * resets, and is replayed, not re-handled.
+   * re-delivers it on reconnect. Each ack names its row (`delivery_id`) when
+   * the engine's `node.register` reply listed the `delivery.ack.delivery_id`
+   * capability, so it settles exactly what this client handled. An older
+   * engine accepts only the cumulative `up_to_seq`, which this client sends
+   * only while every lower seq it saw on this connection was consumed; a
+   * success behind a failed delivery then stays unacked until the gap closes
+   * or the connection resets, and is replayed, not re-handled.
    */
   autoAckDeliveries?: boolean;
   /**
@@ -151,11 +151,15 @@ export interface AcceptedDelivery {
 }
 
 /**
- * A contiguous success watermark over a connection's `seq` stream. The first
- * seq that arrives anchors it just below; a success extends it only while
- * every lower seq since the anchor succeeded, so a cumulative `up_to_seq` is
- * never claimed across a failed (unpersisted / unconsumed) row. Out-of-order
- * successes are held and folded in once the gap closes.
+ * A contiguous success watermark over a connection's `seq` stream, for the
+ * cumulative `up_to_seq` form that older engines require. The first seq that
+ * arrives anchors it just below; a success extends it only while every lower
+ * seq since the anchor succeeded, so a cumulative `up_to_seq` is never
+ * claimed across a failed (unpersisted / unconsumed) row. Out-of-order
+ * successes are held and folded in once the gap closes. The anchor is not a
+ * server cursor (this transport has no cursor handshake), so rows below the
+ * first seq seen are outside what it can vouch for; that is why an engine
+ * that accepts the per-delivery form is sent that form instead.
  */
 class SeqWatermark {
   private high: number | null = null;
@@ -597,7 +601,8 @@ export class WsClient {
     const run = (handler: EventHandler) => {
       const result = handler(data) as unknown;
       if (result && typeof (result as Promise<unknown>).then === 'function') {
-        (result as Promise<unknown>).catch((err) => this.warn('event handler failed', { event, error: err }));
+        // `Promise.resolve` adopts any thenable (a query builder has no `catch`).
+        Promise.resolve(result).catch((err) => this.warn('event handler failed', { event, error: err }));
       }
     };
     this.handlers.get(event)?.forEach(run);
@@ -798,17 +803,21 @@ export class WsClient {
   }
 
   /**
-   * Report one success on the wire: cumulative `up_to_seq` while this
-   * connection's successes for the agent are contiguous, else the
-   * per-delivery `delivery_id` form (the engine applies a named row on its
-   * own). The named form goes out only when the engine listed the capability
-   * for it (`delivery.ack.delivery_id`; `delivery.accepted` is gated as a
-   * whole): an older engine rejects the frame, so the success is kept in the
-   * watermark and reported cumulatively once the gap closes, else the row is
-   * replayed on the next connection and deduped there. A success from a
-   * previous connection is dropped: that connection's unacked rows are
-   * replayed on this one, and confirming a stale row here (even by
-   * `delivery_id`) could race this connection's own dispatch of it.
+   * Report one success on the wire. Per delivery (`delivery_id`) whenever the
+   * engine accepts that form (`delivery.accepted` is sent only to an engine
+   * that listed it; `delivery.ack` by id needs `delivery.ack.delivery_id`):
+   * it settles exactly the row this client handled. A cumulative `up_to_seq`
+   * would also settle every lower unsettled row on the engine, and this
+   * transport cannot vouch for rows below the first seq it saw on a
+   * connection: a live frame can reach a fresh socket before the reconnect
+   * replay of older unacked rows, which a cumulative ack would then bury
+   * unhandled. An older engine accepts only the cumulative form, so for it
+   * the success goes into the connection's contiguous watermark and is sent
+   * as `up_to_seq` only while every lower seq seen here succeeded; otherwise
+   * it is withheld and the row is replayed on the next connection and deduped
+   * there. A success from a previous connection is dropped: that connection's
+   * unacked rows are replayed on this one, and confirming a stale row here
+   * (even by `delivery_id`) could race this connection's own dispatch of it.
    */
   private sendConfirmation(
     type: 'delivery.accepted' | 'delivery.ack',
@@ -822,15 +831,16 @@ export class WsClient {
       this.warn(`${type} dropped: delivery belongs to a previous connection and is replayed on this one`, { deliveryId, seq });
       return;
     }
+    const byId = type === 'delivery.accepted' || this.engineCapabilities.has('delivery.ack.delivery_id');
+    if (byId && deliveryId !== null) {
+      this.sendJson({ v: 1, type, agent, delivery_id: deliveryId });
+      return;
+    }
     const upTo = this.watermarkFor(watermarks, agent).record(seq);
     if (upTo !== null) {
       this.sendJson({ v: 1, type, agent, up_to_seq: upTo });
-    } else if (deliveryId === null) {
-      return;
-    } else if (type === 'delivery.ack' && !this.engineCapabilities.has('delivery.ack.delivery_id')) {
-      this.warn('delivery.ack by delivery_id withheld: the engine did not list the capability; the row stays unacked until the gap below it closes or it is replayed', { deliveryId, seq });
     } else {
-      this.sendJson({ v: 1, type, agent, delivery_id: deliveryId });
+      this.warn(`${type} withheld: the engine accepts only the cumulative form and a lower seq on this connection is unconsumed; the row stays unacked until the gap below it closes or it is replayed`, { deliveryId, seq });
     }
   }
 

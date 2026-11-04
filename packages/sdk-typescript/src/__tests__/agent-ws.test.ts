@@ -385,7 +385,7 @@ describe('AgentClient WebSocket integration', () => {
     expect(framesWhenHandled).not.toContain('delivery.ack');
     const sent = ws.send.mock.calls.map(([payload]) => JSON.parse(String(payload)));
     expect(sent.filter((frame) => frame.type === 'delivery.accepted')).toEqual([
-      { v: 1, type: 'delivery.accepted', agent: 'worker', up_to_seq: 7 },
+      { v: 1, type: 'delivery.accepted', agent: 'worker', delivery_id: 'del_7' },
     ]);
     expect(sent.findIndex((frame) => frame.type === 'delivery.accepted'))
       .toBeLessThan(sent.findIndex((frame) => frame.type === 'delivery.ack'));
@@ -423,17 +423,17 @@ describe('AgentClient WebSocket integration', () => {
       { v: 1, type: 'delivery.ack', agent: 'worker', delivery_id: 'del_9' },
     ]);
 
-    // The server re-delivers 8; once it persists, the watermark closes over 9.
+    // The server re-delivers 8; once it persists it is accepted and acked by name, like 9 was.
     failing.clear();
     ws.simulateMessage(deliverFrame(8));
     await settleDeliveries();
     expect(handler).toHaveBeenCalledTimes(2);
     sent = ws.send.mock.calls.map(([payload]) => JSON.parse(String(payload)));
     expect(sent.filter((frame) => frame.type === 'delivery.accepted').at(-1)).toEqual(
-      { v: 1, type: 'delivery.accepted', agent: 'worker', up_to_seq: 9 },
+      { v: 1, type: 'delivery.accepted', agent: 'worker', delivery_id: 'del_8' },
     );
     expect(sent.filter((frame) => frame.type === 'delivery.ack').at(-1)).toEqual(
-      { v: 1, type: 'delivery.ack', agent: 'worker', up_to_seq: 9 },
+      { v: 1, type: 'delivery.ack', agent: 'worker', delivery_id: 'del_8' },
     );
   });
 
@@ -456,15 +456,15 @@ describe('AgentClient WebSocket integration', () => {
     release();
     await settleDeliveries();
     let acks = ws.send.mock.calls.map(([p]) => JSON.parse(String(p))).filter((f) => f.type === 'delivery.ack');
-    expect(acks).toEqual([{ v: 1, type: 'delivery.ack', agent: 'worker', up_to_seq: 1 }]);
+    expect(acks).toEqual([{ v: 1, type: 'delivery.ack', agent: 'worker', delivery_id: 'del_1' }]);
 
-    // 2 rejects: unconsumed, held on the server. 3 succeeds behind the gap: per-delivery ack.
+    // 2 rejects: unconsumed, held on the server. 3 succeeds behind the gap and is acked on its own.
     ws.simulateMessage(deliverFrame(2));
     ws.simulateMessage(deliverFrame(3));
     await settleDeliveries();
     acks = ws.send.mock.calls.map(([p]) => JSON.parse(String(p))).filter((f) => f.type === 'delivery.ack');
     expect(acks).toEqual([
-      { v: 1, type: 'delivery.ack', agent: 'worker', up_to_seq: 1 },
+      { v: 1, type: 'delivery.ack', agent: 'worker', delivery_id: 'del_1' },
       { v: 1, type: 'delivery.ack', agent: 'worker', delivery_id: 'del_3' },
     ]);
   });
@@ -487,10 +487,10 @@ describe('AgentClient WebSocket integration', () => {
     ws.simulateMessage(deliverFrame(2));
     ws.simulateMessage(deliverFrame(3));
     await settleDeliveries();
-    // 3 succeeded behind the gap at 2, but the named form would be rejected, so nothing is sent for it.
+    // 3 succeeded behind the gap at 2, but the engine takes only the cumulative form, so nothing is sent for it.
     expect(sentFrames(ws, 'delivery.ack')).toEqual([ack('worker', { up_to_seq: 1 })]);
     expect(warnSpy).toHaveBeenCalledWith(
-      expect.stringContaining('delivery.ack by delivery_id withheld'),
+      expect.stringContaining('delivery.ack withheld'),
       expect.objectContaining({ deliveryId: 'del_3', seq: 3 }),
     );
 
@@ -520,13 +520,13 @@ describe('AgentClient WebSocket integration', () => {
     expect(sentFrames(ws, 'delivery.ack')).toEqual([]);
     release();
     await settleDeliveries();
-    expect(sentFrames(ws, 'delivery.ack')).toEqual([ack('worker', { up_to_seq: 1 })]);
+    expect(sentFrames(ws, 'delivery.ack')).toEqual([ack('worker', { delivery_id: 'del_1' })]);
 
     // The callback's rejection is the delivery's failure: 2 stays unacked, 3 is acked on its own.
     ws.simulateMessage(deliverFrame(2));
     ws.simulateMessage(deliverFrame(3));
     await settleDeliveries();
-    expect(sentFrames(ws, 'delivery.ack')).toEqual([ack('worker', { up_to_seq: 1 }), ack('worker', { delivery_id: 'del_3' })]);
+    expect(sentFrames(ws, 'delivery.ack')).toEqual([ack('worker', { delivery_id: 'del_1' }), ack('worker', { delivery_id: 'del_3' })]);
     expect(warnSpy).toHaveBeenCalledWith(
       expect.stringContaining('delivery handler failed; delivery left unconsumed'),
       expect.objectContaining({ deliveryId: 'del_2', seq: 2 }),
@@ -675,10 +675,10 @@ describe('AgentClient WebSocket integration', () => {
     ws.simulateMessage(deliverFrame(6));
     await settleDeliveries();
 
-    // Consumed once; the duplicate is confirmed by name since the watermark already covers it.
+    // Consumed once; the duplicate is confirmed again by name without a second run.
     expect(handler).toHaveBeenCalledTimes(1);
     expect(sentFrames(ws, 'delivery.ack')).toEqual([
-      ack('worker', { up_to_seq: 6 }),
+      ack('worker', { delivery_id: 'del_6' }),
       ack('worker', { delivery_id: 'del_6' }),
     ]);
   });
@@ -695,11 +695,11 @@ describe('AgentClient WebSocket integration', () => {
     agent.connect();
     const ws = await nextSocket();
     ws.simulateOpen();
-    await replyToRegistration(ws, ['delivery.accepted']);
+    await replyToRegistration(ws, ['delivery.accepted', 'delivery.ack.delivery_id']);
 
     ws.simulateMessage(deliverFrame(3));
     await settleDeliveries();
-    expect(sentFrames(ws, 'delivery.accepted')).toEqual([{ v: 1, type: 'delivery.accepted', agent: 'worker', up_to_seq: 3 }]);
+    expect(sentFrames(ws, 'delivery.accepted')).toEqual([{ v: 1, type: 'delivery.accepted', agent: 'worker', delivery_id: 'del_3' }]);
     expect(sentFrames(ws, 'delivery.ack')).toEqual([]);
 
     // Nothing is cached across the failure: the hook stores the row again
@@ -709,10 +709,10 @@ describe('AgentClient WebSocket integration', () => {
     await settleDeliveries();
     expect(order).toEqual(['hook:del_3', 'handler:0 acks so far', 'hook:del_3', 'handler:0 acks so far']);
     expect(sentFrames(ws, 'delivery.accepted')).toEqual([
-      { v: 1, type: 'delivery.accepted', agent: 'worker', up_to_seq: 3 },
+      { v: 1, type: 'delivery.accepted', agent: 'worker', delivery_id: 'del_3' },
       { v: 1, type: 'delivery.accepted', agent: 'worker', delivery_id: 'del_3' },
     ]);
-    expect(sentFrames(ws, 'delivery.ack')).toEqual([ack('worker', { up_to_seq: 3 })]);
+    expect(sentFrames(ws, 'delivery.ack')).toEqual([ack('worker', { delivery_id: 'del_3' })]);
   });
 
   it('shares the outcome of a run still in flight with a duplicate frame: acks when it succeeds, reruns when it fails', async () => {
@@ -835,9 +835,9 @@ describe('AgentClient WebSocket integration', () => {
     ws.simulateMessage(deliverFrameFor('bob', 2, 'b2'));
     await settleDeliveries();
     expect(sentFrames(ws, 'delivery.ack')).toEqual([
-      ack('bob', { up_to_seq: 1 }),
+      ack('bob', { delivery_id: 'del_b1' }),
       ack('alice', { delivery_id: 'del_a2' }),
-      ack('bob', { up_to_seq: 2 }),
+      ack('bob', { delivery_id: 'del_b2' }),
     ]);
   });
 
@@ -854,7 +854,7 @@ describe('AgentClient WebSocket integration', () => {
     agent.connect();
     const ws = await nextSocket();
     ws.simulateOpen();
-    await replyToRegistration(ws, ['delivery.accepted']);
+    await replyToRegistration(ws, ['delivery.accepted', 'delivery.ack.delivery_id']);
 
     ws.simulateMessage(deliverFrame(1));
     ws.simulateMessage(deliverFrame(2));
@@ -863,7 +863,7 @@ describe('AgentClient WebSocket integration', () => {
     // Intake never waits for handlers: 2 and 3 are stored and accepted while 1 hangs.
     expect(acceptDelivery.mock.calls.map(([delivery]) => delivery.deliveryId)).toEqual(['del_1', 'del_2', 'del_3']);
     expect(sentFrames(ws, 'delivery.accepted')).toEqual([
-      accepted('worker', { up_to_seq: 1 }), accepted('worker', { up_to_seq: 2 }), accepted('worker', { up_to_seq: 3 }),
+      accepted('worker', { delivery_id: 'del_1' }), accepted('worker', { delivery_id: 'del_2' }), accepted('worker', { delivery_id: 'del_3' }),
     ]);
     // Dispatch is ordered per agent: 2 and 3 are handled (and acked) only after 1 completed.
     expect(calls).toEqual(['m_1']);
@@ -873,7 +873,7 @@ describe('AgentClient WebSocket integration', () => {
     await settleDeliveries();
     expect(calls).toEqual(['m_1', 'm_2', 'm_3']);
     expect(sentFrames(ws, 'delivery.ack')).toEqual([
-      ack('worker', { up_to_seq: 1 }), ack('worker', { up_to_seq: 2 }), ack('worker', { up_to_seq: 3 }),
+      ack('worker', { delivery_id: 'del_1' }), ack('worker', { delivery_id: 'del_2' }), ack('worker', { delivery_id: 'del_3' }),
     ]);
   });
 
@@ -925,7 +925,7 @@ describe('AgentClient WebSocket integration', () => {
     ws.simulateMessage(deliverFrame(8));
     ws.simulateMessage(deliverFrame(9));
     await settleDeliveries();
-    expect(sentFrames(ws, 'delivery.accepted')).toEqual([accepted('worker', { up_to_seq: 8 }), accepted('worker', { up_to_seq: 9 })]);
+    expect(sentFrames(ws, 'delivery.accepted')).toEqual([accepted('worker', { delivery_id: 'del_8' }), accepted('worker', { delivery_id: 'del_9' })]);
     expect(calls).toEqual(['m_8']);
 
     ws.simulateClose();
@@ -940,7 +940,7 @@ describe('AgentClient WebSocket integration', () => {
     ws2.simulateMessage(deliverFrame(9));
     await settleDeliveries();
     expect(acceptDelivery).toHaveBeenCalledTimes(4);
-    expect(sentFrames(ws2, 'delivery.accepted')).toEqual([accepted('worker', { up_to_seq: 8 }), accepted('worker', { up_to_seq: 9 })]);
+    expect(sentFrames(ws2, 'delivery.accepted')).toEqual([accepted('worker', { delivery_id: 'del_8' }), accepted('worker', { delivery_id: 'del_9' })]);
     expect(calls).toEqual(['m_8']);
     expect(sentFrames(ws, 'delivery.ack')).toEqual([]);
     expect(sentFrames(ws2, 'delivery.ack')).toEqual([]);
@@ -985,12 +985,12 @@ describe('AgentClient WebSocket integration', () => {
     ws.simulateMessage(deliverFrameFor('alice', 1, 'a1', 'm_shared'));
     await settleDeliveries();
     expect(handler).toHaveBeenCalledTimes(1);
-    expect(sentFrames(ws, 'delivery.ack')).toEqual([ack('alice', { up_to_seq: 1 }), ack('alice', { delivery_id: 'del_a1' })]);
+    expect(sentFrames(ws, 'delivery.ack')).toEqual([ack('alice', { delivery_id: 'del_a1' }), ack('alice', { delivery_id: 'del_a1' })]);
 
     ws.simulateMessage(deliverFrameFor('bob', 1, 'b1', 'm_shared'));
     await settleDeliveries();
     expect(handler).toHaveBeenCalledTimes(2);
-    expect(sentFrames(ws, 'delivery.ack').at(-1)).toEqual(ack('bob', { up_to_seq: 1 }));
+    expect(sentFrames(ws, 'delivery.ack').at(-1)).toEqual(ack('bob', { delivery_id: 'del_b1' }));
   });
 
   it('on.deliveryReplied fires with the sender-side delivery.replied context update', async () => {

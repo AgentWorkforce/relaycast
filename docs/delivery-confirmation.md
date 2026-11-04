@@ -150,7 +150,7 @@ after workspace expiry, like `delivery.ack`.
 Then send `delivery.ack` once the delivery was **consumed** — every handler
 for it completed — not when it was dispatched.
 
-### Per-delivery reports; watermarks only over contiguous successes
+### Per-delivery reports; a cumulative watermark only for older engines
 
 Acceptance and consumption are reported **per delivery**. Both frames take
 either a cumulative `up_to_seq` or a single `delivery_id`:
@@ -159,41 +159,47 @@ either a cumulative `up_to_seq` or a single `delivery_id`:
   **ignores `up_to_seq`**. Rows are marked individually and may arrive out of
   order (N+1 before N); nothing is ever inferred by range from a named row.
 - bare `up_to_seq` → every unsettled row with `seq <= up_to_seq` (acceptance),
-  or the cumulative ack cursor (consumption, as before).
+  or the cumulative ack cursor (consumption, as before). Note that this
+  settles every unsettled row below, whether or not the client ever saw it.
 
-A client therefore keeps one contiguous watermark per agent (the engine
-numbers `seq` per agent row, so a client hosting several agents sees one
-independent stream each), per connection and per frame type, anchored just
-below the first `seq` it receives for that agent on that connection: it
-sends `up_to_seq` only when every lower seq since the anchor succeeded
-(persisted, respectively consumed), and the `delivery_id` form otherwise. Persistence failing for N but succeeding for N+1 yields
+The TypeScript SDK sends the `delivery_id` form whenever the engine accepts
+it: `delivery.accepted` only goes to an engine that listed it, and
+`delivery.ack` names its row when the reply listed `delivery.ack.delivery_id`.
+Each confirmation then settles exactly the row this client persisted,
+respectively handled. Persistence failing for N but succeeding for N+1 yields
 `{"type":"delivery.accepted","agent":"bob","delivery_id":"<N+1>"}` and
-nothing for N; when the server re-delivers N and it persists, the client
-sends `up_to_seq: N+1`. The same rule governs `delivery.ack` now that acks
-depend on handler success: a handler failure at N holds the ack watermark
-below N even if N+1 succeeded; N+1 is acked by `delivery_id` (the cursor
-does not move), and N stays unacked on the server until it is re-delivered
-and consumed, or the connection resets (a new connection replays from the
-server's cursor and starts fresh watermarks; a delivery still being handled
-when the socket dropped sends no confirmation at all on the new connection,
-since the server replays it there and the stale frame's success could
-otherwise anchor the fresh watermark above an unconsumed lower seq). Against
-an engine whose `node.register` reply did not list `delivery.ack.delivery_id`
-the client withholds the named ack (the older strict schema rejects it) and
-keeps the success in its watermark: N+1 is reported by `up_to_seq` once N is
-re-delivered and consumed, or replayed on the next connection and deduped
-there (its handlers do not run again). It never acks across the gap.
+nothing for N; a handler failure at N leaves N unacked on the server (it is
+re-delivered and the handlers run again) while N+1 is acked on its own. The
+engine's cumulative cursor does not move for such a client; replay and
+expiry go by row status, so nothing depends on it.
 
-Known limitation: the anchor is the first seq seen on the connection, not a
-server cursor. The direct node transport does no cursor handshake
-(`delivery_ack_seq` is only in the `agent.register` / `agent.recover` replies
-of cursor-aware providers), so if a live frame reaches a fresh connection
-before the reconnect replay of older unacked rows, the first cumulative
-confirmation can cover rows the client has not seen yet (they are still
-delivered and handled afterwards, but were confirmed early). The pre-12.8
-ack and `ackMode: 'on-receipt'` send `up_to_seq: seq` for every frame and
-have the same exposure, wider. Closing it means anchoring at the server's
-cursor (the handshake) — a follow-up, not part of this change.
+Why not cumulative: this transport has no cursor handshake (`delivery_ack_seq`
+is handed only to cursor-aware providers in the `agent.register` /
+`agent.recover` replies), so the only anchor a client could use is the first
+`seq` it sees on a connection, which proves nothing about the rows below it.
+The engine marks a reconnecting node delivery-ready before it replays that
+node's older unacked rows, so a live frame can reach the fresh socket first;
+a cumulative `up_to_seq` for it would settle the older rows on the engine
+before they were ever delivered here, and the replay would then skip them.
+The pre-12.8 ack and `ackMode: 'on-receipt'` send `up_to_seq: seq` for every
+frame and have exactly that exposure.
+
+Against an older engine, whose `node.register` reply lists neither
+capability, `delivery.accepted` is not sent at all and `delivery.ack` must be
+cumulative (its strict schema requires `up_to_seq`). For that case the SDK
+keeps one contiguous watermark per agent (the engine numbers `seq` per agent
+row, so a client hosting several agents sees one independent stream each),
+per connection, anchored just below the first `seq` it receives for that
+agent on that connection, and sends `up_to_seq` only when every lower seq
+since the anchor was consumed: a handler failure at N holds the watermark
+below N even if N+1 succeeded; N+1 is withheld (logged) and reported by
+`up_to_seq` once N is re-delivered and consumed, or replayed on the next
+connection and deduped there (its handlers do not run again). It never acks
+across the gap, but it carries the anchor exposure above. A new connection
+starts fresh watermarks; a delivery still being handled when the socket
+dropped sends no confirmation at all on the new connection, since the server
+replays it there and the stale frame's success could otherwise anchor the
+fresh watermark above an unconsumed lower seq.
 
 TS SDK behaviour (`ws.ts`): with `autoAckDeliveries`, `delivery.ack` is sent
 only after every handler for the delivery returned and every promise it
@@ -233,8 +239,9 @@ Neither SDK sends the acceptance frame yet; the engine treats them as legacy rec
 remember `data.capabilities` from the `node.register` reply; if it contains
 `"delivery.accepted"`, then on receipt of a `deliver` frame, after storing it
 and before invoking the handler, write the first JSON above with the frame's
-`agent`, `delivery_id` and `seq` as `up_to_seq`; keep `delivery.ack` after
-the handler. The Relay Desktop probe can assert the order on the socket:
+`agent` and `delivery_id` (no `up_to_seq`: see "Why not cumulative" above);
+keep `delivery.ack` after the handler, and name its `delivery_id` too when
+the reply listed `delivery.ack.delivery_id`. The Relay Desktop probe can assert the order on the socket:
 `node.register` reply lists the capability, `deliver` in,
 `delivery.accepted` out, handler, `delivery.ack` out — and no
 `delivery.accepted` at all when the reply does not list it.
