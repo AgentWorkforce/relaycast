@@ -6,6 +6,53 @@ import { BuzzSocket } from '../buzz-bridge/buzz-socket.js';
 const servers: WebSocketServer[] = [];
 afterEach(async () => { await Promise.all(servers.splice(0).map((server) => new Promise<void>((resolve) => server.close(() => resolve())))); });
 
+it('continues the room queue after one event keeps failing', async () => {
+  const server = new WebSocketServer({ port: 0 });
+  servers.push(server);
+  await new Promise<void>((resolve) => server.once('listening', resolve));
+  const address = server.address();
+  if (!address || typeof address === 'string') throw new Error('Missing port');
+  const url = `ws://127.0.0.1:${address.port}/`;
+  const channel = 'c83154dd-49d3-4dc1-aede-fdb8130d7fbe';
+  const key = generateSecretKey();
+  const sender = generateSecretKey();
+  const eventFor = (content: string) => finalizeEvent({
+    kind: 9, created_at: Math.floor(Date.now() / 1000), content,
+    tags: [['h', channel], ['p', getPublicKey(key)]],
+  }, sender);
+  const poison = eventFor('poison');
+  const later = eventFor('later');
+  server.on('connection', (peer) => {
+    peer.send(JSON.stringify(['AUTH', 'challenge']));
+    peer.on('message', (raw) => {
+      const frame = JSON.parse(raw.toString()) as unknown[];
+      if (frame[0] === 'AUTH') peer.send(JSON.stringify(['OK', (frame[1] as Event).id, true, '']));
+      if (frame[0] === 'REQ') {
+        peer.send(JSON.stringify(['EVENT', 'relay-buzz-room', poison]));
+        peer.send(JSON.stringify(['EVENT', 'relay-buzz-room', later]));
+      }
+    });
+  });
+  const abort = new AbortController();
+  const socket = new BuzzSocket(url, channel, key, () => poison.created_at, () => {}, { attempts: 2, retryDelayMs: 10 });
+  const seen: string[] = [];
+  let delivered!: () => void;
+  const delivery = new Promise<void>((resolve) => { delivered = resolve; });
+  const running = socket.run(abort.signal, async (event) => {
+    if (event.id === poison.id) throw new Error('permanent');
+    seen.push(event.id);
+    delivered();
+  }, async () => {});
+  try {
+    await delivery;
+    expect(seen).toEqual([later.id]);
+  } finally {
+    abort.abort();
+    socket.close();
+    await running;
+  }
+});
+
 it('authenticates, receives a room event, and waits for publish acknowledgement', async () => {
   const server = new WebSocketServer({ port: 0 });
   servers.push(server);

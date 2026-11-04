@@ -16,6 +16,7 @@ export class BuzzSocket {
     private readonly secretKey: Uint8Array,
     private readonly since: () => number,
     private readonly log: (message: string) => void = console.error,
+    private readonly delivery: { attempts?: number; retryDelayMs?: number } = {},
   ) {}
 
   async run(signal: AbortSignal, onEvent: (event: Event) => Promise<unknown>, onReady: () => Promise<void>): Promise<void> {
@@ -29,8 +30,12 @@ export class BuzzSocket {
       }
       if (signal.aborted) break;
       await new Promise<void>((resolve) => {
-        const timer = setTimeout(resolve, delayMs);
-        signal.addEventListener('abort', () => { clearTimeout(timer); resolve(); }, { once: true });
+        const onAbort = () => { clearTimeout(timer); resolve(); };
+        const timer = setTimeout(() => {
+          signal.removeEventListener('abort', onAbort);
+          resolve();
+        }, delayMs);
+        signal.addEventListener('abort', onAbort, { once: true });
       });
       delayMs = Math.min(delayMs * 2, 30_000);
     }
@@ -134,11 +139,15 @@ export class BuzzSocket {
         this.deliveryQueue = this.deliveryQueue.catch((error) => {
           this.log(`Buzz delivery queue recovered: ${String(error)}`);
         }).then(async () => {
-          while (this.socket && this.socket.readyState === WebSocket.OPEN) {
+          const attempts = this.delivery.attempts ?? 3;
+          const delayMs = this.delivery.retryDelayMs ?? 5_000;
+          for (let attempt = 1; attempt <= attempts; attempt += 1) {
+            if (!this.socket || this.socket.readyState !== WebSocket.OPEN) return;
             try { await onEvent(event); return; }
             catch (error) {
-              this.log(`Buzz event ${event.id} delivery failed, retrying: ${String(error)}`);
-              await new Promise((resolve) => setTimeout(resolve, 5_000));
+              this.log(`Buzz event ${event.id} delivery failed (${attempt}/${attempts}): ${String(error)}`);
+              if (attempt === attempts) return;
+              await new Promise((resolve) => setTimeout(resolve, delayMs));
             }
           }
         }).catch((error) => {
