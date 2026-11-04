@@ -25,7 +25,7 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 - `NodeConnectionRegistry.isConnectionSuperseded?(connectionId)`: true once a reconnect's `node.register` moved the connection's provider to a newer socket.
 - Socket grants are signed: `signSocketPrincipal` / `verifySocketPrincipal` / `canonicalSocketPrincipal` / `SOCKET_GRANT_MAX_AGE_MS` (also from `@relaycast/engine/gateway`); a principal gains `iat`, `nonce` and `sig`, and `onConnect` refuses one that is unsigned, tampered, older than 120 s or already attached (4401).
 - `deriveKeyedWorkspaceId(bootstrapSecret, idempotencyKey)` in `@relaycast/engine/gateway`: the workspace id a keyed create lands on, so a gateway routes its retry to the same actor.
-- `actorConfigFromEnv` reads `RELAYCAST_WORKSPACE_BOOTSTRAP_SECRET` verbatim, as `bin/serve.ts` does.
+- `actorConfigFromEnv` reads `RELAYCAST_WORKSPACE_BOOTSTRAP_SECRET` (or `_FILE`) with `bin/serve.ts`'s exact-bytes semantics and `RELAYCAST_WORKSPACE_BOOTSTRAP_PROOF_REQUIRED` (`true` or `false`; anything else is a `ConfigError`), so a workspace actor runs the engine's keyed-create replay and bootstrap-secret proof policy.
 - `NodeConnectionRegistry.isConnectionSuperseded?` is required of every registry that re-binds a provider to a newer connection; `handleNodeControlMessage` also takes `connectionSuperseded` and `supersededProviderName` per frame.
 - `INTERNAL_CAPABILITIES` and `WORKSPACE_KEY_MAX_GRACE_MS` live in `engine/internalCapabilities.ts`, a module without database imports.
 

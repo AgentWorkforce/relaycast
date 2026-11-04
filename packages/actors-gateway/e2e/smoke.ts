@@ -20,12 +20,24 @@
  *      observer socket never drops, and a second exchange succeeds.
  *   7. `GET /v1/deliveries?wait=` through gateway 1 returns as soon as a
  *      delivery arrives (and holds for the full wait when none does).
+ *   8. With `keyedCreate`: a keyed `POST /v1/workspaces` (`Idempotency-Key`)
+ *      through gateway 1 is replayed through gateway 2 with the same
+ *      workspace and credential, and another body under the key is refused
+ *      (the deployment holds `RELAYCAST_WORKSPACE_BOOTSTRAP_SECRET`).
+ *
+ * `runBootstrapProofChecks` is the second phase `local.ts` runs once the
+ * stack holds `RELAYCAST_WORKSPACE_BOOTSTRAP_PROOF_REQUIRED=true`: an
+ * anonymous keyed create is refused without `X-Workspace-Bootstrap-Secret`,
+ * accepted and replayed with it (across both gateways and, for a create made
+ * before the restart, across the control plane restart), and an unkeyed
+ * create needs no proof.
  *
  * Standalone (no restart; the orchestrator `local.ts` supplies it):
  *   RELAYCAST_GATEWAY1_URL=http://127.0.0.1:8787 RELAYCAST_GATEWAY2_URL=http://127.0.0.1:8788 \
- *     npx tsx packages/actors-gateway/e2e/smoke.ts
+ *     [RELAYCAST_E2E_KEYED_CREATE=true] npx tsx packages/actors-gateway/e2e/smoke.ts
  */
 
+import { randomBytes } from 'node:crypto';
 import WebSocket from 'ws';
 import { RelayCast, type AgentClient } from '../../sdk-typescript/src/index.js';
 
@@ -34,7 +46,16 @@ export interface SmokeOptions {
   gateway2: string;
   /** Stops gateway 1, starts it again on the same port and resolves when `/readyz` is 200. Omit to skip the restart checks. */
   restartGateway1?: () => Promise<void>;
+  /** Run the keyed-create replay (the deployment must hold a bootstrap secret, with no proof required). */
+  keyedCreate?: boolean;
   log?: (line: string) => void;
+}
+
+/** A keyed create's key and body name, and the answer it was created with (which does not repeat the name). */
+export interface KeyedCreate {
+  key: string;
+  name: string;
+  data: Record<string, unknown>;
 }
 
 export interface SmokeStep {
@@ -48,6 +69,8 @@ export interface SmokeResult {
   failed: number;
   /** Whether alice's client reconnected on its own after the restart (vs. an explicit reconnect). */
   aliceReconnect?: 'auto';
+  /** The keyed create of check 8, for a later replay. */
+  keyedCreate?: KeyedCreate;
 }
 
 const EVENT_TIMEOUT_MS = 10_000;
@@ -167,12 +190,45 @@ async function readError(response: Response): Promise<string> {
   return `HTTP ${response.status} ${text.slice(0, 300)}`;
 }
 
-export async function runSmoke(options: SmokeOptions): Promise<SmokeResult> {
-  const log = options.log ?? ((line: string) => console.log(line));
-  const result: SmokeResult = { steps: [], failed: 0 };
-  const cleanups: Array<() => void> = [];
+/** The response's `data`, when its status is `status`; the error otherwise. */
+async function expectData(response: Response, status: number, label: string): Promise<Record<string, unknown>> {
+  if (response.status !== status) throw new Error(`${label}: expected HTTP ${status}, got ${await readError(response)}`);
+  return ((await response.json()) as { data: Record<string, unknown> }).data;
+}
 
-  async function step<T>(name: string, fn: () => Promise<T>): Promise<T> {
+async function expectError(response: Response, status: number, code: string, label: string): Promise<void> {
+  const text = await response.text().catch(() => '');
+  let got: string | undefined;
+  try {
+    got = (JSON.parse(text) as { error?: { code?: string } }).error?.code;
+  } catch {
+    /* not JSON */
+  }
+  if (response.status !== status || got !== code) throw new Error(`${label}: expected ${status} ${code}, got HTTP ${response.status} ${text.slice(0, 300)}`);
+}
+
+/** A keyed `POST /v1/workspaces` (the engine's floor is 32 characters; 16 random bytes hex-encoded is the documented key). */
+function keyedCreate(base: string, key: string, name: string, proof?: string): Promise<Response> {
+  return fetch(`${base}/v1/workspaces`, {
+    method: 'POST',
+    headers: {
+      'content-type': 'application/json',
+      'idempotency-key': key,
+      ...(proof === undefined ? {} : { 'x-workspace-bootstrap-secret': proof }),
+    },
+    body: JSON.stringify({ name }),
+  });
+}
+
+function sameData(a: Record<string, unknown>, b: Record<string, unknown>, label: string): void {
+  if (JSON.stringify(a) !== JSON.stringify(b)) throw new Error(`${label}: ${JSON.stringify(b)} differs from ${JSON.stringify(a)}`);
+}
+
+type Step = <T>(name: string, fn: () => Promise<T>) => Promise<T>;
+
+/** Records each check in `result` and logs it; a failed check throws so the ones after it are skipped. */
+function stepRunner(result: SmokeResult, log: (line: string) => void): Step {
+  return async function step<T>(name: string, fn: () => Promise<T>): Promise<T> {
     const started = Date.now();
     try {
       const value = await fn();
@@ -188,7 +244,14 @@ export async function runSmoke(options: SmokeOptions): Promise<SmokeResult> {
       log(`[FAIL] ${name} (${ms} ms): ${message}`);
       throw error;
     }
-  }
+  };
+}
+
+export async function runSmoke(options: SmokeOptions): Promise<SmokeResult> {
+  const log = options.log ?? ((line: string) => console.log(line));
+  const result: SmokeResult = { steps: [], failed: 0 };
+  const cleanups: Array<() => void> = [];
+  const step = stepRunner(result, log);
 
   const { gateway1, gateway2 } = options;
   const runId = Date.now().toString(36);
@@ -367,6 +430,23 @@ export async function runSmoke(options: SmokeOptions): Promise<SmokeResult> {
       if (hit.ms > 2500) throw new Error(`wait=3000 returned only after ${hit.ms} ms`);
       log(`       empty wait=1000 held ${empty.ms} ms; wait=3000 returned ${hit.count} delivery after ${hit.ms} ms`);
     });
+
+    // 8. A keyed create lands on the actor derived from its key on every replica.
+    if (options.keyedCreate) {
+      await step('keyed create (Idempotency-Key) via gateway 1, replayed via gateway 2: same workspace and credential, another body refused', async () => {
+        const key = randomBytes(16).toString('hex');
+        const name = `smoke-${runId}-keyed`;
+        const created = await expectData(await keyedCreate(gateway1, key, name), 201, 'keyed create via gateway 1');
+        if (!String(created.api_key ?? '').startsWith('ar_ws_')) throw new Error(`expected an ar_ws_ key, got ${String(created.api_key).slice(0, 8)}…`);
+        const replayed = await expectData(await keyedCreate(gateway2, key, name), 200, 'keyed replay via gateway 2');
+        sameData(created, replayed, 'replay via gateway 2');
+        await expectError(await keyedCreate(gateway2, key, `smoke-${runId}-other`), 409, 'workspace_create_idempotency_conflict', 'another body under the same key');
+        result.keyedCreate = { key, name, data: created };
+        log(`       workspace ${String(created.workspace_id)} created via gateway 1, replayed via gateway 2`);
+      });
+    } else {
+      log('[skip] keyed create replay (keyedCreate off; local.ts turns it on)');
+    }
   } catch {
     // The failing step has been recorded; later steps depend on it.
   } finally {
@@ -381,11 +461,76 @@ export async function runSmoke(options: SmokeOptions): Promise<SmokeResult> {
   return result;
 }
 
+export interface BootstrapProofOptions {
+  gateway1: string;
+  gateway2: string;
+  /** `RELAYCAST_WORKSPACE_BOOTSTRAP_SECRET`, as both the gateways and the actors hold it. */
+  secret: string;
+  /** A keyed create made before proof was required, replayed with the proof. */
+  earlier?: KeyedCreate;
+  log?: (line: string) => void;
+}
+
+/**
+ * The stack now holds `RELAYCAST_WORKSPACE_BOOTSTRAP_PROOF_REQUIRED=true`
+ * (gateways and actors alike): the engine's proof policy, enforced at the
+ * gateway before any actor call and again inside the actor.
+ */
+export async function runBootstrapProofChecks(options: BootstrapProofOptions): Promise<SmokeResult> {
+  const log = options.log ?? ((line: string) => console.log(line));
+  const result: SmokeResult = { steps: [], failed: 0 };
+  const step = stepRunner(result, log);
+  const { gateway1, gateway2, secret } = options;
+  const runId = Date.now().toString(36);
+  const key = randomBytes(16).toString('hex');
+  const name = `smoke-${runId}-proven`;
+
+  try {
+    await step('proof required: anonymous keyed create without X-Workspace-Bootstrap-Secret → 401 workspace_create_bootstrap_secret_invalid on both gateways', async () => {
+      for (const gateway of [gateway1, gateway2]) {
+        await expectError(await keyedCreate(gateway, key, name), 401, 'workspace_create_bootstrap_secret_invalid', `missing proof via ${gateway}`);
+      }
+    });
+    await step('proof required: a wrong proof → 401 workspace_create_bootstrap_secret_invalid', async () => {
+      for (const proof of ['not-the-configured-secret', `${secret}x`]) {
+        await expectError(await keyedCreate(gateway1, key, name, proof), 401, 'workspace_create_bootstrap_secret_invalid', `wrong proof ${JSON.stringify(proof)}`);
+      }
+    });
+    await step('proof required: the proof via gateway 1 → 201; replayed with it via gateway 2 → 200, same credential; without it → 401', async () => {
+      const created = await expectData(await keyedCreate(gateway1, key, name, secret), 201, 'proven keyed create via gateway 1');
+      if (!String(created.api_key ?? '').startsWith('ar_ws_')) throw new Error(`expected an ar_ws_ key, got ${String(created.api_key).slice(0, 8)}…`);
+      const replayed = await expectData(await keyedCreate(gateway2, key, name, secret), 200, 'proven replay via gateway 2');
+      sameData(created, replayed, 'proven replay via gateway 2');
+      await expectError(await keyedCreate(gateway2, key, name), 401, 'workspace_create_bootstrap_secret_invalid', 'replay without the proof');
+      log(`       workspace ${String(created.workspace_id)} created with the proof via gateway 1, replayed via gateway 2`);
+    });
+    if (options.earlier) {
+      const earlier = options.earlier;
+      await step('proof required: a keyed create made before the restart replays with the proof → 200 with its original credential', async () => {
+        const replayed = await expectData(await keyedCreate(gateway1, earlier.key, earlier.name, secret), 200, 'replay of the earlier keyed create');
+        sameData(earlier.data, replayed, 'replay of the earlier keyed create');
+      });
+    }
+    await step('proof required: an unkeyed create needs no proof → 201', async () => {
+      const created = await expectData(await fetch(`${gateway1}/v1/workspaces`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ name: `smoke-${runId}-unkeyed` }),
+      }), 201, 'unkeyed create');
+      if (!String(created.api_key ?? '').startsWith('ar_ws_')) throw new Error(`expected an ar_ws_ key, got ${String(created.api_key).slice(0, 8)}…`);
+    });
+  } catch {
+    // The failing step has been recorded; later steps depend on it.
+  }
+  return result;
+}
+
 const isMain = process.argv[1] && import.meta.url === new URL(`file://${process.argv[1]}`).href;
 if (isMain) {
   const gateway1 = (process.env.RELAYCAST_GATEWAY1_URL ?? 'http://127.0.0.1:8787').replace(/\/+$/, '');
   const gateway2 = (process.env.RELAYCAST_GATEWAY2_URL ?? 'http://127.0.0.1:8788').replace(/\/+$/, '');
-  runSmoke({ gateway1, gateway2 }).then((result) => {
+  const keyed = process.env.RELAYCAST_E2E_KEYED_CREATE;
+  runSmoke({ gateway1, gateway2, keyedCreate: keyed === '1' || keyed === 'true' }).then((result) => {
     console.log(`${result.steps.length - result.failed}/${result.steps.length} steps passed`);
     process.exit(result.failed === 0 ? 0 : 1);
   });

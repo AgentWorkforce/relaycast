@@ -2,6 +2,7 @@
  * Node HTTP plumbing shared by the routes: request ids, bounded body reads,
  * the actor request/response shapes, JSON envelopes and CORS.
  */
+import { createHash, timingSafeEqual } from 'node:crypto';
 import { randomUUID } from 'node:crypto';
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import type { ActorHttpRequest, ActorHttpResponse } from '@relaycast/engine/gateway';
@@ -58,6 +59,12 @@ export function requestHeaders(req: IncomingMessage): [string, string][] {
     else pairs.push([name, value]);
   }
   return pairs;
+}
+
+/** Equality of two caller-presented secrets whose cost depends on neither value (both are hashed first). */
+export function constantTimeEqual(a: string, b: string): boolean {
+  const digest = (value: string) => createHash('sha256').update(value).digest();
+  return timingSafeEqual(digest(a), digest(b));
 }
 
 export function bearerToken(req: IncomingMessage): string | undefined {

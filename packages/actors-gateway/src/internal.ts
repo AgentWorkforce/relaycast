@@ -8,14 +8,13 @@
  * not yet exist for (create: it mints the id and tag); the rest go to that
  * workspace's actor, which validates the same secret itself.
  */
-import { createHash, timingSafeEqual } from 'node:crypto';
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import { z } from 'zod';
 import { INTERNAL_CAPABILITIES, generateWorkspaceId, parseArCredential } from '@relaycast/engine/gateway';
 import { WorkspaceMetadataSchema, isArWorkspaceId } from '@relaycast/types';
 import type { GatewayContext } from './context.js';
-import { REQUEST_ID_HEADER, bearerToken, readBody, sendActorResponse, sendError, sendJson, toActorRequest } from './http.js';
-import { IDEMPOTENCY_KEY_HEADER, chooseWorkspaceId, isWorkspaceIdTaken } from './workspaceId.js';
+import { REQUEST_ID_HEADER, bearerToken, constantTimeEqual, readBody, sendActorResponse, sendError, sendJson, toActorRequest } from './http.js';
+import { BOOTSTRAP_PROOF_HEADER, IDEMPOTENCY_KEY_HEADER, chooseWorkspaceId, isWorkspaceIdTaken } from './workspaceId.js';
 
 /** The engine's own capability document: the actors serve exactly these. */
 export { INTERNAL_CAPABILITIES };
@@ -47,14 +46,6 @@ function pushedWorkspaceKey(body: Buffer): string | undefined {
   } catch {
     return undefined;
   }
-}
-
-function digest(value: string): Buffer {
-  return createHash('sha256').update(value).digest();
-}
-
-export function constantTimeEqual(a: string, b: string): boolean {
-  return timingSafeEqual(digest(a), digest(b));
 }
 
 export interface InternalRequest {
@@ -93,8 +84,10 @@ export async function handleInternal(ctx: GatewayContext, { req, res, url, reque
     // create does (a keyed create derives the id from its `Idempotency-Key`,
     // which travels to the actor), and the actor creates the workspace from
     // a synthesized `POST /v1/workspaces`; its 201 and body (the workspace
-    // and its key, revealed once) answer this call.
-    const chosen = await chooseWorkspaceId(req, ctx.config.workspaceBootstrapSecret);
+    // and its key, revealed once) answer this call. The internal secret is
+    // this call's authentication: like the engine's own internal create, it
+    // asks no bootstrap proof of the caller.
+    const chosen = await chooseWorkspaceId(req, { bootstrapSecret: ctx.config.workspaceBootstrapSecret });
     if ('error' in chosen) return sendError(res, chosen.error.status, chosen.error.code, chosen.error.message);
     let workspaceId = chosen.workspaceId;
     setWorkspace(workspaceId);
@@ -103,6 +96,10 @@ export async function handleInternal(ctx: GatewayContext, { req, res, url, reque
       ...(parsed.data.metadata === undefined ? {} : { metadata: parsed.data.metadata }),
     });
     const idempotencyKey = req.headers[IDEMPOTENCY_KEY_HEADER];
+    // The actor serves the synthesized create on its public route, whose
+    // engine asks an anonymous keyed create for proof when the deployment
+    // requires it; the gateway holds the same secret and proves it itself.
+    const proof = chosen.keyed && ctx.config.workspaceBootstrapProofRequired ? ctx.config.workspaceBootstrapSecret : undefined;
     const request = {
       method: 'POST',
       url: `${url.origin}/v1/workspaces`,
@@ -111,6 +108,7 @@ export async function handleInternal(ctx: GatewayContext, { req, res, url, reque
         ['content-type', 'application/json'],
         [REQUEST_ID_HEADER, requestId],
         ...(typeof idempotencyKey === 'string' ? [[IDEMPOTENCY_KEY_HEADER, idempotencyKey] as [string, string]] : []),
+        ...(proof === undefined ? [] : [[BOOTSTRAP_PROOF_HEADER, proof] as [string, string]]),
       ] as [string, string][],
       body,
     };

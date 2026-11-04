@@ -3,7 +3,7 @@
  * variable names and semantics as the self-host server (`bin/serve.ts`).
  */
 import { z } from 'zod';
-import { ConfigError } from '../../bin/secretEnv.js';
+import { ConfigError, secretFromEnv } from '../../bin/secretEnv.js';
 import { MIN_INTERNAL_SECRET_LENGTH } from '../../engine/internalAdmin.js';
 import type { ActorRuntimeOptions } from './index.js';
 
@@ -33,12 +33,11 @@ const ActorEnvSchema = z.object({
   ),
   RELAYCAST_ENV: z.preprocess(unsetIfBlank, z.string().trim().min(1).optional()),
   /**
-   * Lets an anonymous `POST /v1/workspaces` with an `Idempotency-Key` be
-   * retried (the gateway derives the actor id from the same secret and key).
-   * Exact bytes, as `bin/serve.ts` and the gateway read it (only an empty
-   * value is unset): they feed a derivation.
+   * The engine's self-host policy: an anonymous keyed create must also send
+   * `X-Workspace-Bootstrap-Secret`. Exactly `true` or `false`; the gateway
+   * reads the same variable and gates at the edge first.
    */
-  RELAYCAST_WORKSPACE_BOOTSTRAP_SECRET: z.preprocess((value) => (value === '' ? undefined : value), z.string().optional()),
+  RELAYCAST_WORKSPACE_BOOTSTRAP_PROOF_REQUIRED: z.preprocess(unsetIfBlank, z.enum(['true', 'false']).optional()),
 });
 
 /**
@@ -53,6 +52,12 @@ export function actorConfigFromEnv(env: Record<string, string | undefined>): Act
     throw new ConfigError(`Invalid relaycast actor configuration: ${problems.join('; ')}`);
   }
   const values = parsed.data;
+  // Lets an anonymous `POST /v1/workspaces` with an `Idempotency-Key` be
+  // retried (the gateway derives the actor id from the same secret and key).
+  // Read as `bin/serve.ts` reads it: `_FILE` supported, and exact bytes (a
+  // direct value verbatim, a file minus one trailing newline), since they
+  // feed a derivation; only an empty value is unset.
+  const workspaceBootstrapSecret = secretFromEnv(env, 'RELAYCAST_WORKSPACE_BOOTSTRAP_SECRET', { exact: true });
   const mailbox = {
     ...(values.RELAYCAST_MAILBOX_TTL_MS !== undefined ? { deliveryTtlMs: values.RELAYCAST_MAILBOX_TTL_MS } : {}),
     ...(values.RELAYCAST_MAILBOX_DEPTH_CAP !== undefined ? { depthCap: values.RELAYCAST_MAILBOX_DEPTH_CAP } : {}),
@@ -63,7 +68,8 @@ export function actorConfigFromEnv(env: Record<string, string | undefined>): Act
     maxUploadBytes: values.RELAYCAST_MAX_UPLOAD_BYTES ?? DEFAULT_ACTOR_MAX_UPLOAD_BYTES,
     retention: { messageTtlDays: ttlDays !== undefined && ttlDays > 0 ? ttlDays : null },
     ...(values.RELAYCAST_INTERNAL_SECRET !== undefined ? { internalSecret: values.RELAYCAST_INTERNAL_SECRET } : {}),
-    ...(values.RELAYCAST_WORKSPACE_BOOTSTRAP_SECRET !== undefined ? { workspaceBootstrapSecret: values.RELAYCAST_WORKSPACE_BOOTSTRAP_SECRET } : {}),
+    ...(workspaceBootstrapSecret !== undefined ? { workspaceBootstrapSecret } : {}),
+    ...(values.RELAYCAST_WORKSPACE_BOOTSTRAP_PROOF_REQUIRED === 'true' ? { workspaceBootstrapProofRequired: true } : {}),
     ...(values.RELAYCAST_RATE_LIMIT_PER_MINUTE !== undefined ? { rateLimitPerMinute: values.RELAYCAST_RATE_LIMIT_PER_MINUTE } : {}),
     ...(Object.keys(mailbox).length > 0 ? { mailbox } : {}),
   };

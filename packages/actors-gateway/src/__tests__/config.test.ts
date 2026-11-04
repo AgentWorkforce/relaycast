@@ -24,6 +24,8 @@ describe('configuration', () => {
       controlPlaneSecret: undefined,
       homeRegion: undefined,
       publicWorkspaceCreate: true,
+      workspaceBootstrapSecret: undefined,
+      workspaceBootstrapProofRequired: false,
       fileStore: 'local',
       fileDir: '/data/files',
       maxUploadBytes: 64 * 1024 * 1024,
@@ -119,6 +121,20 @@ describe('configuration', () => {
     expect(loadConfig(baseEnv(URL)).workspaceBootstrapSecret).toBeUndefined();
     expect(loadConfig(baseEnv(URL, { RELAYCAST_WORKSPACE_BOOTSTRAP_SECRET: ' exact bytes ' })).workspaceBootstrapSecret).toBe(' exact bytes ');
     expect(loadConfig({ ...baseEnv(URL), RELAYCAST_WORKSPACE_BOOTSTRAP_SECRET_FILE: '/secrets/bootstrap' }, () => 'from-file\n').workspaceBootstrapSecret).toBe('from-file');
+  });
+
+  it('reads the bootstrap proof flag as "true" or "false" only, as the engine does', () => {
+    const secret = { RELAYCAST_WORKSPACE_BOOTSTRAP_SECRET: 'bootstrap-secret-0123456789abcdef' };
+    expect(loadConfig(baseEnv(URL, secret)).workspaceBootstrapProofRequired).toBe(false);
+    expect(loadConfig(baseEnv(URL, { ...secret, RELAYCAST_WORKSPACE_BOOTSTRAP_PROOF_REQUIRED: 'false' })).workspaceBootstrapProofRequired).toBe(false);
+    expect(loadConfig(baseEnv(URL, { ...secret, RELAYCAST_WORKSPACE_BOOTSTRAP_PROOF_REQUIRED: 'true' })).workspaceBootstrapProofRequired).toBe(true);
+    for (const value of ['yes', '1', 'TRUE', 'required']) {
+      const refused = refusal(baseEnv(URL, { ...secret, RELAYCAST_WORKSPACE_BOOTSTRAP_PROOF_REQUIRED: value }));
+      expect(refused.code).toBe('invalid_config');
+      expect(refused.message).toMatch(/RELAYCAST_WORKSPACE_BOOTSTRAP_PROOF_REQUIRED/);
+    }
+    // Like the engine's server, the flag without a secret starts: a keyed create then fails closed (503) before any proof is asked.
+    expect(loadConfig(baseEnv(URL, { RELAYCAST_WORKSPACE_BOOTSTRAP_PROOF_REQUIRED: 'true' }))).toMatchObject({ workspaceBootstrapSecret: undefined, workspaceBootstrapProofRequired: true });
   });
 
   it('reads secrets from _FILE variants and refuses unreadable files', () => {

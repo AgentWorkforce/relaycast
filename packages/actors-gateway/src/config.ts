@@ -46,6 +46,13 @@ export interface GatewayConfig {
    * same value. Unset: a keyed create fails closed (503), as on the engine.
    */
   workspaceBootstrapSecret: string | undefined;
+  /**
+   * The engine's self-host policy (`RELAYCAST_WORKSPACE_BOOTSTRAP_PROOF_REQUIRED`):
+   * an anonymous keyed create must send `X-Workspace-Bootstrap-Secret`. The
+   * gateway checks it at the edge before any actor call and forwards it, so
+   * the actor's engine (configured with the same two variables) checks it too.
+   */
+  workspaceBootstrapProofRequired: boolean;
   publicWorkspaceCreate: boolean;
   fileStore: FileStoreKind;
   fileDir: string;
@@ -115,6 +122,7 @@ const EnvSchema = z.object({
   DURABLE_ACTORS_PROJECT_ID: component('DURABLE_ACTORS_PROJECT_ID'),
   DURABLE_ACTORS_HOME_REGION: component('DURABLE_ACTORS_HOME_REGION').optional(),
   RELAYCAST_PUBLIC_WORKSPACE_CREATE: z.enum(['true', 'false']).default('true'),
+  RELAYCAST_WORKSPACE_BOOTSTRAP_PROOF_REQUIRED: z.enum(['true', 'false']).default('false'),
   RELAYCAST_FILE_STORE: z.enum(['local', 'gcs', 's3']).default('local'),
   RELAYCAST_FILE_DIR: z.string().min(1).default('/data/files'),
   RELAYCAST_MAX_UPLOAD_BYTES: integer(1).default(64 * 1024 * 1024),
@@ -197,6 +205,8 @@ export function loadConfig(env: Env = process.env, readFile?: (path: string) => 
     credentialKeyring,
     internalSecret,
     workspaceBootstrapSecret,
+    // Accepted without a secret, as the engine's server is: a keyed create then fails closed (503) before any proof is asked.
+    workspaceBootstrapProofRequired: settings.RELAYCAST_WORKSPACE_BOOTSTRAP_PROOF_REQUIRED === 'true',
     publicWorkspaceCreate: settings.RELAYCAST_PUBLIC_WORKSPACE_CREATE === 'true',
     fileStore: settings.RELAYCAST_FILE_STORE,
     fileDir: settings.RELAYCAST_FILE_DIR,

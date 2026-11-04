@@ -152,6 +152,60 @@ describe('workspace actor runtime', () => {
     expect(keyed.sql.exec('SELECT tag FROM _actor_credential_tag')).toEqual([{ tag: 'aBBBBBBBBBB' }]);
   });
 
+  it("runs the engine's bootstrap-secret policy inside the actor: fail-closed without a secret, proof when required, keyed replay", async () => {
+    const secret = 'bootstrap-secret-0123456789abcdef';
+    const key = 'kkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkk';
+    const keyed = (proof?: string, name = 'keyed'): ActorHttpRequest => ({
+      method: 'POST',
+      url: 'https://armadillo.test/v1/workspaces',
+      headers: [
+        ['content-type', 'application/json'],
+        ['idempotency-key', key],
+        ...(proof === undefined ? [] : [['x-workspace-bootstrap-secret', proof] as [string, string]]),
+      ],
+      body: JSON.stringify({ name }),
+    });
+    const error = (response: { body: string }) => (JSON.parse(response.body) as { error: { code: string } }).error.code;
+
+    // No secret configured: the engine's fail-closed answer, and nothing is created.
+    const unconfigured = new FakeWorkspaceActor('241764880589606915');
+    const closed = await unconfigured.create(keyed(), await TEST_CREDENTIAL_TAGS.tag('241764880589606915'));
+    expect(closed.status).toBe(503);
+    expect(error(closed)).toBe('workspace_create_idempotency_unavailable');
+    expect(rows(unconfigured, 'SELECT COUNT(*) AS n FROM workspaces')).toEqual([{ n: 0 }]);
+
+    // Proof required: a missing or wrong `X-Workspace-Bootstrap-Secret` is
+    // refused with the engine's status and code before anything is created.
+    const strict = new FakeWorkspaceActor('241764880589606916', { config: { workspaceBootstrapSecret: secret, workspaceBootstrapProofRequired: true } });
+    const strictTag = await TEST_CREDENTIAL_TAGS.tag('241764880589606916');
+    for (const proof of [undefined, '', 'not-the-configured-secret', `${secret}x`, secret.slice(0, -1)]) {
+      const refused = await strict.create(keyed(proof), strictTag);
+      expect(refused.status, `proof ${JSON.stringify(proof)}`).toBe(401);
+      expect(error(refused)).toBe('workspace_create_bootstrap_secret_invalid');
+    }
+    expect(rows(strict, 'SELECT COUNT(*) AS n FROM workspaces')).toEqual([{ n: 0 }]);
+    // The right proof creates; the same keyed create replays the same credential through the actor's idempotency record.
+    const created = await strict.create(keyed(secret), strictTag);
+    expect(created.status).toBe(201);
+    const createdData = (JSON.parse(created.body) as { data: { workspace_id: string; api_key: string } }).data;
+    expect(createdData.workspace_id).toBe('241764880589606916');
+    expect(createdData.api_key).toMatch(/^ar_ws_/);
+    const replayed = await strict.create(keyed(secret), strictTag);
+    expect(replayed.status).toBe(200);
+    expect((JSON.parse(replayed.body) as { data: unknown }).data).toEqual(createdData);
+    // A replay with another body is the engine's conflict, and the proof is still checked first.
+    const conflict = await strict.create(keyed(secret, 'other'), strictTag);
+    expect(conflict.status).toBe(409);
+    expect(error(conflict)).toBe('workspace_create_idempotency_conflict');
+    expect(error(await strict.create(keyed(undefined, 'other'), strictTag))).toBe('workspace_create_bootstrap_secret_invalid');
+    expect(rows(strict, 'SELECT COUNT(*) AS n FROM workspaces')).toEqual([{ n: 1 }]);
+
+    // The proof is asked of anonymous keyed creates only: an unkeyed create needs none.
+    const plain = new FakeWorkspaceActor('241764880589606917', { config: { workspaceBootstrapSecret: secret, workspaceBootstrapProofRequired: true } });
+    const unkeyed = await plain.create(jsonRequest('POST', '/v1/workspaces', { name: 'plain' }), await TEST_CREDENTIAL_TAGS.tag('241764880589606917'));
+    expect(unkeyed.status).toBe(201);
+  });
+
   it('refuses a second workspace in the same actor', async () => {
     const actor = new FakeWorkspaceActor(WORKSPACE_ID);
     await workspaceWithAgents(actor);

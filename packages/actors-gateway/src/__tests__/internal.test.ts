@@ -106,6 +106,34 @@ describe('internal admin API', () => {
     }
   });
 
+  it('proves the bootstrap secret itself for a keyed internal create when the deployment requires proof', async () => {
+    const secret = 'bootstrap-secret-0123456789abcdef';
+    harness = await startHarness({ workspace: adminWorkspace, env: { RELAYCAST_INTERNAL_SECRET: INTERNAL_SECRET, RELAYCAST_WORKSPACE_BOOTSTRAP_SECRET: secret, RELAYCAST_WORKSPACE_BOOTSTRAP_PROOF_REQUIRED: 'true' } });
+    const create = (headers: Record<string, string>) => fetch(`${harness!.baseUrl}/internal/workspaces`, {
+      method: 'POST',
+      headers: { authorization: `Bearer ${INTERNAL_SECRET}`, 'content-type': 'application/json', ...headers },
+      body: JSON.stringify({ name: 'team' }),
+    });
+    // The internal secret is the authentication, as on the engine's own internal create: no proof is asked of the caller,
+    // and the synthesized create carries the gateway's proof so the actor's engine accepts it.
+    const keyed = await create({ 'idempotency-key': 'cccccccccccccccccccccccccccccccc' });
+    expect(keyed.status).toBe(201);
+    const [keyedCall] = harness.controlPlane.invocations;
+    expect(keyedCall.actorId).toBe(await deriveKeyedWorkspaceId(secret, 'cccccccccccccccccccccccccccccccc'));
+    const keyedHeaders = (keyedCall.args[0] as { headers: [string, string][] }).headers;
+    expect(keyedHeaders).toContainEqual(['x-workspace-bootstrap-secret', secret]);
+    expect(keyedHeaders).toContainEqual(['idempotency-key', 'cccccccccccccccccccccccccccccccc']);
+    // A caller's own proof header is not what travels; the synthesized request is the gateway's.
+    const presented = await create({ 'idempotency-key': 'cccccccccccccccccccccccccccccccc', 'x-workspace-bootstrap-secret': 'not-the-configured-secret' });
+    expect(presented.status).toBe(201);
+    expect((harness.controlPlane.invocations[1].args[0] as { headers: [string, string][] }).headers).toContainEqual(['x-workspace-bootstrap-secret', secret]);
+    // An unkeyed internal create needs no proof and carries none.
+    const unkeyed = await create({});
+    expect(unkeyed.status).toBe(201);
+    expect((harness.controlPlane.invocations[2].args[0] as { headers: [string, string][] }).headers.map(([name]) => name)).not.toContain('x-workspace-bootstrap-secret');
+    expect(JSON.stringify(harness.logs)).not.toContain(secret);
+  });
+
   it('retries an unkeyed internal create once under a fresh id when the minted one was taken', async () => {
     let first: string | undefined;
     const colliding = (id: string): FakeWorkspace => ({

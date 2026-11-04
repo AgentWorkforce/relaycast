@@ -40,6 +40,8 @@ logger.info('gateway.listening', {
   file_store: config.fileStore,
   file_dir: config.fileStore === 'local' ? config.fileDir : undefined,
   public_workspace_create: config.publicWorkspaceCreate,
+  keyed_workspace_create: config.workspaceBootstrapSecret !== undefined,
+  bootstrap_proof_required: config.workspaceBootstrapProofRequired,
   internal_api: config.internalSecret !== undefined,
 });
 

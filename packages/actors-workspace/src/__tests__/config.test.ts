@@ -32,13 +32,18 @@ describe("workspaceConfigFromEnv", () => {
             RELAYCAST_MESSAGE_TTL_DAYS: "7",
             RELAYCAST_MAILBOX_DEPTH_CAP: "10",
             RELAYCAST_INTERNAL_SECRET: "an-internal-secret-of-thirty-two-chars!!",
+            RELAYCAST_WORKSPACE_BOOTSTRAP_SECRET: " bootstrap-secret-exact-bytes ",
+            RELAYCAST_WORKSPACE_BOOTSTRAP_PROOF_REQUIRED: "true",
         })
         expect(config.engine).toMatchObject({
             environment: "staging",
             retention: { messageTtlDays: 7 },
             mailbox: { depthCap: 10 },
             internalSecret: "an-internal-secret-of-thirty-two-chars!!",
+            workspaceBootstrapSecret: " bootstrap-secret-exact-bytes ",
+            workspaceBootstrapProofRequired: true,
         })
         expect(() => workspaceConfigFromEnv({ ...BASE, RELAYCAST_INTERNAL_SECRET: "short" })).toThrow(/RELAYCAST_INTERNAL_SECRET/)
+        expect(() => workspaceConfigFromEnv({ ...BASE, RELAYCAST_WORKSPACE_BOOTSTRAP_PROOF_REQUIRED: "yes" })).toThrow(/RELAYCAST_WORKSPACE_BOOTSTRAP_PROOF_REQUIRED/)
     })
 })

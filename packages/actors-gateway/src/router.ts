@@ -142,8 +142,14 @@ export function createRequestHandler(ctx: GatewayContext, options: RequestHandle
       if (!ctx.config.publicWorkspaceCreate) return sendError(res, 404, 'not_found', 'Route not found');
       // Credentials carry a tag only this gateway's keyring signs, so a
       // credential naming a made-up workspace is refused here and never
-      // creates an actor. A keyed create lands on an id derived from the key.
-      const chosen = await chooseWorkspaceId(req, ctx.config.workspaceBootstrapSecret);
+      // creates an actor. A keyed create lands on an id derived from the key;
+      // when the deployment requires proof of the bootstrap secret, an
+      // anonymous keyed create is refused here without it, and the proof
+      // travels on to the actor's engine with the other headers.
+      const chosen = await chooseWorkspaceId(req, {
+        bootstrapSecret: ctx.config.workspaceBootstrapSecret,
+        proofRequired: ctx.config.workspaceBootstrapProofRequired,
+      });
       if ('error' in chosen) return sendError(res, chosen.error.status, chosen.error.code, chosen.error.message);
       const workspaceId = chosen.workspaceId;
       setWorkspace(workspaceId);
