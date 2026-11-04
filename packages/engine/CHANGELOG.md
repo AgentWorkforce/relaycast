@@ -12,7 +12,6 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 ### Added
 
 - `POST /v1/nodes`: an `Idempotency-Key` without `X-Relaycast-Node-Token` makes a first enrollment recoverable. The minted token is derived from the key and request (like a rotation's replacement) and the row keeps the key/body binding in `rotation_idempotency_key_hash` / `rotation_request_digest` / `previous_token_expires_at` with `previous_token_hash` null; an identical proof-less retry inside 24 hours replays `201` with the same token. No schema migration. `createNodeToken`'s `rotationRecovery` option is now `keyedRecovery`.
-- `POST /v1/nodes` no longer returns `400 node_rotation_idempotency_requires_current_token`; a key shorter than 32 characters is `400 node_rotation_idempotency_key_too_weak` with or without proof.
 - `@relaycast/engine/adapters/actor`: `ActorRealtime` runs the engine's realtime over a durable actor's sockets; `upgrade` / `upgradeNode` answer a socket grant instead of a 101.
 - `SOCKET_GRANT_HEADER`, `SocketPrincipalSchema`, `SocketGrantSchema` and `isSocketGrant` describe that grant, exported from the actor adapter and `@relaycast/engine/gateway`.
 - The actor runtime gains `onConnect` / `onMessage` / `onDisconnect` and a `sockets` option; a socket the actor cannot restore is closed `4012 actor restarted`.
@@ -33,6 +32,7 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Changed
 
+- `POST /v1/nodes` no longer returns `400 node_rotation_idempotency_requires_current_token`; a key shorter than 32 characters is `400 node_rotation_idempotency_key_too_weak` with or without proof.
 - `createActorRuntime` runs no SQL in the actor's constructor: the schema is applied inside the first call and commits with it, so a failed `create` leaves no half-built actor; a wake with a current schema runs no DDL.
 - `/internal/workspaces/:id` and `/internal/workspaces/:id/api-key` answer 404 for another workspace's id on a single-workspace host (`config.workspaceId`), where `POST /internal/workspaces` is also a 404.
 - The workspace actor binds no `DeliveryWaiters`: `GET /v1/deliveries?wait` answers at once inside an actor (its host long-polls).
