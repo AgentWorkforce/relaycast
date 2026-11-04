@@ -207,7 +207,7 @@ export async function cleanupOldEvents(db: Db, maxAgeMs = 24 * 60 * 60 * 1000): 
         lte(pendingEvents.completedAt, cutoff),
       ),
     )
-    .returning();
+    .returning({ id: pendingEvents.id });
 
   return deleted.length;
 }
