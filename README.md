@@ -963,7 +963,12 @@ node. For crash-safe rotation, also send a CSPRNG-generated `Idempotency-Key`
 of at least 32 characters and reuse the same key, current token, and request
 body after a transport failure. During a 24-hour recovery window, the server
 returns the same replacement token without mutating the row again; a changed
-key or body is rejected. Only `broker` nodes are matched
+key or body is rejected. A first enrollment is recoverable the same way: send
+the same kind of `Idempotency-Key` without a node token, persisting the key
+before the first request, and a retry with the same key and body returns the
+original token for 24 hours with no new row and no rotation. A retry with a
+changed body, another key, or no key gets `409 node_token_proof_required`, as
+an unkeyed re-enrollment always has. Only `broker` nodes are matched
 this way — a machine legitimately runs many `direct` node-of-one delivery hosts
 — and passing an explicit `node_id` pins identity, which is how you run two
 brokers on one machine. The value is recorded on the node and returned on

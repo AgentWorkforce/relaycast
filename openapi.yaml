@@ -5750,6 +5750,14 @@ paths:
         workspace key alone cannot rotate or modify an established row. Supplying a
         CSPRNG-generated `Idempotency-Key` of at least 32 characters makes that rotation
         recoverable after a lost response when the same key, proof, and body are retried.
+        The same key, sent without `X-Relaycast-Node-Token`, makes a first enrollment
+        recoverable: persist the key before the first request and retry with the same
+        key and body, and for 24 hours the server answers `201` with the node's original
+        token without creating or rotating anything; a retry with the same key but a
+        changed body, a different key, or no key is refused with `node_token_proof_required`
+        (409). The key is scoped to the node it enrolled, so reusing it under another
+        `node_id` is an ordinary create. A key shorter than 32 characters is rejected with
+        `node_rotation_idempotency_key_too_weak` (400).
         When `node_id`
         is supplied, it is the enrollment key: an authorized matching node is rotated
         in place (and renamed if `name` differs), a new `node_id` creates a new node, and
@@ -5783,7 +5791,7 @@ paths:
             type: string
             minLength: 32
             maxLength: 255
-          description: CSPRNG-generated recovery capability for an existing-node rotation. Reuse the same key with the same current token and request body after a transport failure to recover the same replacement token during the bounded replay window.
+          description: CSPRNG-generated recovery capability. With `X-Relaycast-Node-Token`, reuse the same key, current token, and request body after a transport failure to recover the same replacement token during the 24-hour replay window. Without it, the key makes a first enrollment recoverable the same way; persist it before the first request and reuse it on every retry.
       requestBody:
         required: true
         content:

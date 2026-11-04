@@ -504,8 +504,13 @@ export async function createNodeToken(
   authorization: {
     expectedTokenHash?: string;
     directAgentId?: string;
-    rotationRecovery?: {
-      /** The deterministic replacement, under each tag the deployment knows (current first). */
+    /**
+     * Keyed recovery for a rotation (with `expectedTokenHash`) or a first
+     * enrollment (without). The token is derived from the caller's secrets and
+     * the request, never stored: a replay re-derives it and matches the hash.
+     */
+    keyedRecovery?: {
+      /** The deterministic token, under each tag the deployment knows (current first). */
       replacementTokens: readonly string[];
       idempotencyKeyHash: string;
       requestDigest: string;
@@ -514,7 +519,7 @@ export async function createNodeToken(
     admitRegistration?: RegistrationAdmission;
   } = {},
 ) {
-  const token = authorization.rotationRecovery?.replacementTokens[0] ?? await issueCredential(db, 'node', workspaceId);
+  const token = authorization.keyedRecovery?.replacementTokens[0] ?? await issueCredential(db, 'node', workspaceId);
   const tokenHash = await sha256Hex(token);
   const name = data.name.startsWith('#') ? data.name.slice(1) : data.name;
   // Reject names that are empty or still #-prefixed after normalization: an
@@ -579,29 +584,37 @@ export async function createNodeToken(
     await authorization.admitRegistration('register_device');
   }
 
+  const hasPresentedTokenProof = authorization.expectedTokenHash !== undefined;
+  const recovery = authorization.keyedRecovery;
+  // A replay returns the token the first attempt committed, whichever tag it
+  // carries; a new rotation or enrollment mints under the current one.
+  const replacements = recovery
+    ? await Promise.all(recovery.replacementTokens.map(async (replacement) => ({ token: replacement, hash: await sha256Hex(replacement) })))
+    : [];
+  /** The row's recovery binding matches this key and body, inside its window. */
+  const keyedBindingMatches = (candidate: NodeRow) => recovery !== undefined
+    && candidate.rotationIdempotencyKeyHash === recovery.idempotencyKeyHash
+    && candidate.rotationRequestDigest === recovery.requestDigest
+    && candidate.previousTokenExpiresAt !== null
+    && candidate.previousTokenExpiresAt.getTime() > now.getTime();
+  // A keyed rotation retains the superseded proof it was authorized by; a
+  // keyed first enrollment is a rotation from nothing and retains none
+  // (`previousTokenHash` stays null). Either way the row replays only to a
+  // caller presenting exactly the proof it retained — none, for a create —
+  // inside the window, so a caller that never saw the minted token recovers it.
+  const isIdempotentReplay = (candidate: NodeRow) =>
+    candidate.previousTokenHash === (authorization.expectedTokenHash ?? null)
+    && keyedBindingMatches(candidate);
+  /** The token a row committed by this exact keyed request holds, if it is one. */
+  const replayedToken = (candidate: NodeRow): string | undefined => {
+    const committed = replacements.find((replacement) => replacement.hash === candidate.tokenHash);
+    return committed && isIdempotentReplay(candidate) ? committed.token : undefined;
+  };
+
   if (existing) {
-    const hasPresentedTokenProof = authorization.expectedTokenHash !== undefined;
     const authorizedDirectNode = authorization.directAgentId !== undefined
       && existing.id === directNodeIdForAgent(authorization.directAgentId)
       && existing.role === 'direct';
-    const recovery = authorization.rotationRecovery;
-    // A replay returns the replacement the first attempt committed, whichever
-    // tag it carries; a new rotation mints under the current one.
-    const replacements = recovery
-      ? await Promise.all(recovery.replacementTokens.map(async (replacement) => ({ token: replacement, hash: await sha256Hex(replacement) })))
-      : [];
-    /** The replacement token a row committed by this keyed rotation holds, if it is one. */
-    const replayedToken = (candidate: NodeRow): string | undefined => {
-      const committed = replacements.find((replacement) => replacement.hash === candidate.tokenHash);
-      return committed && isIdempotentRotationReplay(candidate) ? committed.token : undefined;
-    };
-    const isIdempotentRotationReplay = (candidate: NodeRow) => hasPresentedTokenProof
-      && recovery !== undefined
-      && candidate.previousTokenHash === authorization.expectedTokenHash
-      && candidate.rotationIdempotencyKeyHash === recovery.idempotencyKeyHash
-      && candidate.rotationRequestDigest === recovery.requestDigest
-      && candidate.previousTokenExpiresAt !== null
-      && candidate.previousTokenExpiresAt.getTime() > now.getTime();
     const replayed = replayedToken(existing);
     if (replayed) {
       return { ...publicNode(existing), token: replayed };
@@ -613,23 +626,19 @@ export async function createNodeToken(
         409,
       );
     }
+    // A keyed rotation by proof retains the superseded hash and its key/body
+    // binding for the recovery window; an agent's implicit direct node, minted
+    // on its authority rather than a proof, never does.
+    const keyedRotation = hasPresentedTokenProof && !authorizedDirectNode && recovery !== undefined;
     const [updated] = await db
       .update(nodes)
       .set({
         name,
         tokenHash,
-        previousTokenHash: hasPresentedTokenProof && !authorizedDirectNode && recovery
-          ? authorization.expectedTokenHash
-          : null,
-        previousTokenExpiresAt: hasPresentedTokenProof && !authorizedDirectNode && recovery
-          ? new Date(now.getTime() + NODE_ROTATION_RECOVERY_TTL_MS)
-          : null,
-        rotationIdempotencyKeyHash: hasPresentedTokenProof && !authorizedDirectNode && recovery
-          ? recovery.idempotencyKeyHash
-          : null,
-        rotationRequestDigest: hasPresentedTokenProof && !authorizedDirectNode && recovery
-          ? recovery.requestDigest
-          : null,
+        previousTokenHash: keyedRotation ? authorization.expectedTokenHash : null,
+        previousTokenExpiresAt: keyedRotation ? new Date(now.getTime() + NODE_ROTATION_RECOVERY_TTL_MS) : null,
+        rotationIdempotencyKeyHash: keyedRotation ? recovery.idempotencyKeyHash : null,
+        rotationRequestDigest: keyedRotation ? recovery.requestDigest : null,
         kind,
         role,
         deliveryAdapter,
@@ -680,31 +689,58 @@ export async function createNodeToken(
     return { ...publicNode(updated), token };
   }
 
-  const [created] = await db
-    .insert(nodes)
-    .values({
-      id: data.node_id ?? `node_${generateId()}`,
-      workspaceId,
-      name,
-      tokenHash,
-      kind,
-      role,
-      deliveryAdapter,
-      deliveryConfig,
-      capabilities: normalizeCapabilities(data.capabilities ?? []),
-      machineId: data.machine_id ?? null,
-      maxAgents,
-      tags: data.tags ?? [],
-      version: data.version ?? 'unknown',
-      status: 'offline',
-      handlersLive: false,
-      load: 0,
-      loadReported: false,
-      activeAgents: 0,
-      createdAt: now,
-    })
-    .returning();
-  return { ...publicNode(created), token };
+  // A keyed first enrollment (no proof, no direct-agent authority) retains its
+  // key/body binding for the recovery window so a lost 201 can be replayed.
+  const keyedCreate = recovery !== undefined && !hasPresentedTokenProof && authorization.directAgentId === undefined;
+  try {
+    const [created] = await db
+      .insert(nodes)
+      .values({
+        id: data.node_id ?? `node_${generateId()}`,
+        workspaceId,
+        name,
+        tokenHash,
+        previousTokenHash: null,
+        previousTokenExpiresAt: keyedCreate ? new Date(now.getTime() + NODE_ROTATION_RECOVERY_TTL_MS) : null,
+        rotationIdempotencyKeyHash: keyedCreate ? recovery.idempotencyKeyHash : null,
+        rotationRequestDigest: keyedCreate ? recovery.requestDigest : null,
+        kind,
+        role,
+        deliveryAdapter,
+        deliveryConfig,
+        capabilities: normalizeCapabilities(data.capabilities ?? []),
+        machineId: data.machine_id ?? null,
+        maxAgents,
+        tags: data.tags ?? [],
+        version: data.version ?? 'unknown',
+        status: 'offline',
+        handlersLive: false,
+        load: 0,
+        loadReported: false,
+        activeAgents: 0,
+        createdAt: now,
+      })
+      .returning();
+    return { ...publicNode(created), token };
+  } catch (err: unknown) {
+    // Two identical keyed first enrollments can both miss the lookup before
+    // either inserts; they derive the same token, so the loser trips the
+    // token_hash (or node id) uniqueness. Recover the winner's row instead of
+    // surfacing the constraint.
+    if (!keyedCreate) throw err;
+    let winner: NodeRow | null;
+    try {
+      winner = await getNodeByTokenHash(db, tokenHash);
+    } catch {
+      // The insert's own failure is the one to report, not the lookup's.
+      throw err;
+    }
+    const replayedByWinner = winner && winner.workspaceId === workspaceId ? replayedToken(winner) : undefined;
+    if (winner && replayedByWinner) {
+      return { ...publicNode(winner), token: replayedByWinner };
+    }
+    throw err;
+  }
 }
 
 export async function getNodeByTokenHash(db: Db, tokenHash: string) {

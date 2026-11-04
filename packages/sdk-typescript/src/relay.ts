@@ -1049,16 +1049,11 @@ export class RelayCast {
         throw new Error('currentToken must not be blank for node rotation');
       }
       if (options?.idempotencyKey !== undefined && !options.idempotencyKey.trim()) {
-        throw new Error('idempotencyKey must not be blank for node rotation recovery');
-      }
-      if (options?.idempotencyKey !== undefined && !options.currentToken) {
-        throw new Error('idempotencyKey requires currentToken for node rotation recovery');
+        throw new Error('idempotencyKey must not be blank for node enrollment recovery');
       }
       const headers = {
         ...(options?.currentToken ? { 'X-Relaycast-Node-Token': options.currentToken } : {}),
-        ...(options?.currentToken && options.idempotencyKey !== undefined
-          ? { 'Idempotency-Key': options.idempotencyKey }
-          : {}),
+        ...(options?.idempotencyKey !== undefined ? { 'Idempotency-Key': options.idempotencyKey } : {}),
       };
       return this.client.post(
         '/v1/nodes',
