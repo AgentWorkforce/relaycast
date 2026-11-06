@@ -1575,6 +1575,8 @@ only after the binding has been removed and the agent moved offline. Requests
 without an `id` retain fire-and-forget behavior. Brokers performing owned identity
 cleanup must await that acknowledgement before requesting deletion.
 
+Relayfile ingress accepts authenticated `file.created`, `file.updated`, and `file.deleted` notifications. Deletes without a snapshot preserve the event type and path, with a notice that deleted content is unavailable; no record content or actor is reconstructed.
+
 The signed Relayfile webhook request follows Relayfile's existing external event contract (`eventId`, `providerEventType`, `resourceRef`). These are verified vendor payload fields, not alternate spellings of Relaycast HTTP fields; Relaycast message metadata remains snake_case.
 
 ### Workspace delivery capacity
