@@ -1750,7 +1750,13 @@ components:
           description: Relayfile provider namespace, such as `slack`, `linear`, or `github`.
         path_glob:
           type: string
-          description: Relayfile path glob to bind to this channel.
+          description: >
+            Relayfile path glob to bind to this channel. Supports * within one
+            segment and whole ** segments across directories, including
+            /linear/issues/*__<id>.json and /jira/issues/*/comments/*.json.
+            Matching resolves repeated slashes and dot segments, preserving case
+            and percent escapes. Existing trailing-prefix behavior is retained;
+            target signatures and GitHub identity opt-ins are unchanged.
 
     RelayfileInboundTarget:
       type: object

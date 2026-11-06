@@ -16,7 +16,11 @@ This project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 Packages without a separate changelog are covered by the cross-package notes below.
 
-## [Unreleased]
+## [Unreleased - Patch]
+
+### Fixed
+
+- Relayfile callbacks deliver events for embedded and internal path wildcards, including per-issue Linear files and Jira comment paths.
 
 ## [12.8.0] - 2026-11-04
 

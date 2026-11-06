@@ -18,6 +18,7 @@ import { resolveWorkspaceDeliveryPolicyById } from '../engine/workspaceDeliveryP
 import { runInBackground } from './background.js';
 import { sendWebhookEvent } from './webhookOutbox.js';
 import { emitServerEvent } from '../lib/serverTelemetry.js';
+import { eventMatchesRelayfileGlob } from './relayfilePathGlob.js';
 
 export const relayfileInboundRoutes = new Hono<AppEnv>();
 
@@ -486,30 +487,13 @@ function normalizePathGlob(pathGlob: string): string {
   return trimmed.startsWith('/') ? trimmed : `/${trimmed}`;
 }
 
-function eventMatchesGlob(path: string, glob: string): boolean {
-  const normalizedPath = normalizePathGlob(path);
-  const normalizedGlob = normalizePathGlob(glob);
-  if (normalizedGlob === '/**' || normalizedGlob === normalizedPath) return true;
-  if (normalizedGlob.endsWith('/**')) {
-    const prefix = normalizedGlob.slice(0, -'/**'.length);
-    return normalizedPath === prefix || normalizedPath.startsWith(`${prefix}/`);
-  }
-  if (normalizedGlob.endsWith('/*')) {
-    const prefix = normalizedGlob.slice(0, -'/*'.length);
-    const rest = normalizedPath.slice(prefix.length + 1);
-    return normalizedPath.startsWith(`${prefix}/`) && !rest.includes('/');
-  }
-  if (normalizedGlob.endsWith('*')) return normalizedPath.startsWith(normalizedGlob.slice(0, -1));
-  return false;
-}
-
 /**
  * Match literal paths first, then authorized GitHub PR identities within one repo.
  * The provider comes from the authenticated target; only provider-sync events may
  * use titled pull paths or stable PR references to match sibling event layouts.
  */
 function eventMatchesSubscription(event: RelayfileEvent, glob: string, githubPrIdentityAuthorized: boolean, provider: string): boolean {
-  if (eventMatchesGlob(event.path ?? '', glob)) return true;
+  if (eventMatchesRelayfileGlob(event.path ?? '', glob)) return true;
   // The route provider is normalized and authenticated by the target HMAC;
   // the caller already rejected any conflicting event provider above.
   if (!githubPrIdentityAuthorized || provider !== 'github' || event.origin !== 'provider_sync') return false;
