@@ -16,14 +16,16 @@ let restored = 0;
 for (const [key, entry] of Object.entries(refreshed.packages ?? {})) {
   const sourceEntry = source.packages?.[key];
   if (!sourceEntry || !entry || typeof entry !== "object") continue;
-  if (Object.hasOwn(sourceEntry, "peer")) {
-    if (entry.peer !== sourceEntry.peer) {
-      entry.peer = sourceEntry.peer;
+  for (const field of ["peer", "dev"]) {
+    if (Object.hasOwn(sourceEntry, field)) {
+      if (entry[field] !== sourceEntry[field]) {
+        entry[field] = sourceEntry[field];
+        restored += 1;
+      }
+    } else if (Object.hasOwn(entry, field)) {
+      delete entry[field];
       restored += 1;
     }
-  } else if (Object.hasOwn(entry, "peer")) {
-    delete entry.peer;
-    restored += 1;
   }
 
   // JSON key order is part of the exact release-tree contract. Assigning a
@@ -41,4 +43,4 @@ for (const [key, entry] of Object.entries(refreshed.packages ?? {})) {
 }
 
 writeFileSync(lockPath, `${JSON.stringify(refreshed, null, 2)}\n`);
-console.log(`Restored source peer metadata on ${restored} lockfile entries`);
+console.log(`Restored source dependency metadata (${restored} fields)`);

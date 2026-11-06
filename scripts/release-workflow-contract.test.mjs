@@ -565,17 +565,17 @@ describe("publish workflow safety contract", () => {
     assert.doesNotMatch(refresh, /npm (?:install|update) --package-lock-only/);
   });
 
-  it("restores source peer metadata after npm refreshes the release lockfile", () => {
+  it("restores source dependency metadata after npm refreshes the release lockfile", () => {
     const build = jobBlock("build");
     const refresh = build.indexOf("npm install --package-lock-only --ignore-scripts");
     const restore = build.indexOf("restore-release-lock-metadata.mjs", refresh);
     const validate = build.indexOf("Validate release version, changelog, and generated-source parity");
     assert.ok(refresh !== -1, "workspace lock refresh not found");
-    assert.ok(restore > refresh, "peer metadata restore must follow npm's lock refresh");
+    assert.ok(restore > refresh, "dependency metadata restore must follow npm's lock refresh");
     assert.ok(validate > restore, "release validation must follow metadata restoration");
   });
 
-  it("restores peer metadata at its source JSON position", () => {
+  it("restores source peer/dev metadata at its JSON position without hiding other lock edits", () => {
     const root = mkdtempSync(path.join(tmpdir(), "relaycast-release-lock-metadata-"));
     try {
       const sourceLock = {
@@ -588,6 +588,15 @@ describe("publish workflow safety contract", () => {
             engines: { node: ">=22" },
             funding: { url: "https://example.test" },
           },
+          "node_modules/tsx/node_modules/@esbuild/linux-x64": {
+            version: "0.28.0",
+            resolved: "https://registry.npmjs.org/@esbuild/linux-x64/-/linux-x64-0.28.0.tgz",
+            integrity: "sha512-source",
+            dev: true,
+            optional: true,
+            os: ["linux"],
+          },
+          "node_modules/tsx": { version: "4.20.0", bin: { tsx: "dist/cli.mjs" } },
         },
       };
       writeFileSync(path.join(root, "package-lock.json"), `${JSON.stringify(sourceLock, null, 2)}\n`);
@@ -600,6 +609,12 @@ describe("publish workflow safety contract", () => {
       const refreshedLock = structuredClone(sourceLock);
       refreshedLock.packages["packages/example"].version = "1.1.0";
       delete refreshedLock.packages["packages/example"].peer;
+      const platform = "node_modules/tsx/node_modules/@esbuild/linux-x64";
+      delete refreshedLock.packages[platform].dev;
+      refreshedLock.packages["node_modules/tsx"].dev = true;
+      // Metadata restoration must leave these unrelated edits for the strict validator.
+      refreshedLock.packages[platform].integrity = "sha512-changed";
+      refreshedLock.packages[platform].optional = false;
       writeFileSync(path.join(root, "package-lock.json"), `${JSON.stringify(refreshedLock, null, 2)}\n`);
 
       const restored = spawnSync(process.execPath, [restoreReleaseLockMetadata], {
@@ -610,6 +625,8 @@ describe("publish workflow safety contract", () => {
 
       const expectedLock = structuredClone(sourceLock);
       expectedLock.packages["packages/example"].version = "1.1.0";
+      expectedLock.packages[platform].integrity = "sha512-changed";
+      expectedLock.packages[platform].optional = false;
       assert.equal(
         readFileSync(path.join(root, "package-lock.json"), "utf8"),
         `${JSON.stringify(expectedLock, null, 2)}\n`,
