@@ -16,7 +16,11 @@ This project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 Packages without a separate changelog are covered by the cross-package notes below.
 
-## [Unreleased]
+## [Unreleased - Patch]
+
+### Fixed
+
+- Relayfile deletion notifications reach subscribed agents, including typed provider removals without a record snapshot.
 
 ## [12.8.0] - 2026-11-04
 

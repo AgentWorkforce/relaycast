@@ -205,7 +205,7 @@ async (c) => {
   if (event.origin === 'agent_write') {
     return jsonOk(c, { skipped: 'agent_write' });
   }
-  if (event.type !== 'file.created' && event.type !== 'file.updated') {
+  if (event.type !== 'file.created' && event.type !== 'file.updated' && event.type !== 'file.deleted') {
     return jsonOk(c, { skipped: 'ignored_event_type' });
   }
 
@@ -405,6 +405,7 @@ export async function verifyRelayfileSignature(
   return { ok: true };
 }
 
+/** Render authenticated event semantics and optional record content without reconstructing deleted snapshots. */
 export function formatRelayfileEventMessage(event: RelayfileEventPublic, provider: string): { text: string; author: string; record: unknown } | null {
   const stored = parseSnapshotRecord(event.snapshot);
   const envelope = providerRecordEnvelopeSchema.safeParse(stored);
@@ -416,7 +417,9 @@ export function formatRelayfileEventMessage(event: RelayfileEventPublic, provide
   const title = recordTitle(record);
   const body = recordBody(record);
   const providerLabel = provider.charAt(0).toUpperCase() + provider.slice(1);
-  const lines = [event.providerEventType ? `${providerLabel} ${event.providerEventType}` : `${providerLabel} update`];
+  const eventLabel = event.providerEventType || (event.type === 'file.deleted' ? 'file.deleted' : 'update');
+  const lines = [`${providerLabel} ${eventLabel}`];
+  if (event.type === 'file.deleted' && record === null) lines.push('Deleted file content is unavailable.');
   if (title) lines.push(title);
   if (body && body !== title) lines.push(body);
   lines.push(`Relayfile path: ${event.path}`);
