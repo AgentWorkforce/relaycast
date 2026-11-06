@@ -405,6 +405,7 @@ export async function verifyRelayfileSignature(
   return { ok: true };
 }
 
+/** Render authenticated event semantics and optional record content without reconstructing deleted snapshots. */
 export function formatRelayfileEventMessage(event: RelayfileEventPublic, provider: string): { text: string; author: string; record: unknown } | null {
   const stored = parseSnapshotRecord(event.snapshot);
   const envelope = providerRecordEnvelopeSchema.safeParse(stored);
