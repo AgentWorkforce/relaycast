@@ -38,14 +38,19 @@
     }
   ],
   "retrospective": {
-    "summary": "Aligned authenticated Relayfile callback path matching with released producer semantics. Baseline route regressions reproduce 18 passed / 2 failed; patched receiver and agreement suites pass 41 tests, with 21/21 vectors agreeing with pinned upstream source. Existing HMAC labels, GitHub identity opt-in and ingress controls are preserved. No runtime, deployment or provider actions.",
+    "summary": "Aligned authenticated Relayfile callback matching with released producer semantics while preserving Relaycast legacy root wildcards. Final receiver and matcher suites pass 45 tests; 21 shared vectors agree with pinned upstream source, and root compatibility has separate regressions. Existing HMAC labels, GitHub identity opt-in and ingress controls are preserved. No runtime, deployment or provider actions.",
     "approach": "Standard approach",
     "confidence": 0.94
   },
   "commits": [
-    "604f2dd03bdba2a62bc41e3ebb8ac8747ab59a8b"
+    "604f2dd03bdba2a62bc41e3ebb8ac8747ab59a8b",
+    "b431f0fd1e6ebb24825e5267ac2e04f4c8d395e4",
+    "c6f30bce4e3ed2ddb1a4f92c38d0a74c77925ade"
   ],
   "filesChanged": [
+    ".agentworkforce/trajectories/completed/2026-11/traj_zbji908tsp9e.trace.json",
+    ".agentworkforce/trajectories/completed/2026-11/traj_zbji908tsp9e/summary.md",
+    ".agentworkforce/trajectories/completed/2026-11/traj_zbji908tsp9e/trajectory.json",
     "CHANGELOG.md",
     "README.md",
     "openapi.yaml",
@@ -59,7 +64,7 @@
   "tags": [],
   "_trace": {
     "startRef": "1ecb158404c877c63e31ee9e55f1c2786fab60ab",
-    "endRef": "604f2dd03bdba2a62bc41e3ebb8ac8747ab59a8b",
+    "endRef": "c6f30bce4e3ed2ddb1a4f92c38d0a74c77925ade",
     "traceId": "3f9c8d1a-c07e-4673-81b2-382a2499cb10"
   }
 }

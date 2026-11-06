@@ -50,3 +50,11 @@ Product commit: `604f2dd03bdba2a62bc41e3ebb8ac8747ab59a8b`, based on `1ecb158404
 Matching uses the upstream iterative segment-state dynamic program and star retry algorithm, without caller-controlled regular expressions or recursive backtracking. Its bound is polynomial in path/pattern size, not a strict whole-input linear-time claim. Canonicalization is matching-only: target HMAC labels and GitHub identity authorization logic are unchanged.
 
 No provider calls, manual webhook replays, configuration/runtime changes, merge or deployment were performed. Hosted engine revision remains unverified; this PR is separate from deletion support in PR630.
+
+## Review correction: root wildcard compatibility
+
+Final product commit: `c6f30bce4e3ed2ddb1a4f92c38d0a74c77925ade`. A faithful upstream port exposed its empty-prefix bug for `/*`, which previously matched root-level paths in Relaycast. The receiver now keeps that prefix empty, preserving existing root-file/root-path matches while rejecting nested files. This is a narrow intentional difference from upstream, not an authorization expansion.
+
+The same two-suite Vitest command above now passes 45 tests (21 route tests and 24 matcher cases). Added regressions failed on the prior port with 42 passed / 3 failed, then passed after the fix. The original 21 shared upstream vectors still agree 21/21; the three root-compatibility cases are separate from that agreement set. TypeScript 5.9.3 and changed-source ESLint 9.39.2 were rerun successfully. Local review logs: `/tmp/relaycast-globs-root-{before,after}.log`.
+
+The trajectory range now ends at this final product commit and records all commits/files in the actual git range, including the intervening evidence commit. The trace retains original product attribution and adds this correction's changed ranges. Subsequent evidence-only updates do not change executable code or tests.
