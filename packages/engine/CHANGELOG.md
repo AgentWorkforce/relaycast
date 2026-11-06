@@ -11,7 +11,7 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Fixed
 
-- Relayfile inbound callbacks accept authenticated `file.deleted` events through the existing target checks and replay deduplication; snapshot-free deletes preserve event metadata and path without inventing record content.
+- Relayfile inbound callbacks deliver authenticated `file.deleted` events, preserving metadata and paths when no snapshot is available.
 
 ## [12.8.0] - 2026-11-04
 
