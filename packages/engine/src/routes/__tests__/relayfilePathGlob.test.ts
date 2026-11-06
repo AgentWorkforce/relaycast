@@ -42,3 +42,14 @@ describe('Relaycast legacy root wildcard compatibility', () => {
     expect(eventMatchesRelayfileGlob(path, '/*')).toBe(expected);
   });
 });
+
+// Pattern stars stay wildcard tokens even when a path contains a literal star.
+describe('Wildcard token treatment', () => {
+  it.each([
+    ['/jira/issues/KAN-1/comments/*note.json', '/jira/issues/*/comments/*.json', true],
+    ['/jira/issues/KAN-1/comments/pre*note.json', '/jira/issues/*/comments/pre*.json', true],
+    ['/jira/issues/KAN-1/comments/*note.txt', '/jira/issues/*/comments/*.json', false],
+  ])('%s against %s is %s', (path, glob, expected) => {
+    expect(eventMatchesRelayfileGlob(path, glob)).toBe(expected);
+  });
+});

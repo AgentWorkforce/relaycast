@@ -2,7 +2,8 @@
  * Match the RelayFile webhook contract from relayfile-cloud ba817966, including
  * its legacy trailing-prefix rules. Matching normalization follows core 0.10.34;
  * this helper never changes the target text used to derive an HMAC secret.
- * The empty /* prefix preserves Relaycast root matching despite an upstream bug.
+ * Keep legacy root /* matching and treat pattern stars as wildcard tokens even
+ * when event paths contain literal stars, correcting two upstream edge cases.
  * Reference: https://github.com/AgentWorkforce/relayfile-cloud/blob/ba8179660deac4cf251754859ccd3d5ac2948b4f/packages/relayfile/src/webhook-delivery.ts
  */
 export function eventMatchesRelayfileGlob(path: string, glob: string): boolean {
@@ -44,7 +45,7 @@ function normalizeMatchPath(path: string): string {
 function wildcardSegmentMatches(path: string, pattern: string): boolean {
   let at = 0, patternAt = 0, star = -1, retry = 0;
   while (at < path.length) {
-    if (patternAt < pattern.length && pattern[patternAt] === path[at]) {
+    if (patternAt < pattern.length && pattern[patternAt] !== '*' && pattern[patternAt] === path[at]) {
       at++;
       patternAt++;
     } else if (pattern[patternAt] === '*') {

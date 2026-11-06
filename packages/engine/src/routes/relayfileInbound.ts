@@ -488,7 +488,7 @@ function normalizePathGlob(pathGlob: string): string {
 }
 
 /**
- * Match literal paths first, then authorized GitHub PR identities within one repo.
+ * Match provider path globs first, then authorized GitHub PR identities within one repo.
  * The provider comes from the authenticated target; only provider-sync events may
  * use titled pull paths or stable PR references to match sibling event layouts.
  */
@@ -499,7 +499,7 @@ function eventMatchesSubscription(event: RelayfileEvent, glob: string, githubPrI
   if (!githubPrIdentityAuthorized || provider !== 'github' || event.origin !== 'provider_sync') return false;
 
   // Keep aligned with relayfile-cloud eventMatchesWebhookSubscription. Only
-  // whole numeric PR subtrees gain identity semantics; generic globs stay literal.
+  // whole numeric PR subtrees gain identity semantics; generic globs match paths.
   const match = /^\/github\/repos\/([^/*]+)\/([^/*]+)\/pulls\/([1-9]\d*)\/\*\*$/.exec(normalizePathGlob(glob));
   if (!match) return false;
   const [, owner, repo, number] = match;

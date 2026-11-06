@@ -181,6 +181,11 @@ describe('relayfile inbound bridge', () => {
       label: 'root-level', provider: 'linear', glob: '/*', path: '/issue.json',
       wrongPath: '/nested/issue.json', eventType: 'issue.create',
     },
+    {
+      label: 'Jira literal-star path', provider: 'jira', glob: '/jira/issues/*/comments/*.json',
+      path: '/jira/issues/KAN-1/comments/*note.json',
+      wrongPath: '/jira/issues/KAN-1/comments/nested/*note.json', eventType: 'comment.created',
+    },
   ])('delivers $label segment-glob events once while retaining authenticated target controls', async ({ provider, glob, path, wrongPath, eventType }) => {
     const stack = makeStack();
     const ws = await createWorkspace(stack.app, `segment-glob-${provider}`);
