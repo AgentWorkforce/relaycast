@@ -38,7 +38,8 @@ so the gateway does not depend on it; replies are validated with zod.
 | `DURABLE_ACTORS_SECRET` (alias `DURABLE_ACTORS_API_KEY`, or `_FILE`) | unset | Application credential sent as `Authorization: Bearer`; a local runtime needs none |
 | `DURABLE_ACTORS_HOME_REGION` | unset | Passed as `homeRegion` on every call |
 | `RELAYCAST_FILE_SIGNING_SECRET` (or `_FILE`) | required | HMAC secret shared with the actors, which sign `/_relayfiles` URLs; at least 32 characters |
-| `RELAYCAST_CREDENTIAL_KEYRING` (or `_FILE`) | required | `{"current":"a","keys":{"a":"<secret ≥16 chars>"}}`; signs new workspaces' tags, verifies every credential's tag. Rotate by adding a version and making it current; removing a version locks out its credentials |
+| `RELAYCAST_CREDENTIAL_KEYRING` (or `_FILE`) | one of keyring or RelayAuth | `{"current":"a","keys":{"a":"<secret ≥16 chars>"}}`; signs new workspaces' tags and verifies every credential's tag. Rotate by adding a version and making it current; removing a version locks out its credentials. When set, RelayAuth settings are not read |
+| `RELAYCAST_RELAYAUTH_URL` + `RELAYCAST_RELAYAUTH_TOKEN` (or `_FILE`) | one of keyring or RelayAuth | RelayAuth origin and bearer token. Tags come from `GET <url>/v1/relaycast/credential-tags/:wsid`. Set both or neither; a half-set refuses startup. A workspace RelayAuth has not tagged cannot be created or verified here. The actors do not hold this token |
 | `RELAYCAST_INTERNAL_SECRET` (or `_FILE`) | unset | Enables `/internal/*`; at least 32 characters, and the actors must be configured with the same value |
 | `RELAYCAST_WORKSPACE_BOOTSTRAP_SECRET` (or `_FILE`) | unset | Lets `POST /v1/workspaces` (and `POST /internal/workspaces`) with an `Idempotency-Key` be retried: the workspace id is derived from this secret, the key and the creating owner (anonymous, or the `ar_ws_` bearer's workspace), so a retry reaches the same actor. A direct value is used verbatim (not trimmed); a `_FILE` value loses one trailing newline. The actors must hold the same value; changing it changes the derived ids, so a retry after a change is a new create. Unset: such a create answers 503 `workspace_create_idempotency_unavailable`, as the engine does |
 | `RELAYCAST_WORKSPACE_BOOTSTRAP_PROOF_REQUIRED` | `false` | The engine's self-host policy (`docs/self-hosting.md`): `true` makes an anonymous keyed `POST /v1/workspaces` prove the bootstrap secret with `X-Workspace-Bootstrap-Secret`. The gateway checks it at the edge (constant time, after the 503 above, before an id is derived or an actor called): missing or mismatched answers 401 `workspace_create_bootstrap_secret_invalid`; a matching one travels on to the actor's engine, which checks it again. The actors must be configured with the same value. Blank is unset (`false`); any other non-blank value (`TRUE`, `yes`, `true ` with a space) is refused, as the actors refuse it. With `true`, a secret an HTTP header cannot carry (anything but printable ASCII, or a leading or trailing space or tab) is refused at startup rather than trimmed |
@@ -53,8 +54,9 @@ so the gateway does not depend on it; replies are validated with zod.
 | `RELAYCAST_ENV` | `production` | Environment label in the startup log |
 
 A directly set variable wins over its `_FILE` variant. A missing or malformed
-setting, an unreadable `_FILE`, a short internal secret or an invalid keyring
-prints one line and exits with code 64. Secret values are never logged.
+setting, an unreadable `_FILE`, a short internal secret, an invalid keyring,
+or a half-set RelayAuth pair prints one line and exits with code 64. Secret
+values are never logged.
 
 ## Routes
 

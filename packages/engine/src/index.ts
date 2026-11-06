@@ -61,7 +61,9 @@ export {
 
 // OSS default providers (self-host). Cloud injects its own.
 export { SqliteApiKeyAuthProvider, hashToken } from './auth/index.js';
-export { createCredentialTagSigner, parseCredentialKeyring } from './auth/credentialTags.js';
+export { createCredentialTagSigner, credentialTagAccepted, parseCredentialKeyring } from './auth/credentialTags.js';
+export { remoteCredentialTagger } from './auth/remoteCredentialTags.js';
+export type { RemoteCredentialTaggerOptions } from './auth/remoteCredentialTags.js';
 export type { CredentialKeyring, CredentialTagSigner, CredentialTagger } from './auth/credentialTags.js';
 export { NoopTelemetrySink } from './providers/noop-telemetry.js';
 export {

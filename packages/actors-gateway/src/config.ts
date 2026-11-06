@@ -36,8 +36,16 @@ export interface GatewayConfig {
   homeRegion: string | undefined;
   /** HMAC secret shared with the actors, which sign `/_relayfiles` URLs. */
   fileSigningSecret: string;
-  /** Signs new workspaces' routing tags and verifies every credential's tag. */
-  credentialKeyring: CredentialKeyring;
+  /**
+   * Signs new workspaces' routing tags and verifies every credential's tag.
+   * Absent when {@link relayauth} is the credential authority.
+   */
+  credentialKeyring: CredentialKeyring | undefined;
+  /**
+   * RelayAuth origin and bearer token. The gateway asks it for tags. Absent
+   * when a local keyring is set; a keyring wins and these settings are not read.
+   */
+  relayauth: { baseUrl: string; token: string } | undefined;
   /** Enables `/internal/*`; the actors are configured with the same value. */
   internalSecret: string | undefined;
   /**
@@ -166,6 +174,25 @@ function present(env: Env, names: readonly string[]): Record<string, string> {
   return out;
 }
 
+/**
+ * RelayAuth settings when no keyring is set. Both variables are set together;
+ * one without the other, or a URL that is not an origin, refuses startup.
+ * Returns undefined only when both are unset.
+ */
+function relayauthFromEnv(env: Env, readFile?: (path: string) => string): GatewayConfig['relayauth'] {
+  const baseUrl = env.RELAYCAST_RELAYAUTH_URL?.trim();
+  const token = secretFromEnv(env, 'RELAYCAST_RELAYAUTH_TOKEN', readFile);
+  if (!baseUrl && !token) return undefined;
+  if (!baseUrl || !token) {
+    throw new ConfigError('invalid_relayauth', 'RELAYCAST_RELAYAUTH_URL and RELAYCAST_RELAYAUTH_TOKEN (or _FILE) are set together.');
+  }
+  const parsed = origin.safeParse(baseUrl);
+  if (!parsed.success) {
+    throw new ConfigError('invalid_relayauth', `RELAYCAST_RELAYAUTH_URL ${parsed.error.issues[0]?.message ?? 'is invalid'}.`);
+  }
+  return { baseUrl: parsed.data, token };
+}
+
 function firstIssue(error: z.ZodError): string {
   const issue = error.issues[0];
   const path = issue?.path.map(String).join('.') || 'configuration';
@@ -187,8 +214,9 @@ export function parseEnv<T extends z.ZodObject>(schema: T, env: Env): z.output<T
 /**
  * Validated configuration from `env`. Throws {@link ConfigError} for a
  * missing or malformed setting, an unreadable `_FILE`, a short internal
- * secret, an invalid keyring, or a file store this build does not implement
- * yet is not refused here (the store factory throws at startup).
+ * secret, an invalid keyring, or a half-set RelayAuth pair. A file store this
+ * build does not implement yet is not refused here (the store factory throws
+ * at startup).
  */
 export function loadConfig(env: Env = process.env, readFile?: (path: string) => string): GatewayConfig {
   const settings = parseEnv(EnvSchema, env);
@@ -200,12 +228,18 @@ export function loadConfig(env: Env = process.env, readFile?: (path: string) => 
   }
 
   const keyringJson = secretFromEnv(env, 'RELAYCAST_CREDENTIAL_KEYRING', readFile);
-  if (!keyringJson) throw new ConfigError('missing_credential_keyring', 'RELAYCAST_CREDENTIAL_KEYRING (or _FILE) is required.');
-  let credentialKeyring: CredentialKeyring;
-  try {
-    credentialKeyring = parseCredentialKeyring(keyringJson);
-  } catch (error) {
-    throw new ConfigError('invalid_credential_keyring', `RELAYCAST_CREDENTIAL_KEYRING: ${(error as Error).message}.`);
+  let credentialKeyring: CredentialKeyring | undefined;
+  if (keyringJson) {
+    try {
+      credentialKeyring = parseCredentialKeyring(keyringJson);
+    } catch (error) {
+      throw new ConfigError('invalid_credential_keyring', `RELAYCAST_CREDENTIAL_KEYRING: ${(error as Error).message}.`);
+    }
+  }
+  // An explicit keyring wins, so a leftover or half-set RelayAuth pair must not refuse startup.
+  const relayauth = credentialKeyring ? undefined : relayauthFromEnv(env, readFile);
+  if (!credentialKeyring && !relayauth) {
+    throw new ConfigError('missing_credential_keyring', 'RELAYCAST_CREDENTIAL_KEYRING (or _FILE), or RELAYCAST_RELAYAUTH_URL plus RELAYCAST_RELAYAUTH_TOKEN (or _FILE), is required.');
   }
 
   const internalSecret = secretFromEnv(env, 'RELAYCAST_INTERNAL_SECRET', readFile);
@@ -230,6 +264,7 @@ export function loadConfig(env: Env = process.env, readFile?: (path: string) => 
     homeRegion: settings.DURABLE_ACTORS_HOME_REGION,
     fileSigningSecret,
     credentialKeyring,
+    relayauth,
     internalSecret,
     workspaceBootstrapSecret,
     // Accepted without a secret, as the engine's server is: a keyed create then fails closed (503) before any proof is asked.

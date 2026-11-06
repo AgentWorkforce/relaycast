@@ -275,15 +275,20 @@ describe('internal admin API', () => {
       expect((await readWorkspace(pushed)).status).toBe(200);
     });
 
-    it('accepts a pushed ar_ws_ key only for the workspace it names', async () => {
+    it('accepts a pushed ar_ws_ key only for the workspace it names and only under a tag the deployment signed', async () => {
       stack = makeNodeStack({ internalSecret: SECRET, credentialFormat: 'ar', credentialTagger: TAGGER });
       const ws = await createViaAdmin();
-      const key = (id: string) => encodeArCredential({ kind: 'workspace', workspaceId: id, tag: 'aAAAAAAAAAA', secret: new Uint8Array(32).fill(5) });
-      const other = await internal(`/workspaces/${ws.workspace_id}/api-key`, { method: 'POST', body: { api_key: key('42'), key_generation: 1 } });
+      const key = async (id: string, tag?: string) =>
+        encodeArCredential({ kind: 'workspace', workspaceId: id, tag: tag ?? await TAGGER.tag(id), secret: new Uint8Array(32).fill(5) });
+      const other = await internal(`/workspaces/${ws.workspace_id}/api-key`, { method: 'POST', body: { api_key: await key('42'), key_generation: 1 } });
       expect(other.status).toBe(400);
-      const own = await internal(`/workspaces/${ws.workspace_id}/api-key`, { method: 'POST', body: { api_key: key(ws.workspace_id), key_generation: 1 } });
+      // Well-formed for this workspace but tagged by no version the keyring signs.
+      const forged = await internal(`/workspaces/${ws.workspace_id}/api-key`, { method: 'POST', body: { api_key: await key(ws.workspace_id, 'aAAAAAAAAAA'), key_generation: 1 } });
+      expect(forged.status).toBe(400);
+      expect(await forged.json()).toMatchObject({ error: { code: 'invalid_request' } });
+      const own = await internal(`/workspaces/${ws.workspace_id}/api-key`, { method: 'POST', body: { api_key: await key(ws.workspace_id), key_generation: 1 } });
       expect(own.status).toBe(200);
-      expect((await readWorkspace(key(ws.workspace_id))).status).toBe(200);
+      expect((await readWorkspace(await key(ws.workspace_id))).status).toBe(200);
     });
 
     it('server-minted rotation of an unknown workspace is 404', async () => {

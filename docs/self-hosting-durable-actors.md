@@ -76,7 +76,13 @@ Values that must match across processes:
   with it, the gateway gets the invoke key and the deployer the admin key;
   without it, both get the same admin key (locally: no secret).
 - `RELAYCAST_CREDENTIAL_KEYRING`: identical on every gateway replica, or a
-  credential minted through one replica is refused by another.
+  credential minted through one replica is refused by another. Or, with no
+  keyring, every replica sets the same `RELAYCAST_RELAYAUTH_URL` and
+  `RELAYCAST_RELAYAUTH_TOKEN` (or `_FILE`). A keyring wins and RelayAuth
+  settings are not read. The actors hold neither secret: the gateway hands a
+  workspace its tag at create, and a key push before that handover is `400`.
+  RelayAuth mode creates and verifies only workspaces RelayAuth has already
+  tagged.
 - `RELAYCAST_FILE_STORE` / `RELAYCAST_FILE_DIR`: identical on every replica;
   with `local` the directory itself must be shared (see [More than one replica](#more-than-one-replica)).
 

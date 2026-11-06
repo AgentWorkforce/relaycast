@@ -168,6 +168,7 @@ describe('configuration', () => {
     }, readFile);
     expect(config.internalSecret).toBe('s'.repeat(40));
     expect(config.credentialKeyring).toEqual(KEYRING);
+    expect(config.relayauth).toBeUndefined();
 
     const unreadable = refusal(baseEnv(URL, { RELAYCAST_INTERNAL_SECRET_FILE: '/run/secrets/missing' }), readFile);
     expect(unreadable.code).toBe('unreadable_secret_file');
@@ -178,5 +179,31 @@ describe('configuration', () => {
     expect(secretFromEnv({ X: ' direct ', X_FILE: '/run/secrets/internal' }, 'X', readFile)).toBe('direct');
     expect(secretFromEnv({ X: '', X_FILE: '/run/secrets/internal' }, 'X', readFile)).toBe('s'.repeat(40));
     expect(secretFromEnv({ X: '   ' }, 'X', readFile)).toBeUndefined();
+  });
+
+  it('takes tags from RelayAuth when no keyring is set, and ignores RelayAuth when one is', () => {
+    const files: Record<string, string> = { '/run/secrets/token': ' relayauth-token \n' };
+    const readFile = (path: string): string => {
+      if (!(path in files)) throw Object.assign(new Error('ENOENT'), { code: 'ENOENT' });
+      return files[path]!;
+    };
+    const fromFile = loadConfig({
+      ...baseEnv(URL),
+      RELAYCAST_CREDENTIAL_KEYRING: undefined,
+      RELAYCAST_RELAYAUTH_URL: 'https://relayauth.example/',
+      RELAYCAST_RELAYAUTH_TOKEN_FILE: '/run/secrets/token',
+    }, readFile);
+    expect(fromFile.credentialKeyring).toBeUndefined();
+    expect(fromFile.relayauth).toEqual({ baseUrl: 'https://relayauth.example', token: 'relayauth-token' });
+
+    const keyringWins = loadConfig(baseEnv(URL, { RELAYCAST_RELAYAUTH_URL: 'not a url', RELAYCAST_RELAYAUTH_TOKEN_FILE: '/run/secrets/missing' }), readFile);
+    expect(keyringWins.credentialKeyring).toEqual(KEYRING);
+    expect(keyringWins.relayauth).toBeUndefined();
+
+    expect(refusal({ ...baseEnv(URL), RELAYCAST_CREDENTIAL_KEYRING: undefined, RELAYCAST_RELAYAUTH_URL: 'https://relayauth.example' }).code).toBe('invalid_relayauth');
+    expect(refusal({ ...baseEnv(URL), RELAYCAST_CREDENTIAL_KEYRING: undefined, RELAYCAST_RELAYAUTH_TOKEN: 'token' }).code).toBe('invalid_relayauth');
+    const badUrl = refusal({ ...baseEnv(URL), RELAYCAST_CREDENTIAL_KEYRING: undefined, RELAYCAST_RELAYAUTH_URL: 'https://relayauth.example/v1', RELAYCAST_RELAYAUTH_TOKEN: 'token' });
+    expect(badUrl.code).toBe('invalid_relayauth');
+    expect(badUrl.message).not.toContain('token');
   });
 });

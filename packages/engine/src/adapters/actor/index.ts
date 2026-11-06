@@ -376,11 +376,10 @@ export function createActorRuntime(options: ActorRuntimeOptions): ActorRuntime {
   };
 
   /**
-   * A key push that created this workspace (`POST /internal/workspaces/:id/api-key`
-   * with an `ar_ws_` key, answered 201) is the one create that does not go
-   * through `create`: the pushed key's routing tag is the workspace's tag,
-   * or the actor could mint no credential afterwards. The gateway admits
-   * only tags its keyring signed to this route.
+   * A creating key push (`POST /internal/workspaces/:id/api-key`, 201) with no
+   * tag stored yet keeps the pushed `ar_ws_` key's routing tag. The internal
+   * route refuses that push until a tag exists, so a push before the gateway's
+   * `create` does not land here.
    */
   const keepPushedTag = (request: ActorHttpRequest, status: number): void => {
     if (status !== 201 || request.method !== 'POST' || credentialTag.get() !== undefined) return;
