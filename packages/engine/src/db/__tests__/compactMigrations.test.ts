@@ -122,6 +122,7 @@ function expectConstraintsPreserved(before: ReturnType<typeof constraints>, afte
       'a2a_egress',
       'a2a_egress_context',
       'a2a_inbound',
+      'agent_inbound_policies',
       'credential_upgrades',
       'direct_dm_idempotency',
       'webhook_deliveries',
@@ -231,7 +232,7 @@ describe('compact maintenance migration path', () => {
     const after = snapshot(handle);
     expect(handle.sqlite.prepare('SELECT status_before_liveness_loss FROM agents').all())
       .toEqual([{ status_before_liveness_loss: null }]);
-    // Remote-DM, direct-idempotency and credential-upgrade migrations add empty tables; every
+    // Remote-DM, direct-idempotency, credential-upgrade and inbound-policy migrations add empty tables; every
     // pre-existing row and table must remain. messages_mention_fts is a new
     // index over those same message bodies, so its shadow tables are not
     // pre-existing rows.
@@ -239,6 +240,7 @@ describe('compact maintenance migration path', () => {
       'a2a_egress',
       'a2a_egress_context',
       'a2a_inbound',
+      'agent_inbound_policies',
       'credential_upgrades',
       'direct_dm_idempotency',
       'webhook_deliveries',

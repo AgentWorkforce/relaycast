@@ -125,15 +125,17 @@ describe('bundled actor migrations', () => {
     const fake = new FakeActorDatabase();
     const { applied } = applyActorMigrations(fake);
     expect(actorMigrationsCurrent(fake)).toBe(true);
-    // A database that recorded the two superseded files and lacks the newest
-    // one has more rows than the plan needs, and is not current.
-    const newest = applied[applied.length - 1];
-    fake.exec(`DELETE FROM ${ACTOR_MIGRATIONS_TABLE} WHERE name = ?`, newest);
+    // Extra superseded rows must not read as current while a real migration
+    // is unrecorded. Replay the idempotent index: the schema from the first
+    // apply is still there, and the tip creates a table.
+    const missing = '0080_nodes_context_reachable_index.sql';
+    expect(applied).toContain(missing);
+    fake.exec(`DELETE FROM ${ACTOR_MIGRATIONS_TABLE} WHERE name = ?`, missing);
     for (const superseded of ['0048_bounded_maintenance.sql', '0049_redrive_review_hardening.sql']) {
       fake.exec(`INSERT OR IGNORE INTO ${ACTOR_MIGRATIONS_TABLE} (name, applied_at) VALUES (?, 0)`, superseded);
     }
     expect(actorMigrationsCurrent(fake)).toBe(false);
-    expect(applyActorMigrations(fake, { trackingTableExists: true }).applied).toEqual([newest]);
+    expect(applyActorMigrations(fake, { trackingTableExists: true }).applied).toEqual([missing]);
     expect(actorMigrationsCurrent(fake)).toBe(true);
   });
 });

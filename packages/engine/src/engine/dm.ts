@@ -40,6 +40,7 @@ import { buildDmReceivedEventData } from './deliveryWire.js';
 import { buildWorkspaceEventWrite } from './workspaceEvents.js';
 import { transformForClient } from './wsTransform.js';
 import { codedError } from '../lib/httpError.js';
+import { assertMayAddress, getInboundPolicy, policyAdmits } from './inboundPolicy.js';
 import {
   addressNodeSelection,
   addressNotFound,
@@ -292,6 +293,35 @@ async function resolveConversation(
 }
 
 /**
+ * A refused send must not leave the 1:1 shell `resolveConversation` just
+ * created. Listing that empty conversation would name the recipient after the
+ * send returned not-found. A conversation that already has a message stays.
+ */
+async function discardEmptyDirectConversation(
+  db: Db,
+  workspaceId: string,
+  conversationId: string,
+  channelId: string,
+): Promise<void> {
+  const [message] = await db
+    .select({ id: messages.id })
+    .from(messages)
+    .where(eq(messages.channelId, channelId))
+    .limit(1);
+  if (message) return;
+  await db.delete(dmParticipants).where(eq(dmParticipants.conversationId, conversationId));
+  await db.delete(dmConversations).where(and(
+    eq(dmConversations.id, conversationId),
+    eq(dmConversations.workspaceId, workspaceId),
+  ));
+  await db.delete(channels).where(and(
+    eq(channels.id, channelId),
+    eq(channels.workspaceId, workspaceId),
+    eq(channels.channelType, 1),
+  ));
+}
+
+/**
  * Persisted DM metadata. Server-owned keys go after caller metadata so a
  * federated peer cannot override how the local runtime is injected, and
  * `sanitizeUserMessageMetadata` already drops any caller-supplied
@@ -309,6 +339,29 @@ function dmMessageMetadata(
 }
 
 /**
+ * True when `senderId` may still address `recipientId` as of this statement.
+ * Evaluated inside the message insert, so a policy narrow that committed
+ * first makes the insert fail instead of delivering.
+ */
+function inboundAdmissionSql(workspaceId: string, senderId: string, recipientId: string) {
+  return sql`(
+    ${senderId} = ${recipientId}
+    OR NOT EXISTS (
+      SELECT 1 FROM agent_inbound_policies p
+      WHERE p.agent_id = ${recipientId}
+        AND p.workspace_id = ${workspaceId}
+        AND p.mode = 'allowlist'
+        AND NOT EXISTS (
+          SELECT 1 FROM json_each(p.allowed_agent_ids) AS allowed WHERE allowed.value = ${senderId}
+        )
+        AND NOT EXISTS (
+          SELECT 1 FROM json_each(p.pinned_agent_ids) AS pinned WHERE pinned.value = ${senderId}
+        )
+    )
+  )`;
+}
+
+/**
  * Build the message + attachment-junction inserts for a DM without executing
  * them, so the send path can run them inside one atomic unit. The message
  * insert is always first and carries `.returning()`.
@@ -317,6 +370,7 @@ function buildDmMessageWrites(
   db: Db,
   workspaceId: string,
   fromAgentId: string,
+  recipientAgentId: string,
   channelId: string,
   data: {
     text: string;
@@ -350,11 +404,13 @@ function buildDmMessageWrites(
             AND a.id = ${fromAgentId} AND a.workspace_id = ${workspaceId}
             ${inboundRegistration.tokenHash === undefined ? sql`` : sql`AND a.token_hash = ${inboundRegistration.tokenHash}`}
         )` : fromAgentId,
-        // NULL violates messages.body when an addressed recipient left the
-        // addressed node (or was released) after it was selected, so the whole
-        // admission rolls back instead of delivering to its new location.
-        body: addressedRecipient ? sql<string>`(
-          SELECT ${data.text} WHERE EXISTS (
+        // NULL violates messages.body. The predicate is part of this insert, so
+        // a recipient that left the addressed node, or whose inbound policy
+        // narrowed after the earlier check, rolls the admission back instead
+        // of delivering.
+        body: sql<string>`(
+          SELECT ${data.text} WHERE ${inboundAdmissionSql(workspaceId, fromAgentId, recipientAgentId)}
+          AND ${addressedRecipient ? sql`EXISTS (
             SELECT 1 FROM agents a JOIN nodes n ON n.id = a.location_node_id
             WHERE a.id = ${addressedRecipient.agentId} AND a.workspace_id = ${workspaceId}
               AND a.status <> 'released' AND a.location_node_id = ${addressedRecipient.nodeId}
@@ -363,8 +419,8 @@ function buildDmMessageWrites(
                 OR (n.role <> 'direct' AND ${addressedRecipient.machine} <> 'direct'
                   AND (n.name = ${addressedRecipient.machine} OR n.machine_id = ${addressedRecipient.machine}))
               )
-          )
-        )` : data.text,
+          )` : sql`1`}
+        )`,
         hasAttachments,
         metadata,
         sessionRef,
@@ -677,6 +733,13 @@ export async function sendDm(
   if (!toAgent) {
     throw codedError(`Agent "${data.to}" not found`, 'agent_not_found', 404);
   }
+  if (options.address !== undefined) {
+    // A refused address is the same 404 as an address that names nobody.
+    const policy = await getInboundPolicy(db, workspaceId, toAgent.id);
+    if (!policyAdmits(policy, fromAgentId, toAgent.id)) throw addressNotFound(options.address);
+  } else {
+    await assertMayAddress(db, workspaceId, fromAgentId, { id: toAgent.id, name: data.to });
+  }
 
   const [fromAgent] = await db
     .select({ name: agents.name, node: addressNodeSelection })
@@ -757,7 +820,7 @@ export async function sendDm(
   // delivery share admission. None can escape a capacity rollback, or depend
   // on external transport success.
   const persist = () => runAtomicWrites(db, (writeDb) => {
-    const writes = buildDmMessageWrites(writeDb, workspaceId, fromAgentId, conv.channelId, data, attachments, messageId, createdAt,
+    const writes = buildDmMessageWrites(writeDb, workspaceId, fromAgentId, toAgent.id, conv.channelId, data, attachments, messageId, createdAt,
       options.receivedA2aAgentId ? { id: options.receivedA2aAgentId, tokenHash: options.receivedA2aTokenHash } : undefined,
       senderAddress, addressedRecipient);
 
@@ -867,8 +930,14 @@ export async function sendDm(
     const results = await persist();
     if (notificationsDurable) admittedEventSeq = (results[results.length - 1] as { seq: number }[])[0].seq;
   } catch (error) {
-    if (options.address !== undefined && databaseConstraintKind(error) === 'address_changed') {
-      throw addressNotFound(options.address);
+    if (databaseConstraintKind(error) === 'address_changed') {
+      // The insert predicate failed. An address that no longer matches and a
+      // recipient that no longer admits this sender are the same not-found the
+      // pre-check returns, so the message is not stored. Drop the empty shell
+      // created above so the conversation list cannot name that recipient.
+      await discardEmptyDirectConversation(db, workspaceId, conv.id, conv.channelId);
+      if (options.address !== undefined) throw addressNotFound(options.address);
+      throw codedError(`Agent "${data.to}" not found`, 'agent_not_found', 404);
     }
     if (options.receivedA2aAgentId && databaseConstraintKind(error) === 'a2a_registration_changed') {
       throw codedError('Authenticated A2A registration changed before admission', 'a2a_registration_changed', 401);
