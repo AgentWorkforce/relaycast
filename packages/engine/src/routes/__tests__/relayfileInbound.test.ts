@@ -69,6 +69,14 @@ class FailingKeyValueStore implements KeyValueStore {
 }
 
 describe('relayfile inbound bridge', () => {
+  it('preserves existing signed target labels while canonicalizing only for matching', async () => {
+    const glob = '/linear//issues/./*__uuid.json/';
+    expect(await deriveRelayfileInboundSecret('master', {
+      workspaceId: 'ws', channelId: 'channel', provider: 'linear', pathGlob: glob,
+    })).toBe(createHmac('sha256', 'master')
+      .update(`relayfile-inbound:v1:ws:channel:linear:${glob}`).digest('hex'));
+  });
+
   it('uses unambiguous field boundaries for semantic target secrets', async () => {
     const common = { provider: 'github', pathGlob: '/github/repos/o/r/pulls/1/**', githubPrIdentityAuthorized: true };
     const first = await deriveRelayfileInboundSecret('master', { ...common, workspaceId: 'ws:channel', channelId: 'id' });
@@ -154,6 +162,87 @@ describe('relayfile inbound bridge', () => {
     const inbox = await stack.app.request('/v1/deliveries', { headers: { authorization: `Bearer ${agent.token}` } });
     const { data: queued } = await inbox.json();
     expect(queued.filter((delivery: { message_id: string }) => deliveredIds.includes(delivery.message_id))).toHaveLength(6);
+  });
+
+  it.each([
+    {
+      label: 'Linear UUID', provider: 'linear', glob: '/linear/issues/*__11111111-2222-4333-8444-555555555555.json',
+      path: '/linear/issues/AR-705__11111111-2222-4333-8444-555555555555.json',
+      wrongPath: '/linear/issues/AR-705__11111111-2222-4333-8444-555555555556.json',
+      eventType: 'issue.create',
+    },
+    {
+      label: 'Jira comments', provider: 'jira', glob: '/jira/issues/*/comments/*.json',
+      path: '/jira/issues/KAN-1/comments/9.json',
+      wrongPath: '/jira/issues/KAN-1/comments/nested/9.json',
+      eventType: 'comment.created',
+    },
+    {
+      label: 'root-level', provider: 'linear', glob: '/*', path: '/issue.json',
+      wrongPath: '/nested/issue.json', eventType: 'issue.create',
+    },
+    {
+      label: 'Jira literal-star path', provider: 'jira', glob: '/jira/issues/*/comments/*.json',
+      path: '/jira/issues/KAN-1/comments/*note.json',
+      wrongPath: '/jira/issues/KAN-1/comments/nested/*note.json', eventType: 'comment.created',
+    },
+  ])('delivers $label segment-glob events once while retaining authenticated target controls', async ({ provider, glob, path, wrongPath, eventType }) => {
+    const stack = makeStack();
+    const ws = await createWorkspace(stack.app, `segment-glob-${provider}`);
+    const agent = await registerAgent(stack.app, ws.workspaceKey, 'glob-reader');
+    await stack.app.request('/v1/channels/general/join', {
+      method: 'POST', headers: { authorization: `Bearer ${agent.token}` },
+    });
+    const targetRes = await stack.app.request('/v1/integrations/relayfile/inbound-target', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', authorization: `Bearer ${ws.workspaceKey}` },
+      body: JSON.stringify({ channel: 'general', provider, path_glob: glob }),
+    });
+    expect(targetRes.status).toBe(201);
+    const { data: target } = await targetRes.json();
+    expect(target.secret).toBe(await deriveRelayfileInboundSecret('relaycast-master', {
+      workspaceId: ws.workspaceId, channelId: target.channel_id, provider, pathGlob: glob,
+    }));
+    const event = { eventId: `evt_glob_${provider}`, type: 'file.updated', provider,
+      providerEventType: eventType, origin: 'provider_sync', path, revision: 'rev_1' };
+    const emit = (patch: Record<string, unknown> = {}, secret = target.secret, url = target.url) => {
+      const payload = JSON.stringify({ ...event, ...patch });
+      return stack.app.request(url, { method: 'POST', body: payload,
+        headers: { ...signedHeaders(secret, payload), 'X-Relay-Event-Id': event.eventId } });
+    };
+    expect((await emit({}, 'wrong-secret')).status).toBe(401);
+    const broadened = new URL(target.url);
+    broadened.searchParams.set('path_glob', '/**');
+    expect((await emit({}, target.secret, broadened.toString())).status).toBe(401);
+    for (const [patch, skipped] of [
+      [{ provider: 'github' }, 'provider_mismatch'],
+      [{ path: wrongPath }, 'path_mismatch'],
+      [{ path: `/${provider}/projects/unrelated.json` }, 'path_mismatch'],
+    ] as const) {
+      expect(await (await emit(patch)).json()).toMatchObject({ data: { skipped } });
+    }
+    const response = await emit();
+    expect(response.status).toBe(201);
+    const { data: accepted } = await response.json();
+    expect(accepted.replayed).toBe(false);
+    expect(await (await emit({ origin: 'agent_write' })).json()).toMatchObject({ data: { skipped: 'agent_write' } });
+    expect(await (await emit()).json()).toMatchObject({
+      data: { replayed: true, message_id: accepted.message_id },
+    });
+    expect(await (await emit({ revision: 'different-event' })).json()).toMatchObject({
+      data: { skipped: 'event_id_reused' },
+    });
+    const list = await stack.app.request('/v1/channels/general/messages', {
+      headers: { authorization: `Bearer ${ws.workspaceKey}` },
+    });
+    const { data: messages } = await list.json();
+    expect(messages).toHaveLength(1);
+    expect(messages[0]).toMatchObject({ id: accepted.message_id,
+      metadata: { provider_event_type: eventType, path, relayfile: { path, eventId: event.eventId } } });
+    const inbox = await stack.app.request('/v1/deliveries', {
+      headers: { authorization: `Bearer ${agent.token}` },
+    });
+    expect((await inbox.json()).data).toMatchObject([{ message_id: accepted.message_id }]);
   });
 
   it('returns retryable overflow and accepts the same unique event after capacity recovers', async () => {

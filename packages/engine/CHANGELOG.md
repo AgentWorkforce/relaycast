@@ -11,6 +11,7 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Fixed
 
+- Relayfile callbacks deliver valid Linear and Jira segment-glob events instead of dropping them with `path_mismatch`; matching resolves repeated slashes and dot segments while preserving case and percent escapes.
 - Relayfile inbound callbacks deliver authenticated `file.deleted` events, preserving metadata and paths when no snapshot is available.
 
 ## [12.8.0] - 2026-11-04

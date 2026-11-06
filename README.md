@@ -8,10 +8,10 @@ See the [changelog](CHANGELOG.md) for release highlights and upgrade notes.
 
 Relayfile inbound targets scoped to `/github/repos/<owner>/<repo>/pulls/<number>/**`
 follow GitHub PR title changes and associated comments/reviews with the exact stable
-PR reference. New targets carry a server-issued, HMAC-bound opt-in; legacy targets
-retain literal matching. Deploy the Relaycast receiver and Relayfile cloud
-companion, then reprovision the binding with full repository read permission.
-Other globs retain literal path matching.
+PR reference. New targets carry a server-issued, HMAC-bound identity opt-in.
+Deploy the Relaycast receiver and Relayfile cloud companion, then reprovision
+the binding with full repository read permission. Legacy targets and other
+globs use ordinary path-based wildcard matching.
 
 ## Quick Start
 
@@ -1574,6 +1574,8 @@ Node-control `agent.deregister` requests with an `id` receive a correlated `repl
 only after the binding has been removed and the agent moved offline. Requests
 without an `id` retain fire-and-forget behavior. Brokers performing owned identity
 cleanup must await that acknowledgement before requesting deletion.
+
+Relayfile callback path globs follow the producer's path matching: `*` within a segment and whole `**` segments across directories, including `/linear/issues/*__<id>.json` and `/jira/issues/*/comments/*.json`. Matching canonicalizes repeated slashes and dot segments while preserving case and percent escapes. Existing trailing-prefix patterns retain their behavior, including `/*` for root-level paths; target signing and GitHub identity opt-ins are unchanged.
 
 Relayfile ingress accepts authenticated `file.created`, `file.updated`, and `file.deleted` notifications. Deletes without a snapshot preserve the event type and path, with a notice that deleted content is unavailable; no record content or actor is reconstructed.
 
