@@ -1,66 +1,47 @@
 # Trajectory: Align authenticated Relayfile callbacks with segment glob matching
 
-> **Status:** ✅ Completed
+> **Status:** Completed
 > **Confidence:** 94%
-> **Started:** November 6, 2026 at 08:22 AM
-> **Completed:** November 6, 2026 at 08:29 AM
-
----
+> **Started:** 2026-11-06T16:22:13.423Z
+> **Completed:** 2026-11-06T16:41:15Z
 
 ## Summary
 
-Aligned authenticated Relayfile callback path matching with released producer semantics. Baseline route regressions reproduce 18 passed / 2 failed; patched receiver+agreement tests: 41 passed; pinned upstream/core probe: 21/21 agree. Existing HMAC labels, GitHub identity opt-in and ingress controls preserved. No runtime/deployment/provider actions.
-
-**Approach:** Standard approach
-
----
-
-## Key Decisions
-
-### Mirror released RelayFile matching semantics without changing target secret derivation
-- **Chose:** Mirror released RelayFile matching semantics without changing target secret derivation
-- **Reasoning:** Embedded and internal segment wildcards already match upstream; keep legacy trailing-prefix behavior, exact canonical matching and existing GitHub semantic opt-in while preserving old target HMAC labels.
-
----
-
-## Chapters
-
-### 1. Work
-*Agent: default*
-
-- Mirror released RelayFile matching semantics without changing target secret derivation: Mirror released RelayFile matching semantics without changing target secret derivation
-
----
+Authenticated Relayfile callbacks now match embedded Linear UUID globs and internal Jira comment globs. Legacy root wildcards remain compatible, and pattern stars remain wildcard tokens when an event path contains literal asterisks. The final local receiver/matcher suites pass 49 tests. Existing HMAC labels, GitHub identity opt-ins and ingress controls are unchanged.
 
 ## Artifacts
 
-**Commits:** 604f2dd0
-**Files changed:** 8
+- Base: `1ecb158404c877c63e31ee9e55f1c2786fab60ab`.
+- Final attributed product: `eda43a17a5f1e62673643d92d5aa3c73d9c3732f`.
+- Commits in the exact attribution range (5): `604f2dd03bdba2a62bc41e3ebb8ac8747ab59a8b`, `b431f0fd1e6ebb24825e5267ac2e04f4c8d395e4`, `c6f30bce4e3ed2ddb1a4f92c38d0a74c77925ade`, `322c495cfc6dd8ee6ef8d93bfc1dca3f39652605`, `eda43a17a5f1e62673643d92d5aa3c73d9c3732f`.
+- Files changed in that range: 11. The names in `trajectory.json` match `git diff --name-only` for the same range.
+- The trace records original product and review-correction line ranges. Later evidence-only commits are outside this stable product range and change no executable code or tests.
 
-## Validation evidence
+## Current validation
 
-Product commit: `604f2dd03bdba2a62bc41e3ebb8ac8747ab59a8b`, based on `1ecb158404c877c63e31ee9e55f1c2786fab60ab`. The metadata-only completion commit records this stable product range, not itself.
+All checks below apply to source/tests committed in the final attributed product.
 
-- `npm exec --workspace=@relaycast/engine -- vitest run src/routes/__tests__/relayfileInbound.test.ts src/routes/__tests__/relayfilePathGlob.test.ts`: 41 passed (20 real SQLite/API route tests plus 21 matcher agreement cases). Existing GitHub semantic opt-in tests remain in the receiver suite.
-- Baseline production route overlaid with the added route tests: 18 passed / 2 failed, both at expected delivery status 201 versus skipped status 200. The production file was restored in a finally block. This is a local regression, not a separate RelayFlow or deployed test.
-- TypeScript 5.9.3 `tsc --noEmit -p packages/engine/tsconfig.typecheck.json`: passed. Pinned ESLint 9.39.2 on `packages/engine/src/routes/relayfileInbound.ts` and `relayfilePathGlob.ts`: passed with the repository config. No full-engine build was run.
-- A local AST-extraction probe executed the actual four matcher functions from relayfile-cloud `ba8179660deac4cf251754859ccd3d5ac2948b4f` and `normalizePath` from its locked `@relayfile/core` 0.10.34 package against the 21 committed vectors: all agreed. The temporary probe is supplemental evidence, not a shipped dependency or CI check.
-- `git diff --check`: passed. Logs: `/tmp/relaycast-globs-{baseline-final,targeted,typecheck,eslint,parity}.log` (local temporary artifacts).
+- `npm exec --workspace=@relaycast/engine -- vitest run src/routes/__tests__/relayfileInbound.test.ts src/routes/__tests__/relayfilePathGlob.test.ts`: **49 passed**, comprising 22 real SQLite/API route tests and 27 matcher cases. Wrong UUID/provider/path, bad signatures, broader-target tampering, agent writes, replay and event-ID collisions remain covered. Existing GitHub identity cases pass.
+- TypeScript 5.9.3 `tsc --noEmit -p packages/engine/tsconfig.typecheck.json`: passed. ESLint 9.39.2 on `packages/engine/src/routes/relayfileInbound.ts` and `relayfilePathGlob.ts`: passed with the repository config. CI Node 22.14.0 was used; no full-engine build was run.
+- A supplemental local AST-extraction probe executed the actual four matcher functions from relayfile-cloud `ba8179660deac4cf251754859ccd3d5ac2948b4f` plus `normalizePath` from locked `@relayfile/core` 0.10.34. All **21 shared vectors agreed**. The root-prefix and literal-star edge cases are separately labeled corrections, outside this agreement set. The temporary probe is not a shipped dependency or CI check.
+- `git diff --check` passed. Full-diff Veto review passed after the final product correction.
 
-Matching uses the upstream iterative segment-state dynamic program and star retry algorithm, without caller-controlled regular expressions or recursive backtracking. Its bound is polynomial in path/pattern size, not a strict whole-input linear-time claim. Canonicalization is matching-only: target HMAC labels and GitHub identity authorization logic are unchanged.
+## Historical regression evidence
 
-No provider calls, manual webhook replays, configuration/runtime changes, merge or deployment were performed. Hosted engine revision remains unverified; this PR is separate from deletion support in PR630.
+These counts describe earlier reproductions, not the final suite result.
 
-## Review correction: root wildcard compatibility
+| Reproduction | Before correction | After correction |
+| --- | --- | --- |
+| Added Linear/Jira route cases against base production | 18 passed / 2 failed, expected 201 versus skipped 200 | Initially 41 passed across route/agreement suites |
+| Added root compatibility cases against the first port | 42 passed / 3 failed | 45 passed |
+| Added literal-star cases against the root-corrected port | 46 passed / 3 failed | Final 49 passed |
 
-Root-compatibility product commit: `c6f30bce4e3ed2ddb1a4f92c38d0a74c77925ade`. A faithful upstream port exposed its empty-prefix bug for `/*`, which previously matched root-level paths in Relaycast. The receiver now keeps that prefix empty, preserving existing root-file/root-path matches while rejecting nested files. This is a narrow intentional difference from upstream, not an authorization expansion.
+The baseline production route overlay was restored in a finally block. Logs: `/tmp/relaycast-globs-{baseline-final,targeted,typecheck,eslint,parity}.log`, `/tmp/relaycast-globs-root-{before,after}.log` and `/tmp/relaycast-globs-star-{before,after}.log`. These are local temporary artifacts, not shipped evidence files or a separate RelayFlow/deployed proof.
 
-The same two-suite Vitest command above now passes 45 tests (21 route tests and 24 matcher cases). Added regressions failed on the prior port with 42 passed / 3 failed, then passed after the fix. The original 21 shared upstream vectors still agree 21/21; the three root-compatibility cases are separate from that agreement set. TypeScript 5.9.3 and changed-source ESLint 9.39.2 were rerun successfully. Local review logs: `/tmp/relaycast-globs-root-{before,after}.log`.
+## Decisions and limits
 
-The trajectory range now ends at this final product commit and records all commits/files in the actual git range, including the intervening evidence commit. The trace retains original product attribution and adds this correction's changed ranges. Subsequent evidence-only updates do not change executable code or tests.
+Matching normalization resolves repeated slashes and dot segments, preserving case and percent escapes. It is matching-only: target HMAC label normalization and GitHub identity authorization logic remain unchanged. The README overview and package changelog describe the resulting user behavior.
 
-## Review correction: wildcard token handling and documentation
+The matcher follows the pinned producer's segment-state dynamic program and star retry algorithm, with receiver fixes for the empty `/*` prefix and literal-star token handling. It uses no caller-controlled regular expression or recursive backtracking. Its bound is polynomial in path/pattern size; no strict whole-input linear-time claim is made.
 
-Final product commit: `eda43a17a5f1e62673643d92d5aa3c73d9c3732f`. Pattern `*` remains a wildcard token even if the event path has a literal asterisk at that position. The literal-equality branch now excludes pattern stars. A real Jira callback plus leading/internal literal-star positive cases and an extension-mismatch denial reproduced 46 passed / 3 failed before this correction, then 49 passed afterward (22 route tests + 27 matcher cases). The original 21 shared vectors still agree with pinned upstream source; root and literal-star edge corrections are explicitly outside that shared agreement set.
-
-The README overview now distinguishes GitHub identity opt-in from ordinary path globs, and the package changelog leads with valid Linear/Jira events no longer being dropped. TypeScript 5.9.3 and ESLint 9.39.2 were rerun successfully; the source-agreement probe remains 21/21. Logs: `/tmp/relaycast-globs-star-{before,after}.log`. The attribution range and trace include this final product correction; the subsequent evidence-only commit changes no code or tests.
+No provider calls, manual webhook replays, merge, deployment, installation or runtime/configuration changes were performed. The hosted engine revision remains unverified. This work remains separate from deletion support in PR630.
