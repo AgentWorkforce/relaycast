@@ -53,8 +53,14 @@ No provider calls, manual webhook replays, configuration/runtime changes, merge 
 
 ## Review correction: root wildcard compatibility
 
-Final product commit: `c6f30bce4e3ed2ddb1a4f92c38d0a74c77925ade`. A faithful upstream port exposed its empty-prefix bug for `/*`, which previously matched root-level paths in Relaycast. The receiver now keeps that prefix empty, preserving existing root-file/root-path matches while rejecting nested files. This is a narrow intentional difference from upstream, not an authorization expansion.
+Root-compatibility product commit: `c6f30bce4e3ed2ddb1a4f92c38d0a74c77925ade`. A faithful upstream port exposed its empty-prefix bug for `/*`, which previously matched root-level paths in Relaycast. The receiver now keeps that prefix empty, preserving existing root-file/root-path matches while rejecting nested files. This is a narrow intentional difference from upstream, not an authorization expansion.
 
 The same two-suite Vitest command above now passes 45 tests (21 route tests and 24 matcher cases). Added regressions failed on the prior port with 42 passed / 3 failed, then passed after the fix. The original 21 shared upstream vectors still agree 21/21; the three root-compatibility cases are separate from that agreement set. TypeScript 5.9.3 and changed-source ESLint 9.39.2 were rerun successfully. Local review logs: `/tmp/relaycast-globs-root-{before,after}.log`.
 
 The trajectory range now ends at this final product commit and records all commits/files in the actual git range, including the intervening evidence commit. The trace retains original product attribution and adds this correction's changed ranges. Subsequent evidence-only updates do not change executable code or tests.
+
+## Review correction: wildcard token handling and documentation
+
+Final product commit: `eda43a17a5f1e62673643d92d5aa3c73d9c3732f`. Pattern `*` remains a wildcard token even if the event path has a literal asterisk at that position. The literal-equality branch now excludes pattern stars. A real Jira callback plus leading/internal literal-star positive cases and an extension-mismatch denial reproduced 46 passed / 3 failed before this correction, then 49 passed afterward (22 route tests + 27 matcher cases). The original 21 shared vectors still agree with pinned upstream source; root and literal-star edge corrections are explicitly outside that shared agreement set.
+
+The README overview now distinguishes GitHub identity opt-in from ordinary path globs, and the package changelog leads with valid Linear/Jira events no longer being dropped. TypeScript 5.9.3 and ESLint 9.39.2 were rerun successfully; the source-agreement probe remains 21/21. Logs: `/tmp/relaycast-globs-star-{before,after}.log`. The attribution range and trace include this final product correction; the subsequent evidence-only commit changes no code or tests.
