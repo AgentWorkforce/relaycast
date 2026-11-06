@@ -30,3 +30,15 @@ describe('RelayFile webhook path-glob agreement', () => {
     expect(eventMatchesRelayfileGlob(path, glob)).toBe(expected);
   });
 });
+
+// Preserve Relaycast's pre-existing root-prefix behavior. Upstream currently
+// canonicalizes the empty prefix to '/', which incorrectly requires '//'.
+describe('Relaycast legacy root wildcard compatibility', () => {
+  it.each([
+    ['/issue.json', true],
+    ['/', true],
+    ['/nested/issue.json', false],
+  ])('matches %s against /* as %s', (path, expected) => {
+    expect(eventMatchesRelayfileGlob(path, '/*')).toBe(expected);
+  });
+});

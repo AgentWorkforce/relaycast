@@ -2,6 +2,7 @@
  * Match the RelayFile webhook contract from relayfile-cloud ba817966, including
  * its legacy trailing-prefix rules. Matching normalization follows core 0.10.34;
  * this helper never changes the target text used to derive an HMAC secret.
+ * The empty /* prefix preserves Relaycast root matching despite an upstream bug.
  * Reference: https://github.com/AgentWorkforce/relayfile-cloud/blob/ba8179660deac4cf251754859ccd3d5ac2948b4f/packages/relayfile/src/webhook-delivery.ts
  */
 export function eventMatchesRelayfileGlob(path: string, glob: string): boolean {
@@ -18,7 +19,9 @@ export function eventMatchesRelayfileGlob(path: string, glob: string): boolean {
     return normalizedPath === prefix || normalizedPath.startsWith(`${prefix}/`);
   }
   if (normalizedGlob.endsWith('/*')) {
-    const prefix = normalizeMatchPath(normalizedGlob.slice(0, -'/*'.length));
+    // The glob is already canonical. Keep the root prefix empty, not '/',
+    // so legacy /* targets match root files without requiring a double slash.
+    const prefix = normalizedGlob.slice(0, -'/*'.length);
     const suffix = normalizedPath.slice(prefix.length);
     return normalizedPath.startsWith(`${prefix}/`) && !suffix.slice(1).includes('/');
   }

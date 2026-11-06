@@ -166,18 +166,22 @@ describe('relayfile inbound bridge', () => {
 
   it.each([
     {
-      provider: 'linear', glob: '/linear/issues/*__11111111-2222-4333-8444-555555555555.json',
+      label: 'Linear UUID', provider: 'linear', glob: '/linear/issues/*__11111111-2222-4333-8444-555555555555.json',
       path: '/linear/issues/AR-705__11111111-2222-4333-8444-555555555555.json',
       wrongPath: '/linear/issues/AR-705__11111111-2222-4333-8444-555555555556.json',
       eventType: 'issue.create',
     },
     {
-      provider: 'jira', glob: '/jira/issues/*/comments/*.json',
+      label: 'Jira comments', provider: 'jira', glob: '/jira/issues/*/comments/*.json',
       path: '/jira/issues/KAN-1/comments/9.json',
       wrongPath: '/jira/issues/KAN-1/comments/nested/9.json',
       eventType: 'comment.created',
     },
-  ])('delivers $provider segment-glob events once while retaining authenticated target controls', async ({ provider, glob, path, wrongPath, eventType }) => {
+    {
+      label: 'root-level', provider: 'linear', glob: '/*', path: '/issue.json',
+      wrongPath: '/nested/issue.json', eventType: 'issue.create',
+    },
+  ])('delivers $label segment-glob events once while retaining authenticated target controls', async ({ provider, glob, path, wrongPath, eventType }) => {
     const stack = makeStack();
     const ws = await createWorkspace(stack.app, `segment-glob-${provider}`);
     const agent = await registerAgent(stack.app, ws.workspaceKey, 'glob-reader');
