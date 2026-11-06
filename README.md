@@ -942,7 +942,11 @@ describes transport (`ws`, `http_push`, or `poll`), `role` describes ownership
 describes the wire contract. Directly connected agents are implicit
 `kind: "ws", role: "direct"` nodes, broker-controlled agents bind to
 `kind: "ws", role: "broker"` nodes over `/v1/node/ws`, and both use the same
-`ws.node.v1` `deliver` frame. Agent-targeted receipt/failure notifications are
+`ws.node.v1` `deliver` frame. An agent whose metadata `source` is
+`cloud-relay-connect` stays on the probe's `GET /v1/deliveries` pull instead:
+the `ws.node.v1` binding ordinary registration creates does not receive its
+`deliver` frames, and its rows are snapshotted `self_connected` with no node route.
+Agent-targeted receipt/failure notifications are
 best-effort `context.update` frames on the same node stream. Which event types ride the
 `deliver` frame at all is declared once in `@relaycast/types`
 (`NODE_DELIVER_FRAME_EVENT_TYPES` / `nodeFrameKindFor`) — durably for `message.created`
