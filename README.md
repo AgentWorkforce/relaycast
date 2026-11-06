@@ -781,6 +781,7 @@ Durable delivery (server-backed, per-recipient delivery contract):
 
 ```text
 GET    /deliveries                   List queued deliveries for the agent (accepted + deferred)
+GET    /deliveries/by-message/:id    Read one still-pending delivery for this agent token
 POST   /deliveries/:id/ack           Acknowledge a delivery (-> delivered)
 POST   /deliveries/:id/fail          Record a failed delivery (error + retryable)
 POST   /deliveries/:id/defer         Defer a delivery until available_at
@@ -795,6 +796,9 @@ as `deliver` frames on its node socket and needs no polling; a client without a 
 `wait=<ms>` (up to 25000) so an empty answer waits for the next delivery instead of returning at once.
 The self-hosted server (`createNodeRuntime`) supports `wait`; an engine embedded without a
 `DeliveryWaiters` provider, including the workspace actor, answers at once.
+The by-message read returns only the calling agent's own queued or delivered row, with the
+server-derived sender agent id. Unknown, foreign, acknowledged, and expired
+message ids all return the same 404; it does not reveal other recipients.
 
 The sender can follow what happened to its message. `POST /dm` answers with
 `delivery: { id, status, expires_at } | null`; `POST /channels/:name/messages` answers with
