@@ -4,6 +4,7 @@ import { describe, expect, it } from 'vitest';
 import { sql } from 'drizzle-orm';
 import { createActorEngineDb } from '../database.js';
 import { ACTOR_MIGRATIONS_TABLE, actorMigrationsCurrent, applyActorMigrations } from '../migrations.js';
+import { ACTOR_MIGRATIONS } from '../migrations.generated.js';
 import { FakeActorDatabase } from './fakeActor.js';
 import { channels, messages, workspaces } from '../../../db/schema.js';
 import { desc, eq } from 'drizzle-orm';
@@ -133,6 +134,13 @@ describe('bundled actor migrations', () => {
       fake.exec(`INSERT OR IGNORE INTO ${ACTOR_MIGRATIONS_TABLE} (name, applied_at) VALUES (?, 0)`, superseded);
     }
     expect(actorMigrationsCurrent(fake)).toBe(false);
+    // The row was removed after the file had already changed the schema. A
+    // database that never ran the newest file also lacks the columns it adds.
+    const newestSql = ACTOR_MIGRATIONS.find(([file]) => file === newest)?.[1] ?? [];
+    for (const statement of newestSql) {
+      const add = /ALTER TABLE\s+[`"]?(\w+)[`"]?\s+ADD COLUMN\s+[`"]?(\w+)/i.exec(statement);
+      if (add) fake.exec(`ALTER TABLE ${add[1]} DROP COLUMN ${add[2]}`);
+    }
     expect(applyActorMigrations(fake, { trackingTableExists: true }).applied).toEqual([newest]);
     expect(actorMigrationsCurrent(fake)).toBe(true);
   });

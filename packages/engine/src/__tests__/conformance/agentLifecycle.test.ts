@@ -563,6 +563,7 @@ describe('agent presence and release lifecycle', () => {
     const ws = await createWorkspace(stack.app, 'hostless-release-generation-race');
     const caller = await registerAgent(stack.app, ws.workspaceKey, 'hostless-release-caller');
     const target = await registerAgent(stack.app, ws.workspaceKey, 'hostless-generation-agent');
+    await stack.runtime.deps.db.update(agents).set({ spawnedBy: caller.agentId }).where(eq(agents.id, target.agentId));
     const expectedTokenHash = await sha256Hex(target.token);
     const replacementTokenHash = 'a'.repeat(64);
     const nodeConnections = stack.runtime.deps.nodeConnections!;
@@ -678,6 +679,7 @@ describe('agent presence and release lifecycle', () => {
     const ws = await createWorkspace(stack.app, 'hostless-agent-release-replay');
     const caller = await registerAgent(stack.app, ws.workspaceKey, 'caller');
     const target = await registerAgent(stack.app, ws.workspaceKey, 'release-replay-target');
+    await stack.runtime.deps.db.update(agents).set({ spawnedBy: caller.agentId }).where(eq(agents.id, target.agentId));
     const nodeId = `node_direct_${target.agentId}`;
     const invoke = () => stack.app.request('/v1/actions/release/invoke', {
       method: 'POST',
@@ -714,6 +716,7 @@ describe('agent presence and release lifecycle', () => {
     const ws = await createWorkspace(stack.app, 'release-dispatch-race-replay');
     const caller = await registerAgent(stack.app, ws.workspaceKey, 'caller');
     const target = await registerAgent(stack.app, ws.workspaceKey, 'release-race-target');
+    await stack.runtime.deps.db.update(agents).set({ spawnedBy: caller.agentId }).where(eq(agents.id, target.agentId));
     const targetNode = await attachDirectNodeSocket(stack, ws.workspaceId, target);
 
     const nodeConnections = stack.runtime.deps.nodeConnections!;
@@ -1302,6 +1305,7 @@ describe('agent presence and release lifecycle', () => {
     const ws = await createWorkspace(stack.app, 'release-generation-owner-race');
     const caller = await registerAgent(stack.app, ws.workspaceKey, 'release-owner-caller');
     const target = await registerAgent(stack.app, ws.workspaceKey, 'owner-race-agent');
+    await stack.runtime.deps.db.update(agents).set({ spawnedBy: caller.agentId }).where(eq(agents.id, target.agentId));
     const { sock, handle } = await attachDirectNodeSocket(stack, ws.workspaceId, target);
     const expectedTokenHash = await sha256Hex(target.token);
     const replacementTokenHash = 'c'.repeat(64);
@@ -1519,6 +1523,7 @@ describe('agent presence and release lifecycle', () => {
     const ws = await createWorkspace(stack.app, 'release-generation-completion-replay');
     const caller = await registerAgent(stack.app, ws.workspaceKey, 'release-completion-caller');
     const target = await registerAgent(stack.app, ws.workspaceKey, 'completion-race-agent');
+    await stack.runtime.deps.db.update(agents).set({ spawnedBy: caller.agentId }).where(eq(agents.id, target.agentId));
     const { handle } = await attachDirectNodeSocket(stack, ws.workspaceId, target);
     const expectedTokenHash = await sha256Hex(target.token);
     const replacementTokenHash = 'd'.repeat(64);

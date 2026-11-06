@@ -173,6 +173,35 @@ function releaseGenerationStillCurrent(
   )`;
 }
 
+/**
+ * A token rotation of the authorized id is a generation conflict. Identity
+ * mismatch is only the case where that id is no longer the named row.
+ */
+function releaseConflictError(workspaceId: string, name: string, expectedAgentId: string | null) {
+  if (!expectedAgentId) return RELEASE_GENERATION_CONFLICT_CODE;
+  return sql`CASE WHEN EXISTS (
+    SELECT 1 FROM ${agents}
+    WHERE ${agents.workspaceId} = ${workspaceId}
+      AND ${agents.name} = ${name}
+      AND ${agents.id} = ${expectedAgentId}
+  ) THEN ${RELEASE_GENERATION_CONFLICT_CODE} ELSE ${RELEASE_IDENTITY_MISMATCH_CODE} END`;
+}
+
+function throwReleaseProofConflict(code: string, name: string): never {
+  if (code === RELEASE_IDENTITY_MISMATCH_CODE) {
+    throw codedError(
+      `Agent "${name}" no longer matches the expected immutable identity`,
+      code,
+      409,
+    );
+  }
+  throw codedError(
+    `Agent "${name}" no longer matches the expected token generation`,
+    code,
+    409,
+  );
+}
+
 function dispatchActionNameForInvocation(actionName: string, input: Record<string, unknown>): string {
   if (!isSpawnInvocation(actionName)) return actionName;
   const raw = input.capability ?? input.cli;
@@ -1205,17 +1234,21 @@ async function dispatchRelease(args: {
   const expectedTokenHash = releaseExpectedTokenHash(input);
   const expectedAgentId = releaseExpectedAgentId(input);
 
-  // Claim the operation before resolving the mutable name. A completed exact
+  // A keyed release claims before resolving the mutable name. A completed exact
   // release tombstones/renames the row, so a lost-response replay must find
-  // this immutable invocation before it looks up the name again.
-  const exactClaim = expectedAgentId ? await createInvocation(args.db, args.workspaceId, null, {
+  // this immutable invocation before it looks up the name again. An unkeyed
+  // release still carries expected_agent_id to pin the write, and a proof miss
+  // fails before any invocation exists.
+  const exactInvocationId = args.invocationId
+    ?? (args.idempotencyKey && (args.idempotencyActorId ?? args.data.caller_id)
+      ? await idempotentInvocationId(args.workspaceId, args.idempotencyActorId ?? args.data.caller_id!, 'release', args.idempotencyKey)
+      : undefined);
+  const exactClaim = expectedAgentId && exactInvocationId ? await createInvocation(args.db, args.workspaceId, null, {
     input,
     caller_id: args.data.caller_id,
     caller_name: args.data.caller_name,
     action_name: 'release',
-    invocation_id: args.invocationId ?? (args.idempotencyKey && (args.idempotencyActorId ?? args.data.caller_id)
-      ? await idempotentInvocationId(args.workspaceId, args.idempotencyActorId ?? args.data.caller_id!, 'release', args.idempotencyKey)
-      : undefined),
+    invocation_id: exactInvocationId,
   }) : null;
   if (exactClaim?.replayed) {
     const { invocation } = exactClaim;
@@ -1233,46 +1266,73 @@ async function dispatchRelease(args: {
       ...(expectedTokenHash ? [eq(agents.tokenHash, expectedTokenHash)] : []),
     ));
   if (!agent) {
-    if (expectedAgentId) {
-      await args.db
-        .update(actionInvocations)
-        .set({ status: 'failed', error: RELEASE_IDENTITY_MISMATCH_CODE, completedAt: new Date() })
-        .where(and(
-          eq(actionInvocations.workspaceId, args.workspaceId),
-          eq(actionInvocations.id, exactClaim!.invocation.id),
-          inArray(actionInvocations.status, OPEN_INVOCATION_STATUSES),
-        ));
-      const [sameName] = await args.db
-        .select({ id: agents.id })
-        .from(agents)
-        .where(and(eq(agents.workspaceId, args.workspaceId), eq(agents.name, name)));
-      if (sameName) {
+    const [sameName] = await args.db
+      .select({ id: agents.id, tokenHash: agents.tokenHash })
+      .from(agents)
+      .where(and(eq(agents.workspaceId, args.workspaceId), eq(agents.name, name)));
+    // The authorized id is not this name: a replacement (or a freed name).
+    // A token rotation of that same id is the generation guard, including when
+    // the release also pinned expected_agent_id.
+    const identityMiss = Boolean(expectedAgentId) && sameName?.id !== expectedAgentId;
+    const generationMiss = !identityMiss
+      && Boolean(expectedTokenHash)
+      && Boolean(sameName)
+      && sameName.tokenHash !== expectedTokenHash;
+    if (identityMiss || generationMiss) {
+      const code = identityMiss ? RELEASE_IDENTITY_MISMATCH_CODE : RELEASE_GENERATION_CONFLICT_CODE;
+      if (exactClaim) {
+        await args.db
+          .update(actionInvocations)
+          .set({ status: 'failed', error: code, completedAt: new Date() })
+          .where(and(
+            eq(actionInvocations.workspaceId, args.workspaceId),
+            eq(actionInvocations.id, exactClaim.invocation.id),
+            inArray(actionInvocations.status, OPEN_INVOCATION_STATUSES),
+          ));
+      }
+      if (identityMiss) {
         throw codedError(
-          `Agent "${name}" no longer matches the expected immutable identity`,
+          sameName
+            ? `Agent "${name}" no longer matches the expected immutable identity`
+            : `Agent "${name}" with expected identity is absent`,
           RELEASE_IDENTITY_MISMATCH_CODE,
           409,
         );
       }
       throw codedError(
-        `Agent "${name}" with expected identity is absent`,
-        RELEASE_IDENTITY_MISMATCH_CODE,
+        `Agent "${name}" no longer matches the expected token generation`,
+        RELEASE_GENERATION_CONFLICT_CODE,
         409,
       );
     }
-    if (expectedTokenHash) {
-      const [sameName] = await args.db
-        .select({ id: agents.id })
-        .from(agents)
-        .where(and(eq(agents.workspaceId, args.workspaceId), eq(agents.name, name)));
-      if (sameName) {
-        throw codedError(
-          `Agent "${name}" no longer matches the expected token generation`,
-          RELEASE_GENERATION_CONFLICT_CODE,
-          409,
-        );
-      }
-    }
     throw codedError(`Agent "${name}" not found`, 'agent_not_found', 404);
+  }
+  // Agent tokens release only themselves or agents they spawned. Workspace keys
+  // and node tokens leave caller_id unset. This sits after the exact-claim
+  // replay above, so a retry of a stored release does not consult the name
+  // that may now belong to someone else. A fresh exact claim is still
+  // unstarted here; drop it so the same key can be answered 403 again instead
+  // of sticking on an invocation that never dispatched.
+  const callerId = args.data.caller_id;
+  if (callerId && callerId !== agent.id && agent.spawnedBy !== callerId) {
+    if (exactClaim) {
+      await args.db
+        .delete(actionInvocations)
+        .where(and(
+          eq(actionInvocations.workspaceId, args.workspaceId),
+          eq(actionInvocations.id, exactClaim.invocation.id),
+          eq(actionInvocations.status, 'pending'),
+          isNull(actionInvocations.handlerNodeId),
+          isNull(actionInvocations.dispatchedNodeId),
+          isNull(actionInvocations.spawnReservedAt),
+          eq(actionInvocations.dispatchAttempts, 0),
+        ));
+    }
+    throw codedError(
+      `Agent "${name}" was not spawned by this agent; managing it requires a workspace key`,
+      'agent_not_spawned_by_caller',
+      403,
+    );
   }
   // Legacy requests retain their prior behavior: invalid names/generation
   // guards fail before creating an invocation. Exact requests have already
@@ -1353,7 +1413,7 @@ async function dispatchRelease(args: {
         .update(actionInvocations)
         .set({
           status: 'failed',
-          error: expectedAgentId ? RELEASE_IDENTITY_MISMATCH_CODE : RELEASE_GENERATION_CONFLICT_CODE,
+          error: releaseConflictError(args.workspaceId, name, expectedAgentId),
           completedAt,
         })
         .where(and(
@@ -1362,7 +1422,7 @@ async function dispatchRelease(args: {
           inArray(actionInvocations.status, OPEN_INVOCATION_STATUSES),
           expectedTokenHash || expectedAgentId ? sql`NOT (${generationStillCurrent})` : sql`0`,
         ))
-        .returning({ id: actionInvocations.id }));
+        .returning({ id: actionInvocations.id, error: actionInvocations.error }));
 
       // Win completion and snapshot the current binding before deactivating
       // it. The returned node drives the response and agent.exited event, so a
@@ -1485,18 +1545,12 @@ async function dispatchRelease(args: {
 
       return writes;
     }, { requireAtomic: true });
-    const generationConflict = results[0] as Array<{ id: string }>;
+    const generationConflict = results[0] as Array<{ id: string; error: string | null }>;
     const completed = results[1] as Array<{ id: string; handlerNodeId: string | null }>;
     const completedExitNodeId = completed[0]?.handlerNodeId ?? null;
 
     if ((expectedTokenHash || expectedAgentId) && (generationConflict.length > 0 || completed.length === 0)) {
-      throw codedError(
-        expectedAgentId
-          ? `Agent "${name}" no longer matches the expected immutable identity`
-          : `Agent "${name}" no longer matches the expected token generation`,
-        expectedAgentId ? RELEASE_IDENTITY_MISMATCH_CODE : RELEASE_GENERATION_CONFLICT_CODE,
-        409,
-      );
+      throwReleaseProofConflict(generationConflict[0]?.error ?? RELEASE_GENERATION_CONFLICT_CODE, name);
     }
 
     // External completion effects belong after the durable atomic unit: an
@@ -1536,7 +1590,7 @@ async function dispatchRelease(args: {
           .update(actionInvocations)
           .set({
             status: 'failed',
-            error: expectedAgentId ? RELEASE_IDENTITY_MISMATCH_CODE : RELEASE_GENERATION_CONFLICT_CODE,
+            error: releaseConflictError(args.workspaceId, name, expectedAgentId),
             completedAt,
           })
           .where(and(
@@ -1545,7 +1599,7 @@ async function dispatchRelease(args: {
             inArray(actionInvocations.status, OPEN_INVOCATION_STATUSES),
             sql`NOT (${generationStillCurrent})`,
           ))
-          .returning({ id: actionInvocations.id }),
+          .returning({ id: actionInvocations.id, error: actionInvocations.error }),
         writeDb
           .update(actionInvocations)
           .set({ status: 'failed', error: 'agent_host_unavailable', completedAt })
@@ -1557,15 +1611,9 @@ async function dispatchRelease(args: {
           ))
           .returning({ id: actionInvocations.id }),
       ], { requireAtomic: true });
-      const generationConflict = results[0] as Array<{ id: string }>;
+      const generationConflict = results[0] as Array<{ id: string; error: string | null }>;
       if (generationConflict.length > 0) {
-        throw codedError(
-          expectedAgentId
-            ? `Agent "${name}" no longer matches the expected immutable identity`
-            : `Agent "${name}" no longer matches the expected token generation`,
-          expectedAgentId ? RELEASE_IDENTITY_MISMATCH_CODE : RELEASE_GENERATION_CONFLICT_CODE,
-          409,
-        );
+        throwReleaseProofConflict(generationConflict[0]?.error ?? RELEASE_GENERATION_CONFLICT_CODE, name);
       }
     } else {
       await args.db
@@ -1668,13 +1716,7 @@ async function dispatchRelease(args: {
           eq(actionInvocations.id, invocation.id),
         ));
       if (settled?.error === RELEASE_GENERATION_CONFLICT_CODE || settled?.error === RELEASE_IDENTITY_MISMATCH_CODE) {
-        throw codedError(
-          expectedAgentId
-            ? `Agent "${name}" no longer matches the expected immutable identity`
-            : `Agent "${name}" no longer matches the expected token generation`,
-          expectedAgentId ? RELEASE_IDENTITY_MISMATCH_CODE : RELEASE_GENERATION_CONFLICT_CODE,
-          409,
-        );
+        throwReleaseProofConflict(settled.error, name);
       }
       if (settled?.error === 'node_dispatch_unavailable') {
         throw codedError(
@@ -2486,7 +2528,7 @@ async function completeReleaseNodeInvocation(
       .update(actionInvocations)
       .set({
         status: 'failed',
-        error: expectedAgentId ? RELEASE_IDENTITY_MISMATCH_CODE : RELEASE_GENERATION_CONFLICT_CODE,
+        error: releaseConflictError(workspaceId, name, expectedAgentId),
         completedAt,
         spawnReservedAt: null,
       })
@@ -3118,9 +3160,6 @@ async function dispatchNodeInvocation(args: {
   const guardedReleaseAgentId = args.invocationOrigin === 'builtin' && isReleaseInvocation(args.action)
     ? releaseExpectedAgentId(args.input)
     : null;
-  const releaseConflictCode = guardedReleaseAgentId
-    ? RELEASE_IDENTITY_MISMATCH_CODE
-    : RELEASE_GENERATION_CONFLICT_CODE;
   if (guardedReleaseHash || guardedReleaseAgentId) {
     const name = typeof args.input.name === 'string' ? args.input.name : '';
     const [current] = await args.db
@@ -3140,6 +3179,19 @@ async function dispatchNodeInvocation(args: {
           )`,
       ));
     if (!current) {
+      const [named] = await args.db
+        .select({ id: agents.id, tokenHash: agents.tokenHash })
+        .from(agents)
+        .where(and(eq(agents.workspaceId, args.workspaceId), eq(agents.name, name)));
+      const identityMiss = Boolean(guardedReleaseAgentId) && named?.id !== guardedReleaseAgentId;
+      const generationMiss = !identityMiss
+        && Boolean(guardedReleaseHash)
+        && named?.tokenHash !== guardedReleaseHash;
+      const releaseConflictCode = identityMiss
+        ? RELEASE_IDENTITY_MISMATCH_CODE
+        : generationMiss || !guardedReleaseAgentId
+          ? RELEASE_GENERATION_CONFLICT_CODE
+          : RELEASE_IDENTITY_MISMATCH_CODE;
       await args.db
         .update(actionInvocations)
         .set({

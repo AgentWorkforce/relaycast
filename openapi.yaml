@@ -431,6 +431,16 @@ components:
           type: string
           format: date-time
           description: Last presence update timestamp.
+        spawned_by:
+          type: string
+          nullable: true
+          description: >-
+            Id of the agent whose open spawn reservation this registration
+            answered. That agent's token may release or delete it. Null when
+            that reservation is closed or already used (including a name
+            registered again after release), when the agent was registered
+            directly or spawned with a workspace key, or when the row predates
+            ownership.
         channels:
           type: array
           description: Channels this agent belongs to. Present on agent detail responses.
@@ -2732,11 +2742,13 @@ paths:
         status or age, in one read; it cannot be combined with status or
         include_stale. Responses carry a weak ETag; a request whose
         If-None-Match matches it gets 304 with no body.
-        Observer tokens require `agents:read`.
+        Agent tokens may read the roster. Observer tokens require `agents:read`
+        and see only the agents their filters allow.
       tags:
         - Agents
       security:
         - workspaceKey: []
+        - agentToken: []
         - observerToken: []
       parameters:
         - name: names
@@ -2898,11 +2910,13 @@ paths:
       summary: Get agent
       description: >-
         Get agent by name. Presence uses the same five-minute last_seen TTL as
-        the roster, without database writes. Observer tokens require `agents:read`.
+        the roster, without database writes. Agent tokens may read any agent.
+        Observer tokens require `agents:read`.
       tags:
         - Agents
       security:
         - workspaceKey: []
+        - agentToken: []
         - observerToken: []
       parameters:
         - name: name
@@ -2987,11 +3001,15 @@ paths:
       description: >-
         Tombstone an agent, remove memberships, and dead-letter its active deliveries
         in one atomic write. Database adapters without transaction or atomic batch
-        support are refused before these changes.
+        support are refused before these changes. An agent token may delete only
+        agents it spawned (`spawned_by`); the delete is bound to that agent id,
+        so a replacement that reused the name is not deleted. Other agents need
+        a workspace key.
       tags:
         - Agents
       security:
         - workspaceKey: []
+        - agentToken: []
       parameters:
         - name: name
           in: path
@@ -3001,6 +3019,14 @@ paths:
       responses:
         '204':
           description: Agent deleted
+        '403':
+          description: agent_not_spawned_by_caller; the agent token did not spawn this agent
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: Agent not found
 
   /agents/{name}/subscription-channel:
     post:
@@ -3332,7 +3358,13 @@ paths:
         tombstoning the agent and deleting any implicit direct node. Irreversible
         release removes memberships and dead-letters active deliveries in the
         same atomic write. Database adapters without transaction or atomic batch
-        support are refused before these changes.
+        support are refused before these changes. An agent token may release
+        itself or agents it spawned (`spawned_by`); releasing any other agent
+        needs a workspace key or node token. The server pins the release to the
+        live agent id it authorized (`expected_agent_id` on the dispatch). A
+        same-name replacement is not released. Builtin
+        `POST /actions/release/invoke` uses the same ownership rule when no
+        custom `release` action is registered.
       tags:
         - Agents
       security:
@@ -3382,6 +3414,12 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
+        '403':
+          description: agent_not_spawned_by_caller; the agent token did not spawn this agent
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
         '404':
           description: Agent not found
           content:
@@ -3410,10 +3448,13 @@ paths:
         authenticated caller principal, and release action; workspace-key
         callers share the workspace-key principal scope, so each caller must
         create and persist a unique key for each logical operation. A same-name
-        replacement is never released by this operation. Replaying a key
-        returns the original terminal invocation and does not enqueue a second
-        `action.invoked` webhook, while reusing it with another payload
-        conflicts.
+        replacement is never released by this operation. A retry with the same
+        key and `expected_agent_id` replays the stored result before the
+        current name is checked, including after that name is reused, and does
+        not enqueue a second `action.invoked` webhook. Reusing the key with
+        another payload conflicts. An agent token may release itself or agents
+        it spawned (`spawned_by`); that check applies to a fresh release, not
+        to the stored replay.
       tags: [Agents]
       security:
         - workspaceKey: []
@@ -3456,6 +3497,8 @@ paths:
                   data: { $ref: '#/components/schemas/LifecycleActionInvocation' }
         '400':
           description: Missing or invalid identity/key
+        '403':
+          description: agent_not_spawned_by_caller; the agent token did not spawn this agent
         '409':
           description: agent_identity_mismatch or idempotency_key_reused; no replacement mutation occurred
         '503':
@@ -5589,7 +5632,10 @@ paths:
         and obsolete attempts/generations return stale_task_execution. Providers
         persist launch state before acceptance and reconcile ambiguous replies
         without launching a second worker. Node-addressed and unkeyed invokes of
-        task actions fail task_idempotency_required.
+        task actions fail task_idempotency_required. Builtin `release`, when no
+        custom `release` action is registered, follows `POST /agents/release`:
+        an agent token may release only itself or an agent it spawned
+        (`403 agent_not_spawned_by_caller`).
       tags:
         - Actions
       security:
@@ -5645,7 +5691,7 @@ paths:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
         '403':
-          description: Agent token required, or caller is not allowed to invoke this action. Denied agent callers receive an `action.denied` event.
+          description: Agent token required, caller is not allowed to invoke this action (`action.denied`), or builtin release of an agent this token did not spawn (`agent_not_spawned_by_caller`).
           content:
             application/json:
               schema:

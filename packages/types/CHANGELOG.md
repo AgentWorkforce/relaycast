@@ -13,6 +13,7 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Added
 
+- `AgentSchema.spawned_by` (optional, nullable): the agent whose open spawn reservation created this agent.
 - `DeliveryAckedEventSchema` (`delivery.acked`: `delivery_id`, `message_id`, recipient `agent_id` / `agent_name`, `status: 'acked'`, `at`), in `ServerEventSchema`, `WsClientEventSchema` and `SubscribableEventTypeSchema`. `DeliveryDeliveredEventSchema` gains optional sender-side `agent_id`, `agent_name`, `status`, `at`.
 - `SentDeliverySchema`, `MessageDeliveryReceiptSchema`, `MessageDeliveriesResponseSchema`; `SendDmResponseSchema.delivery` (`{ id, status, expires_at } | null`).
 
