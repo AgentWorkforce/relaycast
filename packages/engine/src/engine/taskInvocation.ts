@@ -3,6 +3,7 @@ import { FleetTaskContextSchema, type FleetActionAcceptMessage, type FleetAction
 import { actionInvocations, type TaskInvocationState } from '../db/schema.js';
 import type { EngineDb } from '../ports/database.js';
 import { codedError } from '../lib/httpError.js';
+import { appendInvocationEvents, invocationEvent } from './invocationEvents.js';
 
 type Invocation = typeof actionInvocations.$inferSelect;
 const liveStates = ['pending', 'dispatched', 'running'];
@@ -66,6 +67,7 @@ export async function expireTaskInvocation(db: EngineDb, row: Invocation): Promi
   if (!row.taskState || !liveStates.includes(row.status) || row.taskState.deadline > new Date().toISOString()) return row;
   const [updated] = await db.update(actionInvocations).set({
     status: 'failed', error: 'task_deadline_exceeded', completedAt: new Date(),
+    events: appendInvocationEvents(invocationEvent('failed', { error: 'task_deadline_exceeded' })),
   }).where(and(
     eq(actionInvocations.id, row.id), eq(actionInvocations.workspaceId, row.workspaceId),
     inArray(actionInvocations.status, liveStates),
@@ -88,7 +90,11 @@ export async function acceptTaskInvocation(
     ...row.taskState!, execution_id: message.execution_id,
     worker_generation: message.worker_generation, accepted_at: new Date().toISOString(),
   };
-  const [accepted] = await db.update(actionInvocations).set({ status: 'running', taskState: state }).where(and(
+  const [accepted] = await db.update(actionInvocations).set({
+    status: 'running',
+    taskState: state,
+    events: appendInvocationEvents(invocationEvent('acknowledged', { node_id: nodeId, provider })),
+  }).where(and(
     eq(actionInvocations.id, row.id), eq(actionInvocations.workspaceId, workspaceId),
     eq(actionInvocations.status, 'dispatched'), eq(actionInvocations.dispatchedNodeId, nodeId),
     eq(actionInvocations.dispatchedProvider, provider), eq(actionInvocations.dispatchAttempts, row.dispatchAttempts),
@@ -143,6 +149,10 @@ export async function completeTaskInvocation(
   const [completed] = await db.update(actionInvocations).set({
     status, output, error, completedAt: new Date(),
     taskState: { ...row.taskState!, ...(message.accounting ? { accounting: message.accounting } : {}) },
+    events: appendInvocationEvents(
+      invocationEvent('result_received', { node_id: nodeId, provider, ok: error === null, ...(error ? { error } : {}) }),
+      invocationEvent(status, { node_id: nodeId, ...(error ? { error } : {}) }),
+    ),
   }).where(and(
     eq(actionInvocations.id, row.id), eq(actionInvocations.workspaceId, workspaceId),
     eq(actionInvocations.status, 'running'), eq(actionInvocations.dispatchedNodeId, nodeId),
@@ -162,6 +172,7 @@ export async function completeTaskInvocation(
 export async function expireTaskInvocations(db: EngineDb): Promise<void> {
   await db.update(actionInvocations).set({
     status: 'failed', error: 'task_deadline_exceeded', completedAt: new Date(),
+    events: appendInvocationEvents(invocationEvent('failed', { error: 'task_deadline_exceeded' })),
   }).where(and(
     isNotNull(actionInvocations.taskState), inArray(actionInvocations.status, liveStates),
     sql`json_extract(${actionInvocations.taskState}, '$.deadline') <= ${new Date().toISOString()}`,
