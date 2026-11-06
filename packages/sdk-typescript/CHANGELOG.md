@@ -17,6 +17,7 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Changed
 
+- `relay.agents.spawn()` accepts any harness id in `cli`, including ids outside `claude`, `codex`, `gemini`, `aider`, `goose`, `opencode`, `grok`, `muse` and `devin`.
 - `nodes.create(data, { idempotencyKey })` no longer requires `currentToken`: without it the key makes a first enrollment recoverable (persist it before the first call and reuse it on retries).
 
 ## [12.7.0] - 2026-11-03
