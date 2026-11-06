@@ -6,7 +6,7 @@
   },
   "status": "completed",
   "startedAt": "2026-11-06T16:22:13.423Z",
-  "completedAt": "2026-11-06T16:41:15Z",
+  "completedAt": "2026-11-06T17:01:39Z",
   "agents": [
     {
       "name": "default",
@@ -38,7 +38,7 @@
     }
   ],
   "retrospective": {
-    "summary": "Aligned authenticated Relayfile callback matching with producer semantics, preserving legacy root globs and correcting literal-star token handling. Final receiver and matcher suites pass 49 tests; 21 shared vectors agree with pinned upstream source, with separately labeled edge-case fixes. HMAC labels, GitHub identity opt-in and ingress controls are preserved. No runtime, deployment or provider actions.",
+    "summary": "Aligned callback segment globs, preserved root and literal-star edge behavior, then refreshed onto main with authenticated deletion support. The combined affected suites pass 66 tests, including 51 receiver/matcher cases. Typecheck and lint pass; HMAC labels, GitHub identity opt-ins and ingress controls remain intact. No publication or runtime/deployment/provider actions.",
     "approach": "Standard approach",
     "confidence": 0.94
   },
@@ -47,7 +47,10 @@
     "b431f0fd1e6ebb24825e5267ac2e04f4c8d395e4",
     "c6f30bce4e3ed2ddb1a4f92c38d0a74c77925ade",
     "322c495cfc6dd8ee6ef8d93bfc1dca3f39652605",
-    "eda43a17a5f1e62673643d92d5aa3c73d9c3732f"
+    "eda43a17a5f1e62673643d92d5aa3c73d9c3732f",
+    "59b6a02d5df4b9ccd4aa3fd6742cc65ddcef4820",
+    "ce312cdb10e74a565e2a4df955e54615e9eb5d88",
+    "a63c2803063b4e33cf9ffe0554c8bbc7b216fab3"
   ],
   "filesChanged": [
     ".agentworkforce/trajectories/completed/2026-11/traj_zbji908tsp9e.trace.json",
@@ -65,8 +68,8 @@
   "projectId": "AgentWorkforce/relaycast",
   "tags": [],
   "_trace": {
-    "startRef": "1ecb158404c877c63e31ee9e55f1c2786fab60ab",
-    "endRef": "eda43a17a5f1e62673643d92d5aa3c73d9c3732f",
+    "startRef": "b61aa533c03db3d0fc7f3ea3d787bb84e5611ef4",
+    "endRef": "a63c2803063b4e33cf9ffe0554c8bbc7b216fab3",
     "traceId": "3f9c8d1a-c07e-4673-81b2-382a2499cb10"
   }
 }
