@@ -11,6 +11,11 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ## [12.8.0] - 2026-11-04
 
+### Fixed
+
+- `registerOrRotate` names `agents.recover()` when the server returns `agent_already_exists`. It still does not rotate a token. Any other 409 keeps the server message.
+- `decamelizeKeys` rejects a body that sends both casings of one field.
+
 ### Added
 
 - `AgentClient.messageDeliveries(messageId)` and `relay.messages.deliveries(messageId)` call `GET /v1/messages/:id/deliveries`; `on.deliveryAcked` (agent and relay) handles the sender-side `delivery.acked` event. New types `DeliveryAckedEvent`, `SentDelivery`, `MessageDeliveryReceipt`, `MessageDeliveriesResponse`; `SendDmResponse.delivery`.
