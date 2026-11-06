@@ -2898,6 +2898,38 @@ export async function recoverAgentViaNode(
   return recovered;
 }
 
+/**
+ * An open built-in release dispatched to this node still has to finish for
+ * `agent`. Deregister must not re-home that agent first: completion requires
+ * the binding on this node to still be active, and re-homing onto
+ * `node_direct_<id>` makes the result fail with
+ * `agent_release_generation_conflict`.
+ */
+async function nodeHoldsOpenRelease(
+  db: Db,
+  workspaceId: string,
+  nodeId: string,
+  agent: { id: string; name: string },
+): Promise<boolean> {
+  const releases = await db
+    .select({ input: actionInvocations.input })
+    .from(actionInvocations)
+    .where(and(
+      eq(actionInvocations.workspaceId, workspaceId),
+      eq(actionInvocations.dispatchedNodeId, nodeId),
+      eq(actionInvocations.actionName, 'release'),
+      eq(actionInvocations.invocationOrigin, 'builtin'),
+      inArray(actionInvocations.status, ['pending', 'dispatched', 'invoked']),
+      sql`json_extract(${actionInvocations.input}, '$.name') = ${agent.name}`,
+    ));
+  return releases.some(({ input }) => {
+    const release = input && typeof input === 'object' && !Array.isArray(input)
+      ? input as Record<string, unknown>
+      : {};
+    return release.expected_agent_id === undefined || release.expected_agent_id === agent.id;
+  });
+}
+
 export async function deregisterAgentViaNode(
   db: Db,
   workspaceId: string,
@@ -2917,6 +2949,14 @@ export async function deregisterAgentViaNode(
   } else {
     return null;
   }
+
+  const [located] = await db
+    .select({ id: agents.id, name: agents.name })
+    .from(agents)
+    .where(and(...conditions));
+  if (!located) return null;
+  // Leave the binding, the slot, and the exit to release completion.
+  if (await nodeHoldsOpenRelease(db, workspaceId, nodeId, located)) return null;
 
   const [updated] = await db
     .update(agents)
