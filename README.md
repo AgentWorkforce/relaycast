@@ -1577,6 +1577,8 @@ cleanup must await that acknowledgement before requesting deletion.
 
 Relayfile callback path globs follow the producer's path matching: `*` within a segment and whole `**` segments across directories, including `/linear/issues/*__<id>.json` and `/jira/issues/*/comments/*.json`. Matching canonicalizes repeated slashes and dot segments while preserving case and percent escapes. Existing trailing-prefix patterns retain their behavior, including `/*` for root-level paths; target signing and GitHub identity opt-ins are unchanged.
 
+Relayfile ingress accepts authenticated `file.created`, `file.updated`, and `file.deleted` notifications. Deletes without a snapshot preserve the event type and path, with a notice that deleted content is unavailable; no record content or actor is reconstructed.
+
 The signed Relayfile webhook request follows Relayfile's existing external event contract (`eventId`, `providerEventType`, `resourceRef`). These are verified vendor payload fields, not alternate spellings of Relaycast HTTP fields; Relaycast message metadata remains snake_case.
 
 ### Workspace delivery capacity

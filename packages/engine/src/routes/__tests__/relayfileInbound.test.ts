@@ -429,6 +429,84 @@ describe('relayfile inbound bridge', () => {
     expect(messages.data[0]).toMatchObject({ metadata: { provider_event_type: 'message.created', resource_ref: '/slack/channels/C123' } });
   });
 
+  it('delivers a signed typed deletion without a snapshot once and retains ingress controls', async () => {
+    const stack = makeStack();
+    const ws = await createWorkspace(stack.app, 'relayfile-deletion');
+    const agent = await registerAgent(stack.app, ws.workspaceKey, 'deletion-reader');
+    await stack.app.request('/v1/channels/general/join', {
+      method: 'POST', headers: { authorization: `Bearer ${agent.token}` },
+    });
+    const targetRes = await stack.app.request('/v1/integrations/relayfile/inbound-target', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', authorization: `Bearer ${ws.workspaceKey}` },
+      body: JSON.stringify({ channel: 'general', provider: 'slack', path_glob: '/slack/channels/C123/messages/**' }),
+    });
+    expect(targetRes.status).toBe(201);
+    const { data: target } = await targetRes.json();
+    const event = {
+      eventId: 'evt_reaction_removed', type: 'file.deleted', provider: 'slack',
+      origin: 'provider_sync', providerEventType: 'reaction.removed',
+      resourceRef: '/slack/channels/C123', revision: 'rev_deleted',
+      path: '/slack/channels/C123/messages/123_456/reactions/eyes--U123.json',
+    };
+    const emit = (patch: Record<string, unknown> = {}, secret = target.secret) => {
+      const payload = JSON.stringify({ ...event, ...patch });
+      return stack.app.request(target.url, {
+        method: 'POST', body: payload,
+        headers: { ...signedHeaders(secret, payload), 'X-Relay-Event-Id': event.eventId },
+      });
+    };
+    expect((await emit({}, 'wrong-secret')).status).toBe(401);
+    for (const [patch, skipped] of [
+      [{ provider: 'github' }, 'provider_mismatch'],
+      [{ path: '/slack/channels/OTHER/messages/123/reactions/eyes.json' }, 'path_mismatch'],
+      [{ origin: 'agent_write' }, 'agent_write'],
+      [{ type: 'file.renamed' }, 'ignored_event_type'],
+    ] as const) {
+      expect(await (await emit(patch)).json()).toMatchObject({ data: { skipped } });
+    }
+    const payloadWithoutId = JSON.stringify({ ...event, eventId: undefined });
+    const headersWithoutId = new Headers(signedHeaders(target.secret, payloadWithoutId));
+    headersWithoutId.delete('X-Relay-Event-Id');
+    expect(await (await stack.app.request(target.url, {
+      method: 'POST', body: payloadWithoutId, headers: headersWithoutId,
+    })).json()).toMatchObject({ data: { skipped: 'missing_event_id' } });
+
+    const response = await emit();
+    expect(response.status).toBe(201);
+    const { data: accepted } = await response.json();
+    expect(accepted.replayed).toBe(false);
+    expect(await (await emit()).json()).toMatchObject({
+      data: { replayed: true, message_id: accepted.message_id },
+    });
+    expect(await (await emit({ revision: 'different-event' })).json()).toMatchObject({
+      data: { skipped: 'event_id_reused' },
+    });
+    const list = await stack.app.request('/v1/channels/general/messages', {
+      headers: { authorization: `Bearer ${ws.workspaceKey}` },
+    });
+    const { data: messages } = await list.json();
+    expect(messages).toHaveLength(1);
+    expect(messages[0]).toMatchObject({
+      id: accepted.message_id,
+      text: `Slack reaction.removed\nDeleted file content is unavailable.\nRelayfile path: ${event.path}`,
+      metadata: {
+        event: 'file.deleted', provider_event_type: 'reaction.removed', resource_ref: event.resourceRef,
+        record: null, relayfile: { path: event.path, revision: event.revision },
+      },
+    });
+    const inbox = await stack.app.request('/v1/deliveries', {
+      headers: { authorization: `Bearer ${agent.token}` },
+    });
+    expect((await inbox.json()).data).toMatchObject([{ message_id: accepted.message_id }]);
+  });
+
+  it('labels an untyped deletion without inventing deleted record content', () => {
+    expect(formatRelayfileEventMessage({ type: 'file.deleted', path: '/slack/messages/deleted.json' }, 'slack'))
+      .toEqual({ author: 'slack', record: null,
+        text: 'Slack file.deleted\nDeleted file content is unavailable.\nRelayfile path: /slack/messages/deleted.json' });
+  });
+
   it('creates channel deliveries so node/broker agents receive the message', async () => {
     // Regression guard for the node-delivery bug: triggerIntegrationMessage used
     // to insert the message with a bare write (no delivery rows), so fanoutToChannel

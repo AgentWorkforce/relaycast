@@ -6820,7 +6820,9 @@ paths:
       summary: Receive relayfile inbound event
       description: >
         HMAC-authenticated callback used by relayfile to inject matching provider
-        file events into a Relaycast channel. The HMAC input is
+        file.created, file.updated, and file.deleted events into a Relaycast channel.
+        A deletion without a snapshot retains its authenticated event metadata and
+        path; deleted record content is unavailable and is not reconstructed. The HMAC input is
         `X-Relay-Timestamp + "." + raw request body`, signed with SHA-256.
         A full recipient mailbox returns 503 mailbox_full with Retry-After: 30;
         the producer must retry the same event ID. The message and all delivery
