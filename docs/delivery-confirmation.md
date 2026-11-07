@@ -58,7 +58,7 @@ Decisions:
   unanswered DM" heuristic was dropped entirely), and a row still raw
   `queued` (it may already be in flight: a reconnect-replay page is written
   before the engine marks it delivered) keeps the reply as a pending link and
-  still reads `queued`; the row's move to delivered / consumed applies it,
+  still reads `queued`; the row's move to delivered / consumed applies it in the same write,
   stamping `replied_at` then, and the sender hears `delivery.replied` after
   that `delivery.delivered` / `delivery.acked`; a row that fails or expires is
   never marked. The correlation is stored on the reply

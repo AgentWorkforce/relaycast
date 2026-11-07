@@ -3,7 +3,6 @@ import type { AppEnv } from '../env.js';
 import { requireAuth, requireAgentToken } from '../middleware/auth.js';
 import { rateLimit } from '../middleware/rateLimit.js';
 import * as receiptEngine from '../engine/receipt.js';
-import * as deliveryEngine from '../engine/delivery.js';
 import { notifySenderDeliveryReceipts } from '../engine/deliveryReceipts.js';
 import { and, eq } from 'drizzle-orm';
 import { dmConversations, messages } from '../db/schema.js';
@@ -28,21 +27,20 @@ receiptRoutes.post(
       const db = c.get('db');
       const workspace = c.get('workspace');
       const agent = c.get('agent');
-      const result = await receiptEngine.markRead(
+      const marked = await receiptEngine.markReadAndApplyReplies(
         db,
         workspace.id,
         c.req.param('id'),
         agent!.id,
       );
-      if (!result) {
+      if (!marked) {
         return jsonNotFound(c, 'message_not_found', 'Message not found');
       }
-      // Reading consumes the row (`acked`), which applies a reply the reader
-      // sent while it was still queued; the sender hears `delivery.replied`.
-      const replied = await deliveryEngine.applyPendingRepliesForMessage(db, workspace.id, {
-        messageId: result.message_id,
-        recipientAgentId: agent!.id,
-      });
+      const result = marked.receipt;
+      // Reading consumes the row (`acked`); that same write applied a reply
+      // the reader sent while it was still queued, so the sender hears
+      // `delivery.replied`.
+      const replied = marked.repliedDeliveryIds;
       if (replied.length > 0) {
         runInBackground(
           c,

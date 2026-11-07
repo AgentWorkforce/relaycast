@@ -13,6 +13,8 @@ import {
 } from './harness.js';
 import { sweepExpiredDeliveries } from '../../routes/deliveryRouting.js';
 import { createEngine } from '../../engine.js';
+import * as deliveryEngine from '../../engine/delivery.js';
+import { markReadAndApplyReplies } from '../../engine/receipt.js';
 
 type SentDelivery = {
   id: string;
@@ -414,6 +416,106 @@ describe('delivery confirmation', () => {
       ['delivery.acked', null], ['delivery.replied', answer.data.id],
     ]);
     expect((await receipts(alice.token, question.data.id))[0]).toMatchObject({ status: 'acked', state: 'replied', reply_message_id: answer.data.id });
+  });
+
+  /** The `UPDATE deliveries` statements `fn` prepares, alongside its result. */
+  async function deliveryUpdates<T>(fn: () => Promise<T>): Promise<{ result: T; updates: string[] }> {
+    const sqlite = stack.runtime.handle.sqlite;
+    const original = sqlite.prepare;
+    const updates: string[] = [];
+    sqlite.prepare = ((source: string) => {
+      if (/^\s*update\s+"?deliveries"?\s/i.test(source)) updates.push(source);
+      return original.call(sqlite, source);
+    }) as typeof sqlite.prepare;
+    try {
+      return { result: await fn(), updates };
+    } finally {
+      sqlite.prepare = original;
+    }
+  }
+
+  /** A DM to `to` whose row is raw `queued` and carries a pending reply link from `to`. */
+  async function pendingLinkedDm(from: { token: string }, to: { token: string; name: string }, text: string) {
+    const question = await sendDm(from.token, { to: to.name, text });
+    const deliveryId = question.data.delivery!.id;
+    await stack.settle();
+    stack.runtime.handle.sqlite.prepare("UPDATE deliveries SET status = 'queued', delivered_at = NULL WHERE id = ?").run(deliveryId);
+    const answer = await sendDm(to.token, { to: 'alice', text: `re: ${text}`, reply_to_message_id: question.data.id });
+    expect(answer.status).toBe(201);
+    await stack.settle();
+    expect(pendingLink(deliveryId)).toEqual({ reply_message_id: answer.data.id, replied_at: null });
+    return { messageId: question.data.id, deliveryId, answerId: answer.data.id };
+  }
+
+  it('applies a pending reply link in the transition statement itself: delivered mark, REST ack and read each stamp replied_at in their one deliveries write', async () => {
+    const ws = await createWorkspace(stack.app, 'confirm-reply-same-write');
+    const alice = await registerAgent(stack.app, ws.workspaceKey, 'alice');
+    const bob = await registerAgent(stack.app, ws.workspaceKey, 'bob');
+    const db = stack.runtime.handle.db;
+    // No follow-up "apply" statement exists any more.
+    expect(Object.keys(deliveryEngine).filter((name) => /applyPendingReplies/.test(name))).toEqual([]);
+
+    const delivered = await pendingLinkedDm(alice, bob, 'mark me delivered');
+    const mark = await deliveryUpdates(() => deliveryEngine.markDeliveriesDelivered(db, ws.workspaceId, [delivered.deliveryId]));
+    expect(mark.result).toEqual({ delivered: [delivered.deliveryId], replied: [delivered.deliveryId] });
+    expect(mark.updates).toHaveLength(1);
+    expect(pendingLink(delivered.deliveryId)).toEqual({ reply_message_id: delivered.answerId, replied_at: expect.any(Number) });
+    // Idempotent: the row is no longer queued, nothing is reported twice.
+    expect(await deliveryEngine.markDeliveriesDelivered(db, ws.workspaceId, [delivered.deliveryId])).toEqual({ delivered: [], replied: [] });
+
+    const acked = await pendingLinkedDm(alice, bob, 'ack me');
+    const ack = await deliveryUpdates(() => deliveryEngine.ackDelivery(db, ws.workspaceId, bob.agentId, acked.deliveryId));
+    expect(ack.result).toMatchObject({ changed: true, repliedDeliveryIds: [acked.deliveryId] });
+    expect(ack.updates).toHaveLength(1);
+    expect(pendingLink(acked.deliveryId)).toEqual({ reply_message_id: acked.answerId, replied_at: expect.any(Number) });
+    expect(await deliveryEngine.ackDelivery(db, ws.workspaceId, bob.agentId, acked.deliveryId)).toMatchObject({ changed: false });
+
+    const read = await pendingLinkedDm(alice, bob, 'read me');
+    const marked = await deliveryUpdates(() => markReadAndApplyReplies(db, ws.workspaceId, read.messageId, bob.agentId));
+    expect(marked.result).toMatchObject({ receipt: { message_id: read.messageId }, repliedDeliveryIds: [read.deliveryId] });
+    expect(marked.updates).toHaveLength(1);
+    expect(pendingLink(read.deliveryId)).toEqual({ reply_message_id: read.answerId, replied_at: expect.any(Number) });
+    expect((await markReadAndApplyReplies(db, ws.workspaceId, read.messageId, bob.agentId))?.repliedDeliveryIds).toEqual([]);
+
+    // A transition of a row without a link reports no reply.
+    const plain = await sendDm(alice.token, { to: 'bob', text: 'no reply' });
+    await stack.settle();
+    expect((await deliveryEngine.ackDelivery(db, ws.workspaceId, bob.agentId, plain.data.delivery!.id))?.repliedDeliveryIds).toBeUndefined();
+  });
+
+  it('applies a pending reply link in the node acceptance and cumulative ack statements themselves, and never re-reports an earlier reply', async () => {
+    const ws = await createWorkspace(stack.app, 'confirm-reply-node-same-write');
+    const alice = await registerAgent(stack.app, ws.workspaceKey, 'alice');
+    const node = await enrollBrokerNode(ws);
+    const bob = await registerViaNode(node, 'bob');
+    const db = stack.runtime.handle.db;
+    const { provider_name: provider } = stack.runtime.handle.sqlite
+      .prepare('SELECT provider_name FROM agents WHERE id = ?').get(bob.agentId) as { provider_name: string };
+
+    const first = await pendingLinkedDm(alice, bob, 'first');
+    const second = await pendingLinkedDm(alice, bob, 'second');
+
+    const accept = await deliveryUpdates(() => deliveryEngine.acceptDeliveries(db, ws.workspaceId, node.id, provider, 'bob', { deliveryId: first.deliveryId }));
+    expect(accept.result).toMatchObject({ accepted_delivery_ids: [first.deliveryId], replied_delivery_ids: [first.deliveryId] });
+    expect(accept.updates).toHaveLength(1);
+    expect(pendingLink(first.deliveryId)).toEqual({ reply_message_id: first.answerId, replied_at: expect.any(Number) });
+    expect(pendingLink(second.deliveryId)).toEqual({ reply_message_id: second.answerId, replied_at: null });
+
+    // One chunk, one deliveries write: `first` (already replied) is acked
+    // without a second reply; `second` leaves queued and its link applies.
+    const ack = await deliveryUpdates(() => deliveryEngine.ackDeliveriesUpToSeq(db, ws.workspaceId, node.id, provider, 'bob', 2));
+    expect(ack.result).toMatchObject({ acked_delivery_ids: [first.deliveryId, second.deliveryId], replied_delivery_ids: [second.deliveryId] });
+    expect(ack.updates).toHaveLength(1);
+    expect(pendingLink(second.deliveryId)).toEqual({ reply_message_id: second.answerId, replied_at: expect.any(Number) });
+
+    // A row replied while delivered (stamped at once, maybe this very second)
+    // is accepted without reporting that reply again.
+    const third = await sendDm(alice.token, { to: 'bob', text: 'third' });
+    await stack.settle();
+    await sendDm(bob.token, { to: 'alice', text: 're: third', reply_to_message_id: third.data.id });
+    await stack.settle();
+    expect(await deliveryEngine.acceptDeliveries(db, ws.workspaceId, node.id, provider, 'bob', { deliveryId: third.data.delivery!.id }))
+      .toMatchObject({ accepted_delivery_ids: [third.data.delivery!.id], replied_delivery_ids: [] });
   });
 
   it('marks a channel message replied when a thread reply answers it', async () => {

@@ -11,6 +11,7 @@ import {
   dmParticipants,
 } from '../db/schema.js';
 import { runAtomicWrites } from '../ports/database.js';
+import { pendingReplyLink, repliedAtOnTransition } from './delivery.js';
 
 type Db = ReturnType<typeof getDb>;
 
@@ -43,6 +44,24 @@ export async function markRead(
   messageId: string,
   agentId: string,
 ) {
+  const result = await markReadAndApplyReplies(db, workspaceId, messageId, agentId);
+  return result ? result.receipt : null;
+}
+
+/**
+ * {@link markRead}, plus the ids of the reader's deliveries whose pending reply
+ * link (a reply sent while the row was still `queued`) the read's own `acked`
+ * transition applied, so the caller can tell the sender `replied`.
+ */
+export async function markReadAndApplyReplies(
+  db: Db,
+  workspaceId: string,
+  messageId: string,
+  agentId: string,
+): Promise<{
+  receipt: { message_id: string; agent_id: string; read_at: string };
+  repliedDeliveryIds: string[];
+} | null> {
   // Verify message exists and belongs to workspace
   const [msg] = await db
     .select()
@@ -73,28 +92,38 @@ export async function markRead(
   }
   if (!authorized) return null;
 
+  const consumable = and(
+    eq(deliveries.messageId, messageId),
+    eq(deliveries.agentId, agentId),
+    inArray(deliveries.status, ['queued', 'delivered']),
+  );
   // The three read-state writes (receipt + delivery transition + lastReadId)
   // run as one atomic unit when the adapter supports it.
-  await runAtomicWrites(db, (writeDb) => [
+  const results = await runAtomicWrites(db, (writeDb) => [
     // Upsert read receipt (idempotent)
     writeDb
       .insert(readReceipts)
       .values({ messageId, agentId })
       .onConflictDoNothing(),
 
+    // The consumable rows carrying a pending reply link, read in the same
+    // atomic unit just before the transition: exactly the rows whose
+    // `replied_at` it stamps (RETURNING sees only the new values).
+    writeDb
+      .select({ id: deliveries.id })
+      .from(deliveries)
+      .where(and(consumable, pendingReplyLink())),
+
     // Transition delivery status to acked. Reading consumes the message, so
     // clear any in-flight mailbox state; otherwise a delivery would linger in
     // the durable replay queue after the agent has already seen the message.
+    // Leaving `queued` applies a reply sent while it was queued in this same
+    // write, so no crash can strand the link on a consumed row.
     writeDb
       .update(deliveries)
-      .set({ status: 'acked', ackedAt: new Date(), updatedAt: new Date() })
-      .where(
-        and(
-          eq(deliveries.messageId, messageId),
-          eq(deliveries.agentId, agentId),
-          inArray(deliveries.status, ['queued', 'delivered']),
-        ),
-      ),
+      .set({ status: 'acked', ackedAt: new Date(), repliedAt: repliedAtOnTransition(), updatedAt: new Date() })
+      .where(consumable)
+      .returning({ id: deliveries.id, repliedAt: deliveries.repliedAt }),
 
     // Update lastReadId for the channel membership (only move forward)
     writeDb
@@ -122,10 +151,17 @@ export async function markRead(
       ),
     );
 
+  const pendingLinks = new Set((results[1] as { id: string }[]).map((row) => row.id));
+  const transitioned = results[2] as { id: string; repliedAt: Date | null }[];
   return {
-    message_id: receipt.messageId,
-    agent_id: receipt.agentId,
-    read_at: receipt.readAt.toISOString(),
+    receipt: {
+      message_id: receipt.messageId,
+      agent_id: receipt.agentId,
+      read_at: receipt.readAt.toISOString(),
+    },
+    repliedDeliveryIds: transitioned
+      .filter((row) => pendingLinks.has(row.id) && row.repliedAt !== null)
+      .map((row) => row.id),
   };
 }
 
