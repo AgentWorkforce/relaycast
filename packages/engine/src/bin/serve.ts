@@ -8,11 +8,12 @@ import { MIN_INTERNAL_SECRET_LENGTH } from '../engine/internalAdmin.js';
 const HELP = `relaycast-engine — run a self-hosted Relaycast server (Node + SQLite)
 
 Usage:
-  relaycast-engine [--db <path>] [--port <n>] [--base-url <url>] [--env <name>]
+  relaycast-engine [--db <path>] [--port <n>] [--host <addr>] [--base-url <url>] [--env <name>]
 
 Options:
   --db <path>        SQLite database file (default: $RELAYCAST_DB_PATH or ./relaycast.db)
   --port <n>         HTTP port (default: $PORT or 8787)
+  --host <addr>      Interface to bind, e.g. 127.0.0.1 (default: $RELAYCAST_HOST or every interface)
   --base-url <url>   Public origin for signed file URLs (default: http://localhost:<port>)
   --env <name>       Environment label (default: production)
   -v, --version      Print the engine version
@@ -43,6 +44,7 @@ After start, create a workspace:
 interface ServeArgs {
   db: string;
   port: number;
+  host?: string;
   baseUrl?: string;
   environment: string;
   help: boolean;
@@ -53,6 +55,7 @@ function parseArgs(argv: string[], env: NodeJS.ProcessEnv): ServeArgs {
   const out: ServeArgs = {
     db: env.RELAYCAST_DB_PATH ?? './relaycast.db',
     port: env.PORT ? Number(env.PORT) : 8787,
+    host: env.RELAYCAST_HOST?.trim() || undefined,
     baseUrl: undefined,
     environment: env.RELAYCAST_ENV ?? 'production',
     help: false,
@@ -64,6 +67,7 @@ function parseArgs(argv: string[], env: NodeJS.ProcessEnv): ServeArgs {
     else if (arg === '--version' || arg === '-v') out.version = true;
     else if (arg === '--db') out.db = argv[++i] ?? out.db;
     else if (arg === '--port') out.port = Number(argv[++i] ?? out.port);
+    else if (arg === '--host') out.host = argv[++i]?.trim() || undefined;
     else if (arg === '--base-url') out.baseUrl = argv[++i];
     else if (arg === '--env') out.environment = argv[++i] ?? out.environment;
   }
@@ -133,6 +137,7 @@ async function main(): Promise<void> {
   const running = startServer({
     dbPath: opts.db,
     port: opts.port,
+    hostname: opts.host,
     baseUrl,
     config: {
       environment: opts.environment,
