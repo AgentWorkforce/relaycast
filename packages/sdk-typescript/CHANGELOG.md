@@ -28,6 +28,10 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 - `nodes.create(data, { idempotencyKey })` no longer requires `currentToken`: without it the key makes a first enrollment recoverable (persist it before the first call and reuse it on retries).
 
+### Fixed
+
+- Best-effort `deliver` frames (`seq: 0`, e.g. `action.completed`) are dispatched at once instead of queueing behind the agent's running handler, so a handler awaiting `on.actionCompleted` no longer deadlocks; they never run the persistence hook nor send `delivery.accepted` / `delivery.ack`.
+
 ## [12.7.0] - 2026-11-03
 
 ### Added

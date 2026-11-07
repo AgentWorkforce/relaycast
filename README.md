@@ -821,7 +821,7 @@ and a host without a delivery waiter (the workspace actor) answers at once.
 As each row moves, the sender receives `delivery.delivered` (`accepted: true` for the receiver's
 acceptance — the only one that means the client has it; `false` for the host's socket write, kept
 for compatibility), `delivery.acked` (the recipient acked it — through `POST /deliveries/:id/ack`,
-a node's cumulative `delivery.ack`, or an `http_push` node's `on_2xx` / `response` ack mode) and
+a node's `delivery.ack` (named or cumulative), or an `http_push` node's `on_2xx` / `response` ack mode) and
 `delivery.replied` (the recipient explicitly answered it: a DM sent with `reply_to_message_id`
 naming the recipient's message in that conversation, or a thread reply to it; carries
 `reply_message_id`, and the reply exposes `reply_to_message_id`),
@@ -1132,9 +1132,15 @@ Clients must correlate the acknowledgement to this connection and its expected
 provider before admitting fresh identities. Registration is not idempotent: a
 lost reply still requires retained ownership or name quarantine, not a retry.
 The same reply lists the inbound frames the engine understands beyond the
-baseline in `capabilities: string[]` (currently `["delivery.accepted"]`), so a
+baseline in `capabilities: string[]` (currently `["delivery.accepted", "delivery.ack.delivery_id"]`), so a
 node never parses versions: send `delivery.accepted` only when the reply lists
-it; older engines omit the field.
+it; older engines omit the field. `delivery.ack.delivery_id` is the named
+acknowledgement: `delivery.ack { agent, delivery_id }` consumes exactly that
+one delivery and leaves the agent's `delivery_ack_seq` cursor untouched, so
+lower unacknowledged rows are still replayed. The cumulative
+`delivery.ack { agent, up_to_seq }` settles every lower unsettled row. Send the
+named form only when the reply lists `delivery.ack.delivery_id`; older engines
+accept only `up_to_seq` and reject the named frame.
 
 Broker nodes can negotiate restart-safe delivery cursor recovery by including
 `{ "name": "relay:delivery-cursor-v1", "kind": "capacity" }` in every

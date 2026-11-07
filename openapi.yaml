@@ -96,8 +96,14 @@ info:
     establish support; clients must validate the current connection and provider.
     Lost registration replies are not safe to retry automatically. The reply also
     lists the inbound frames the engine understands beyond the baseline in
-    `capabilities: string[]` (currently `["delivery.accepted"]`); a node sends
+    `capabilities: string[]` (currently `["delivery.accepted", "delivery.ack.delivery_id"]`); a node sends
     such a frame only when the reply lists it, never by parsing versions.
+    `delivery.ack.delivery_id` is the named acknowledgement:
+    `delivery.ack { agent, delivery_id }` consumes exactly that one delivery and
+    leaves the agent's `delivery_ack_seq` cursor untouched, so lower
+    unacknowledged rows are still replayed, whereas the cumulative
+    `delivery.ack { agent, up_to_seq }` settles every lower unsettled row. Older
+    engines accept only `up_to_seq` and reject the named frame.
 
     Node action capabilities negotiate authenticated caller provenance with
     capability metadata `{ "relay.action-caller": "v1" }`. Only an exact
@@ -979,7 +985,10 @@ components:
               type: string
               format: date-time
               nullable: true
-              description: When the recipient explicitly answered the message.
+              description: >-
+                When the recipient's explicit answer (`reply_to_message_id`, or a thread
+                reply) was recorded against the delivered row; a reply sent while the row
+                was still queued is recorded when the row is delivered.
             reply_message_id:
               type: string
               nullable: true
@@ -1034,7 +1043,10 @@ components:
           type: string
           format: date-time
           nullable: true
-          description: When the recipient explicitly answered the message.
+          description: >-
+            When the recipient's explicit answer (`reply_to_message_id`, or a thread
+            reply) was recorded against the delivered row; a reply sent while the row
+            was still queued is recorded when the row is delivered.
         reply_message_id:
           type: string
           nullable: true
@@ -1085,7 +1097,10 @@ components:
           type: string
           format: date-time
           nullable: true
-          description: When the recipient explicitly answered the message (`reply_to_message_id`, or a thread reply).
+          description: >-
+            When the recipient's explicit answer (`reply_to_message_id`, or a thread
+            reply) was recorded against the delivered row; a reply sent while the row
+            was still queued is recorded when the row is delivered.
         reply_message_id:
           type: string
           nullable: true
@@ -4436,7 +4451,8 @@ paths:
                     from the recipient in this conversation, else
                     `400 invalid_request`. Marks that message's delivery to the
                     sender of this DM as `replied` (`delivery.replied` to its
-                    sender) and is stored on the message as
+                    sender) once that delivery is delivered or consumed (a
+                    still-queued delivery keeps the link until then) and is stored on the message as
                     `reply_to_message_id`.
                 wait_ms:
                   type: integer

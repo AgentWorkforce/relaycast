@@ -3853,6 +3853,29 @@ async function assertWorkspaceUnexpired(
   }
 }
 
+/**
+ * Tell senders `delivery.replied` for rows whose pending reply link a node's
+ * `delivery.accepted` / `delivery.ack` applied. Best-effort after commit.
+ */
+async function notifyNodeRepliesApplied(
+  args: HandleNodeControlMessageArgs,
+  repliedIds: readonly string[] | undefined,
+): Promise<void> {
+  if (!repliedIds || repliedIds.length === 0 || !args.completionDeps) return;
+  await notifySenderDeliveryReceipts(
+    { db: args.db, engine: args.completionDeps },
+    args.workspaceId,
+    repliedIds,
+    'replied',
+  ).catch((err: unknown) => {
+    console.warn('[node.control] sender delivery.replied notify failed', {
+      workspaceId: args.workspaceId,
+      nodeId: args.nodeId,
+      message: err instanceof Error ? err.message : String(err),
+    });
+  });
+}
+
 export async function handleNodeControlMessage(args: HandleNodeControlMessageArgs) {
   let message: FleetBrokerToRelaycastMessage;
   try {
@@ -4373,6 +4396,8 @@ export async function handleNodeControlMessage(args: HandleNodeControlMessageArg
             });
           });
         }
+        // A reply sent while a row was still queued lands after its `delivered`.
+        await notifyNodeRepliesApplied(args, accepted?.replied_delivery_ids);
         return;
       }
       case 'delivery.ack': {
@@ -4411,6 +4436,8 @@ export async function handleNodeControlMessage(args: HandleNodeControlMessageArg
             });
           });
         }
+        // A reply sent while a row was still queued lands after its `acked`.
+        await notifyNodeRepliesApplied(args, acked?.replied_delivery_ids);
         return;
       }
     }

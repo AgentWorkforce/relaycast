@@ -238,7 +238,12 @@ async function getOwnedDelivery(
 // The outcome of a transition: the (possibly unchanged) delivery plus whether
 // this call actually mutated state. Callers fan out lifecycle events only when
 // `changed` is true so idempotent retries don't emit duplicate notifications.
-export type TransitionResult = { delivery: ReturnType<typeof serializeDelivery>; changed: boolean };
+export type TransitionResult = {
+  delivery: ReturnType<typeof serializeDelivery>;
+  changed: boolean;
+  /** Set by {@link ackDelivery}: the row's pending reply link was applied (see {@link applyPendingReplies}). */
+  repliedDeliveryIds?: string[];
+};
 
 /**
  * Idempotently transition a delivery to `acked`. `acked` is terminal,
@@ -261,7 +266,10 @@ export async function ackDelivery(
   // over-advanced cursor would skip the lower unacked row forever on node
   // replay. The row's `acked` status already excludes it from replay.
   const [updated] = await ackRows(db, workspaceId, agentId, [existing]);
-  return resolveTransition(db, workspaceId, agentId, deliveryId, updated, existing.channelId);
+  const result = await resolveTransition(db, workspaceId, agentId, deliveryId, updated, existing.channelId);
+  // Leaving `queued` lets a reply recorded while the row was queued apply.
+  const replied = result ? await applyPendingReplies(db, workspaceId, [deliveryId]) : [];
+  return result && replied.length > 0 ? { ...result, repliedDeliveryIds: replied } : result;
 }
 
 /**
@@ -488,7 +496,7 @@ export async function ackNodeDelivery(
   providerName: string,
   agentName: string,
   deliveryId: string,
-): Promise<{ agent_id: string; agent_name: string; acked_delivery_ids: string[] } | null> {
+): Promise<{ agent_id: string; agent_name: string; acked_delivery_ids: string[]; replied_delivery_ids: string[] } | null> {
   const [agent] = await db
     .select({ id: agents.id, name: agents.name })
     .from(agents)
@@ -501,7 +509,12 @@ export async function ackNodeDelivery(
     ));
   if (!agent) return null;
   const result = await ackDelivery(db, workspaceId, agent.id, deliveryId);
-  return { agent_id: agent.id, agent_name: agent.name, acked_delivery_ids: result?.changed ? [result.delivery.id] : [] };
+  return {
+    agent_id: agent.id,
+    agent_name: agent.name,
+    acked_delivery_ids: result?.changed ? [result.delivery.id] : [],
+    replied_delivery_ids: result?.repliedDeliveryIds ?? [],
+  };
 }
 
 export async function ackDeliveriesUpToSeq(
@@ -511,7 +524,7 @@ export async function ackDeliveriesUpToSeq(
   providerName: string,
   agentName: string,
   upToSeq: number,
-): Promise<{ agent_id: string; agent_name: string; up_to_seq: number; acked: number; acked_delivery_ids: string[] } | null> {
+): Promise<{ agent_id: string; agent_name: string; up_to_seq: number; acked: number; acked_delivery_ids: string[]; replied_delivery_ids: string[] } | null> {
   const [agent] = await db
     .select()
     .from(agents)
@@ -525,7 +538,7 @@ export async function ackDeliveriesUpToSeq(
   if (!agent) return null;
 
   if (upToSeq <= agent.deliveryAckSeq) {
-    return { agent_id: agent.id, agent_name: agent.name, up_to_seq: upToSeq, acked: 0, acked_delivery_ids: [] };
+    return { agent_id: agent.id, agent_name: agent.name, up_to_seq: upToSeq, acked: 0, acked_delivery_ids: [], replied_delivery_ids: [] };
   }
 
   const rows = await db
@@ -547,7 +560,7 @@ export async function ackDeliveriesUpToSeq(
   // last chunk, so a later chunk failing cannot skip rows still queued.
   if (pending.length === 0) {
     await ackRows(db, workspaceId, agent.id, [], upToSeq);
-    return { agent_id: agent.id, agent_name: agent.name, up_to_seq: upToSeq, acked: 0, acked_delivery_ids: [] };
+    return { agent_id: agent.id, agent_name: agent.name, up_to_seq: upToSeq, acked: 0, acked_delivery_ids: [], replied_delivery_ids: [] };
   }
   const ackedDeliveryIds: string[] = [];
   for (let offset = 0; offset < pending.length; offset += DELIVERY_EXPIRY_BATCH_SIZE) {
@@ -562,23 +575,27 @@ export async function ackDeliveriesUpToSeq(
     up_to_seq: upToSeq,
     acked: ackedDeliveryIds.length,
     acked_delivery_ids: ackedDeliveryIds,
+    replied_delivery_ids: await applyPendingReplies(db, workspaceId, ackedDeliveryIds),
   };
 }
 
 /**
  * Mark still-queued rows delivered using bounded, explicit ID-index writes.
  * Returns the ids that transitioned (`queued` -> `delivered`), so the caller
- * can tell their senders. `accepted` also stamps `accepted_at`: the transport
- * itself proved the receiving software took the row (an `http_push` 2xx),
- * which a socket write does not.
+ * can tell their senders, and the ids whose pending reply link this applied
+ * ({@link applyPendingReplies}); the caller reports those `replied` after the
+ * `delivered`. `accepted` also stamps `accepted_at`: the transport itself
+ * proved the receiving software took the row (an `http_push` 2xx), which a
+ * socket write does not.
  */
 export async function markDeliveriesDelivered(
   db: Db,
   workspaceId: string,
   deliveryIds: string[],
   opts: { accepted?: boolean } = {},
-): Promise<string[]> {
+): Promise<{ delivered: string[]; replied: string[] }> {
   const delivered: string[] = [];
+  const replied: string[] = [];
   const ids = [...new Set(deliveryIds)];
   const now = Math.floor(Date.now() / 1000);
   const acceptedAt = opts.accepted ? sql`${now}` : sql`accepted_at`;
@@ -596,8 +613,9 @@ export async function markDeliveriesDelivered(
       RETURNING id
     `);
     for (const row of updated) delivered.push(row.id);
+    replied.push(...await applyPendingReplies(db, workspaceId, page));
   }
-  return delivered;
+  return { delivered, replied };
 }
 
 /** Rows one `delivery.accepted` frame settles per statement (D1-safe: no IN list, a seq range). */
@@ -610,7 +628,9 @@ export const DELIVERY_ACCEPT_BATCH_SIZE = DELIVERY_EXPIRY_BATCH_SIZE;
  * `delivered` moves to `delivered` (`delivered_at` set if unset) and records
  * `accepted_at`. A row the recipient already consumed or that failed is left
  * alone. Returns the ids this call stamped, so the caller can tell their
- * senders; `null` when the agent is not hosted by this node and provider.
+ * senders, and the ids whose pending reply link it applied
+ * ({@link applyPendingReplies}), reported `replied` after the `delivered`;
+ * `null` when the agent is not hosted by this node and provider.
  *
  * Bounded like a cumulative ack: `up_to_seq` is caller-supplied, so the
  * range is settled in id-indexed pages of {@link DELIVERY_ACCEPT_BATCH_SIZE}
@@ -623,7 +643,7 @@ export async function acceptDeliveries(
   providerName: string,
   agentName: string,
   target: { upToSeq?: number; deliveryId?: string },
-): Promise<{ agent_id: string; agent_name: string; accepted_delivery_ids: string[] } | null> {
+): Promise<{ agent_id: string; agent_name: string; accepted_delivery_ids: string[]; replied_delivery_ids: string[] } | null> {
   const [agent] = await db
     .select({ id: agents.id, name: agents.name })
     .from(agents)
@@ -637,6 +657,7 @@ export async function acceptDeliveries(
   if (!agent) return null;
 
   const accepted: string[] = [];
+  const replied: string[] = [];
   // A named row is accepted on its own; `up_to_seq` is then ignored. A client
   // whose persistence failed for N but succeeded for N+1 names N+1, and a
   // cumulative watermark must never be inferred across that gap.
@@ -669,11 +690,12 @@ export async function acceptDeliveries(
       RETURNING id
     `);
     for (const row of updated) accepted.push(row.id);
+    replied.push(...await applyPendingReplies(db, workspaceId, updated.map((row) => row.id)));
     // A concurrent ack can settle a selected row first; the page then shrinks
     // without emptying. Stop once nothing in it was ours to stamp.
     if (updated.length === 0 || page.length < DELIVERY_ACCEPT_BATCH_SIZE) break;
   }
-  return { agent_id: agent.id, agent_name: agent.name, accepted_delivery_ids: accepted };
+  return { agent_id: agent.id, agent_name: agent.name, accepted_delivery_ids: accepted, replied_delivery_ids: replied };
 }
 
 /** The current sender-facing state of each of `deliveryIds`, read in D1-safe chunks. */
@@ -713,7 +735,8 @@ export async function readDeliveryStates(
     state: deliveryStateOf(row),
     acceptedAt: row.acceptedAt,
     repliedAt: row.repliedAt,
-    replyMessageId: row.replyMessageId,
+    // A pending link (recorded while queued) is not a reply yet.
+    replyMessageId: row.repliedAt ? row.replyMessageId : null,
     error: row.error,
     expiresAt: row.expiresAt,
   }]));
@@ -729,11 +752,24 @@ export function deliveryStateSettled(row: { state: DeliveryState }): boolean {
  * `reply_to_message_id`, or a thread reply's parent): mark exactly that
  * message's delivery to the replier `replied_at` / `reply_message_id`.
  * Explicit correlation only — nothing is inferred from conversation order.
- * A row still `queued` (never handed to the recipient's software) or failed
- * is left alone: the reply itself is accepted as a message, but the row
- * cannot truthfully say the recipient answered what it never received.
- * Returns the ids marked (at most one per recipient), so the caller can tell
- * the sender.
+ * The first reply wins; a later one changes nothing.
+ *
+ * A row already `delivered` or `acked` is marked at once. A row still raw
+ * `queued` may already be in the recipient's hands (reconnect replay sends a
+ * whole page before marking it delivered; a polling recipient answers before
+ * it acks), so the reply is kept as a pending link — `reply_message_id` alone,
+ * `replied_at` unset — which reads as `queued` and tells the sender nothing.
+ * The transition out of `queued` (`markDeliveriesDelivered`,
+ * `acceptDeliveries`, an ack, a read) applies it through
+ * {@link applyPendingReplies}, and its caller reports `replied` after the
+ * `delivered` / `acked`. A failed or dead-lettered row is never marked: a
+ * reply to one is dropped, and a pending link on a row that later fails or
+ * expires stays inert (never applied, never shown) unless the row is
+ * restored and delivered. Both writes are this one statement, so a reply
+ * racing the transition is applied by whichever lands second.
+ *
+ * Returns the ids marked `replied` now (at most one per recipient), so the
+ * caller can tell the sender; a pending link returns nothing.
  */
 export async function markDeliveriesReplied(
   db: Db,
@@ -741,15 +777,80 @@ export async function markDeliveriesReplied(
   input: { messageId: string; recipientAgentId: string; replyMessageId: string },
 ): Promise<string[]> {
   const now = new Date();
+  const nowSeconds = Math.floor(now.getTime() / 1000);
   const updated = await db
     .update(deliveries)
-    .set({ repliedAt: now, replyMessageId: input.replyMessageId, updatedAt: now })
+    .set({
+      // A delivered row may carry a link recorded while it was queued that a
+      // transition has not applied yet: that earlier reply wins.
+      replyMessageId: sql`coalesce(${deliveries.replyMessageId}, ${input.replyMessageId})`,
+      repliedAt: sql`CASE WHEN ${deliveries.status} IN ('delivered', 'acked') THEN ${nowSeconds} ELSE NULL END`,
+      updatedAt: now,
+    })
+    .where(and(
+      eq(deliveries.workspaceId, workspaceId),
+      eq(deliveries.messageId, input.messageId),
+      eq(deliveries.agentId, input.recipientAgentId),
+      isNull(deliveries.repliedAt),
+      sql`(${deliveries.status} IN ('delivered', 'acked') OR (${deliveries.status} = 'queued' AND ${deliveries.replyMessageId} IS NULL))`,
+    ))
+    .returning({ id: deliveries.id, repliedAt: deliveries.repliedAt });
+  return updated.filter((row) => row.repliedAt !== null).map((row) => row.id);
+}
+
+/**
+ * Apply the reply links {@link markDeliveriesReplied} recorded while these
+ * rows were still `queued`, now that they have left it (`delivered` or
+ * `acked`): stamp `replied_at`. Id-indexed pages of 50 (D1-safe). Returns the
+ * ids stamped, so the caller can report `replied` after the transition's own
+ * receipt. Rows without a pending link, already replied, or not delivered or
+ * acked (still queued, failed, dead-lettered) are left alone.
+ */
+export async function applyPendingReplies(
+  db: Db,
+  workspaceId: string,
+  deliveryIds: readonly string[],
+): Promise<string[]> {
+  const applied: string[] = [];
+  const ids = [...new Set(deliveryIds)];
+  for (let offset = 0; offset < ids.length; offset += 50) {
+    const page = ids.slice(offset, offset + 50);
+    const now = Math.floor(Date.now() / 1000);
+    const updated = await db.all<{ id: string }>(sql`
+      UPDATE deliveries INDEXED BY idx_deliveries_id_lookup
+      SET replied_at = ${now}, updated_at = ${now}
+      WHERE workspace_id = ${workspaceId}
+        AND id IN (${sql.join(page.map((id) => sql`${id}`), sql`, `)})
+        AND status IN ('delivered', 'acked')
+        AND replied_at IS NULL
+        AND reply_message_id IS NOT NULL
+      RETURNING id
+    `);
+    for (const row of updated) applied.push(row.id);
+  }
+  return applied;
+}
+
+/**
+ * {@link applyPendingReplies} for one message's delivery to one recipient,
+ * for a transition that names the message rather than the row (a read,
+ * `POST /v1/messages/:id/read`).
+ */
+export async function applyPendingRepliesForMessage(
+  db: Db,
+  workspaceId: string,
+  input: { messageId: string; recipientAgentId: string },
+): Promise<string[]> {
+  const updated = await db
+    .update(deliveries)
+    .set({ repliedAt: new Date(), updatedAt: new Date() })
     .where(and(
       eq(deliveries.workspaceId, workspaceId),
       eq(deliveries.messageId, input.messageId),
       eq(deliveries.agentId, input.recipientAgentId),
       inArray(deliveries.status, ['delivered', 'acked']),
       isNull(deliveries.repliedAt),
+      isNotNull(deliveries.replyMessageId),
     ))
     .returning({ id: deliveries.id });
   return updated.map((row) => row.id);
@@ -835,7 +936,8 @@ export async function getMessageDeliveries(
       accepted_at: toIso(row.acceptedAt),
       acked_at: toIso(row.ackedAt),
       replied_at: toIso(row.repliedAt),
-      reply_message_id: row.replyMessageId,
+      // A pending link (recorded while queued) is not a reply yet.
+      reply_message_id: row.repliedAt ? row.replyMessageId : null,
       dead_lettered_at: toIso(row.deadLetteredAt),
       error: row.error,
       read_at: toIso(row.readAt),
@@ -1630,17 +1732,21 @@ async function replayPendingToNode(
       }
       const transitioned = await markDeliveriesDelivered(db, workspaceId, deliveredIds);
       delivered += deliveredIds.length;
-      // One sender read per replay page, never per row; a notify failure
-      // must not interrupt the drain.
-      if (deps && transitioned.length > 0) {
-        await notifySenderDeliveryReceipts({ db, engine: deps }, workspaceId, transitioned, 'delivered')
-          .catch((err: unknown) => {
-            console.warn('[delivery.replay] sender delivered notify failed', {
-              workspace_id: workspaceId,
-              node_id: nodeId,
-              error: err instanceof Error ? err.message : String(err),
+      // One sender read per replay page and status, never per row; a notify
+      // failure must not interrupt the drain. A reply the recipient sent
+      // while this page was in flight lands after its `delivered`.
+      if (deps) {
+        for (const [ids, status] of [[transitioned.delivered, 'delivered'], [transitioned.replied, 'replied']] as const) {
+          if (ids.length === 0) continue;
+          await notifySenderDeliveryReceipts({ db, engine: deps }, workspaceId, ids, status)
+            .catch((err: unknown) => {
+              console.warn(`[delivery.replay] sender ${status} notify failed`, {
+                workspace_id: workspaceId,
+                node_id: nodeId,
+                error: err instanceof Error ? err.message : String(err),
+              });
             });
-          });
+        }
       }
       if (interrupted) break;
     }

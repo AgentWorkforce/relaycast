@@ -62,7 +62,8 @@ export async function notifySenderDeliveryReceipts(
   const events = rows
     .filter((row) => row.senderId !== null && row.senderId !== row.recipientId)
     .filter((row) => status !== 'delivered' || (row.status === 'delivered' && (opts.accepted || row.acceptedAt === null)))
-    .filter((row) => status !== 'replied' || row.replyMessageId !== null)
+    // A reply link recorded while the row was queued is pending, not a reply.
+    .filter((row) => status !== 'replied' || (row.repliedAt !== null && row.replyMessageId !== null))
     .map((row) => ({
       workspaceId,
       agentId: row.senderId!,

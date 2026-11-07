@@ -114,7 +114,7 @@ export const SentDeliverySchema = z.object({
   state: DeliveryStateSchema,
   /** When the receiving software accepted the row (`delivery.accepted`); `null` until then. */
   accepted_at: z.string().nullable(),
-  /** When the recipient explicitly answered the message; `null` until then. */
+  /** When the recipient's explicit answer was recorded against the delivered row (a reply sent while the row was still queued is recorded when the row is delivered); `null` until then. */
   replied_at: z.string().nullable(),
   /** The recipient's reply once `replied_at` is set. */
   reply_message_id: z.string().nullable(),
@@ -138,7 +138,7 @@ export const MessageDeliveryReceiptSchema = z.object({
   /** When the receiving software accepted the row (`delivery.accepted`, or an `http_push` 2xx). */
   accepted_at: z.string().nullable(),
   acked_at: z.string().nullable(),
-  /** When the recipient replied in the DM conversation; `null` until then (DMs only). */
+  /** When the recipient's explicit answer was recorded against the delivered row (a reply sent while the row was still queued is recorded when the row is delivered); `null` until then (DMs only). */
   replied_at: z.string().nullable(),
   /** The recipient's reply message once `replied_at` is set. */
   reply_message_id: z.string().nullable(),

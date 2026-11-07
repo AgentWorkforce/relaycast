@@ -3,6 +3,8 @@ import type { AppEnv } from '../env.js';
 import { requireAuth, requireAgentToken } from '../middleware/auth.js';
 import { rateLimit } from '../middleware/rateLimit.js';
 import * as receiptEngine from '../engine/receipt.js';
+import * as deliveryEngine from '../engine/delivery.js';
+import { notifySenderDeliveryReceipts } from '../engine/deliveryReceipts.js';
 import { and, eq } from 'drizzle-orm';
 import { dmConversations, messages } from '../db/schema.js';
 import { fanoutToChannel } from './fanout.js';
@@ -34,6 +36,19 @@ receiptRoutes.post(
       );
       if (!result) {
         return jsonNotFound(c, 'message_not_found', 'Message not found');
+      }
+      // Reading consumes the row (`acked`), which applies a reply the reader
+      // sent while it was still queued; the sender hears `delivery.replied`.
+      const replied = await deliveryEngine.applyPendingRepliesForMessage(db, workspace.id, {
+        messageId: result.message_id,
+        recipientAgentId: agent!.id,
+      });
+      if (replied.length > 0) {
+        runInBackground(
+          c,
+          notifySenderDeliveryReceipts({ db, engine: c.get('engine') }, workspace.id, replied, 'replied'),
+          'notify sender delivery.replied',
+        );
       }
 
       const eventData = { ...result, agent_name: agent!.name };

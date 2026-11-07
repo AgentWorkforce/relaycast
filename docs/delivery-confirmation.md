@@ -56,9 +56,12 @@ Decisions:
   parent. Exactly that message's delivery to the replier is marked. Nothing
   is inferred from conversation order (the earlier draft's "mark every
   unanswered DM" heuristic was dropped entirely), and a row still raw
-  `queued` — never handed to the recipient's software — is never marked: the
-  reply is accepted as a message, but the row cannot claim the recipient
-  answered what it never received. The correlation is stored on the reply
+  `queued` (it may already be in flight: a reconnect-replay page is written
+  before the engine marks it delivered) keeps the reply as a pending link and
+  still reads `queued`; the row's move to delivered / consumed applies it,
+  stamping `replied_at` then, and the sender hears `delivery.replied` after
+  that `delivery.delivered` / `delivery.acked`; a row that fails or expires is
+  never marked. The correlation is stored on the reply
   (`messages.reply_to_message_id`, exposed on message and DM history
   responses).
 - **`wait_ms` waits for acceptance or better** (`state` past `queued`:

@@ -924,6 +924,111 @@ describe('AgentClient WebSocket integration', () => {
     ]);
   });
 
+  /** A best-effort `action.completed` frame as the engine fans it out to a node-hosted agent: `seq: 0`, synthetic id, no durable row. */
+  const actionCompletedFrameFor = (agent: string, invocationId: string) => ({
+    v: 1,
+    type: 'deliver',
+    delivery_id: `evt_action_completed_${invocationId}_agent_1`,
+    agent_id: 'agent_1',
+    agent,
+    msg_id: invocationId,
+    seq: 0,
+    mode: 'wait',
+    payload: {
+      type: 'action.completed',
+      data: { invocation_id: invocationId, action_name: 'deploy', status: 'completed', output: { ok: true }, error: null },
+    },
+  });
+
+  it('dispatches a best-effort seq-0 frame at once, so a message handler awaiting on.actionCompleted is not deadlocked behind itself', async () => {
+    const calls: string[] = [];
+    const acceptDelivery = vi.fn(async (_delivery: { deliveryId: string }) => {});
+    const agent = createAgent({ ws: { autoAcceptDeliveries: true, acceptDelivery } });
+    agent.on.dmReceived(async (event) => {
+      calls.push(`start:${event.message.id}`);
+      if (event.message.id === 'm_1') {
+        const completed = await new Promise<{ invocationId: string }>((resolve) => {
+          const off = agent.on.actionCompleted((e) => { off(); resolve(e); });
+        });
+        calls.push(`completed:${completed.invocationId}`);
+      }
+      calls.push(`end:${event.message.id}`);
+    });
+    agent.connect();
+    const ws = await nextSocket();
+    ws.simulateOpen();
+    await replyToRegistration(ws, ['delivery.accepted', 'delivery.ack.delivery_id']);
+
+    ws.simulateMessage(deliverFrame(1));
+    await settleDeliveries();
+    expect(calls).toEqual(['start:m_1']);
+
+    // The durable message 2 queues behind the running handler; the seq-0 completion does not.
+    ws.simulateMessage(deliverFrame(2));
+    ws.simulateMessage(actionCompletedFrameFor('worker', 'inv_1'));
+    await settleDeliveries();
+    expect(calls).toEqual(['start:m_1', 'completed:inv_1', 'end:m_1', 'start:m_2', 'end:m_2']);
+    // Only the durable rows were persisted, accepted and acked, in order.
+    expect(acceptDelivery.mock.calls.map(([delivery]) => delivery.deliveryId)).toEqual(['del_1', 'del_2']);
+    expect(sentFrames(ws, 'delivery.accepted')).toEqual([accepted('worker', { delivery_id: 'del_1' }), accepted('worker', { delivery_id: 'del_2' })]);
+    expect(sentFrames(ws, 'delivery.ack')).toEqual([ack('worker', { delivery_id: 'del_1' }), ack('worker', { delivery_id: 'del_2' })]);
+  });
+
+  it('runs no persistence hook and sends neither delivery.accepted nor delivery.ack for a best-effort seq-0 frame', async () => {
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    for (const capabilities of [['delivery.accepted', 'delivery.ack.delivery_id'], undefined]) {
+      MockWebSocket.instances = [];
+      const acceptDelivery = vi.fn(async () => {});
+      const completed = vi.fn();
+      const agent = createAgent({ ws: { autoAcceptDeliveries: true, acceptDelivery } });
+      agent.on.actionCompleted(completed);
+      agent.connect();
+      const ws = await nextSocket();
+      ws.simulateOpen();
+      await replyToRegistration(ws, capabilities);
+
+      ws.simulateMessage(actionCompletedFrameFor('worker', 'inv_2'));
+      await settleDeliveries();
+      expect(completed).toHaveBeenCalledTimes(1);
+      expect(completed).toHaveBeenCalledWith(expect.objectContaining({ type: 'action.completed', invocationId: 'inv_2' }));
+      expect(acceptDelivery).not.toHaveBeenCalled();
+      expect(sentTypes(ws)).not.toContain('delivery.accepted');
+      expect(sentTypes(ws)).not.toContain('delivery.ack');
+
+      // Nor does seq 0 anchor the cumulative watermark: the first durable row still acks on its own.
+      ws.simulateMessage(deliverFrame(5));
+      await settleDeliveries();
+      expect(sentFrames(ws, 'delivery.ack')).toEqual([
+        capabilities ? ack('worker', { delivery_id: 'del_5' }) : ack('worker', { up_to_seq: 5 }),
+      ]);
+    }
+    expect(warnSpy).not.toHaveBeenCalledWith(expect.stringContaining('withheld'), expect.anything());
+    warnSpy.mockRestore();
+  });
+
+  it('logs a failed best-effort handler without retrying or confirming it, and keeps the agent\'s durable deliveries flowing', async () => {
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    const agent = createAgent();
+    agent.on.actionCompleted(async () => { throw new Error('boom'); });
+    const handled = vi.fn();
+    agent.on.dmReceived(handled);
+    agent.connect();
+    const ws = await nextSocket();
+    ws.simulateOpen();
+    await replyToRegistration(ws);
+
+    ws.simulateMessage(actionCompletedFrameFor('worker', 'inv_3'));
+    ws.simulateMessage(deliverFrame(1));
+    await settleDeliveries();
+    expect(warnSpy).toHaveBeenCalledWith(
+      expect.stringContaining('best-effort delivery handler failed'),
+      expect.objectContaining({ deliveryId: 'evt_action_completed_inv_3_agent_1', seq: 0 }),
+    );
+    expect(handled).toHaveBeenCalledTimes(1);
+    expect(sentFrames(ws, 'delivery.ack')).toEqual([ack('worker', { up_to_seq: 1 })]);
+    warnSpy.mockRestore();
+  });
+
   it("one agent's hung handler holds neither another agent's handlers nor its acks", async () => {
     const calls: string[] = [];
     let release!: () => void;

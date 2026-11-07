@@ -283,7 +283,7 @@ describe('delivery confirmation', () => {
     expect((await receipts(alice.token, toBob.data.id))[0]).toMatchObject({ replied_at: null });
   });
 
-  it('never marks a queued row replied: the recipient cannot have answered what it never received', async () => {
+  it('keeps a reply to a still-queued row as a pending link: state queued, no delivery.replied, no reply_message_id shown', async () => {
     const ws = await createWorkspace(stack.app, 'confirm-reply-queued');
     const alice = await registerAgent(stack.app, ws.workspaceKey, 'alice');
     const bob = await registerAgent(stack.app, ws.workspaceKey, 'bob');
@@ -298,6 +298,122 @@ describe('delivery confirmation', () => {
     await stack.settle();
     expect(stream.ofType('delivery.replied')).toEqual([]);
     expect((await receipts(alice.token, unseen.data.id))[0]).toMatchObject({ status: 'queued', state: 'queued', replied_at: null, reply_message_id: null });
+    // The link is kept for the row's transition out of queued; a second reply does not replace it.
+    await sendDm(bob.token, { to: 'alice', text: 'again', reply_to_message_id: unseen.data.id });
+    await stack.settle();
+    expect(pendingLink(unseen.data.delivery!.id)).toEqual({ reply_message_id: answer.data.id, replied_at: null });
+    expect(stream.ofType('delivery.replied')).toEqual([]);
+  });
+
+  /** The row's stored reply link, read under the API (which hides a pending one). */
+  function pendingLink(deliveryId: string) {
+    return stack.runtime.handle.sqlite.prepare('SELECT reply_message_id, replied_at FROM deliveries WHERE id = ?').get(deliveryId);
+  }
+
+  /** The sender-facing receipt events for one delivery, in arrival order. */
+  function receiptEvents(stream: FakeSocket, deliveryId: string) {
+    return stream.received.filter((event) => String(event.type).startsWith('delivery.') && event.delivery_id === deliveryId);
+  }
+
+  it('applies a reply sent while its row was still queued once replay marks the row delivered: delivered, then replied', async () => {
+    const ws = await createWorkspace(stack.app, 'confirm-reply-replay');
+    const alice = await registerAgent(stack.app, ws.workspaceKey, 'alice');
+    const bob = await registerAgent(stack.app, ws.workspaceKey, 'bob');
+    const { sock: aliceSock } = await attachDirectNodeSocket(stack, ws.workspaceId, alice);
+    const stream = new FakeSocket();
+    stack.runtime.realtime.attachWorkspaceSocket(ws.workspaceId, stream);
+
+    const question = await sendDm(alice.token, { to: 'bob', text: 'free at 3?' });
+    const deliveryId = question.data.delivery!.id;
+    await stack.settle();
+    // The replay window: the recipient already holds the row and answers over
+    // HTTP while its page is still being sent, so the row is still raw queued.
+    const answer = await sendDm(bob.token, { to: 'alice', text: 'yes', reply_to_message_id: question.data.id });
+    expect(answer.status).toBe(201);
+    await stack.settle();
+    expect(receiptEvents(stream, deliveryId)).toEqual([]);
+    expect((await receipts(alice.token, question.data.id))[0]).toMatchObject({ status: 'queued', state: 'queued', replied_at: null, reply_message_id: null });
+
+    // The page's delivered mark runs: the pending reply applies behind it.
+    const { sock: bobSock } = await attachDirectNodeSocket(stack, ws.workspaceId, bob);
+    await stack.settle();
+    expect(deliverFramesOfType(bobSock, 'dm.received')).toEqual([expect.objectContaining({ delivery_id: deliveryId })]);
+    const replied = {
+      delivery_id: deliveryId, message_id: question.data.id, agent_id: bob.agentId, agent_name: 'bob',
+      status: 'replied', reply_message_id: answer.data.id, at: expect.any(String),
+    };
+    expect(receiptEvents(stream, deliveryId)).toEqual([
+      expect.objectContaining({ type: 'delivery.delivered', status: 'delivered', accepted: false }),
+      expect.objectContaining({ type: 'delivery.replied', ...replied }),
+    ]);
+    expect(contextUpdatesOfType(aliceSock, 'delivery.replied').map((f) => f.data)).toEqual([expect.objectContaining(replied)]);
+    expect((await receipts(alice.token, question.data.id))[0]).toMatchObject({
+      status: 'delivered', state: 'replied', delivered_at: expect.any(String), replied_at: expect.any(String), reply_message_id: answer.data.id,
+    });
+  });
+
+  it('applies a reply sent while its row was still queued on the receiver acceptance: delivered (accepted), then replied', async () => {
+    const ws = await createWorkspace(stack.app, 'confirm-reply-accepted');
+    const alice = await registerAgent(stack.app, ws.workspaceKey, 'alice');
+    const node = await enrollBrokerNode(ws);
+    const bob = await registerViaNode(node, 'bob');
+    const stream = new FakeSocket();
+    stack.runtime.realtime.attachWorkspaceSocket(ws.workspaceId, stream);
+
+    const question = await sendDm(alice.token, { to: 'bob', text: 'ship it?' });
+    const deliveryId = question.data.delivery!.id;
+    await stack.settle();
+    expect(node.sock.ofType('deliver')).toHaveLength(1);
+    // Simulate the window between the frame write and its delivered mark.
+    stack.runtime.handle.sqlite.prepare("UPDATE deliveries SET status = 'queued', delivered_at = NULL WHERE id = ?").run(deliveryId);
+    const sentReceipts = receiptEvents(stream, deliveryId).length;
+
+    const answer = await sendDm(bob.token, { to: 'alice', text: 'shipped', reply_to_message_id: question.data.id });
+    expect(answer.status).toBe(201);
+    await stack.settle();
+    expect(stream.ofType('delivery.replied')).toEqual([]);
+    expect((await receipts(alice.token, question.data.id))[0]).toMatchObject({ status: 'queued', state: 'queued', reply_message_id: null });
+
+    await node.handle.handleMessage(JSON.stringify({ v: 1, type: 'delivery.accepted', agent: 'bob', delivery_id: deliveryId }));
+    await stack.settle();
+    expect(receiptEvents(stream, deliveryId).slice(sentReceipts)).toEqual([
+      expect.objectContaining({ type: 'delivery.delivered', accepted: true }),
+      expect.objectContaining({ type: 'delivery.replied', agent_id: bob.agentId, reply_message_id: answer.data.id }),
+    ]);
+    expect((await receipts(alice.token, question.data.id))[0]).toMatchObject({
+      status: 'delivered', state: 'replied', accepted_at: expect.any(String), replied_at: expect.any(String), reply_message_id: answer.data.id,
+    });
+    // A repeat acceptance or a later ack reports no second reply.
+    await node.handle.handleMessage(JSON.stringify({ v: 1, type: 'delivery.accepted', agent: 'bob', delivery_id: deliveryId }));
+    await node.handle.handleMessage(JSON.stringify({ v: 1, type: 'delivery.ack', agent: 'bob', up_to_seq: 1 }));
+    await stack.settle();
+    expect(stream.ofType('delivery.replied')).toHaveLength(1);
+    expect(node.sock.ofType('error')).toHaveLength(0);
+  });
+
+  it('applies a reply a polling recipient sent before acking its still-queued row: acked, then replied', async () => {
+    const ws = await createWorkspace(stack.app, 'confirm-reply-rest-ack');
+    const alice = await registerAgent(stack.app, ws.workspaceKey, 'alice');
+    const bob = await registerAgent(stack.app, ws.workspaceKey, 'bob');
+    const stream = new FakeSocket();
+    stack.runtime.realtime.attachWorkspaceSocket(ws.workspaceId, stream);
+
+    const question = await sendDm(alice.token, { to: 'bob', text: 'polling?' });
+    const deliveryId = question.data.delivery!.id;
+    await stack.settle();
+    const answer = await sendDm(bob.token, { to: 'alice', text: 'polled', reply_to_message_id: question.data.id });
+    await stack.settle();
+    expect(stream.ofType('delivery.replied')).toEqual([]);
+
+    const ack = await stack.app.request(`/v1/deliveries/${deliveryId}/ack`, authed(bob.token, { method: 'POST' }));
+    expect(ack.status).toBe(200);
+    await stack.settle();
+    // (The recipient-side `delivery.delivered` fanout of a REST ack is not a sender receipt.)
+    const senderReceipts = receiptEvents(stream, deliveryId).filter((event) => event.type !== 'delivery.delivered');
+    expect(senderReceipts.map((event) => [event.type, event.reply_message_id ?? null])).toEqual([
+      ['delivery.acked', null], ['delivery.replied', answer.data.id],
+    ]);
+    expect((await receipts(alice.token, question.data.id))[0]).toMatchObject({ status: 'acked', state: 'replied', reply_message_id: answer.data.id });
   });
 
   it('marks a channel message replied when a thread reply answers it', async () => {
@@ -532,6 +648,27 @@ describe('delivery confirmation', () => {
     expect(stream.ofType('delivery.failed')).toEqual([expect.objectContaining({ delivery_id: sent.data.delivery!.id, message_id: sent.data.id })]);
     expect((await receipts(alice.token, sent.data.id))[0]).toMatchObject({
       agent_id: bob.agentId, status: 'dead_lettered', state: 'failed', dead_lettered_at: expect.any(String), replied_at: null,
+    });
+  });
+
+  it('never applies a pending reply link to a row that expires: failed, not replied', async () => {
+    await stack.close();
+    stack = makeNodeStack({ ttlMs: 60_000, mailbox: { deliveryTtlMs: 1_000 } });
+    const ws = await createWorkspace(stack.app, 'confirm-reply-expired');
+    const alice = await registerAgent(stack.app, ws.workspaceKey, 'alice');
+    const bob = await registerAgent(stack.app, ws.workspaceKey, 'bob');
+    const stream = new FakeSocket();
+    stack.runtime.realtime.attachWorkspaceSocket(ws.workspaceId, stream);
+
+    const sent = await sendDm(alice.token, { to: 'bob', text: 'will expire' });
+    await sendDm(bob.token, { to: 'alice', text: 'answered anyway', reply_to_message_id: sent.data.id });
+    await stack.settle();
+    expect(await sweepExpiredDeliveries(stack.runtime.deps, { workspaceId: ws.workspaceId, now: new Date(Date.now() + 120_000) })).toBeGreaterThanOrEqual(1);
+    await stack.settle();
+    expect(stream.ofType('delivery.failed').map((event) => event.delivery_id)).toContain(sent.data.delivery!.id);
+    expect(stream.ofType('delivery.replied')).toEqual([]);
+    expect((await receipts(alice.token, sent.data.id))[0]).toMatchObject({
+      status: 'dead_lettered', state: 'failed', replied_at: null, reply_message_id: null,
     });
   });
 

@@ -234,6 +234,7 @@ export class WsClient {
    * that agent's later handlers and acks (its rows stay unacked server-side).
    * Kept across reconnects: a replayed frame queues behind the earlier run of
    * the same agent and shares its outcome through `inFlightEvents`.
+   * Best-effort `seq: 0` frames never enter it (see `dispatchBestEffort`).
    */
   private dispatchQueues = new Map<string, SerialQueue>();
   /**
@@ -643,6 +644,10 @@ export class WsClient {
     if (!isRecord(parsed) || typeof parsed.type !== 'string') return false;
 
     if (parsed.type === 'deliver') {
+      if (parsed.seq === 0) {
+        this.dispatchBestEffort(parsed);
+        return true;
+      }
       if (typeof parsed.seq === 'number' && Number.isFinite(parsed.seq) && typeof parsed.agent === 'string') {
         this.watermarkFor(this.acceptWatermarks, parsed.agent).arrive(parsed.seq);
         this.watermarkFor(this.ackWatermarks, parsed.agent).arrive(parsed.seq);
@@ -702,7 +707,36 @@ export class WsClient {
     console.warn(`[relaycast] ${message}`, detail);
   }
 
-  /** Queue a `deliver` frame's intake behind the ones before it. */
+  /**
+   * Hand a best-effort `deliver` frame (`seq: 0`) to its handlers at once.
+   * The engine sends ephemeral events (e.g. `action.completed`,
+   * `agent.exited`) this way with a synthetic `delivery_id` and no durable
+   * row: durable rows always carry `seq >= 1`. There is nothing to persist,
+   * accept or ack, and nothing to order against, so the frame skips intake,
+   * the persistence hook, both confirmations and the seq watermarks, and
+   * bypasses the agent's dispatch queue: a message handler awaiting, say,
+   * `on.actionCompleted` would otherwise wait on an event queued behind
+   * itself. Dedupe and recipient scoping still apply; a handler failure is
+   * logged, never retried (the engine does not re-deliver these).
+   */
+  private dispatchBestEffort(parsed: Record<string, unknown>): void {
+    const agent = typeof parsed.agent === 'string' ? parsed.agent : null;
+    const deliveryId = typeof parsed.delivery_id === 'string' ? parsed.delivery_id : null;
+    let completed: Promise<void>;
+    try {
+      completed = this.dispatchDeliver(parsed, agent);
+    } catch (err) {
+      completed = Promise.reject(err);
+    }
+    completed.catch((err) => this.warn('best-effort delivery handler failed', { deliveryId, seq: 0, error: err }));
+  }
+
+  /**
+   * Queue a durable `deliver` frame's intake behind the ones before it.
+   * Best-effort frames (`seq: 0`) never reach here: they are dispatched at
+   * once by {@link dispatchBestEffort}, outside intake and the agent's
+   * dispatch queue.
+   */
   private queueDeliver(parsed: Record<string, unknown>): void {
     // Fenced at arrival: a frame still queued when the socket reconnects
     // belongs to the old connection even though it runs after the reopen.
@@ -721,7 +755,10 @@ export class WsClient {
    * queue. The hook runs whatever the engine's capabilities: it is the
    * client's own durability, and skipping it against an older engine would
    * hand an unstored frame to the handlers. A failed hook leaves the row on
-   * the server for re-delivery: neither accept, dispatch nor ack.
+   * the server for re-delivery: neither accept, dispatch nor ack. Only
+   * durable frames (`seq >= 1`) come through here; a best-effort `seq: 0`
+   * frame bypasses intake and the dispatch queue entirely (see
+   * {@link dispatchBestEffort}), so it can never wait behind a handler.
    */
   private async processDeliver(parsed: Record<string, unknown>, generation: number): Promise<void> {
     const seq = typeof parsed.seq === 'number' && Number.isFinite(parsed.seq) ? parsed.seq : null;

@@ -223,6 +223,8 @@ async function dispatchHttpPush(args: {
   target: DeliveryTarget;
   eventType: string;
   eventData: Record<string, unknown>;
+  /** Collects rows whose pending reply link a receiver ack applied. */
+  repliedIds: string[];
 }): Promise<'delivered' | 'acked' | 'resent' | 'failed'> {
   const config = args.target.deliveryConfig ?? {};
   const url = typeof config.url === 'string' ? config.url : null;
@@ -328,6 +330,7 @@ async function dispatchHttpPush(args: {
         args.delivery.agentId,
         args.delivery.id,
       );
+      args.repliedIds.push(...(acked?.repliedDeliveryIds ?? []));
       if (!acked?.changed) return 'resent';
       await fanoutToAgentsForContext(args.ctx, [args.delivery.agentId], 'delivery.delivered', {
         delivery_id: args.delivery.id,
@@ -347,6 +350,7 @@ async function dispatchHttpPush(args: {
             args.delivery.agentId,
             args.delivery.id,
           );
+          args.repliedIds.push(...(acked?.repliedDeliveryIds ?? []));
           if (!acked?.changed) return 'resent';
           await fanoutToAgentsForContext(args.ctx, [args.delivery.agentId], 'delivery.delivered', {
             delivery_id: args.delivery.id,
@@ -391,22 +395,27 @@ type DeliveryDispatchOutcome = 'delivered' | 'accepted' | 'resent' | 'acked' | '
 
 /**
  * Tell senders about the rows a routing pass transitioned, one read per
- * status for the whole pass. Best-effort: routing already committed.
+ * status for the whole pass, then `replied` for the rows whose pending reply
+ * link those transitions applied (`repliedIds`), so a sender sees the
+ * `delivered` / `acked` first. Best-effort: routing already committed.
  */
 async function notifySendersForOutcomes(
   ctx: RoutingContext,
   outcomes: ReadonlyArray<{ deliveryId: string; outcome: DeliveryDispatchOutcome }>,
+  repliedIds: readonly string[],
 ): Promise<void> {
   // A ws `delivered` is a socket write (`accepted: false`, and dropped if the
   // row was accepted or acked meanwhile); an `http_push` 2xx stamped
   // `accepted_at` in the same transition and is reported as `accepted: true`.
-  const batches: Array<{ outcome: DeliveryDispatchOutcome; status: SenderDeliveryReceiptStatus; accepted?: boolean }> = [
-    { outcome: 'delivered', status: 'delivered' },
-    { outcome: 'accepted', status: 'delivered', accepted: true },
-    { outcome: 'acked', status: 'acked' },
+  const idsFor = (outcome: DeliveryDispatchOutcome) => outcomes.filter((entry) => entry.outcome === outcome).map((entry) => entry.deliveryId);
+  const batches: Array<{ ids: readonly string[]; status: SenderDeliveryReceiptStatus; accepted?: boolean }> = [
+    { ids: idsFor('delivered'), status: 'delivered' },
+    { ids: idsFor('accepted'), status: 'delivered', accepted: true },
+    { ids: idsFor('acked'), status: 'acked' },
+    { ids: repliedIds, status: 'replied' },
   ];
   for (const batch of batches) {
-    const ids = outcomes.filter((entry) => entry.outcome === batch.outcome).map((entry) => entry.deliveryId);
+    const ids = batch.ids;
     if (ids.length === 0) continue;
     const status = batch.status;
     try {
@@ -433,6 +442,8 @@ async function routeOneDeliveryOutcome(
   delivery: DeliveryFanoutRecord,
   eventType: string,
   eventData: Record<string, unknown>,
+  /** Collects rows whose pending reply link this transition applied. */
+  repliedIds: string[],
 ): Promise<DeliveryDispatchOutcome> {
   const recordedTarget = recordedTargets.get(delivery.id);
   const liveLocation = liveLocations.get(delivery.agentId);
@@ -477,7 +488,8 @@ async function routeOneDeliveryOutcome(
     }));
     if (sent) {
       const transitioned = await deliveryEngine.markDeliveriesDelivered(ctx.db, ctx.workspaceId, [delivery.id]);
-      return transitioned.length > 0 ? 'delivered' : 'resent';
+      repliedIds.push(...transitioned.replied);
+      return transitioned.delivered.length > 0 ? 'delivered' : 'resent';
     }
     // The provider was delivery-ready but the live send did not land (no open
     // socket, the provider detached mid-send, or `socket.send` threw). Leave the
@@ -497,13 +509,14 @@ async function routeOneDeliveryOutcome(
   }
 
   if (locationType === 'via_node' && locationNodeId && nodeKind === 'http_push' && target) {
-    const result = await dispatchHttpPush({ ctx, delivery, target, eventType, eventData });
+    const result = await dispatchHttpPush({ ctx, delivery, target, eventType, eventData, repliedIds });
     if (result === 'delivered') {
       // A 2xx is the receiving software's own answer, not a socket write: it
       // counts as acceptance (`accepted_at`), so a parked send is answered
       // and the sender hears `delivered` with `accepted: true`.
       const transitioned = await deliveryEngine.markDeliveriesDelivered(ctx.db, ctx.workspaceId, [delivery.id], { accepted: true });
-      return transitioned.length > 0 ? 'accepted' : 'resent';
+      repliedIds.push(...transitioned.replied);
+      return transitioned.delivered.length > 0 ? 'accepted' : 'resent';
     }
     if (result === 'acked' || result === 'resent') return result;
     return 'deferred';
@@ -525,12 +538,13 @@ async function routeDeliveryOutcomesForContext(
 
   const liveLocations = await resolveLiveLocations(ctx, deliveries);
   const recordedTargets = await resolveRecordedTargets(ctx, deliveries);
+  const repliedIds: string[] = [];
   const settled = await Promise.allSettled(deliveries.map((delivery) => (
-    routeOneDeliveryOutcome(ctx, liveLocations, recordedTargets, delivery, eventType, eventData)
+    routeOneDeliveryOutcome(ctx, liveLocations, recordedTargets, delivery, eventType, eventData, repliedIds)
   )));
   await notifySendersForOutcomes(ctx, settled.flatMap((result, index) => (
     result.status === 'fulfilled' ? [{ deliveryId: deliveries[index]!.id, outcome: result.value }] : []
-  )));
+  )), repliedIds);
 }
 
 export async function routeDeliveryOutcomes(
@@ -620,6 +634,7 @@ async function redriveWsBacklogForAgent(
   const recordedTargets = await resolveRecordedTargets(ctx, backlogDeliveries);
 
   const outcomes: Array<{ deliveryId: string; outcome: DeliveryDispatchOutcome }> = [];
+  const repliedIds: string[] = [];
   try {
     for (const event of backlog) {
       const outcome = await routeOneDeliveryOutcome(
@@ -629,12 +644,13 @@ async function redriveWsBacklogForAgent(
         event.delivery,
         event.eventType,
         event.eventData,
+        repliedIds,
       );
       outcomes.push({ deliveryId: event.delivery.id, outcome });
       if (outcome !== 'delivered' && outcome !== 'accepted' && outcome !== 'resent') break;
     }
   } finally {
-    await notifySendersForOutcomes(ctx, outcomes);
+    await notifySendersForOutcomes(ctx, outcomes, repliedIds);
   }
 }
 
@@ -819,7 +835,9 @@ export async function sweepUnreachableDeliveries(
  * The replier explicitly answered `messageId` (a DM's `reply_to_message_id`,
  * a thread reply's parent): mark that message's delivery to the replier
  * `replied` and tell its sender (`delivery.replied` with the reply's id).
- * Best-effort after the reply committed.
+ * A row still `queued` keeps the reply as a pending link and tells nothing
+ * yet; its transition out of `queued` applies and reports it (see
+ * `markDeliveriesReplied`). Best-effort after the reply committed.
  */
 export async function notifyMessageReplied(
   c: HonoContext,
