@@ -13,11 +13,26 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Added
 
+- **Ack timing changed:** with `autoAckDeliveries`, `delivery.ack` is sent only after every handler for the delivery returned and every promise it returned resolved (`ackMode: 'after-handlers'`, the default). `ackMode: 'on-receipt'` restores the previous ack right after dispatch.
+- A handler that throws or rejects leaves the delivery unacked (logged) for server re-delivery; later deliveries keep processing. The failure is reported only once the delivery's other handlers settled, so the agent's next delivery never starts beside one still working.
+- `subscribe(channels, handler)` and `Relay.onMessage(cb)` callbacks count as handlers: the ack waits for the callback's promise and a rejection leaves the delivery unacked (previously swallowed, and the delivery acked regardless). On the workspace stream a rejected handler promise is logged instead of going unhandled.
+- Confirmations are per delivery (`delivery_id`) on an engine that lists the capability (`delivery.accepted`, and `delivery.ack.delivery_id` for acks), so each settles exactly the row this client handled. On an older engine `delivery.ack` is cumulative (`up_to_seq`) and sent only while every lower seq seen on the connection was consumed; see `docs/delivery-confirmation.md`.
+- A re-delivered frame whose handlers failed reruns them before it is acked; one whose handlers succeeded is acked without a rerun; a duplicate arriving mid-run shares that run's outcome. Dedupe is per recipient agent. A confirmation for a delivery received on a previous connection is dropped after a reconnect (the server replays it).
+- Intake (persistence hook, `delivery.accepted`) runs in arrival order and never waits for handlers; handlers and acks are ordered per agent, so a hung handler holds only its own agent's later handlers and acks.
+- `dm.received` / `group_dm.received` events from the node transport carry the message's `replyToMessageId` (the recipient's message the DM explicitly answers) through to handlers, as REST history already does.
+- `WsClientOptions.acceptDelivery(delivery)` persistence hook and `autoAcceptDeliveries` (default `false`; set it only when you persist deliveries durably before handlers run): the hook runs for every `deliver` frame before any handler, whatever the engine's capabilities; the node transport sends `delivery.accepted` (`agent`, `delivery_id`) only after it resolved, and only when the engine's `node.register` reply listed the capability (an older engine gets no frame but the delivery is still stored first); `delivery.ack` follows dispatch as before. Without the hook nothing is sent; a hook that throws means neither acceptance, dispatch nor ack (the server re-delivers on reconnect). Frames are processed in arrival order. Type `AcceptedDelivery`.
+- `agent.dm(...)` / `sendTo(...)` take `replyTo` (sent as `reply_to_message_id`; the answered message's delivery becomes `replied` for its sender); `agent.reply(parentId, text)` answers its parent the same way.
+- `agent.dm(...)`, `agent.sendTo(...)`, `agent.send(...)` / `post(...)` take `waitMs` (0–2000; 1000 recommended) and return the delivery `state` the server answered with; `send` / `post` now return `PostMessageResponse` (`MessageWithMeta` plus `deliveries`, `deliveriesTruncated`). Types `SendDmOptions`, `SendMessageOptions`, `DeliveryState`, `DeliveryRepliedEvent`; `SentDelivery` / `MessageDeliveryReceipt` carry the new fields.
+- `on.deliveryReplied` (agent and relay) for the sender-side `delivery.replied` event; `on.deliveryDelivered` events carry `accepted`.
 - `AgentClient.messageDeliveries(messageId)` and `relay.messages.deliveries(messageId)` call `GET /v1/messages/:id/deliveries`; `on.deliveryAcked` (agent and relay) handles the sender-side `delivery.acked` event. New types `DeliveryAckedEvent`, `SentDelivery`, `MessageDeliveryReceipt`, `MessageDeliveriesResponse`; `SendDmResponse.delivery`.
 
 ### Changed
 
 - `nodes.create(data, { idempotencyKey })` no longer requires `currentToken`: without it the key makes a first enrollment recoverable (persist it before the first call and reuse it on retries).
+
+### Fixed
+
+- Best-effort `deliver` frames (`seq: 0`, e.g. `action.completed`) are dispatched at once instead of queueing behind the agent's running handler, so a handler awaiting `on.actionCompleted` no longer deadlocks; they never run the persistence hook nor send `delivery.accepted` / `delivery.ack`.
 
 ## [12.7.0] - 2026-11-03
 

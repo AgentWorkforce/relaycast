@@ -153,6 +153,7 @@ export async function postMessage(
     metadata: publicMessageMetadata(message.metadata),
     has_attachments: message.hasAttachments,
     thread_id: message.threadId,
+    reply_to_message_id: message.replyToMessageId,
     created_at: message.createdAt.toISOString(),
     mentions: Array.from(mentionedHandles),
     attachments,
@@ -191,6 +192,7 @@ export async function getMessages(
       agentId: messages.agentId,
       agentName: agents.name,
       threadId: messages.threadId,
+      replyToMessageId: messages.replyToMessageId,
       body: messages.body,
       blocks: messages.blocks,
       metadata: messages.metadata,
@@ -212,6 +214,7 @@ export async function getMessages(
   const replyCounts = await db
     .select({
       threadId: messages.threadId,
+      replyToMessageId: messages.replyToMessageId,
       count: sql<number>`count(*)`,
     })
     .from(messages)
@@ -277,6 +280,7 @@ export async function getMessages(
     metadata: publicMessageMetadata(row.metadata),
     has_attachments: row.hasAttachments,
     thread_id: row.threadId,
+    reply_to_message_id: row.replyToMessageId,
     created_at: row.createdAt.toISOString(),
     reply_count: replyCountMap.get(row.id) ?? 0,
     reactions: reactionMap.get(row.id) || [],
@@ -294,6 +298,7 @@ export async function getMessage(db: Db, workspaceId: string, messageId: string)
       agentId: messages.agentId,
       agentName: agents.name,
       threadId: messages.threadId,
+      replyToMessageId: messages.replyToMessageId,
       body: messages.body,
       blocks: messages.blocks,
       metadata: messages.metadata,
@@ -339,6 +344,7 @@ export async function getMessage(db: Db, workspaceId: string, messageId: string)
     metadata: publicMessageMetadata(row.metadata),
     has_attachments: row.hasAttachments,
     thread_id: row.threadId,
+    reply_to_message_id: row.replyToMessageId,
     created_at: row.createdAt.toISOString(),
     reply_count: replyCounts[0]?.count ?? 0,
     reactions: Object.values(reactionRows.reduce<Record<string, { emoji: string; count: number; agents: string[] }>>((acc, r) => {

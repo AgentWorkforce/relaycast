@@ -14,7 +14,8 @@ import { resolveMailboxConfig } from '../engine/mailboxConfig.js';
 import { resolveWorkspaceDeliveryPolicyFor } from '../engine/workspaceDeliveryPolicy.js';
 import { publishWorkspaceEvent } from './fanout.js';
 import { notifyDeliveryRejections, routeDeliveryOutcomes } from './deliveryRouting.js';
-import { buildMessageCreatedEventData, sentDeliveriesResponseFields } from '../engine/deliveryWire.js';
+import { buildMessageCreatedEventData, SENT_DELIVERIES_RESPONSE_MAX, sentDeliveriesResponseFields } from '../engine/deliveryWire.js';
+import { awaitSentDeliveries, resolveSendWaitMs, sendWaitMsSchema } from './sendWait.js';
 import {
   getChannelObserverResource,
   getMessageObserverResource,
@@ -53,6 +54,9 @@ const postMessageSchema = z.object({
   // Node-token posts attribute the message to `from` — an agent name resolved
   // strictly within the node token's workspace. Agent-token posts must omit it.
   from: z.string().min(1).optional(),
+  // Confirmation budget (ms, 0–2000): park for the recipients' acceptance.
+  // Not part of the idempotency fingerprint: a retry may wait differently.
+  wait_ms: sendWaitMsSchema.optional(),
 });
 
 const sessionMessagesQuerySchema = z.object({
@@ -70,6 +74,7 @@ function postMessageInvalidMessage(failure: ValidationFailure) {
   if (field === 'blocks') return 'blocks must be an array';
   if (field === 'data') return 'data must be an object';
   if (field === 'content_type') return 'content_type must be a string';
+  if (field === 'wait_ms') return 'wait_ms must be an integer between 0 and 2000';
   return 'invalid message body';
 }
 
@@ -90,6 +95,8 @@ messageRoutes.post(
         return parsed.response;
       }
       const { text, blocks, attachments, data, content_type, mode, from } = parsed.data;
+      const wait = resolveSendWaitMs(c, parsed.data.wait_ms);
+      if (!wait.ok) return wait.response;
 
       const { key: idempotencyKey, error: idempotencyError } = parseIdempotencyKey(c.req.header('Idempotency-Key'));
       if (idempotencyError) {
@@ -228,11 +235,15 @@ messageRoutes.post(
       }
 
       // The sender's handles on the per-recipient delivery rows (capped; see
-      // `sentDeliveriesResponseFields`). Replays carry the same rows.
-      return jsonIdempotentOk(c, {
-        ...idempotent,
-        data: { ...idempotent.data, ...sentDeliveriesResponseFields(idempotent.data._deliveries) },
-      });
+      // `sentDeliveriesResponseFields`). Replays carry the same rows and never
+      // park; a fresh post with `wait_ms` parks for the named rows' acceptance.
+      const fields = sentDeliveriesResponseFields(idempotent.data._deliveries);
+      if (!idempotent.replayed && wait.waitMs > 0 && fields.deliveries.length > 0) {
+        fields.deliveries = await awaitSentDeliveries(
+          c, workspace.id, (idempotent.data._deliveries ?? []).slice(0, SENT_DELIVERIES_RESPONSE_MAX), wait.waitMs,
+        );
+      }
+      return jsonIdempotentOk(c, { ...idempotent, data: { ...idempotent.data, ...fields } });
     } catch (err: unknown) {
       return errorResponse(c, err);
     }

@@ -330,6 +330,12 @@ export const DeliveryDeliveredEventSchema = z.object({
   status: z.literal('delivered').optional(),
   /** When the transition happened (sender-side notifications only). */
   at: z.string().optional(),
+  /**
+   * Sender-side only. `true` when the receiving software accepted the row
+   * (`delivery.accepted`, or an `http_push` 2xx) — the authoritative
+   * delivered; `false` when the host only wrote it to the recipient's socket.
+   */
+  accepted: z.boolean().optional(),
 });
 export type DeliveryDeliveredEvent = z.infer<typeof DeliveryDeliveredEventSchema>;
 
@@ -348,6 +354,23 @@ export const DeliveryAckedEventSchema = z.object({
   at: z.string(),
 });
 export type DeliveryAckedEvent = z.infer<typeof DeliveryAckedEventSchema>;
+
+// Sent to a DM's sender when the recipient sends a DM back in the same
+// conversation after the delivery was created (DMs only).
+export const DeliveryRepliedEventSchema = z.object({
+  type: z.literal('delivery.replied'),
+  delivery_id: z.string(),
+  message_id: z.string(),
+  /** Recipient agent id. */
+  agent_id: z.string(),
+  /** Recipient agent name. */
+  agent_name: z.string(),
+  status: z.literal('replied'),
+  /** The recipient's reply. */
+  reply_message_id: z.string(),
+  at: z.string(),
+});
+export type DeliveryRepliedEvent = z.infer<typeof DeliveryRepliedEventSchema>;
 
 export const DeliveryDeferredEventSchema = z.object({
   type: z.literal('delivery.deferred'),
@@ -437,6 +460,7 @@ export const ServerEventSchema = z.discriminatedUnion('type', [
   DeliveryAcceptedEventSchema,
   DeliveryDeliveredEventSchema,
   DeliveryAckedEventSchema,
+  DeliveryRepliedEventSchema,
   DeliveryDeferredEventSchema,
   DeliveryFailedEventSchema,
   PongEventSchema,
@@ -489,6 +513,7 @@ export const WsClientEventSchema = z.discriminatedUnion('type', [
   DeliveryAcceptedEventSchema,
   DeliveryDeliveredEventSchema,
   DeliveryAckedEventSchema,
+  DeliveryRepliedEventSchema,
   DeliveryDeferredEventSchema,
   DeliveryFailedEventSchema,
   PongEventSchema,

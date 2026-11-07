@@ -245,11 +245,928 @@ describe('AgentClient WebSocket integration', () => {
         message: expect.objectContaining({ metadata: { relayflow: { version: 1 } } }),
       }),
     );
+    // The ack follows the handlers' completion, not the dispatch.
+    expect(ws.send.mock.calls.map(([p]) => JSON.parse(String(p)).type)).not.toContain('delivery.ack');
+    await settleDeliveries();
     expect(ws.send).toHaveBeenCalledWith(JSON.stringify({
       v: 1,
       type: 'delivery.ack',
       agent: 'worker',
       up_to_seq: 1,
+    }));
+  });
+
+  /** The engine's reply to this socket's `node.register`, listing the frames it understands. */
+  async function replyToRegistration(ws: MockWebSocket, capabilities?: string[]): Promise<void> {
+    for (let i = 0; i < 10 && !ws.send.mock.calls.some(([p]) => JSON.parse(String(p)).type === 'node.register'); i += 1) {
+      await Promise.resolve();
+    }
+    const register = ws.send.mock.calls.map(([p]) => JSON.parse(String(p))).find((frame) => frame.type === 'node.register');
+    expect(register).toBeDefined();
+    ws.simulateMessage({
+      v: 1, id: register.id, type: 'reply', ok: true,
+      data: {
+        provider: { name: 'default', instance_id: 'i1' }, accepted_capabilities: [],
+        ...(capabilities ? { capabilities } : {}),
+      },
+    });
+  }
+
+  /** A `deliver` frame for `agent` at its `seq`; `key` names the row (`del_<key>`) and, by default, the message (`m_<key>`). */
+  const deliverFrameFor = (agent: string, seq: number, key = String(seq), messageId = `m_${key}`) => ({
+    v: 1,
+    type: 'deliver',
+    delivery_id: `del_${key}`,
+    agent_id: 'agent_1',
+    agent,
+    msg_id: messageId,
+    seq,
+    mode: 'wait',
+    payload: {
+      type: 'dm.received',
+      data: {
+        conversation_id: 'dm_1', id: messageId, from_agent_id: 'bot_1', from_name: 'Bot', to: agent,
+        text: 'confirm me', created_at: '2026-09-24T05:00:00.000Z', attachments: [], metadata: {},
+        message: { id: messageId, agent_id: 'bot_1', agent_name: 'Bot', text: 'confirm me', attachments: [], metadata: {} },
+      },
+    },
+  });
+  const deliverFrame = (seq: number) => deliverFrameFor('worker', seq);
+
+  /** Settle the transport's ordered deliver chain (acceptance hooks resolve on microtasks). */
+  async function settleDeliveries(): Promise<void> {
+    for (let i = 0; i < 40; i += 1) await Promise.resolve();
+  }
+
+  const sentTypes = (ws: MockWebSocket) => ws.send.mock.calls.map(([payload]) => JSON.parse(String(payload)).type as string);
+  const sentFrames = (ws: MockWebSocket, type: string) =>
+    ws.send.mock.calls.map(([payload]) => JSON.parse(String(payload))).filter((frame) => frame.type === type);
+  const ack = (agent: string, form: { up_to_seq: number } | { delivery_id: string }) => ({ v: 1, type: 'delivery.ack', agent, ...form });
+  const accepted = (agent: string, form: { up_to_seq: number } | { delivery_id: string }) => ({ v: 1, type: 'delivery.accepted', agent, ...form });
+
+  it('sends no delivery.accepted without a persistence hook, even when the engine lists the capability', async () => {
+    const handler = vi.fn();
+    for (const ws of [
+      { autoAcceptDeliveries: true },           // asked for, but nothing persists: stay honest
+      { acceptDelivery: async () => {} },       // a hook alone does not opt in
+      {},
+    ] as const) {
+      MockWebSocket.instances = [];
+      const agent = createAgent({ ws });
+      agent.on.dmReceived(handler);
+      agent.connect();
+      const socket = await nextSocket();
+      socket.simulateOpen();
+      await replyToRegistration(socket, ['delivery.accepted']);
+
+      socket.simulateMessage(deliverFrame(3));
+      await settleDeliveries();
+
+      const sent = socket.send.mock.calls.map(([payload]) => JSON.parse(String(payload)));
+      expect(sent.filter((frame) => frame.type === 'delivery.accepted')).toEqual([]);
+      expect(sent.filter((frame) => frame.type === 'delivery.ack')).toEqual([
+        { v: 1, type: 'delivery.ack', agent: 'worker', up_to_seq: 3 },
+      ]);
+    }
+    expect(handler).toHaveBeenCalledTimes(3);
+  });
+
+  it('still runs the persistence hook before the handlers against an engine that did not list the capability, sends no delivery.accepted, and acks after the handlers', async () => {
+    const order: string[] = [];
+    let release!: () => void;
+    const working = new Promise<void>((resolve) => { release = resolve; });
+    const acceptDelivery = vi.fn(async (delivery: { deliveryId: string; seq: number; agent: string }) => {
+      order.push(`hook:${delivery.deliveryId}`);
+    });
+    const agent = createAgent({ ws: { autoAcceptDeliveries: true, acceptDelivery } });
+    agent.on.dmReceived(async (event) => {
+      order.push(`handler:${event.message.id}`);
+      await working;
+    });
+    agent.connect();
+    const ws = await nextSocket();
+    ws.simulateOpen();
+    await replyToRegistration(ws);
+
+    ws.simulateMessage(deliverFrame(3));
+    await settleDeliveries();
+
+    // The hook is the client's own durability: it ran, with the frame, before the handler.
+    expect(acceptDelivery).toHaveBeenCalledTimes(1);
+    expect(acceptDelivery.mock.calls[0]![0]).toMatchObject({ deliveryId: 'del_3', agent: 'worker', seq: 3, messageId: 'm_3' });
+    expect(order).toEqual(['hook:del_3', 'handler:m_3']);
+    // Only the wire frame is withheld from an engine that would reject it; the ack waits for the handler.
+    let sent = ws.send.mock.calls.map(([payload]) => JSON.parse(String(payload)));
+    expect(sent.filter((frame) => frame.type === 'delivery.accepted')).toEqual([]);
+    expect(sent.filter((frame) => frame.type === 'delivery.ack')).toEqual([]);
+
+    release();
+    await settleDeliveries();
+    sent = ws.send.mock.calls.map(([payload]) => JSON.parse(String(payload)));
+    expect(sent.filter((frame) => frame.type === 'delivery.accepted')).toEqual([]);
+    expect(sent.filter((frame) => frame.type === 'delivery.ack')).toEqual([
+      { v: 1, type: 'delivery.ack', agent: 'worker', up_to_seq: 3 },
+    ]);
+  });
+
+  it('neither dispatches nor acks a delivery whose persistence hook rejected against an engine that did not list the capability', async () => {
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    const handler = vi.fn();
+    const acceptDelivery = vi.fn(async () => { throw new Error('disk full'); });
+    const agent = createAgent({ ws: { autoAcceptDeliveries: true, acceptDelivery } });
+    agent.on.dmReceived(handler);
+    agent.connect();
+    const ws = await nextSocket();
+    ws.simulateOpen();
+    await replyToRegistration(ws);
+
+    ws.simulateMessage(deliverFrame(4));
+    await settleDeliveries();
+
+    // Nothing was stored, so nothing runs and nothing is confirmed: the server keeps the row.
+    expect(acceptDelivery).toHaveBeenCalledTimes(1);
+    expect(handler).not.toHaveBeenCalled();
+    expect(sentTypes(ws)).not.toContain('delivery.accepted');
+    expect(sentTypes(ws)).not.toContain('delivery.ack');
+    expect(warnSpy).toHaveBeenCalledWith(
+      expect.stringContaining('acceptDelivery failed; delivery left on the server for re-delivery'),
+      expect.objectContaining({ deliveryId: 'del_4', seq: 4 }),
+    );
+    warnSpy.mockRestore();
+  });
+
+  it('accepts only after the persistence hook resolved, before any handler runs, and acks after dispatch', async () => {
+    const order: string[] = [];
+    let release!: () => void;
+    const stored = new Promise<void>((resolve) => { release = resolve; });
+    const acceptDelivery = vi.fn(async (delivery: { deliveryId: string; seq: number }) => {
+      order.push(`hook:${delivery.deliveryId}`);
+      await stored;
+      order.push('stored');
+    });
+    const agent = createAgent({ ws: { autoAcceptDeliveries: true, acceptDelivery } });
+    agent.connect();
+    const ws = await nextSocket();
+    ws.simulateOpen();
+    await replyToRegistration(ws, ['delivery.accepted']);
+
+    const framesWhenHandled: string[] = [];
+    agent.on.dmReceived(() => {
+      order.push('handler');
+      framesWhenHandled.push(...sentTypes(ws));
+    });
+
+    ws.simulateMessage(deliverFrame(7));
+    await settleDeliveries();
+    // Nothing is claimed while the store is still writing.
+    expect(acceptDelivery).toHaveBeenCalledWith(expect.objectContaining({ deliveryId: 'del_7', agent: 'worker', messageId: 'm_7', seq: 7, mode: 'wait' }));
+    expect(sentTypes(ws)).not.toContain('delivery.accepted');
+    expect(order).toEqual(['hook:del_7']);
+
+    release();
+    await settleDeliveries();
+    expect(order).toEqual(['hook:del_7', 'stored', 'handler']);
+
+    // The acceptance was already on the wire when the handler ran; the ack was not.
+    expect(framesWhenHandled).toContain('delivery.accepted');
+    expect(framesWhenHandled).not.toContain('delivery.ack');
+    const sent = ws.send.mock.calls.map(([payload]) => JSON.parse(String(payload)));
+    expect(sent.filter((frame) => frame.type === 'delivery.accepted')).toEqual([
+      { v: 1, type: 'delivery.accepted', agent: 'worker', delivery_id: 'del_7' },
+    ]);
+    expect(sent.findIndex((frame) => frame.type === 'delivery.accepted'))
+      .toBeLessThan(sent.findIndex((frame) => frame.type === 'delivery.ack'));
+    expect(sent.filter((frame) => frame.type === 'delivery.ack')).toEqual([
+      { v: 1, type: 'delivery.ack', agent: 'worker', up_to_seq: 7 },
+    ]);
+  });
+
+  it('neither accepts, dispatches nor acks a delivery whose persistence hook rejected; later frames still flow per delivery', async () => {
+    const handler = vi.fn();
+    const failing = new Set([8]);
+    const acceptDelivery = vi.fn(async (delivery: { seq: number }) => {
+      if (failing.has(delivery.seq)) throw new Error('disk full');
+    });
+    const agent = createAgent({ ws: { autoAcceptDeliveries: true, acceptDelivery } });
+    agent.on.dmReceived(handler);
+    agent.connect();
+    const ws = await nextSocket();
+    ws.simulateOpen();
+    await replyToRegistration(ws, ['delivery.accepted', 'delivery.ack.delivery_id']);
+
+    ws.simulateMessage(deliverFrame(8));
+    ws.simulateMessage(deliverFrame(9));
+    await settleDeliveries();
+
+    // 8 was never stored: the server keeps it for re-delivery. 9 was, but a
+    // gap is open below it, so both its receipts name the row, never a watermark.
+    expect(handler).toHaveBeenCalledTimes(1);
+    expect(handler.mock.calls[0]![0]).toMatchObject({ message: { id: 'm_9' } });
+    let sent = ws.send.mock.calls.map(([payload]) => JSON.parse(String(payload)));
+    expect(sent.filter((frame) => frame.type === 'delivery.accepted')).toEqual([
+      { v: 1, type: 'delivery.accepted', agent: 'worker', delivery_id: 'del_9' },
+    ]);
+    expect(sent.filter((frame) => frame.type === 'delivery.ack')).toEqual([
+      { v: 1, type: 'delivery.ack', agent: 'worker', delivery_id: 'del_9' },
+    ]);
+
+    // The server re-delivers 8; once it persists it is accepted and acked by name, like 9 was.
+    failing.clear();
+    ws.simulateMessage(deliverFrame(8));
+    await settleDeliveries();
+    expect(handler).toHaveBeenCalledTimes(2);
+    sent = ws.send.mock.calls.map(([payload]) => JSON.parse(String(payload)));
+    expect(sent.filter((frame) => frame.type === 'delivery.accepted').at(-1)).toEqual(
+      { v: 1, type: 'delivery.accepted', agent: 'worker', delivery_id: 'del_8' },
+    );
+    expect(sent.filter((frame) => frame.type === 'delivery.ack').at(-1)).toEqual(
+      { v: 1, type: 'delivery.ack', agent: 'worker', delivery_id: 'del_8' },
+    );
+  });
+
+  it('acks only after every handler settled, never a delivery whose handler rejected', async () => {
+    let release!: () => void;
+    const working = new Promise<void>((resolve) => { release = resolve; });
+    const agent = createAgent();
+    agent.on.dmReceived(async (event) => {
+      if (event.message.id === 'm_2') throw new Error('model crashed');
+      await working;
+    });
+    agent.connect();
+    const ws = await nextSocket();
+    ws.simulateOpen();
+    await replyToRegistration(ws, ['delivery.ack.delivery_id']);
+
+    ws.simulateMessage(deliverFrame(1));
+    await settleDeliveries();
+    expect(sentTypes(ws)).not.toContain('delivery.ack');
+    release();
+    await settleDeliveries();
+    let acks = ws.send.mock.calls.map(([p]) => JSON.parse(String(p))).filter((f) => f.type === 'delivery.ack');
+    expect(acks).toEqual([{ v: 1, type: 'delivery.ack', agent: 'worker', delivery_id: 'del_1' }]);
+
+    // 2 rejects: unconsumed, held on the server. 3 succeeds behind the gap and is acked on its own.
+    ws.simulateMessage(deliverFrame(2));
+    ws.simulateMessage(deliverFrame(3));
+    await settleDeliveries();
+    acks = ws.send.mock.calls.map(([p]) => JSON.parse(String(p))).filter((f) => f.type === 'delivery.ack');
+    expect(acks).toEqual([
+      { v: 1, type: 'delivery.ack', agent: 'worker', delivery_id: 'del_1' },
+      { v: 1, type: 'delivery.ack', agent: 'worker', delivery_id: 'del_3' },
+    ]);
+  });
+
+  it('withholds the per-delivery ack from an engine that did not list the capability, and reports the row cumulatively once the gap closes', async () => {
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    const calls: string[] = [];
+    const agent = createAgent();
+    agent.on.dmReceived(async (event) => {
+      calls.push(event.message.id);
+      if (event.message.id === 'm_2' && calls.filter((id) => id === 'm_2').length === 1) throw new Error('model crashed');
+    });
+    agent.connect();
+    const ws = await nextSocket();
+    ws.simulateOpen();
+    // An older engine: `delivery.ack` must carry `up_to_seq`; a `delivery_id` frame is rejected.
+    await replyToRegistration(ws, ['delivery.accepted']);
+
+    ws.simulateMessage(deliverFrame(1));
+    ws.simulateMessage(deliverFrame(2));
+    ws.simulateMessage(deliverFrame(3));
+    await settleDeliveries();
+    // 3 succeeded behind the gap at 2, but the engine takes only the cumulative form, so nothing is sent for it.
+    expect(sentFrames(ws, 'delivery.ack')).toEqual([ack('worker', { up_to_seq: 1 })]);
+    expect(warnSpy).toHaveBeenCalledWith(
+      expect.stringContaining('delivery.ack withheld'),
+      expect.objectContaining({ deliveryId: 'del_3', seq: 3 }),
+    );
+
+    // The server re-delivers 2; once it is consumed the watermark covers 3 too.
+    ws.simulateMessage(deliverFrame(2));
+    await settleDeliveries();
+    expect(calls).toEqual(['m_1', 'm_2', 'm_3', 'm_2']);
+    expect(sentFrames(ws, 'delivery.ack')).toEqual([ack('worker', { up_to_seq: 1 }), ack('worker', { up_to_seq: 3 })]);
+    warnSpy.mockRestore();
+  });
+
+  it('waits for a subscribe(channels, handler) callback before acking, and leaves the delivery unacked when it rejects', async () => {
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    let release!: () => void;
+    const working = new Promise<void>((resolve) => { release = resolve; });
+    const agent = createAgent();
+    agent.subscribe(['@self'], async (event) => {
+      if (event.message.id === 'm_2') throw new Error('model crashed');
+      await working;
+    });
+    const ws = await nextSocket();
+    ws.simulateOpen();
+    await replyToRegistration(ws, ['delivery.ack.delivery_id']);
+
+    ws.simulateMessage(deliverFrame(1));
+    await settleDeliveries();
+    expect(sentFrames(ws, 'delivery.ack')).toEqual([]);
+    release();
+    await settleDeliveries();
+    expect(sentFrames(ws, 'delivery.ack')).toEqual([ack('worker', { delivery_id: 'del_1' })]);
+
+    // The callback's rejection is the delivery's failure: 2 stays unacked, 3 is acked on its own.
+    ws.simulateMessage(deliverFrame(2));
+    ws.simulateMessage(deliverFrame(3));
+    await settleDeliveries();
+    expect(sentFrames(ws, 'delivery.ack')).toEqual([ack('worker', { delivery_id: 'del_1' }), ack('worker', { delivery_id: 'del_3' })]);
+    expect(warnSpy).toHaveBeenCalledWith(
+      expect.stringContaining('delivery handler failed; delivery left unconsumed'),
+      expect.objectContaining({ deliveryId: 'del_2', seq: 2 }),
+    );
+    warnSpy.mockRestore();
+  });
+
+  it("reports a delivery's failure only once every handler settled, so the agent's next delivery waits for a sibling handler still running", async () => {
+    let release!: () => void;
+    const slow = new Promise<void>((resolve) => { release = resolve; });
+    const seen: string[] = [];
+    const agent = createAgent();
+    agent.on.dmReceived(async (event) => {
+      seen.push(`fast:${event.message.id}`);
+      if (event.message.id === 'm_1') throw new Error('model crashed');
+    });
+    agent.on.dmReceived(async (event) => {
+      seen.push(`slow:${event.message.id}`);
+      if (event.message.id === 'm_1') await slow;
+    });
+    agent.connect();
+    const ws = await nextSocket();
+    ws.simulateOpen();
+    await replyToRegistration(ws, ['delivery.ack.delivery_id']);
+
+    ws.simulateMessage(deliverFrame(1));
+    ws.simulateMessage(deliverFrame(2));
+    await settleDeliveries();
+    // 1's first handler failed at once, but its second is still working: 2 waits behind it.
+    expect(seen).toEqual(['fast:m_1', 'slow:m_1']);
+    expect(sentFrames(ws, 'delivery.ack')).toEqual([]);
+
+    release();
+    await settleDeliveries();
+    expect(seen).toEqual(['fast:m_1', 'slow:m_1', 'fast:m_2', 'slow:m_2']);
+    expect(sentFrames(ws, 'delivery.ack')).toEqual([ack('worker', { delivery_id: 'del_2' })]);
+  });
+
+  it('keeps processing later deliveries when a handler throws synchronously, without acking the failed one', async () => {
+    const seen: string[] = [];
+    const agent = createAgent();
+    agent.on.dmReceived((event) => {
+      seen.push(event.message.id);
+      if (event.message.id === 'm_1') throw new Error('sync boom');
+    });
+    agent.connect();
+    const ws = await nextSocket();
+    ws.simulateOpen();
+    await replyToRegistration(ws, ['delivery.ack.delivery_id']);
+
+    ws.simulateMessage(deliverFrame(1));
+    ws.simulateMessage(deliverFrame(2));
+    ws.simulateMessage(deliverFrame(3));
+    await settleDeliveries();
+
+    expect(seen).toEqual(['m_1', 'm_2', 'm_3']);
+    const acks = ws.send.mock.calls.map(([p]) => JSON.parse(String(p))).filter((f) => f.type === 'delivery.ack');
+    expect(acks).toEqual([
+      { v: 1, type: 'delivery.ack', agent: 'worker', delivery_id: 'del_2' },
+      { v: 1, type: 'delivery.ack', agent: 'worker', delivery_id: 'del_3' },
+    ]);
+  });
+
+  it("ackMode 'on-receipt' keeps the legacy synchronous cumulative ack whatever the handler does", async () => {
+    const agent = createAgent({ ws: { ackMode: 'on-receipt' } });
+    agent.on.dmReceived(async () => { throw new Error('ignored by legacy mode'); });
+    agent.connect();
+    const ws = await nextSocket();
+    ws.simulateOpen();
+    await replyToRegistration(ws);
+
+    ws.simulateMessage(deliverFrame(5));
+    expect(ws.send.mock.calls.map(([p]) => JSON.parse(String(p))).filter((f) => f.type === 'delivery.ack')).toEqual([
+      { v: 1, type: 'delivery.ack', agent: 'worker', up_to_seq: 5 },
+    ]);
+    await settleDeliveries();
+  });
+
+  it('reruns the handlers of a delivery whose handler rejected when the server re-delivers it, and acks only after that run resolved', async () => {
+    const calls: string[] = [];
+    let release!: () => void;
+    const retried = new Promise<void>((resolve) => { release = resolve; });
+    const agent = createAgent();
+    agent.on.dmReceived(async (event) => {
+      calls.push(event.message.id);
+      if (calls.length === 1) throw new Error('model crashed');
+      await retried;
+    });
+    agent.connect();
+    const ws = await nextSocket();
+    ws.simulateOpen();
+    await replyToRegistration(ws);
+
+    ws.simulateMessage(deliverFrame(4));
+    await settleDeliveries();
+    expect(calls).toEqual(['m_4']);
+    expect(sentFrames(ws, 'delivery.ack')).toEqual([]);
+
+    // The same row comes back (same delivery_id, msg_id and seq): the failed
+    // run did not mark it seen, so the handler runs again with the message.
+    ws.simulateMessage(deliverFrame(4));
+    await settleDeliveries();
+    expect(calls).toEqual(['m_4', 'm_4']);
+    expect(sentFrames(ws, 'delivery.ack')).toEqual([]);
+
+    release();
+    await settleDeliveries();
+    expect(calls).toHaveLength(2);
+    expect(sentFrames(ws, 'delivery.ack')).toEqual([ack('worker', { up_to_seq: 4 })]);
+  });
+
+  it('reruns the handlers of a delivery whose handler threw synchronously when the server re-delivers it', async () => {
+    const handler = vi.fn((event: { message: { id: string } }) => {
+      if (handler.mock.calls.length === 1) throw new Error(`sync boom for ${event.message.id}`);
+    });
+    const agent = createAgent();
+    agent.on.dmReceived(handler);
+    agent.connect();
+    const ws = await nextSocket();
+    ws.simulateOpen();
+    await replyToRegistration(ws);
+
+    ws.simulateMessage(deliverFrame(4));
+    await settleDeliveries();
+    expect(handler).toHaveBeenCalledTimes(1);
+    expect(sentFrames(ws, 'delivery.ack')).toEqual([]);
+
+    ws.simulateMessage(deliverFrame(4));
+    await settleDeliveries();
+    expect(handler).toHaveBeenCalledTimes(2);
+    expect(handler.mock.calls[1]![0]).toMatchObject({ message: { id: 'm_4' } });
+    expect(sentFrames(ws, 'delivery.ack')).toEqual([ack('worker', { up_to_seq: 4 })]);
+  });
+
+  it('acks a re-delivered frame whose handlers already succeeded without running them again', async () => {
+    const handler = vi.fn();
+    const agent = createAgent();
+    agent.on.dmReceived(handler);
+    agent.connect();
+    const ws = await nextSocket();
+    ws.simulateOpen();
+    await replyToRegistration(ws, ['delivery.ack.delivery_id']);
+
+    ws.simulateMessage(deliverFrame(6));
+    await settleDeliveries();
+    ws.simulateMessage(deliverFrame(6));
+    await settleDeliveries();
+
+    // Consumed once; the duplicate is confirmed again by name without a second run.
+    expect(handler).toHaveBeenCalledTimes(1);
+    expect(sentFrames(ws, 'delivery.ack')).toEqual([
+      ack('worker', { delivery_id: 'del_6' }),
+      ack('worker', { delivery_id: 'del_6' }),
+    ]);
+  });
+
+  it('re-runs the persistence hook and the handlers of a re-delivered frame whose handler failed after acceptance', async () => {
+    const order: string[] = [];
+    const acceptDelivery = vi.fn(async (delivery: { deliveryId: string }) => { order.push(`hook:${delivery.deliveryId}`); });
+    const agent = createAgent({ ws: { autoAcceptDeliveries: true, acceptDelivery } });
+    const handler = vi.fn(() => {
+      order.push(`handler:${sentTypes(ws).filter((type) => type === 'delivery.ack').length} acks so far`);
+      if (handler.mock.calls.length === 1) throw new Error('model crashed');
+    });
+    agent.on.dmReceived(handler);
+    agent.connect();
+    const ws = await nextSocket();
+    ws.simulateOpen();
+    await replyToRegistration(ws, ['delivery.accepted', 'delivery.ack.delivery_id']);
+
+    ws.simulateMessage(deliverFrame(3));
+    await settleDeliveries();
+    expect(sentFrames(ws, 'delivery.accepted')).toEqual([{ v: 1, type: 'delivery.accepted', agent: 'worker', delivery_id: 'del_3' }]);
+    expect(sentFrames(ws, 'delivery.ack')).toEqual([]);
+
+    // Nothing is cached across the failure: the hook stores the row again
+    // (the engine accepts an accepted row idempotently) and the handler
+    // reruns before the ack.
+    ws.simulateMessage(deliverFrame(3));
+    await settleDeliveries();
+    expect(order).toEqual(['hook:del_3', 'handler:0 acks so far', 'hook:del_3', 'handler:0 acks so far']);
+    expect(sentFrames(ws, 'delivery.accepted')).toEqual([
+      { v: 1, type: 'delivery.accepted', agent: 'worker', delivery_id: 'del_3' },
+      { v: 1, type: 'delivery.accepted', agent: 'worker', delivery_id: 'del_3' },
+    ]);
+    expect(sentFrames(ws, 'delivery.ack')).toEqual([ack('worker', { delivery_id: 'del_3' })]);
+  });
+
+  it('shares the outcome of a run still in flight with a duplicate frame: acks when it succeeds, reruns when it fails', async () => {
+    const outcomes = new Map<string, { resolve: () => void; reject: (err: Error) => void }>();
+    const handler = vi.fn((event: { message: { id: string } }) => new Promise<void>((resolve, reject) => {
+      outcomes.set(event.message.id, { resolve, reject });
+    }));
+    // 'on-receipt' returns from the deliver chain before the handlers settle,
+    // so a duplicate can arrive while the first run is still going.
+    const agent = createAgent({ ws: { ackMode: 'on-receipt' } });
+    agent.on.dmReceived(handler);
+    agent.connect();
+    const ws = await nextSocket();
+    ws.simulateOpen();
+    await replyToRegistration(ws);
+
+    ws.simulateMessage(deliverFrame(1));
+    ws.simulateMessage(deliverFrame(1));
+    await settleDeliveries();
+    expect(handler).toHaveBeenCalledTimes(1);
+    outcomes.get('m_1')!.resolve();
+    await settleDeliveries();
+    expect(handler).toHaveBeenCalledTimes(1);
+
+    ws.simulateMessage(deliverFrame(2));
+    ws.simulateMessage(deliverFrame(2));
+    await settleDeliveries();
+    expect(handler).toHaveBeenCalledTimes(2);
+    outcomes.get('m_2')!.reject(new Error('model crashed'));
+    await settleDeliveries();
+    // The duplicate waited for the first run and, as it failed, ran the handlers itself.
+    expect(handler).toHaveBeenCalledTimes(3);
+    expect(handler.mock.calls[2]![0]).toMatchObject({ message: { id: 'm_2' } });
+    outcomes.get('m_2')!.resolve();
+    await settleDeliveries();
+  });
+
+  it('drops confirmations from the previous connection after a reconnect instead of applying them to the new watermark', async () => {
+    const calls: string[] = [];
+    let release!: () => void;
+    const working = new Promise<void>((resolve) => { release = resolve; });
+    const failing = new Set(['m_8']);
+    const agent = createAgent();
+    agent.on.dmReceived(async (event) => {
+      calls.push(event.message.id);
+      if (failing.delete(event.message.id)) throw new Error('model crashed');
+      if (event.message.id === 'm_9' && calls.filter((id) => id === 'm_9').length === 1) await working;
+    });
+    agent.connect();
+    const ws = await nextSocket();
+    ws.simulateOpen();
+    await replyToRegistration(ws);
+
+    // 8 fails (unacked); 9's handler is still running when the socket drops.
+    ws.simulateMessage(deliverFrame(8));
+    ws.simulateMessage(deliverFrame(9));
+    await settleDeliveries();
+    expect(calls).toEqual(['m_8', 'm_9']);
+    expect(sentFrames(ws, 'delivery.ack')).toEqual([]);
+
+    ws.simulateClose();
+    await vi.advanceTimersByTimeAsync(1000);
+    const ws2 = await nextSocket(1);
+    ws2.simulateOpen();
+    await replyToRegistration(ws2);
+
+    // The old 9 completes before anything arrived on the new connection. Its
+    // ack must not anchor the fresh watermark at 8 and claim `up_to_seq: 9`.
+    release();
+    await settleDeliveries();
+    expect(sentFrames(ws, 'delivery.ack')).toEqual([]);
+    expect(sentFrames(ws2, 'delivery.ack')).toEqual([]);
+
+    // The server replays what the old connection left unacked.
+    ws2.simulateMessage(deliverFrame(8));
+    ws2.simulateMessage(deliverFrame(9));
+    await settleDeliveries();
+    expect(calls).toEqual(['m_8', 'm_9', 'm_8']);
+    expect(sentFrames(ws2, 'delivery.ack')).toEqual([
+      ack('worker', { up_to_seq: 8 }),
+      ack('worker', { up_to_seq: 9 }),
+    ]);
+    expect(sentFrames(ws, 'delivery.ack')).toEqual([]);
+  });
+
+  it('keeps one watermark per agent: interleaved seqs of two agents never collapse or break each other', async () => {
+    const agent = createAgent();
+    agent.on.dmReceived(() => {});
+    agent.connect();
+    const ws = await nextSocket();
+    ws.simulateOpen();
+    await replyToRegistration(ws);
+
+    ws.simulateMessage(deliverFrameFor('alice', 1, 'a1'));
+    ws.simulateMessage(deliverFrameFor('bob', 1, 'b1'));
+    ws.simulateMessage(deliverFrameFor('alice', 2, 'a2'));
+    ws.simulateMessage(deliverFrameFor('bob', 2, 'b2'));
+    await settleDeliveries();
+    expect(sentFrames(ws, 'delivery.ack')).toEqual([
+      ack('alice', { up_to_seq: 1 }),
+      ack('bob', { up_to_seq: 1 }),
+      ack('alice', { up_to_seq: 2 }),
+      ack('bob', { up_to_seq: 2 }),
+    ]);
+  });
+
+  it("keeps one watermark per agent: one agent's failed delivery does not hold the other agent's cursor", async () => {
+    const agent = createAgent();
+    agent.on.dmReceived((event) => {
+      if (event.message.id === 'm_a1') throw new Error('model crashed');
+    });
+    agent.connect();
+    const ws = await nextSocket();
+    ws.simulateOpen();
+    await replyToRegistration(ws, ['delivery.ack.delivery_id']);
+
+    ws.simulateMessage(deliverFrameFor('alice', 1, 'a1'));
+    ws.simulateMessage(deliverFrameFor('bob', 1, 'b1'));
+    ws.simulateMessage(deliverFrameFor('alice', 2, 'a2'));
+    ws.simulateMessage(deliverFrameFor('bob', 2, 'b2'));
+    await settleDeliveries();
+    expect(sentFrames(ws, 'delivery.ack')).toEqual([
+      ack('bob', { delivery_id: 'del_b1' }),
+      ack('alice', { delivery_id: 'del_a2' }),
+      ack('bob', { delivery_id: 'del_b2' }),
+    ]);
+  });
+
+  it('persists and accepts later frames while a handler hangs; their handlers and acks wait behind it in order', async () => {
+    const calls: string[] = [];
+    let release!: () => void;
+    const working = new Promise<void>((resolve) => { release = resolve; });
+    const acceptDelivery = vi.fn(async (_delivery: { deliveryId: string }) => {});
+    const agent = createAgent({ ws: { autoAcceptDeliveries: true, acceptDelivery } });
+    agent.on.dmReceived(async (event) => {
+      calls.push(event.message.id);
+      if (event.message.id === 'm_1') await working;
+    });
+    agent.connect();
+    const ws = await nextSocket();
+    ws.simulateOpen();
+    await replyToRegistration(ws, ['delivery.accepted', 'delivery.ack.delivery_id']);
+
+    ws.simulateMessage(deliverFrame(1));
+    ws.simulateMessage(deliverFrame(2));
+    ws.simulateMessage(deliverFrame(3));
+    await settleDeliveries();
+    // Intake never waits for handlers: 2 and 3 are stored and accepted while 1 hangs.
+    expect(acceptDelivery.mock.calls.map(([delivery]) => delivery.deliveryId)).toEqual(['del_1', 'del_2', 'del_3']);
+    expect(sentFrames(ws, 'delivery.accepted')).toEqual([
+      accepted('worker', { delivery_id: 'del_1' }), accepted('worker', { delivery_id: 'del_2' }), accepted('worker', { delivery_id: 'del_3' }),
+    ]);
+    // Dispatch is ordered per agent: 2 and 3 are handled (and acked) only after 1 completed.
+    expect(calls).toEqual(['m_1']);
+    expect(sentFrames(ws, 'delivery.ack')).toEqual([]);
+
+    release();
+    await settleDeliveries();
+    expect(calls).toEqual(['m_1', 'm_2', 'm_3']);
+    expect(sentFrames(ws, 'delivery.ack')).toEqual([
+      ack('worker', { delivery_id: 'del_1' }), ack('worker', { delivery_id: 'del_2' }), ack('worker', { delivery_id: 'del_3' }),
+    ]);
+  });
+
+  /** A best-effort `action.completed` frame as the engine fans it out to a node-hosted agent: `seq: 0`, synthetic id, no durable row. */
+  const actionCompletedFrameFor = (agent: string, invocationId: string) => ({
+    v: 1,
+    type: 'deliver',
+    delivery_id: `evt_action_completed_${invocationId}_agent_1`,
+    agent_id: 'agent_1',
+    agent,
+    msg_id: invocationId,
+    seq: 0,
+    mode: 'wait',
+    payload: {
+      type: 'action.completed',
+      data: { invocation_id: invocationId, action_name: 'deploy', status: 'completed', output: { ok: true }, error: null },
+    },
+  });
+
+  it('dispatches a best-effort seq-0 frame at once, so a message handler awaiting on.actionCompleted is not deadlocked behind itself', async () => {
+    const calls: string[] = [];
+    const acceptDelivery = vi.fn(async (_delivery: { deliveryId: string }) => {});
+    const agent = createAgent({ ws: { autoAcceptDeliveries: true, acceptDelivery } });
+    agent.on.dmReceived(async (event) => {
+      calls.push(`start:${event.message.id}`);
+      if (event.message.id === 'm_1') {
+        const completed = await new Promise<{ invocationId: string }>((resolve) => {
+          const off = agent.on.actionCompleted((e) => { off(); resolve(e); });
+        });
+        calls.push(`completed:${completed.invocationId}`);
+      }
+      calls.push(`end:${event.message.id}`);
+    });
+    agent.connect();
+    const ws = await nextSocket();
+    ws.simulateOpen();
+    await replyToRegistration(ws, ['delivery.accepted', 'delivery.ack.delivery_id']);
+
+    ws.simulateMessage(deliverFrame(1));
+    await settleDeliveries();
+    expect(calls).toEqual(['start:m_1']);
+
+    // The durable message 2 queues behind the running handler; the seq-0 completion does not.
+    ws.simulateMessage(deliverFrame(2));
+    ws.simulateMessage(actionCompletedFrameFor('worker', 'inv_1'));
+    await settleDeliveries();
+    expect(calls).toEqual(['start:m_1', 'completed:inv_1', 'end:m_1', 'start:m_2', 'end:m_2']);
+    // Only the durable rows were persisted, accepted and acked, in order.
+    expect(acceptDelivery.mock.calls.map(([delivery]) => delivery.deliveryId)).toEqual(['del_1', 'del_2']);
+    expect(sentFrames(ws, 'delivery.accepted')).toEqual([accepted('worker', { delivery_id: 'del_1' }), accepted('worker', { delivery_id: 'del_2' })]);
+    expect(sentFrames(ws, 'delivery.ack')).toEqual([ack('worker', { delivery_id: 'del_1' }), ack('worker', { delivery_id: 'del_2' })]);
+  });
+
+  it('runs no persistence hook and sends neither delivery.accepted nor delivery.ack for a best-effort seq-0 frame', async () => {
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    for (const capabilities of [['delivery.accepted', 'delivery.ack.delivery_id'], undefined]) {
+      MockWebSocket.instances = [];
+      const acceptDelivery = vi.fn(async () => {});
+      const completed = vi.fn();
+      const agent = createAgent({ ws: { autoAcceptDeliveries: true, acceptDelivery } });
+      agent.on.actionCompleted(completed);
+      agent.connect();
+      const ws = await nextSocket();
+      ws.simulateOpen();
+      await replyToRegistration(ws, capabilities);
+
+      ws.simulateMessage(actionCompletedFrameFor('worker', 'inv_2'));
+      await settleDeliveries();
+      expect(completed).toHaveBeenCalledTimes(1);
+      expect(completed).toHaveBeenCalledWith(expect.objectContaining({ type: 'action.completed', invocationId: 'inv_2' }));
+      expect(acceptDelivery).not.toHaveBeenCalled();
+      expect(sentTypes(ws)).not.toContain('delivery.accepted');
+      expect(sentTypes(ws)).not.toContain('delivery.ack');
+
+      // Nor does seq 0 anchor the cumulative watermark: the first durable row still acks on its own.
+      ws.simulateMessage(deliverFrame(5));
+      await settleDeliveries();
+      expect(sentFrames(ws, 'delivery.ack')).toEqual([
+        capabilities ? ack('worker', { delivery_id: 'del_5' }) : ack('worker', { up_to_seq: 5 }),
+      ]);
+    }
+    expect(warnSpy).not.toHaveBeenCalledWith(expect.stringContaining('withheld'), expect.anything());
+    warnSpy.mockRestore();
+  });
+
+  it('logs a failed best-effort handler without retrying or confirming it, and keeps the agent\'s durable deliveries flowing', async () => {
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    const agent = createAgent();
+    agent.on.actionCompleted(async () => { throw new Error('boom'); });
+    const handled = vi.fn();
+    agent.on.dmReceived(handled);
+    agent.connect();
+    const ws = await nextSocket();
+    ws.simulateOpen();
+    await replyToRegistration(ws);
+
+    ws.simulateMessage(actionCompletedFrameFor('worker', 'inv_3'));
+    ws.simulateMessage(deliverFrame(1));
+    await settleDeliveries();
+    expect(warnSpy).toHaveBeenCalledWith(
+      expect.stringContaining('best-effort delivery handler failed'),
+      expect.objectContaining({ deliveryId: 'evt_action_completed_inv_3_agent_1', seq: 0 }),
+    );
+    expect(handled).toHaveBeenCalledTimes(1);
+    expect(sentFrames(ws, 'delivery.ack')).toEqual([ack('worker', { up_to_seq: 1 })]);
+    warnSpy.mockRestore();
+  });
+
+  it("one agent's hung handler holds neither another agent's handlers nor its acks", async () => {
+    const calls: string[] = [];
+    let release!: () => void;
+    const working = new Promise<void>((resolve) => { release = resolve; });
+    const agent = createAgent();
+    agent.on.dmReceived(async (event) => {
+      calls.push(event.message.id);
+      if (event.message.id === 'm_a1') await working;
+    });
+    agent.connect();
+    const ws = await nextSocket();
+    ws.simulateOpen();
+    await replyToRegistration(ws);
+
+    ws.simulateMessage(deliverFrameFor('alice', 1, 'a1'));
+    ws.simulateMessage(deliverFrameFor('bob', 1, 'b1'));
+    ws.simulateMessage(deliverFrameFor('alice', 2, 'a2'));
+    ws.simulateMessage(deliverFrameFor('bob', 2, 'b2'));
+    await settleDeliveries();
+    expect(calls).toEqual(['m_a1', 'm_b1', 'm_b2']);
+    expect(sentFrames(ws, 'delivery.ack')).toEqual([ack('bob', { up_to_seq: 1 }), ack('bob', { up_to_seq: 2 })]);
+
+    release();
+    await settleDeliveries();
+    expect(calls).toEqual(['m_a1', 'm_b1', 'm_b2', 'm_a2']);
+    expect(sentFrames(ws, 'delivery.ack')).toEqual([
+      ack('bob', { up_to_seq: 1 }), ack('bob', { up_to_seq: 2 }), ack('alice', { up_to_seq: 1 }), ack('alice', { up_to_seq: 2 }),
+    ]);
+  });
+
+  it('accepts replayed frames on a new connection at once while an old-generation handler still hangs; handlers and acks wait behind it', async () => {
+    const calls: string[] = [];
+    let release!: () => void;
+    const working = new Promise<void>((resolve) => { release = resolve; });
+    const acceptDelivery = vi.fn(async () => {});
+    const agent = createAgent({ ws: { autoAcceptDeliveries: true, acceptDelivery } });
+    agent.on.dmReceived(async (event) => {
+      calls.push(event.message.id);
+      if (event.message.id === 'm_8') await working;
+    });
+    agent.connect();
+    const ws = await nextSocket();
+    ws.simulateOpen();
+    await replyToRegistration(ws, ['delivery.accepted']);
+
+    ws.simulateMessage(deliverFrame(8));
+    ws.simulateMessage(deliverFrame(9));
+    await settleDeliveries();
+    expect(sentFrames(ws, 'delivery.accepted')).toEqual([accepted('worker', { delivery_id: 'del_8' }), accepted('worker', { delivery_id: 'del_9' })]);
+    expect(calls).toEqual(['m_8']);
+
+    ws.simulateClose();
+    await vi.advanceTimersByTimeAsync(1000);
+    const ws2 = await nextSocket(1);
+    ws2.simulateOpen();
+    await replyToRegistration(ws2, ['delivery.accepted']);
+
+    // The server replays both unacked rows: stored and accepted immediately on
+    // the new connection, handled only once the hung run let the agent's queue go.
+    ws2.simulateMessage(deliverFrame(8));
+    ws2.simulateMessage(deliverFrame(9));
+    await settleDeliveries();
+    expect(acceptDelivery).toHaveBeenCalledTimes(4);
+    expect(sentFrames(ws2, 'delivery.accepted')).toEqual([accepted('worker', { delivery_id: 'del_8' }), accepted('worker', { delivery_id: 'del_9' })]);
+    expect(calls).toEqual(['m_8']);
+    expect(sentFrames(ws, 'delivery.ack')).toEqual([]);
+    expect(sentFrames(ws2, 'delivery.ack')).toEqual([]);
+
+    release();
+    await settleDeliveries();
+    // Each message was handled once; the old-generation outcomes were dropped,
+    // the replays shared them and acked on the new connection in order.
+    expect(calls).toEqual(['m_8', 'm_9']);
+    expect(sentFrames(ws, 'delivery.ack')).toEqual([]);
+    expect(sentFrames(ws2, 'delivery.ack')).toEqual([ack('worker', { up_to_seq: 8 }), ack('worker', { up_to_seq: 9 })]);
+  });
+
+  it('handles one message delivered to two hosted agents once per recipient: dedupe is per agent', async () => {
+    const handler = vi.fn();
+    const agent = createAgent();
+    agent.on.dmReceived(handler);
+    agent.connect();
+    const ws = await nextSocket();
+    ws.simulateOpen();
+    await replyToRegistration(ws);
+
+    ws.simulateMessage(deliverFrameFor('alice', 1, 'a1', 'm_shared'));
+    ws.simulateMessage(deliverFrameFor('bob', 1, 'b1', 'm_shared'));
+    await settleDeliveries();
+    expect(handler).toHaveBeenCalledTimes(2);
+    expect(handler.mock.calls.map(([event]) => event.message.id)).toEqual(['m_shared', 'm_shared']);
+    expect(sentFrames(ws, 'delivery.ack')).toEqual([ack('alice', { up_to_seq: 1 }), ack('bob', { up_to_seq: 1 })]);
+  });
+
+  it("skips one agent's re-delivered copy of a message without touching another agent's first copy", async () => {
+    const handler = vi.fn();
+    const agent = createAgent();
+    agent.on.dmReceived(handler);
+    agent.connect();
+    const ws = await nextSocket();
+    ws.simulateOpen();
+    await replyToRegistration(ws, ['delivery.ack.delivery_id']);
+
+    ws.simulateMessage(deliverFrameFor('alice', 1, 'a1', 'm_shared'));
+    await settleDeliveries();
+    ws.simulateMessage(deliverFrameFor('alice', 1, 'a1', 'm_shared'));
+    await settleDeliveries();
+    expect(handler).toHaveBeenCalledTimes(1);
+    expect(sentFrames(ws, 'delivery.ack')).toEqual([ack('alice', { delivery_id: 'del_a1' }), ack('alice', { delivery_id: 'del_a1' })]);
+
+    ws.simulateMessage(deliverFrameFor('bob', 1, 'b1', 'm_shared'));
+    await settleDeliveries();
+    expect(handler).toHaveBeenCalledTimes(2);
+    expect(sentFrames(ws, 'delivery.ack').at(-1)).toEqual(ack('bob', { delivery_id: 'del_b1' }));
+  });
+
+  it('on.deliveryReplied fires with the sender-side delivery.replied context update', async () => {
+    const agent = createAgent();
+    agent.connect();
+    const ws = await nextSocket();
+    ws.simulateOpen();
+
+    const handler = vi.fn();
+    agent.on.deliveryReplied(handler);
+
+    ws.simulateMessage({
+      v: 1,
+      type: 'context.update',
+      event: 'delivery.replied',
+      data: {
+        delivery_id: 'del_1', message_id: 'm_1', agent_id: 'a_bob', agent_name: 'bob',
+        status: 'replied', reply_message_id: 'm_2', at: '2026-06-01T00:00:03.000Z',
+      },
+    });
+
+    expect(handler).toHaveBeenCalledTimes(1);
+    expect(handler).toHaveBeenCalledWith(expect.objectContaining({
+      type: 'delivery.replied', deliveryId: 'del_1', agentName: 'bob', replyMessageId: 'm_2',
     }));
   });
 
@@ -331,14 +1248,19 @@ describe('AgentClient WebSocket integration', () => {
         type: 'dm.received',
         data: {
           conversation_id: 'conv_1',
-          message: { id: 'dm_1', agent_name: 'Alice', text: 'hello' },
+          message: { id: 'dm_1', agent_name: 'Alice', text: 'hello', reply_to_message_id: 'dm_0' },
         },
       },
     });
 
     expect(handler).toHaveBeenCalledTimes(1);
     expect(handler).toHaveBeenCalledWith(
-      expect.objectContaining({ type: 'dm.received', conversationId: 'conv_1' }),
+      expect.objectContaining({
+        type: 'dm.received',
+        conversationId: 'conv_1',
+        // The message this DM explicitly answers reaches the handler, as it does REST history.
+        message: expect.objectContaining({ id: 'dm_1', text: 'hello', replyToMessageId: 'dm_0' }),
+      }),
     );
   });
 
@@ -489,11 +1411,11 @@ describe('AgentClient WebSocket integration', () => {
     expect(ws.send.mock.calls.map(([payload]) => JSON.parse(String(payload))).some((frame) => frame.type === 'unsubscribe')).toBe(false);
   });
 
-  it('subscribe(channels, handler) logs rejected handler promises', async () => {
+  it('subscribe(channels, handler) logs a rejected handler promise on the workspace stream, where nothing waits for it', async () => {
     const agent = createAgent();
     const err = new Error('handler failed');
     const handler = vi.fn().mockRejectedValue(err);
-    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    const errorSpy = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
 
     agent.subscribe(['general'], handler);
     const ws = await nextSocket();
@@ -509,7 +1431,7 @@ describe('AgentClient WebSocket integration', () => {
     }
 
     expect(handler).toHaveBeenCalledTimes(1);
-    expect(errorSpy).toHaveBeenCalledWith('[relaycast] Subscription handler failed', err);
+    expect(errorSpy).toHaveBeenCalledWith('[relaycast] event handler failed', { event: 'message.created', error: err });
     errorSpy.mockRestore();
   });
 

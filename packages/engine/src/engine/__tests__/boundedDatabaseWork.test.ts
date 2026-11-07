@@ -4,7 +4,7 @@ import { getSqliteDb, runMigrations, type SqliteDbHandle } from '../../adapters/
 import * as schema from '../../db/schema.js';
 import type { EngineDb } from '../../ports/database.js';
 import type { NodeConnectionRegistry } from '../../ports/realtime.js';
-import { deliverPendingToNode, fetchDueNodeDeliveryEvents } from '../delivery.js';
+import { acceptDeliveries, deliverPendingToNode, fetchDueNodeDeliveryEvents } from '../delivery.js';
 import { pruneExpired } from '../retention.js';
 import { reconcileInventory } from '../node.js';
 
@@ -69,6 +69,20 @@ describe('bounded database work with retained history', () => {
       expect(query.params.length).toBeLessThan(100);
       const plan = JSON.stringify(f.sqlite.prepare('EXPLAIN QUERY PLAN ' + query.sql).all(...query.params));
       expect(plan).toContain('SEARCH deliveries USING INDEX idx_deliveries_id_lookup');
+    }
+  });
+
+  it('settles delivered and accepted id pages with id-index seeks, never a status or workspace index', async () => {
+    const f = fixture();
+    expect(await deliverPendingToNode(f.db, f.registry, 'ws', 'node', { providerName: 'provider' })).toBe(125);
+    const accepted = await acceptDeliveries(f.db, 'ws', 'node', 'provider', 'recipient', { upToSeq: 10_125 });
+    expect(accepted?.accepted_delivery_ids).toHaveLength(125);
+    const writes = f.queries.filter(q => /^update "deliveries"/.test(q.sql) || (q.sql.startsWith('select "id" from "deliveries"') && q.sql.includes('"deliveries"."id" in (')));
+    // Three replay pages and three acceptance pages, each a pending-reply read plus its transition.
+    expect(writes).toHaveLength(12);
+    for (const query of writes) {
+      const plan = JSON.stringify(f.sqlite.prepare('EXPLAIN QUERY PLAN ' + query.sql).all(...query.params));
+      expect(plan).toMatch(/SEARCH deliveries USING INDEX (idx_deliveries_id_lookup|sqlite_autoindex_deliveries_1) \(id=\?\)/);
     }
   });
 

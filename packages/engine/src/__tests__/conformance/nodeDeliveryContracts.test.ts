@@ -140,6 +140,8 @@ describe('node delivery contracts', () => {
     expect(
       (await bindAgent(ws.workspaceKey, node.data.name, 'bob')).status,
     ).toBe(201);
+    const stream = new FakeSocket();
+    stack.runtime.realtime.attachWorkspaceSocket(ws.workspaceId, stream);
 
     const post = await stack.app.request('/v1/channels/general/messages', {
       method: 'POST',
@@ -150,7 +152,8 @@ describe('node delivery contracts', () => {
       body: JSON.stringify({ text: 'hello http' }),
     });
     expect(post.status).toBe(201);
-    const messageId = ((await post.json()) as { data: { id: string } }).data.id;
+    const posted = ((await post.json()) as { data: { id: string; deliveries: Array<{ id: string }> } }).data;
+    const messageId = posted.id;
     await waitForAssertion(() => expect(deliveryPosts(fetchMock)).toHaveLength(1));
     const [url, init] = deliveryPosts(fetchMock)[0];
     expect(url).toBe('https://receiver.example.test/relaycast');
@@ -201,6 +204,20 @@ describe('node delivery contracts', () => {
       route_node_kind: 'http_push',
       delivery_adapter: 'http.hmac.v1',
     });
+
+    // The 2xx is the receiving software's own answer: the sender hears the
+    // authoritative `delivered` (`accepted: true`), stamped at acceptance.
+    await stack.settle();
+    expect(stream.ofType('delivery.delivered').filter((event) => 'status' in event)).toEqual([expect.objectContaining({
+      delivery_id: posted.deliveries[0]!.id, message_id: messageId, agent_id: bob.agentId, agent_name: 'bob',
+      status: 'delivered', accepted: true, at: expect.any(String),
+    })]);
+    const receipts = await stack.app.request(`/v1/messages/${messageId}/deliveries`, {
+      headers: { authorization: `Bearer ${alice.token}` },
+    });
+    expect(receipts.status).toBe(200);
+    const [receipt] = ((await receipts.json()) as { data: { deliveries: Array<{ accepted_at: string | null; state: string }> } }).data.deliveries;
+    expect(receipt).toMatchObject({ state: 'delivered', accepted_at: stream.ofType('delivery.delivered').find((event) => 'status' in event)!.at });
   });
 
   it('acks an http_push delivery when the node contract uses on_2xx', async () => {

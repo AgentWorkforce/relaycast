@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { SentDeliverySchema } from './delivery.js';
 import { FileAttachmentSchema } from './file.js';
 import { ReactionGroupSchema } from './reaction.js';
 import { AgentTypeSchema } from './agent.js';
@@ -81,6 +82,8 @@ export const CoreMessagePayloadSchema = z.object({
   injection_mode: MessageInjectionModeSchema.optional(),
   attachments: z.array(FileAttachmentSchema).optional(),
   metadata: z.record(z.string(), z.unknown()).optional(),
+  /** The recipient's message this DM explicitly answers (`reply_to_message_id` on send). */
+  reply_to_message_id: z.string().nullable().optional(),
 });
 export type CoreMessagePayload = z.infer<typeof CoreMessagePayloadSchema>;
 
@@ -97,6 +100,8 @@ export const MessageWithMetaSchema = z.object({
   metadata: z.record(z.string(), z.unknown()).optional(),
   has_attachments: z.boolean(),
   thread_id: z.string().nullable(),
+  /** The message this one explicitly answers (a thread reply's parent); drives the sender's `replied` state. */
+  reply_to_message_id: z.string().nullable().optional(),
   attachments: z.array(FileAttachmentSchema),
   created_at: z.string(),
   reply_count: z.number(),
@@ -114,8 +119,19 @@ export const PostMessageRequestSchema = z.object({
   data: z.record(z.string(), z.unknown()).nullable().optional(),
   content_type: z.string().optional(),
   mode: MessageInjectionModeSchema.default('wait'),
+  /** Confirmation budget in ms (0–2000; 1000 recommended): the response parks for the recipients' acceptance. */
+  wait_ms: z.number().int().min(0).max(2000).optional(),
 });
 export type PostMessageRequest = z.infer<typeof PostMessageRequestSchema>;
+
+/** `POST /v1/channels/:name/messages`: the message plus the sender's delivery handles. */
+export const PostMessageResponseSchema = MessageWithMetaSchema.extend({
+  /** The per-recipient delivery rows this post created (the sender excluded), at most 50. */
+  deliveries: z.array(SentDeliverySchema),
+  /** True when more than 50 rows were created and `deliveries` holds only the first 50. */
+  deliveries_truncated: z.boolean(),
+});
+export type PostMessageResponse = z.infer<typeof PostMessageResponseSchema>;
 
 export const MessageListQuerySchema = z.object({
   limit: z.number().optional(),

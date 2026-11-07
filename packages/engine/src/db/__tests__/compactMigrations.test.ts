@@ -78,6 +78,21 @@ function snapshot(handle: SqliteDbHandle) {
       // nullable fields so this comparison remains byte-for-byte over every
       // pre-existing value while the explicit schema assertions below cover
       // the new columns.
+      // 0081 adds the receiver-acceptance and reply confirmation columns,
+      // nullable and never backfilled.
+      if (name === 'messages') {
+        const { reply_to_message_id: _replyToMessageId, ...existing } = row as Record<string, unknown>;
+        return JSON.stringify(existing);
+      }
+      if (name === 'deliveries') {
+        const {
+          accepted_at: _acceptedAt,
+          replied_at: _repliedAt,
+          reply_message_id: _replyMessageId,
+          ...existing
+        } = row as Record<string, unknown>;
+        return JSON.stringify(existing);
+      }
       if (name === 'nodes') {
         const {
           previous_token_hash: _previousTokenHash,
@@ -180,6 +195,19 @@ function expectConstraintsPreserved(before: ReturnType<typeof constraints>, afte
       // 0078 appends the DM unread cursor. Remove only that additive column.
       if (table.name === 'dm_participants') {
         table = { ...table, sql: table.sql.replace(', last_read_id TEXT', '') };
+      }
+      // 0081 appends nullable confirmation columns. Remove only that additive DDL.
+      if (table.name === 'messages') {
+        table = { ...table, sql: table.sql.replace(', reply_to_message_id TEXT', '') };
+      }
+      if (table.name === 'deliveries') {
+        table = {
+          ...table,
+          sql: table.sql
+            .replace(', accepted_at INTEGER', '')
+            .replace(', replied_at INTEGER', '')
+            .replace(', reply_message_id TEXT', ''),
+        };
       }
       if (table.name === 'nodes') {
         table = {

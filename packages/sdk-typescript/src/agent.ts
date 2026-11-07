@@ -68,9 +68,11 @@ import type {
   DeliveryAcceptedEvent,
   DeliveryDeliveredEvent,
   DeliveryAckedEvent,
+  DeliveryRepliedEvent,
   DeliveryDeferredEvent,
   DeliveryFailedEvent,
   MessageDeliveriesResponse,
+  PostMessageResponse,
   WsReconnectingEvent,
   WsPermanentlyDisconnectedEvent,
   WsResyncedEvent,
@@ -88,6 +90,35 @@ function stripHash(channel: string): string {
 
 interface IdempotencyOption {
   idempotencyKey?: string;
+}
+
+/** Options shared by sends that create delivery rows. */
+interface DeliveryConfirmationOption {
+  /**
+   * Confirmation budget in ms (0–2000; 1000 recommended). The server parks
+   * the response until the receiving software accepts the delivery (or it
+   * settles), then answers with the current `state`. `0` / unset answers at
+   * once with `queued`; hosts that cannot park answer at once too.
+   */
+  waitMs?: number;
+}
+
+export interface SendDmOptions extends IdempotencyOption, DeliveryConfirmationOption {
+  mode?: 'wait' | 'steer';
+  attachments?: string[];
+  data?: Record<string, unknown> | null;
+  /**
+   * The recipient's message this DM answers (must be theirs, in this
+   * conversation). Marks that message's delivery `replied` for its sender.
+   */
+  replyTo?: string;
+}
+
+export interface SendMessageOptions extends IdempotencyOption, DeliveryConfirmationOption {
+  attachments?: string[];
+  blocks?: MessageBlock[];
+  data?: Record<string, unknown> | null;
+  mode?: 'wait' | 'steer';
 }
 
 interface ChannelListOptions {
@@ -407,15 +438,16 @@ export class AgentClient {
     this.connect();
     const key = Symbol('relaycast.subscription');
     const channelSet = new Set(normalized);
-    const invoke = (event: RelaycastMessageEvent): void => {
+    // The callback's outcome is handed back to the transport: on the node
+    // transport the `delivery.ack` waits for it, and a throw or rejection
+    // leaves the delivery unacked for re-delivery; on the workspace stream
+    // the transport logs it. Swallowing it here would ack while the
+    // application is still working, or after it failed.
+    const invoke = (event: RelaycastMessageEvent): Promise<void> | undefined => {
       if (!this.matchesSubscription(channelSet, event)) {
-        return;
+        return undefined;
       }
-      void Promise.resolve()
-        .then(() => onMessage(ensureRelaycastMessageEventId(event)))
-        .catch((err) => {
-          console.error('[relaycast] Subscription handler failed', err);
-        });
+      return Promise.resolve().then(() => onMessage(ensureRelaycastMessageEventId(event)));
     };
 
     const stops = [
@@ -493,6 +525,7 @@ export class AgentClient {
     deliveryDelivered: (handler: (e: DeliveryDeliveredEvent) => void): (() => void) => this.onEvent('delivery.delivered', handler),
     // Sender-side: a recipient acknowledged one of this agent's messages.
     deliveryAcked:     (handler: (e: DeliveryAckedEvent) => void): (() => void)     => this.onEvent('delivery.acked', handler),
+    deliveryReplied:   (handler: (e: DeliveryRepliedEvent) => void): (() => void)   => this.onEvent('delivery.replied', handler),
     deliveryDeferred:  (handler: (e: DeliveryDeferredEvent) => void): (() => void)  => this.onEvent('delivery.deferred', handler),
     deliveryFailed:    (handler: (e: DeliveryFailedEvent) => void): (() => void)    => this.onEvent('delivery.failed', handler),
     // Lifecycle
@@ -519,17 +552,17 @@ export class AgentClient {
     return this.client.get('/v1/agent');
   }
 
+  /**
+   * Post to a channel. `waitMs` (0–2000; 1000 recommended) parks the response
+   * for the recipients' acceptance: each returned delivery then carries its
+   * current `state` (`delivered` once the receiving software accepted it, or
+   * still `queued` while delivery continues).
+   */
   async send(
     channel: string,
     text: string,
-    opts?: {
-      attachments?: string[];
-      blocks?: MessageBlock[];
-      data?: Record<string, unknown> | null;
-      mode?: 'wait' | 'steer';
-      idempotencyKey?: string;
-    },
-  ): Promise<MessageWithMeta> {
+    opts?: SendMessageOptions,
+  ): Promise<PostMessageResponse> {
     const name = stripHash(channel);
     const body: PostMessageRequest = {
       text,
@@ -537,6 +570,7 @@ export class AgentClient {
       ...(opts?.blocks ? { blocks: opts.blocks } : {}),
       ...(opts?.data !== undefined ? { data: opts.data } : {}),
       mode: opts?.mode ?? 'wait',
+      ...(opts?.waitMs != null ? { waitMs: opts.waitMs } : {}),
     };
     return this.client.post(
       `/v1/channels/${encodeURIComponent(name)}/messages`,
@@ -548,14 +582,8 @@ export class AgentClient {
   post(
     channel: string,
     text: string,
-    opts?: {
-      attachments?: string[];
-      blocks?: MessageBlock[];
-      data?: Record<string, unknown> | null;
-      mode?: 'wait' | 'steer';
-      idempotencyKey?: string;
-    },
-  ): Promise<MessageWithMeta> {
+    opts?: SendMessageOptions,
+  ): Promise<PostMessageResponse> {
     return this.send(channel, text, opts);
   }
 
@@ -615,14 +643,16 @@ export class AgentClient {
 
   // === DMs ===
 
+  /**
+   * Send a DM. `waitMs` (0–2000; 1000 recommended) parks the response for the
+   * recipient's acceptance: `delivery.state` is then `delivered` once the
+   * receiving software accepted it, or still `queued` while delivery
+   * continues (follow `on.deliveryDelivered` or `messageDeliveries(id)`).
+   */
   async dm(
     agent: string,
     text: string,
-    opts?: (IdempotencyOption & {
-      mode?: 'wait' | 'steer';
-      attachments?: string[];
-      data?: Record<string, unknown> | null;
-    }),
+    opts?: SendDmOptions,
   ): Promise<SendDmResponse> {
     const body: SendDmRequest = {
       to: agent,
@@ -630,6 +660,8 @@ export class AgentClient {
       ...(opts?.attachments ? { attachments: opts.attachments } : {}),
       ...(opts?.data !== undefined ? { data: opts.data } : {}),
       mode: opts?.mode ?? 'wait',
+      ...(opts?.replyTo ? { replyToMessageId: opts.replyTo } : {}),
+      ...(opts?.waitMs != null ? { waitMs: opts.waitMs } : {}),
     };
     return this.client.post('/v1/dm', body, idempotencyHeaders(opts));
   }
@@ -638,11 +670,7 @@ export class AgentClient {
   async sendTo(
     address: string,
     text: string,
-    opts?: (IdempotencyOption & {
-      mode?: 'wait' | 'steer';
-      attachments?: string[];
-      data?: Record<string, unknown> | null;
-    }),
+    opts?: SendDmOptions,
   ): Promise<SendDmResponse> {
     const body: SendDmRequest = {
       address,
@@ -650,6 +678,8 @@ export class AgentClient {
       ...(opts?.attachments ? { attachments: opts.attachments } : {}),
       ...(opts?.data !== undefined ? { data: opts.data } : {}),
       mode: opts?.mode ?? 'wait',
+      ...(opts?.replyTo ? { replyToMessageId: opts.replyTo } : {}),
+      ...(opts?.waitMs != null ? { waitMs: opts.waitMs } : {}),
     };
     return this.client.post('/v1/dm', body, idempotencyHeaders(opts));
   }

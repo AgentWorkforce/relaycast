@@ -18,6 +18,7 @@ import {
   FLEET_ACTION_CALLER_METADATA_KEY,
   FLEET_ACTION_CALLER_METADATA_VERSION,
   FLEET_DELIVERY_CURSOR_CAPABILITY,
+  NODE_CAPABILITIES,
   NODE_REGISTRATION_CONTRACT_V1,
   parseFleetBrokerToRelaycastMessage,
 } from '@relaycast/types';
@@ -67,7 +68,7 @@ import {
 } from './action.js';
 import { emitInvocationCompletionEffects, emitAgentExitedEffects, emitNodeStatusEffects, fleetInvocationId } from './invocationCompletion.js';
 import type { InvocationCompletionDeps, NodeOfflineReason } from './invocationCompletion.js';
-import { ackDeliveriesUpToSeq, deliverPendingToNode, type DeliveryReplayDeps } from './delivery.js';
+import { acceptDeliveries, ackDeliveriesUpToSeq, ackNodeDelivery, deliverPendingToNode, type DeliveryReplayDeps } from './delivery.js';
 import { notifySenderDeliveryReceipts } from './deliveryReceipts.js';
 import { issueCredential } from '../auth/credentials.js';
 
@@ -3819,12 +3820,13 @@ function sendControl(socket: NodeSocketLike | undefined, payload: Record<string,
  */
 /** Control frames still admitted after the workspace expires (see the gate below). */
 /** Frames that only settle work already dispatched to the socket; a superseded socket may still finish those. */
-const IN_FLIGHT_SETTLING_FRAMES: ReadonlySet<string> = new Set(['action.accept', 'action.result', 'delivery.ack']);
+const IN_FLIGHT_SETTLING_FRAMES: ReadonlySet<string> = new Set(['action.accept', 'action.result', 'delivery.ack', 'delivery.accepted']);
 
 const SETTLING_CONTROL_FRAMES: ReadonlySet<string> = new Set([
   'action.accept',
   'action.result',
   'delivery.ack',
+  'delivery.accepted',
   'node.deregister',
   'agent.deregister',
 ]);
@@ -3849,6 +3851,29 @@ async function assertWorkspaceUnexpired(
   if (isWorkspaceExpired(held)) {
     throw codedError(WORKSPACE_EXPIRED_MESSAGE, WORKSPACE_EXPIRED_CODE, 401);
   }
+}
+
+/**
+ * Tell senders `delivery.replied` for rows whose pending reply link a node's
+ * `delivery.accepted` / `delivery.ack` applied. Best-effort after commit.
+ */
+async function notifyNodeRepliesApplied(
+  args: HandleNodeControlMessageArgs,
+  repliedIds: readonly string[] | undefined,
+): Promise<void> {
+  if (!repliedIds || repliedIds.length === 0 || !args.completionDeps) return;
+  await notifySenderDeliveryReceipts(
+    { db: args.db, engine: args.completionDeps },
+    args.workspaceId,
+    repliedIds,
+    'replied',
+  ).catch((err: unknown) => {
+    console.warn('[node.control] sender delivery.replied notify failed', {
+      workspaceId: args.workspaceId,
+      nodeId: args.nodeId,
+      message: err instanceof Error ? err.message : String(err),
+    });
+  });
 }
 
 export async function handleNodeControlMessage(args: HandleNodeControlMessageArgs) {
@@ -3987,6 +4012,9 @@ export async function handleNodeControlMessage(args: HandleNodeControlMessageArg
             ...registered.node,
             provider: registered.provider,
             accepted_capabilities: acceptance,
+            // Inbound frames this engine understands beyond the baseline, so a
+            // node sends e.g. `delivery.accepted` without parsing versions.
+            capabilities: [...NODE_CAPABILITIES],
             // Only claim authenticated provider registration when this adapter
             // actually bound the connection. Echoed client capabilities are not
             // evidence of a server contract; legacy adapters omit the field.
@@ -4341,15 +4369,57 @@ export async function handleNodeControlMessage(args: HandleNodeControlMessageArg
         }
         return;
       }
-      case 'delivery.ack': {
-        const acked = await ackDeliveriesUpToSeq(
+      case 'delivery.accepted': {
+        // The receiving software durably holds the rows: the authoritative
+        // `delivered`. Senders learn it with `accepted: true`; a send parked on
+        // one of these rows (`wait_ms`) is answered. Best-effort after commit.
+        const accepted = await acceptDeliveries(
           args.db,
           args.workspaceId,
           args.nodeId,
           frameProviderName,
           message.agent,
-          message.up_to_seq,
+          { upToSeq: message.up_to_seq, deliveryId: message.delivery_id },
         );
+        if (accepted && accepted.accepted_delivery_ids.length > 0 && args.completionDeps) {
+          await notifySenderDeliveryReceipts(
+            { db: args.db, engine: args.completionDeps },
+            args.workspaceId,
+            accepted.accepted_delivery_ids,
+            'delivered',
+            { accepted: true },
+          ).catch((err: unknown) => {
+            console.warn('[node.control] sender delivery.delivered (accepted) notify failed', {
+              workspaceId: args.workspaceId,
+              nodeId: args.nodeId,
+              message: err instanceof Error ? err.message : String(err),
+            });
+          });
+        }
+        // A reply sent while a row was still queued lands after its `delivered`.
+        await notifyNodeRepliesApplied(args, accepted?.replied_delivery_ids);
+        return;
+      }
+      case 'delivery.ack': {
+        // A named row is consumed on its own (`up_to_seq` ignored, cursor
+        // untouched); only a bare `up_to_seq` moves the cumulative cursor.
+        const acked = message.delivery_id !== undefined
+          ? await ackNodeDelivery(
+            args.db,
+            args.workspaceId,
+            args.nodeId,
+            frameProviderName,
+            message.agent,
+            message.delivery_id,
+          )
+          : await ackDeliveriesUpToSeq(
+            args.db,
+            args.workspaceId,
+            args.nodeId,
+            frameProviderName,
+            message.agent,
+            message.up_to_seq ?? 0,
+          );
         // The senders of every row this cumulative ack settled learn of it in
         // one batch read. Best-effort: the ack itself has committed.
         if (acked && acked.acked_delivery_ids.length > 0 && args.completionDeps) {
@@ -4366,6 +4436,8 @@ export async function handleNodeControlMessage(args: HandleNodeControlMessageArg
             });
           });
         }
+        // A reply sent while a row was still queued lands after its `acked`.
+        await notifyNodeRepliesApplied(args, acked?.replied_delivery_ids);
         return;
       }
     }

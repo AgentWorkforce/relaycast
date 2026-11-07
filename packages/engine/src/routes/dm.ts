@@ -11,8 +11,9 @@ import { requireAgentAddress } from '../engine/address.js';
 import { resolveMailboxConfig } from '../engine/mailboxConfig.js';
 import { resolveWorkspaceDeliveryPolicyFor } from '../engine/workspaceDeliveryPolicy.js';
 import { publishWorkspaceEvent } from './fanout.js';
-import { notifyDeliveryRejections, routeDeliveryOutcomes } from './deliveryRouting.js';
-import { buildDmReceivedEventData, sentDmDeliveryReceipt } from '../engine/deliveryWire.js';
+import { notifyDeliveryRejections, notifyMessageReplied, routeDeliveryOutcomes } from './deliveryRouting.js';
+import { buildDmReceivedEventData, sentDmDeliveryReceipt, withoutRecipient } from '../engine/deliveryWire.js';
+import { awaitSentDeliveries, resolveSendWaitMs, sendWaitMsSchema } from './sendWait.js';
 import { runInBackground } from './background.js';
 import { sendWebhookEvent, shouldEnqueueWebhookEvent } from './webhookOutbox.js';
 import { emitServerEvent } from '../lib/serverTelemetry.js';
@@ -32,6 +33,11 @@ const sendDmSchema = z.object({
   attachments: z.array(z.string()).optional(),
   data: z.record(z.string(), z.unknown()).nullable().optional(),
   mode: z.enum(['wait', 'steer']).default('wait'),
+  // The recipient's message this DM answers (explicit `replied` correlation).
+  reply_to_message_id: z.string().min(1).max(64).optional(),
+  // Confirmation budget (ms, 0–2000): park for the recipient's acceptance.
+  // Not part of the idempotency fingerprint: a retry may wait differently.
+  wait_ms: sendWaitMsSchema.optional(),
 }).refine((body) => (body.to === undefined) !== (body.address === undefined), {
   path: ['to'],
 });
@@ -63,7 +69,9 @@ dmRoutes.post(
       if (!parsed.ok) {
         return parsed.response;
       }
-      const { address, text, attachments, data, mode } = parsed.data;
+      const { address, text, attachments, data, mode, reply_to_message_id: replyToMessageId } = parsed.data;
+      const wait = resolveSendWaitMs(c, parsed.data.wait_ms);
+      if (!wait.ok) return wait.response;
       if (address !== undefined) requireAgentAddress(address);
       // The engine resolves an addressed recipient from `address`; `to` then
       // only names the request in the idempotency fingerprint.
@@ -84,6 +92,8 @@ dmRoutes.post(
         text,
         ...(normalizedAttachments ? { attachments: normalizedAttachments } : {}),
         ...(data !== undefined ? { data_sha256: await sha256Hex(canonicalJson(data)) } : {}),
+        // Only when given, so records written before the field existed still replay.
+        ...(replyToMessageId !== undefined ? { reply_to_message_id: replyToMessageId } : {}),
       };
       // Existing KV records used insertion-order JSON. Accept that format only
       // as a replay-compatible fingerprint during the 24-hour TTL window.
@@ -140,6 +150,7 @@ dmRoutes.post(
             attachments: normalizedAttachments,
             data,
             mode,
+            reply_to_message_id: replyToMessageId,
           }, { mailbox, resolveWorkspaceDeliveryPolicy: () => resolveWorkspaceDeliveryPolicyFor(c.get('engine').config, workspace), idempotencyKey, address,
             hasWebhookSubscriptions,
             afterAdmission: (data, event) => {
@@ -206,17 +217,32 @@ dmRoutes.post(
         trackDmSent(publicDmData);
       }
 
+      // An explicit answer settles the named message's delivery to this
+      // agent as `replied` (the engine already verified the reference).
+      // Fresh sends only: a replay created nothing new.
+      if (!effectiveIdempotent.replayed && replyToMessageId !== undefined) {
+        runInBackground(c, notifyMessageReplied(c, {
+          messageId: replyToMessageId,
+          recipientAgentId: agent!.id,
+          replyMessageId: effectiveIdempotent.data.id,
+        }), 'mark replied delivery');
+      }
+
       // The sender's handle on the recipient's delivery row: `null` when no
       // row was created (a rejected delivery). Replays read `_delivery` back
       // from the idempotency record — KV or the durable claim the admission
-      // batch stamped — so a replayed response carries the same `delivery`.
+      // batch stamped — so a replayed response carries the same `delivery`
+      // and never parks. A fresh send with `wait_ms` parks for the row's
+      // acceptance and answers with its state then.
       const sentDelivery = effectiveIdempotent.data._delivery;
+      const delivery = !sentDelivery
+        ? null
+        : effectiveIdempotent.replayed
+          ? sentDmDeliveryReceipt(sentDelivery)
+          : withoutRecipient((await awaitSentDeliveries(c, workspace.id, [sentDelivery], wait.waitMs))[0]!);
       return jsonIdempotentOk(c, {
         ...effectiveIdempotent,
-        data: {
-          ...effectiveIdempotent.data,
-          delivery: sentDelivery ? sentDmDeliveryReceipt(sentDelivery) : null,
-        },
+        data: { ...effectiveIdempotent.data, delivery },
       });
     } catch (err: unknown) {
       return errorResponse(c, err);

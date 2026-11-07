@@ -323,6 +323,7 @@ function buildDmMessageWrites(
     attachments?: string[];
     mode?: 'wait' | 'steer';
     data?: Record<string, unknown> | null;
+    reply_to_message_id?: string;
   },
   attachments: AttachmentRow[],
   messageId: string,
@@ -341,6 +342,7 @@ function buildDmMessageWrites(
         id: messageId,
         workspaceId,
         channelId,
+        replyToMessageId: data.reply_to_message_id ?? null,
         // NULL violates messages.agent_id inside the atomic write. A vanished,
         // reassigned registration or rotated caller token cannot silently make
         // the later counter UPDATE affect zero rows while the DM commits.
@@ -395,7 +397,7 @@ function buildDmMessageWrites(
 
 function buildDmResult(
   message: Pick<typeof messages.$inferSelect, 'id' | 'agentId' | 'body' | 'metadata' | 'createdAt'>,
-  conv: { id: string }, fromAgent: { name: string }, data: { to: string; mode?: 'wait' | 'steer' },
+  conv: { id: string }, fromAgent: { name: string }, data: { to: string; mode?: 'wait' | 'steer'; reply_to_message_id?: string },
   attachments: AttachmentRow[],
 ) {
   const injectionMode = data.mode ?? 'wait';
@@ -411,6 +413,7 @@ function buildDmResult(
       injection_mode: injectionMode,
       attachments,
       metadata: publicMessageMetadata(message.metadata),
+      reply_to_message_id: data.reply_to_message_id ?? null,
     },
     created_at: message.createdAt.toISOString(),
 
@@ -529,6 +532,8 @@ export async function sendDm(
     attachments?: string[];
     mode?: 'wait' | 'steer';
     data?: Record<string, unknown> | null;
+    /** The recipient's message this DM answers; must be theirs, in this conversation. */
+    reply_to_message_id?: string;
   },
   options: SendDmOptions = {},
 ): Promise<SendDmResult> {
@@ -693,6 +698,18 @@ export async function sendDm(
   // metadata (channel/conversation/participant rows) is created.
   const attachments = await resolveSendAttachments(db, workspaceId, data.attachments);
   const conv = await resolveConversation(db, workspaceId, fromAgentId, toAgent.id);
+  if (data.reply_to_message_id !== undefined) {
+    // An explicit correlation must be one the recipient can verify: their own
+    // message, in this conversation. Anything else is a bad request, never a
+    // silently dropped hint.
+    const [answered] = await db
+      .select({ channelId: messages.channelId, agentId: messages.agentId })
+      .from(messages)
+      .where(and(eq(messages.id, data.reply_to_message_id), eq(messages.workspaceId, workspaceId)));
+    if (!answered || answered.channelId !== conv.channelId || answered.agentId !== toAgent.id) {
+      throw codedError('reply_to_message_id must name a message from the recipient in this conversation', 'invalid_request', 400);
+    }
+  }
   const a2aTarget = options.skipA2aIntercept
     ? null
     : await a2aEngine.getA2aAgentByRelayName(db, workspaceId, toAgent.name);
@@ -1101,6 +1118,7 @@ export async function getDmMessages(
       agentName: agents.name,
       body: messages.body,
       metadata: messages.metadata,
+      replyToMessageId: messages.replyToMessageId,
       createdAt: messages.createdAt,
     })
     .from(messages)
@@ -1120,6 +1138,7 @@ export async function getDmMessages(
     injection_mode: r.metadata?.injection_mode as 'wait' | 'steer' | undefined,
     metadata: publicMessageMetadata(r.metadata),
     attachments: attachmentMap.get(r.id) || [],
+    reply_to_message_id: r.replyToMessageId,
     created_at: r.createdAt.toISOString(),
   }));
 }

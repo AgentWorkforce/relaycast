@@ -29,7 +29,7 @@ export {
 export type { RelaycastSetupErrorCode } from './setup-errors.js';
 export type { WorkspaceProvenanceOptions } from './workspace-provenance.js';
 export { AgentClient } from './agent.js';
-export type { AgentClientOptions } from './agent.js';
+export type { AgentClientOptions, SendDmOptions, SendMessageOptions } from './agent.js';
 export { HttpClient, RelayError } from './client.js';
 export type { ClientOptions } from './client.js';
 export {
@@ -57,7 +57,7 @@ export type {
   TakeOverAgentInput,
 } from './identity.js';
 export { WsClient } from './ws.js';
-export type { WsClientOptions, EventHandler } from './ws.js';
+export type { WsClientOptions, EventHandler, AcceptedDelivery } from './ws.js';
 export { NodeProviderClient, NodeRegistrationError } from './node-provider.js';
 export type {
   NodeProviderOptions,

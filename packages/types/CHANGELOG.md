@@ -13,6 +13,11 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Added
 
+- `FleetDeliveryAckMessageSchema`: `up_to_seq` optional, optional `delivery_id` (at least one; `delivery_id` wins), moved beside `FleetDeliveryAcceptedMessageSchema` in the outer `FleetBrokerToRelaycastMessageSchema` union.
+- `NodeRegisterReplyDataSchema.capabilities` (optional `string[]`; older engines omit it), `NODE_CAPABILITIES` / `NODE_CAPABILITY_DELIVERY_ACCEPTED` / `NODE_CAPABILITY_DELIVERY_ACK_BY_ID` (`delivery.ack.delivery_id`: the per-delivery `delivery.ack` form) / `NodeCapability`.
+- `FleetDeliveryAcceptedMessageSchema` (`delivery.accepted`: `agent`, optional `delivery_id` / `up_to_seq`, at least one) in `FleetBrokerToRelaycastMessageSchema`; fixture `delivery.accepted.json`.
+- `DeliveryStateSchema` (`queued | delivered | consumed | replied | failed`; `delivered` only with `accepted_at`). `SentDeliverySchema` gains `state`, `accepted_at`, `replied_at`, `reply_message_id`, `error`; `MessageDeliveryReceiptSchema` gains `state`, `accepted_at`, `replied_at`, `reply_message_id`. `SendDmRequestSchema` accepts `reply_to_message_id`; `SendDmRequestSchema` / `PostMessageRequestSchema` accept `wait_ms` (0–2000); `CoreMessagePayloadSchema` and `MessageWithMetaSchema` gain optional `reply_to_message_id`; `PostMessageResponseSchema` is the channel post response with `deliveries` / `deliveries_truncated`.
+- `DeliveryRepliedEventSchema` (`delivery.replied`: `delivery_id`, `message_id`, recipient `agent_id` / `agent_name`, `status: 'replied'`, `reply_message_id`, `at`) in `ServerEventSchema`, `WsClientEventSchema` and `SubscribableEventTypeSchema`; `DeliveryDeliveredEventSchema` gains optional sender-side `accepted`.
 - `DeliveryAckedEventSchema` (`delivery.acked`: `delivery_id`, `message_id`, recipient `agent_id` / `agent_name`, `status: 'acked'`, `at`), in `ServerEventSchema`, `WsClientEventSchema` and `SubscribableEventTypeSchema`. `DeliveryDeliveredEventSchema` gains optional sender-side `agent_id`, `agent_name`, `status`, `at`.
 - `SentDeliverySchema`, `MessageDeliveryReceiptSchema`, `MessageDeliveriesResponseSchema`; `SendDmResponseSchema.delivery` (`{ id, status, expires_at } | null`).
 

@@ -1,0 +1,318 @@
+# Delivery confirmation
+
+Trustworthy, bounded confirmation that a message reached the software on the
+other side — not just a socket — with one sender-facing state vocabulary, a
+short wait budget on the send, and a later status route.
+
+## Design findings (what existed, what changed)
+
+Before this change the delivery row had three signals:
+
+| Stored `status` | Set by | What it proved |
+| --- | --- | --- |
+| `queued` | the send's admission write | the row exists; delivery continues |
+| `delivered` | `markDeliveriesDelivered` after `nodeConnections.sendToProvider` returned `true` (a ws socket write accepted by the host) or an `http_push` 2xx | for ws: the host wrote bytes to a socket. Nothing about the receiver. |
+| `acked` | `POST /v1/deliveries/:id/ack`, the node frame `delivery.ack { up_to_seq }` (cumulative), `http_push` `on_2xx` / `response` ack modes | the recipient acknowledged |
+
+**When the TypeScript SDK sends `delivery.ack`.** `WsClient.handleNodeMessage`
+dispatches the `deliver` frame's payload to the user's handlers synchronously
+(`emitServerLikeEvent` → `emit`), then sends `delivery.ack { up_to_seq: seq }`
+in the same tick. Handlers run first, but an async handler's promise is not
+awaited, so the ack lands right after dispatch — on receipt from the
+sender's point of view. It therefore meant "dispatched to handlers", not "the
+model answered". It keeps that role as the **consumed** signal; the new
+`delivery.accepted` frame is sent *before* dispatch and is the receipt.
+
+**What the hosted NodeDO does with inbound frames.** relaycast-cloud's
+`NodeDO.webSocketMessage` hands the raw frame string to the engine's
+`handleNodeControlMessage` (`@relaycast/engine/node-control`). The worker
+parses it only to recover a request id for error correlation and to recognise
+a heartbeat (`parseFleetBrokerToRelaycastMessage` inside a `try`); an unknown
+type is not rejected by the worker. So a new frame type is handled by adding
+it to `FleetBrokerToRelaycastMessageSchema` (`@relaycast/types`) and to the
+engine's `handleNodeControlMessage` switch — which this change does — and the
+hosted gateway picks it up when it bumps engine + types. `fleet/wire.ts` in
+the cloud repo only holds outbound (relaycast → broker) types. The cloud repo
+must also copy migration `0081_delivery_confirmation.sql` into its
+`src/db/migrations/` (its CLAUDE.md lockstep rule).
+
+Decisions:
+
+- **Acceptance is the only `delivered`.** `accepted_at` is stamped by
+  `delivery.accepted` or an `http_push` 2xx (the receiving server's own
+  answer). A ws socket write still moves the raw `status` to `delivered`
+  (compatibility with #620 consumers) and still emits the sender's
+  `delivery.delivered`, but with `accepted: false`, and the derived `state`
+  stays `queued`: only `accepted: true` / `accepted_at` means the client has
+  it. The SDK sends the acceptance only after an application-supplied
+  persistence hook stored the frame; a client with no durable inbox sends
+  nothing and is reported `queued` → `consumed`, never `delivered`.
+- **`delivery.ack` stays the consumed signal**, stored as `acked`, exposed as
+  `state: consumed`. An ack also stamps `accepted_at` if the receiver never
+  sent the acceptance (consumed implies held).
+- **`replied` is explicit correlation only.** A DM names what it answers
+  with `reply_to_message_id` (verified: the recipient's own message, in that
+  conversation, else `400 invalid_request`); a thread reply answers its
+  parent. Exactly that message's delivery to the replier is marked. Nothing
+  is inferred from conversation order (the earlier draft's "mark every
+  unanswered DM" heuristic was dropped entirely), and a row still raw
+  `queued` (it may already be in flight: a reconnect-replay page is written
+  before the engine marks it delivered) keeps the reply as a pending link and
+  still reads `queued`; the row's move to delivered / consumed applies it in the same write,
+  stamping `replied_at` then, and the sender hears `delivery.replied` after
+  that `delivery.delivered` / `delivery.acked`; a row that fails or expires is
+  never marked. The correlation is stored on the reply
+  (`messages.reply_to_message_id`, exposed on message and DM history
+  responses).
+- **`wait_ms` waits for acceptance or better** (`state` past `queued`:
+  delivered, consumed, replied, failed), never for a socket write: a legacy
+  receiver that sends no `delivery.accepted` runs the budget out and the
+  response says `state: queued` (raw `status: delivered`, `accepted_at:
+  null`). A reply that lands during the wait answers it with `replied`.
+- **`client_message_id` was not added.** `messages` has no dedicated column
+  for a caller-supplied id (only `metadata` JSON and the deliveries'
+  `idempotency_key`), and the brief rules out a second migration for it.
+  `Idempotency-Key` on the send is the dedupe handle; the response's
+  `message.id` + `delivery.id` are the lookup keys for
+  `GET /v1/messages/:id/deliveries`.
+
+## State vocabulary (sender-facing)
+
+`state` is derived from the row on every read; `status` is the stored enum.
+
+| `state` | Derived from | Meaning |
+| --- | --- | --- |
+| `failed` | `status` in `failed`, `dead_lettered` | not delivered; `error` says why |
+| `replied` | `replied_at` set | the recipient explicitly answered it: a DM with `reply_to_message_id`, or a thread reply (`reply_message_id`) |
+| `consumed` | `status = acked` | the recipient acknowledged (REST ack, node `delivery.ack`, `http_push` ack modes) |
+| `delivered` | `accepted_at` set | the receiving software durably holds it (`delivery.accepted`, or an `http_push` 2xx) |
+| `queued` | otherwise — including raw `status = delivered` with `accepted_at: null` | the row exists; delivery continues. A host-side socket write is not a receipt |
+
+Carried on: `POST /v1/dm` → `delivery`, `POST /v1/channels/:name/messages` →
+`deliveries[]` (`{ id, agent_id, status, state, accepted_at, replied_at, reply_message_id, error, expires_at }`),
+`GET /v1/messages/:id/deliveries` → `deliveries[]` (adds `created_at`,
+`delivered_at`, `acked_at`, `replied_at`, `reply_message_id`,
+`dead_lettered_at`, `read_at`).
+
+## Wire contract: `delivery.accepted` (broker / SDK → relaycast)
+
+**Definition.** `delivery.accepted` means: *the receiving software holds this
+delivery and will process it*, sent before any handler runs. It is not a
+socket write (which proves only that bytes left the server) and not
+consumption (the later `delivery.ack`).
+
+**Where the durability of the claim comes from.** relaycast keeps the row
+unacked and re-delivers it on reconnect until the client's `delivery.ack`,
+so a client crash between acceptance and consumption is a re-delivery,
+never a loss. A client may therefore send the acceptance once the delivery
+is in its durable inbox **or** in an in-process queue that is backed by that
+server-side retention. The Relay Desktop spawn node does the latter: it
+queues, then acks only after writing the delivery into the agent session.
+The TypeScript SDK dispatches synchronously to handlers with no queue, so
+it sends the acceptance only behind the `acceptDelivery` persist hook; an
+in-memory handler client reports `queued` → `consumed`, never `delivered`.
+
+**Capability gate — never parse versions.** A successful `node.register`
+reply lists the inbound frames (and frame forms) the engine understands
+beyond the baseline in `data.capabilities` (`string[]`); this engine answers
+`"capabilities": ["delivery.accepted", "delivery.ack.delivery_id"]`. Send
+`delivery.accepted` only when the reply lists it, and `delivery.ack` with a
+`delivery_id` only when the reply lists `delivery.ack.delivery_id`; an older
+engine omits the field (or the entry) and would answer either frame with
+`error { code: invalid_message }` (its `delivery.ack` is strict and requires
+`up_to_seq`). Later frame types get their own entry. Re-read it on every
+connection: a reconnect may land on a different engine. The gate is on the
+wire frame only: the client's own durability (the `acceptDelivery` hook)
+runs for every frame whatever the engine lists, so an older engine never
+causes an unstored frame to reach the handlers; it just is not told.
+
+```json
+{"v":1,"type":"reply","id":"r1","ok":true,"data":{"provider":{"name":"default","instance_id":"…"},"accepted_capabilities":[],"capabilities":["delivery.accepted","delivery.ack.delivery_id"],"…":"…"}}
+```
+
+Send it only once the delivery is held as defined above (a durable inbox,
+or a retention-backed in-process queue — not merely parsed in memory on
+the way to a handler) and **before** any handler or model runs. A client
+that holds neither must not send it; its deliveries are then reported
+`queued` until consumed, which is the truth. Cumulative by `up_to_seq` like `delivery.ack`, or a
+single row by `delivery_id`; at least one is required, both may be given.
+
+```json
+{"v":1,"type":"delivery.accepted","agent":"bob","delivery_id":"del_01J7FLEET000000000000201","up_to_seq":42}
+```
+
+```json
+{"v":1,"type":"delivery.accepted","agent":"bob","up_to_seq":42}
+```
+
+Effect: every matching row of that agent (hosted by this node and provider)
+that is still `queued` or `delivered` and not yet accepted moves to
+`delivered` (`delivered_at` set if unset) with `accepted_at = now`. Rows
+already acked, failed or dead-lettered are untouched. Repeats are no-ops. The
+frame is fire-and-forget (no reply); a malformed one gets the usual
+`error { code: invalid_message }`. It is admitted on a superseded socket and
+after workspace expiry, like `delivery.ack`.
+
+Then send `delivery.ack` once the delivery was **consumed** — every handler
+for it completed — not when it was dispatched.
+
+### Per-delivery reports; a cumulative watermark only for older engines
+
+Acceptance and consumption are reported **per delivery**. Both frames take
+either a cumulative `up_to_seq` or a single `delivery_id`:
+
+- `delivery_id` given → the engine applies the frame to that row only and
+  **ignores `up_to_seq`**. Rows are marked individually and may arrive out of
+  order (N+1 before N); nothing is ever inferred by range from a named row.
+- bare `up_to_seq` → every unsettled row with `seq <= up_to_seq` (acceptance),
+  or the cumulative ack cursor (consumption, as before). Note that this
+  settles every unsettled row below, whether or not the client ever saw it.
+
+The TypeScript SDK sends the `delivery_id` form whenever the engine accepts
+it: `delivery.accepted` only goes to an engine that listed it, and
+`delivery.ack` names its row when the reply listed `delivery.ack.delivery_id`.
+Each confirmation then settles exactly the row this client persisted,
+respectively handled. Persistence failing for N but succeeding for N+1 yields
+`{"type":"delivery.accepted","agent":"bob","delivery_id":"<N+1>"}` and
+nothing for N; a handler failure at N leaves N unacked on the server (it is
+re-delivered and the handlers run again) while N+1 is acked on its own. The
+engine's cumulative cursor does not move for such a client; replay and
+expiry go by row status, so nothing depends on it.
+
+Why not cumulative: this transport has no cursor handshake (`delivery_ack_seq`
+is handed only to cursor-aware providers in the `agent.register` /
+`agent.recover` replies), so the only anchor a client could use is the first
+`seq` it sees on a connection, which proves nothing about the rows below it.
+The engine marks a reconnecting node delivery-ready before it replays that
+node's older unacked rows, so a live frame can reach the fresh socket first;
+a cumulative `up_to_seq` for it would settle the older rows on the engine
+before they were ever delivered here, and the replay would then skip them.
+The pre-12.8 ack and `ackMode: 'on-receipt'` send `up_to_seq: seq` for every
+frame and have exactly that exposure.
+
+Against an older engine, whose `node.register` reply lists neither
+capability, `delivery.accepted` is not sent at all (the persistence hook
+still runs before the handlers, and its failure still withholds dispatch and
+ack) and `delivery.ack` must be cumulative (its strict schema requires
+`up_to_seq`). For that case the SDK
+keeps one contiguous watermark per agent (the engine numbers `seq` per agent
+row, so a client hosting several agents sees one independent stream each),
+per connection, anchored just below the first `seq` it receives for that
+agent on that connection, and sends `up_to_seq` only when every lower seq
+since the anchor was consumed: a handler failure at N holds the watermark
+below N even if N+1 succeeded; N+1 is withheld (logged) and reported by
+`up_to_seq` once N is re-delivered and consumed, or replayed on the next
+connection and deduped there (its handlers do not run again). It never acks
+across the gap, but it carries the anchor exposure above. A new connection
+starts fresh watermarks; a delivery still being handled when the socket
+dropped sends no confirmation at all on the new connection, since the server
+replays it there and the stale frame's success could otherwise anchor the
+fresh watermark above an unconsumed lower seq.
+
+TS SDK behaviour (`ws.ts`): with `autoAckDeliveries`, `delivery.ack` is sent
+only after every handler for the delivery returned and every promise it
+returned resolved (`ackMode: 'after-handlers'`, the default); a handler that
+throws or rejects leaves the delivery unacked (logged) and later deliveries
+keep flowing. With a persistence hook configured, a hook failure means
+neither accept, dispatch nor ack. `ackMode: 'on-receipt'` restores the
+earlier synchronous ack-after-dispatch for clients that accept the loss.
+
+Intake and handler completion are separate stages. Intake (parse, the
+persistence hook, `delivery.accepted`) runs in arrival order and never waits
+for handlers; dispatch (handlers, then `delivery.ack`) is ordered per agent.
+A slow or hung handler therefore holds only that agent's later handlers and
+acks (those rows stay unacked server-side and are replayed on reconnect;
+on a new connection they are stored and accepted at once but handled only
+after the hung run let go), never the persistence or acceptance of later
+frames, and never another agent hosted on the same client.
+
+Sender-side events (workspace stream + the sender's node `context.update`):
+
+```json
+{"type":"delivery.delivered","delivery_id":"del_…","message_id":"msg_…","agent_id":"agt_…","agent_name":"bob","status":"delivered","accepted":true,"at":"2026-11-04T04:00:00.000Z"}
+{"type":"delivery.acked","delivery_id":"del_…","message_id":"msg_…","agent_id":"agt_…","agent_name":"bob","status":"acked","at":"…"}
+{"type":"delivery.replied","delivery_id":"del_…","message_id":"msg_…","agent_id":"agt_…","agent_name":"bob","status":"replied","reply_message_id":"msg_…","at":"…"}
+```
+
+A ws socket write emits `delivery.delivered` with `accepted: false` (kept
+for #620 consumers; the row's `state` is still `queued`); the acceptance
+then emits a second one with `accepted: true` (unless the acceptance landed
+before the host's batch was read, in which case only the accepted one is
+sent). Only `accepted: true` means the client has the message.
+
+### Rust and Swift SDKs, Relay Desktop probe
+
+Neither SDK sends the acceptance frame yet; the engine treats them as legacy receivers
+(socket-write `delivered`, `accepted_at: null`, `wait_ms` runs out). To adopt:
+remember `data.capabilities` from the `node.register` reply; if it contains
+`"delivery.accepted"`, then on receipt of a `deliver` frame, after storing it
+and before invoking the handler, write the first JSON above with the frame's
+`agent` and `delivery_id` (no `up_to_seq`: see "Why not cumulative" above);
+keep `delivery.ack` after the handler, and name its `delivery_id` too when
+the reply listed `delivery.ack.delivery_id`. The Relay Desktop probe can assert the order on the socket:
+`node.register` reply lists the capability, `deliver` in,
+`delivery.accepted` out, handler, `delivery.ack` out — and no
+`delivery.accepted` at all when the reply does not list it.
+
+## Bounded wait on send: `wait_ms`
+
+`POST /v1/dm` and `POST /v1/channels/:name/messages` accept `wait_ms` in the
+body or as `?wait_ms=` (body wins), integer 0–2000, default 0 (compat). **1000
+is the recommended value**: one acceptance round trip for a live receiver,
+short enough to sit inside a tool call.
+
+- The route creates the rows and starts routing as before, then parks on the
+  engine's `DeliveryWaiters.waitForDeliveryState` for the named rows (DM: the
+  one; channel: the first 50 the response names). Each wake re-reads the rows
+  (no transaction is held while parked) and parks again on the ones still
+  short. It returns once every row is accepted or settled (consumed, replied,
+  failed), or when the budget ends — then with the rows as they stand.
+- Wakes come from: `delivery.accepted`, every ack path, `http_push` 2xx, the
+  REST fail route, and the host-side socket write (which re-reads and keeps
+  waiting, since it is not an acceptance).
+- Idempotent replays never park and repeat the stored receipt (`queued`).
+- Hosts without a `DeliveryWaiters` that can park (the workspace actor; a
+  Cloudflare host until its waiter implements `waitForDeliveryState`) answer
+  at once; the client falls back to the events or
+  `GET /v1/messages/:id/deliveries`.
+- `wait_ms` is not part of the idempotency fingerprint.
+
+The TypeScript SDK sends `delivery.accepted` only when all three hold:
+`autoAcceptDeliveries: true` (default `false` — set it only when you persist
+deliveries durably before handlers run), an `acceptDelivery(delivery)`
+persistence hook is configured and has resolved for that frame, and the
+`node.register` reply listed the capability. The first two alone make the
+hook run, before any handler, for every frame: an engine that did not list
+the capability changes only whether the frame is sent, never whether the
+delivery is stored. A hook that throws or rejects
+stored nothing, so that delivery is neither accepted, dispatched nor acked:
+it stays unacked on the server and is re-delivered on reconnect, when the
+hook and the handlers run again. Later frames on the connection still flow
+(intake is in arrival order; acceptance then uses the per-delivery form
+until the gap is re-delivered and persisted).
+
+TypeScript: `agent.dm('bob', text, { waitMs: 1000, replyTo: theirMessageId })`,
+`agent.reply(parentId, text)` (thread reply; answers the parent),
+`agent.send('#general', text, { waitMs: 1000 })`; read `delivery.state` /
+`deliveries[].state`.
+
+## Dedupe
+
+Retries of a send dedupe on `Idempotency-Key` (scope `dm:direct` /
+`channel-message:<channel>`, 24 h); the replay carries the same `message.id`
+and `delivery.id`, which are the keys for `GET /v1/messages/:id/deliveries`.
+Node delivery is at-least-once; the SDK dedupes redelivered frames by
+recipient agent and event id (one message delivered to two agents hosted on
+the same client is handled and acked once per agent; only a frame whose
+handlers succeeded counts as seen, so a re-delivery after a handler failure
+reruns the handlers before anything is acked), and `delivery.accepted` /
+`delivery.ack` for an already-settled row are no-ops.
+
+## Storage
+
+Migration `0081_delivery_confirmation.sql` adds nullable
+`deliveries.accepted_at`, `replied_at`, `reply_message_id` and
+`messages.reply_to_message_id` (no backfill, no index: rows are reached
+through the delivery's id or the message's deliveries). Reply marking is one
+UPDATE on the answered message's delivery to the replier; acceptance
+settles a cumulative range in id-indexed pages of 50.

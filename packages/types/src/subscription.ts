@@ -27,6 +27,7 @@ export const SubscribableEventTypeSchema = z.enum([
   'delivery.accepted',
   'delivery.delivered',
   'delivery.acked',
+  'delivery.replied',
   'delivery.deferred',
   'delivery.failed',
   'action.invoked',

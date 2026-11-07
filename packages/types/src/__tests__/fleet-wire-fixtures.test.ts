@@ -5,6 +5,7 @@ import { describe, expect, expectTypeOf, it } from 'vitest';
 import {
   AgentRegisterReplyDataSchema,
   NodeRegisterReplyDataSchema,
+  NODE_CAPABILITIES,
   FleetBrokerToRelaycastMessageSchema,
   FleetRelaycastToBrokerMessageSchema,
   parseFleetBrokerToRelaycastMessage,
@@ -24,6 +25,10 @@ it('validates server registration contracts while accepting legacy node replies'
   for (const contract of ['invented', 1, null, { version: 1 }]) {
     expect(NodeRegisterReplyDataSchema.safeParse({ ...legacy, registration_contract: contract }).success).toBe(false);
   }
+  // Engine capabilities: optional for older engines, a string list when present.
+  expect(NodeRegisterReplyDataSchema.safeParse({ ...legacy, capabilities: ['delivery.accepted', 'future.frame'] }).success).toBe(true);
+  expect(NodeRegisterReplyDataSchema.safeParse({ ...legacy, capabilities: [1] }).success).toBe(false);
+  expect(NODE_CAPABILITIES).toEqual(['delivery.accepted', 'delivery.ack.delivery_id']);
 });
 
 const BROKER_TO_RELAYCAST_TYPES = new Set([
@@ -34,6 +39,7 @@ const BROKER_TO_RELAYCAST_TYPES = new Set([
   'agent.recover',
   'agent.deregister',
   'delivery.ack',
+  'delivery.accepted',
   'action.result',
   'inventory.sync',
 ]);
@@ -49,6 +55,7 @@ const EXPECTED_FIXTURES = [
   'agent.register.json',
   'context.update.json',
   'deliver.json',
+  'delivery.accepted.json',
   'delivery.ack.json',
   'error.json',
   'inventory.sync.json',
@@ -131,6 +138,23 @@ describe('fleet wire fixtures', () => {
       }
     });
   }
+
+  it('requires delivery_id or up_to_seq on delivery.accepted', () => {
+    const accepted = { v: 1 as const, type: 'delivery.accepted' as const, agent: 'codex-builder-1' };
+    expect(parseFleetBrokerToRelaycastMessage({ ...accepted, up_to_seq: 3 })).toEqual({ ...accepted, up_to_seq: 3 });
+    expect(parseFleetBrokerToRelaycastMessage({ ...accepted, delivery_id: 'del_1' })).toEqual({ ...accepted, delivery_id: 'del_1' });
+    expect(() => parseFleetBrokerToRelaycastMessage(accepted)).toThrow();
+    expect(() => parseFleetBrokerToRelaycastMessage({ ...accepted, up_to_seq: -1 })).toThrow();
+    expect(() => parseFleetBrokerToRelaycastMessage({ ...accepted, up_to_seq: 1, extra: true })).toThrow();
+  });
+
+  it('accepts a per-delivery delivery.ack and still requires one of delivery_id / up_to_seq', () => {
+    const ack = { v: 1 as const, type: 'delivery.ack' as const, agent: 'codex-builder-1' };
+    expect(parseFleetBrokerToRelaycastMessage({ ...ack, up_to_seq: 42 })).toEqual({ ...ack, up_to_seq: 42 });
+    expect(parseFleetBrokerToRelaycastMessage({ ...ack, delivery_id: 'del_1' })).toEqual({ ...ack, delivery_id: 'del_1' });
+    expect(() => parseFleetBrokerToRelaycastMessage(ack)).toThrow();
+    expect(() => parseFleetBrokerToRelaycastMessage({ ...ack, delivery_id: '' })).toThrow();
+  });
 
   it('accepts unreported heartbeat load and rejects values outside [0,1]', () => {
     const heartbeat = {

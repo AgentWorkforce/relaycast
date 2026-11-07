@@ -277,9 +277,16 @@ Point any Relaycast client at your base URL with a key.
      {"v":1,"type":"deliver","delivery_id":"del_…","agent":"bob","msg_id":"msg_…","seq":43,"payload":{"type":"dm.received","data":{…}}}
      ```
 
-  5. Acknowledge cumulatively with
-     `{"v":1,"type":"delivery.ack","agent":"bob","up_to_seq":43}`. Unacked
-     deliveries are sent again when the node reconnects.
+  5. The moment the client holds the frame (before any handler runs), confirm
+     receipt with `{"v":1,"type":"delivery.accepted","agent":"bob","delivery_id":"del_…","up_to_seq":43}`
+     (cumulative like the ack; `delivery_id` alone names one row). This is the
+     receipt a sender's `wait_ms` waits for. Once consumed (handlers done),
+     acknowledge cumulatively with `{"v":1,"type":"delivery.ack","agent":"bob","up_to_seq":43}`,
+     or one row with `{"v":1,"type":"delivery.ack","agent":"bob","delivery_id":"del_…"}`
+     when a lower seq is still open (a named row is applied on its own; a
+     cumulative value is only safe over contiguous successes). Unacked
+     deliveries are sent again when the node reconnects. See
+     `docs/delivery-confirmation.md`.
 
 - **Workspace-wide stream (observers)**: mint an observer token with
   `POST /v1/observer-tokens` (workspace key; body

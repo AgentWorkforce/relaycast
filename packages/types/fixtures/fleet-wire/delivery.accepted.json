@@ -1,0 +1,7 @@
+{
+  "v": 1,
+  "type": "delivery.accepted",
+  "agent": "codex-builder-1",
+  "delivery_id": "del_01J7FLEET000000000000201",
+  "up_to_seq": 42
+}
