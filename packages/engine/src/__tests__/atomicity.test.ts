@@ -33,7 +33,7 @@ import { sendDm } from '../engine/dm.js';
 import { createGroupDm, postGroupMessage } from '../engine/groupDm.js';
 import { postReply } from '../engine/thread.js';
 import { markRead } from '../engine/receipt.js';
-import { ackDelivery, ackDeliveriesUpToSeq, DELIVERY_EXPIRY_BATCH_SIZE } from '../engine/delivery.js';
+import { acceptDeliveries, ackDelivery, ackDeliveriesUpToSeq, DELIVERY_EXPIRY_BATCH_SIZE, markDeliveriesDelivered } from '../engine/delivery.js';
 import { rotateAgentIdentity } from '../engine/agentIdentity.js';
 import {
   applyStatusEventEffect,
@@ -545,6 +545,38 @@ describe('atomic write paths', () => {
       expectStatementOn(batches[0], 'update', 'dm_participants');
       const [cursor] = await db.select().from(dmParticipants).where(eq(dmParticipants.agentId, bob.agentId));
       expect(cursor.lastReadId).toBe(sent.id);
+    });
+
+    it('marks a delivery delivered in one batch: pending-reply read + transition', async () => {
+      const { ws, alice, db } = await seed();
+      const sent = await sendDm(db, ws.workspaceId, alice.agentId, { to: 'bob', text: 'psst' });
+      const [delivery] = await db.select().from(deliveries).where(eq(deliveries.messageId, sent.id));
+      await db.update(deliveries).set({ status: 'queued', deliveredAt: null }).where(eq(deliveries.id, delivery.id));
+      const batches = attachFakeBatch(db);
+
+      expect(await markDeliveriesDelivered(db, ws.workspaceId, [delivery.id])).toEqual({ delivered: [delivery.id], replied: [] });
+
+      expect(batches).toHaveLength(1);
+      expect(batches[0]).toHaveLength(2);
+      expect(batches[0][0]).toMatch(/^select "id" from "deliveries"/);
+      expectStatementOn(batches[0], 'update', 'deliveries');
+    });
+
+    it('accepts a node delivery in one batch: pending-reply read + transition', async () => {
+      const { ws, alice, bob, db } = await seed();
+      stack.runtime.handle.sqlite.prepare("INSERT INTO nodes(id,workspace_id,name,token_hash) VALUES ('node_atomic',?,'node','node-key')").run(ws.workspaceId);
+      await db.update(agents).set({ locationType: 'via_node', locationNodeId: 'node_atomic', providerName: 'provider' }).where(eq(agents.id, bob.agentId));
+      const sent = await sendDm(db, ws.workspaceId, alice.agentId, { to: 'bob', text: 'psst' });
+      const [delivery] = await db.select().from(deliveries).where(eq(deliveries.messageId, sent.id));
+      const batches = attachFakeBatch(db);
+
+      const accepted = await acceptDeliveries(db, ws.workspaceId, 'node_atomic', 'provider', 'bob', { deliveryId: delivery.id });
+
+      expect(accepted).toMatchObject({ accepted_delivery_ids: [delivery.id], replied_delivery_ids: [] });
+      expect(batches).toHaveLength(1);
+      expect(batches[0]).toHaveLength(2);
+      expect(batches[0][0]).toMatch(/^select "id" from "deliveries"/);
+      expectStatementOn(batches[0], 'update', 'deliveries');
     });
 
     it('a failed batch applies nothing — no orphan message rows', async () => {

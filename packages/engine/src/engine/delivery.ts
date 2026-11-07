@@ -1,6 +1,7 @@
 import { nodeLivenessAuthority } from './nodeLiveness.js';
 import { parseMessageMentions } from './mentions.js';
-import { eq, and, asc, exists, isNull, isNotNull, inArray, lt, ne, not, notInArray, lte, gt, sql, getTableColumns, type SQL } from 'drizzle-orm';
+import { eq, and, asc, exists, isNull, isNotNull, inArray, lt, ne, not, notInArray, lte, gt, sql, getTableColumns, type AnyColumn, type SQL } from 'drizzle-orm';
+import type { SQLiteUpdateSetSource } from 'drizzle-orm/sqlite-core';
 import type { getDb } from '../db/index.js';
 import { deliveries, messages, agents, nodes, readReceipts, channelMembers, channels, dmConversations } from '../db/schema.js';
 import type { DeliveryState, DeliveryStatus } from '@relaycast/types';
@@ -615,6 +616,47 @@ export async function ackDeliveriesUpToSeq(
 }
 
 /**
+ * `column <rest>` with SQLite's unary `+` on the column, which disqualifies the
+ * term from index selection, so `id IN (...)` is the only indexable term of a
+ * bounded id-page write. Without it the planner can pick a workspace/status
+ * index and scan retained history. This replaces `INDEXED BY`, which drizzle's
+ * update builder cannot emit, and a raw UPDATE cannot join the atomic unit in
+ * {@link transitionWithReplyLinks}: on Node a raw `tx.all` executes when it is
+ * built (before the pre-read), and on D1 drizzle's `batch()` cannot bind a raw
+ * statement's parameters (see inbox.ts).
+ */
+function onlyIdIndex(column: AnyColumn, rest: SQL): SQL {
+  return sql`+${column} ${rest}`;
+}
+
+/**
+ * One atomic unit (see {@link ackRows}): read the rows `where` matches that
+ * carry a pending reply link, then move every row `where` matches with `set`,
+ * applying those links in the same UPDATE ({@link repliedAtOnTransition}).
+ * A row reports a reply only if this unit saw its link pending and the UPDATE
+ * returned it stamped, never because its `replied_at` equals some timestamp: a
+ * reply a concurrent write stamped before this unit began is not reported twice.
+ */
+async function transitionWithReplyLinks(
+  db: Db,
+  where: SQL,
+  set: SQLiteUpdateSetSource<typeof deliveries>,
+): Promise<{ updated: { id: string }[]; appliedReplies: string[] }> {
+  const [pending, updated] = await runAtomicWrites(db, (tx) => [
+    tx.select({ id: deliveries.id }).from(deliveries).where(and(where, pendingReplyLink())),
+    tx.update(deliveries)
+      .set({ ...set, repliedAt: repliedAtOnTransition() })
+      .where(where)
+      .returning({ id: deliveries.id, repliedAt: deliveries.repliedAt }),
+  ]) as [{ id: string }[], { id: string; repliedAt: Date | null }[]];
+  const pendingIds = new Set(pending.map((row) => row.id));
+  return {
+    updated,
+    appliedReplies: updated.filter((row) => pendingIds.has(row.id) && row.repliedAt !== null).map((row) => row.id),
+  };
+}
+
+/**
  * Mark still-queued rows delivered using bounded, explicit ID-index writes.
  * Returns the ids that transitioned (`queued` -> `delivered`), so the caller
  * can tell their senders, and the ids whose pending reply link the same
@@ -632,31 +674,23 @@ export async function markDeliveriesDelivered(
   const delivered: string[] = [];
   const replied: string[] = [];
   const ids = [...new Set(deliveryIds)];
-  const now = Math.floor(Date.now() / 1000);
-  const acceptedAt = opts.accepted ? sql`${now}` : sql`accepted_at`;
-  // Force primary-key writes too: a bounded replay read is not enough if its
-  // status UPDATE chooses a workspace/status index and scans retained history.
+  const now = new Date(Math.floor(Date.now() / 1000) * 1000);
   for (let offset = 0; offset < ids.length; offset += 50) {
     const page = ids.slice(offset, offset + 50);
-    // Leaving `queued` applies a pending reply link in this same write.
-    // RETURNING sees only new values: `replied_now` is a link whose
-    // `replied_at` is this statement's `now`. A `queued` row can only carry a
-    // `replied_at` from before a requeue, so the one false positive is a row
-    // replied, requeued and redelivered within the same second.
-    const updated = await db.all<{ id: string; replied_now: number }>(sql`
-      UPDATE deliveries INDEXED BY idx_deliveries_id_lookup
-      SET status = 'delivered', next_attempt_at = NULL, last_dispatch_error = NULL,
-          delivered_at = ${now}, accepted_at = ${acceptedAt}, updated_at = ${now},
-          replied_at = CASE WHEN reply_message_id IS NOT NULL AND replied_at IS NULL THEN ${now} ELSE replied_at END
-      WHERE workspace_id = ${workspaceId}
-        AND id IN (${sql.join(page.map(id => sql`${id}`), sql`, `)})
-        AND status = 'queued'
-      RETURNING id, (reply_message_id IS NOT NULL AND replied_at = ${now}) AS replied_now
-    `);
-    for (const row of updated) {
-      delivered.push(row.id);
-      if (row.replied_now) replied.push(row.id);
-    }
+    const { updated, appliedReplies } = await transitionWithReplyLinks(db, and(
+      onlyIdIndex(deliveries.workspaceId, sql`= ${workspaceId}`),
+      inArray(deliveries.id, page),
+      onlyIdIndex(deliveries.status, sql`= 'queued'`),
+    )!, {
+      status: 'delivered',
+      nextAttemptAt: null,
+      lastDispatchError: null,
+      deliveredAt: now,
+      ...(opts.accepted ? { acceptedAt: now } : {}),
+      updatedAt: now,
+    });
+    for (const row of updated) delivered.push(row.id);
+    replied.push(...appliedReplies);
   }
   return { delivered, replied };
 }
@@ -709,7 +743,7 @@ export async function acceptDeliveries(
     : sql`${deliveries.seq} <= ${target.upToSeq ?? 0}`;
   for (;;) {
     const page = await db
-      .select({ id: deliveries.id, repliedAt: deliveries.repliedAt })
+      .select({ id: deliveries.id })
       .from(deliveries)
       .where(and(
         eq(deliveries.workspaceId, workspaceId),
@@ -721,28 +755,26 @@ export async function acceptDeliveries(
       .orderBy(asc(deliveries.seq))
       .limit(DELIVERY_ACCEPT_BATCH_SIZE);
     if (page.length === 0) break;
-    const now = Math.floor(Date.now() / 1000);
+    const nowSeconds = Math.floor(Date.now() / 1000);
+    const now = new Date(nowSeconds * 1000);
     // Leaving `queued` applies a pending reply link in this same write (a
-    // `delivered` row left with one is repaired too). RETURNING sees only new
-    // values: `replied_now` is a link whose `replied_at` is this statement's
-    // `now`, and a row the page read already saw replied is excluded, so a
-    // reply stamped earlier in the same second is not reported twice.
-    const repliedBefore = new Set(page.filter((row) => row.repliedAt !== null).map((row) => row.id));
-    const updated = await db.all<{ id: string; replied_now: number }>(sql`
-      UPDATE deliveries INDEXED BY idx_deliveries_id_lookup
-      SET status = 'delivered', next_attempt_at = NULL, last_dispatch_error = NULL,
-          delivered_at = coalesce(delivered_at, ${now}), accepted_at = ${now}, updated_at = ${now},
-          replied_at = CASE WHEN reply_message_id IS NOT NULL AND replied_at IS NULL THEN ${now} ELSE replied_at END
-      WHERE workspace_id = ${workspaceId}
-        AND id IN (${sql.join(page.map((row) => sql`${row.id}`), sql`, `)})
-        AND status IN ('queued', 'delivered')
-        AND accepted_at IS NULL
-      RETURNING id, (reply_message_id IS NOT NULL AND replied_at = ${now}) AS replied_now
-    `);
-    for (const row of updated) {
-      accepted.push(row.id);
-      if (row.replied_now && !repliedBefore.has(row.id)) replied.push(row.id);
-    }
+    // `delivered` row left with one is repaired too). A reply stamped between
+    // the page read and this write is not pending, so it is not reported again.
+    const { updated, appliedReplies } = await transitionWithReplyLinks(db, and(
+      onlyIdIndex(deliveries.workspaceId, sql`= ${workspaceId}`),
+      inArray(deliveries.id, page.map((row) => row.id)),
+      onlyIdIndex(deliveries.status, sql`IN ('queued', 'delivered')`),
+      onlyIdIndex(deliveries.acceptedAt, sql`IS NULL`),
+    )!, {
+      status: 'delivered',
+      nextAttemptAt: null,
+      lastDispatchError: null,
+      deliveredAt: sql`coalesce(${deliveries.deliveredAt}, ${nowSeconds})`,
+      acceptedAt: now,
+      updatedAt: now,
+    });
+    for (const row of updated) accepted.push(row.id);
+    replied.push(...appliedReplies);
     // A concurrent ack can settle a selected row first; the page then shrinks
     // without emptying. Stop once nothing in it was ours to stamp.
     if (updated.length === 0 || page.length < DELIVERY_ACCEPT_BATCH_SIZE) break;

@@ -518,6 +518,75 @@ describe('delivery confirmation', () => {
       .toMatchObject({ accepted_delivery_ids: [third.data.delivery!.id], replied_delivery_ids: [] });
   });
 
+  it('does not re-report a reply a concurrent write stamped between the acceptance page read and its update, even in the same second', async () => {
+    const ws = await createWorkspace(stack.app, 'confirm-reply-accept-race');
+    const alice = await registerAgent(stack.app, ws.workspaceKey, 'alice');
+    const node = await enrollBrokerNode(ws);
+    const bob = await registerViaNode(node, 'bob');
+    const db = stack.runtime.handle.db;
+    const sqlite = stack.runtime.handle.sqlite;
+    const { provider_name: provider } = sqlite
+      .prepare('SELECT provider_name FROM agents WHERE id = ?').get(bob.agentId) as { provider_name: string };
+
+    const question = await sendDm(alice.token, { to: 'bob', text: 'race me' });
+    const deliveryId = question.data.delivery!.id;
+    await stack.settle();
+    // A real message of bob's to point the link at, not yet linked.
+    const answer = await sendDm(bob.token, { to: 'alice', text: 'the answer' });
+    await stack.settle();
+    expect(sqlite.prepare('SELECT status, accepted_at FROM deliveries WHERE id = ?').get(deliveryId))
+      .toEqual({ status: 'delivered', accepted_at: null });
+    expect(pendingLink(deliveryId)).toEqual({ reply_message_id: null, replied_at: null });
+
+    // What a concurrent `markDeliveriesReplied` does to a `delivered` row (the
+    // sender already heard `delivery.replied`), landing right after the
+    // acceptance page read: the next statement acceptDeliveries prepares.
+    const original = sqlite.prepare;
+    let pageRead = false;
+    let injectedAt: number | null = null;
+    sqlite.prepare = ((source: string) => {
+      if (injectedAt === null && pageRead) {
+        injectedAt = Math.floor(Date.now() / 1000);
+        original.call(sqlite, 'UPDATE deliveries SET reply_message_id = ?, replied_at = ?, updated_at = ? WHERE id = ?')
+          .run(answer.data.id, injectedAt, injectedAt, deliveryId);
+      }
+      if (/from "deliveries"/i.test(source) && /order by/i.test(source)) pageRead = true;
+      return original.call(sqlite, source);
+    }) as typeof sqlite.prepare;
+    let result;
+    try {
+      result = await deliveryEngine.acceptDeliveries(db, ws.workspaceId, node.id, provider, 'bob', { deliveryId });
+    } finally {
+      sqlite.prepare = original;
+    }
+
+    expect(injectedAt).not.toBeNull();
+    expect(result).toMatchObject({ accepted_delivery_ids: [deliveryId], replied_delivery_ids: [] });
+    // Stamped once, by the concurrent write; the acceptance left it alone.
+    expect(pendingLink(deliveryId)).toEqual({ reply_message_id: answer.data.id, replied_at: injectedAt });
+  });
+
+  it('does not report a queued row whose reply was stamped before a requeue, even in the same second', async () => {
+    const ws = await createWorkspace(stack.app, 'confirm-reply-requeue-same-second');
+    const alice = await registerAgent(stack.app, ws.workspaceKey, 'alice');
+    const bob = await registerAgent(stack.app, ws.workspaceKey, 'bob');
+    const db = stack.runtime.handle.db;
+
+    const question = await sendDm(alice.token, { to: 'bob', text: 'requeued' });
+    const deliveryId = question.data.delivery!.id;
+    await stack.settle();
+    const answer = await sendDm(bob.token, { to: 'alice', text: 're: requeued', reply_to_message_id: question.data.id });
+    await stack.settle();
+    // Replied, then requeued this very second (a redrive leaves the link applied).
+    const now = Math.floor(Date.now() / 1000);
+    stack.runtime.handle.sqlite.prepare("UPDATE deliveries SET status = 'queued', delivered_at = NULL, reply_message_id = ?, replied_at = ? WHERE id = ?")
+      .run(answer.data.id, now, deliveryId);
+
+    expect(await deliveryEngine.markDeliveriesDelivered(db, ws.workspaceId, [deliveryId]))
+      .toEqual({ delivered: [deliveryId], replied: [] });
+    expect(pendingLink(deliveryId)).toEqual({ reply_message_id: answer.data.id, replied_at: now });
+  });
+
   it('marks a channel message replied when a thread reply answers it', async () => {
     const ws = await createWorkspace(stack.app, 'confirm-thread-reply');
     const alice = await registerAgent(stack.app, ws.workspaceKey, 'alice');
