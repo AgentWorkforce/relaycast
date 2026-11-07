@@ -33,6 +33,8 @@ export { ConfigError } from '../bin/secretEnv.js';
 export interface StartServerOptions {
   dbPath: string;
   port: number;
+  /** Interface to bind (default: every interface). */
+  hostname?: string;
   /** Public origin. Default: `http://localhost:<port>`. */
   baseUrl?: string;
   fileDir?: string;
@@ -111,7 +113,11 @@ export function startServer(options: StartServerOptions): RunningServer {
   app.route('/', engine);
   app.notFound((c) => jsonNotFound(c, 'not_found', 'Route not found'));
 
-  const server = serve({ fetch: app.fetch, port: options.port });
+  const server = serve({
+    fetch: app.fetch,
+    port: options.port,
+    ...(options.hostname ? { hostname: options.hostname } : {}),
+  });
 
   // WebSocket upgrades (Node owns these at the socket level).
   const wss = new WebSocketServer({ noServer: true });
