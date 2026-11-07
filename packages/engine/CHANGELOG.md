@@ -9,6 +9,10 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ## [Unreleased - Patch]
 
+### Added
+
+- `relaycast-engine --host <addr>` (default `$RELAYCAST_HOST`) and `StartServerOptions.hostname` bind the HTTP server to one interface, for example `127.0.0.1` when the engine runs as a sidecar behind another app. Unset, it still listens on every interface.
+
 ### Fixed
 
 - Relayfile callbacks deliver valid Linear and Jira segment-glob events instead of dropping them with `path_mismatch`; matching resolves repeated slashes and dot segments while preserving case and percent escapes.
