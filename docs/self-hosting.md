@@ -111,7 +111,79 @@ bytes derive keyed-create replay keys, so a directly set value is used as is
 and a `_FILE` loses only one trailing newline.
 
 **Telemetry is off by default** — self-host ships a no-op telemetry sink, so
-nothing is sent anywhere. (There is no PostHog/analytics in self-host.)
+nothing is sent anywhere. There is no PostHog or other hosted analytics in
+self-host, and no fallback to one.
+
+#### Optional: export analytics to your own collector
+
+Set `RELAYCAST_TELEMETRY_COLLECTOR_URL` to send engine observations to an
+analytics collector inside your installation (for example a Kubernetes
+Service). Point it at the collector's internal batch endpoint, `/v1/events`
+(for example `http://analytics-collector.analytics.svc:8080/v1/events`); the
+URL is used as is, no path is appended. The server POSTs small JSON batches to
+it; the collector owns storage (for example rotated NDJSON files). Relaycast
+writes no analytics files and needs no extra volume.
+
+| Variable | Default | Meaning |
+|---|---|---|
+| `RELAYCAST_TELEMETRY_COLLECTOR_URL` | unset (off) | Collector ingest URL. Must be `https://`, or `http://` only to `localhost`, `127.0.0.1`, `[::1]`, a `*.svc` / `*.svc.cluster.local` Service or a single-label host (e.g. `http://collector:8080/v1/events`). Credentials in the URL are refused. |
+| `RELAYCAST_TELEMETRY_COLLECTOR_TOKEN` / `RELAYCAST_TELEMETRY_COLLECTOR_TOKEN_FILE` | unset | This server's per-producer collector credential, sent as `Authorization: Bearer …`. Mount it from a Secret and use the `_FILE` form; do not reuse a database, user or migration credential. Trimmed; never logged. |
+| `RELAYCAST_TELEMETRY_DEPLOYMENT` | container hostname | Deployment label on every event. |
+| `RELAYCAST_TELEMETRY_QUEUE_MAX` | `1000` | Most events held in memory; more are dropped and counted. |
+| `RELAYCAST_TELEMETRY_BATCH_MAX` | `50` | Most events per POST. |
+| `RELAYCAST_TELEMETRY_FLUSH_MS` | `2000` | Longest wait before a partial batch is sent. |
+
+A malformed value stops startup with exit code `64`. Library users pass the
+same settings as `telemetryCollector` to `startServer` / `createNodeRuntime`
+(an explicit `telemetry` sink takes precedence).
+
+The container image pins a published `@relaycast/engine`; until a release that
+includes collector support is pinned there, setting
+`RELAYCAST_TELEMETRY_COLLECTOR_URL` stops startup with exit code `64` and
+`unsupported_telemetry_collector` rather than silently ignoring the setting.
+
+Each request is `POST <url>` with `content-type: application/json` and a body
+`{ "schema": "agent-relay.analytics.batch/v1", "events": [...] }`. Each event
+has `version` (`1`), `event_id` (UUID, kept across retries), `occurred_at`
+(UTC), `component` (`relaycast`), `deployment_id`, `event` (the engine
+observation kind, or `exception`), `trace_id` (when a request id is known),
+`workspace_id` (only for workspace-scoped events) and `properties`.
+`properties` holds only the identifiers and counts listed for that kind (for
+example `channel_id` and `message_id` for `message.created`) plus
+`actor_type` (`human` / `agent` / `system`, when authenticated),
+`origin_actor`, `origin_client`, `origin_version` and `instance` (hostname),
+as strings (at most 256 characters), numbers, booleans or null; it never
+repeats a top-level field name. An `exception` carries only `error_name`, an
+`error_code` and an allowlisted `operation`. `tenant_id` is not sent yet:
+Relaycast has no tenant separate from its workspace, and the collector's
+event-kind registry that says which events are tenant-scoped is still pending.
+
+Never exported: message or file content, search queries, request bodies or
+headers, tokens, API keys, credential hashes, the sender's name, error messages
+or stacks, and any field not on the allowlist.
+
+Collector responses:
+
+| Response | What the server does |
+|---|---|
+| `2xx` (the collector answers `204`) | Batch accepted. |
+| `400` and other `4xx` (except `408`, retried) | Batch dropped and counted as `rejected`; not retried. |
+| `401` / `403` | Batch dropped and counted as `rejected`; the log line says `collector rejected producer credential (401)` (or `403`): check the token. |
+| `413` | The batch is split in halves and each half is sent again; a single event that is still too large is dropped and counted as `rejected`. |
+| `429` / `503` / `507` | Retried; a `Retry-After` given in seconds is honored, up to 30 s. `507` logs `collector storage exhausted (507)`. |
+| Other `5xx`, timeout or connection failure | Retried. |
+| Redirect | Not followed (the credential is never forwarded); batch dropped and counted. |
+
+Export never affects requests: events are queued in memory (bounded by
+`RELAYCAST_TELEMETRY_QUEUE_MAX`; when full, new events are dropped and counted
+as `queueFull`), sent one batch at a time with a 5 s request timeout, retried
+up to 3 attempts with a short backoff and then dropped. A retry can duplicate a
+batch the collector already stored (same `event_id`s). A failed export logs at
+most one `[telemetry] collector export: …` line to stderr every 30 s, with the
+`exported`, `dropped`, `rejected`, `queueFull`, `failedBatches` and `retries`
+counters, and never the token or a response body. On shutdown the queue is
+drained for up to 5 s; anything left is dropped. There is no hosted fallback:
+a failed export is dropped, never sent anywhere else.
 
 Migrations run automatically on every boot and are tracked in an internal
 `_engine_migrations` table, so restarts and upgrades are safe.
