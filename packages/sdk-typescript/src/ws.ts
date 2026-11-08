@@ -268,14 +268,14 @@ export class WsClient {
 
         const result = ServerEventSchema.safeParse(parsed);
         if (result.success) {
-          this.emit(result.data.type, camelizeKeys(result.data) as WsClientEvent);
+          this.emit(result.data.type, camelizeKeys(result.data, { opaqueBlocks: true }) as WsClientEvent);
         } else if (
           parsed !== null &&
           typeof parsed === 'object' &&
           typeof parsed.type === 'string'
         ) {
           // Forward unrecognized event types so wildcard listeners still fire
-          this.emit(parsed.type, camelizeKeys(parsed) as WsClientEvent);
+          this.emit(parsed.type, camelizeKeys(parsed, { opaqueBlocks: true }) as WsClientEvent);
         } else if (this.debug) {
           console.warn('[relaycast] Dropped WebSocket message: missing or invalid "type" field', parsed);
         }
@@ -505,11 +505,11 @@ export class WsClient {
     }
     const result = ServerEventSchema.safeParse(transformed);
     if (result.success) {
-      this.emit(result.data.type, camelizeKeys(result.data) as WsClientEvent);
+      this.emit(result.data.type, camelizeKeys(result.data, { opaqueBlocks: true }) as WsClientEvent);
       return;
     }
     if (typeof transformed.type === 'string') {
-      this.emit(transformed.type, camelizeKeys(transformed) as WsClientEvent);
+      this.emit(transformed.type, camelizeKeys(transformed, { opaqueBlocks: true }) as WsClientEvent);
     } else if (this.debug) {
       console.warn('[relaycast] Dropped node event: missing or invalid "type" field', transformed);
     }
@@ -529,6 +529,7 @@ export class WsClient {
             agent_id: data.agent_id,
             agent_name: data.from_name,
             text: data.text,
+            ...(data.blocks !== undefined ? { blocks: data.blocks } : {}),
             attachments: Array.isArray(data.attachments) ? data.attachments : [],
             ...(typeof data.injection_mode === 'string' ? { injection_mode: data.injection_mode } : {}),
             ...(isRecord(data.metadata) ? { metadata: data.metadata } : {}),
@@ -545,6 +546,7 @@ export class WsClient {
             agent_id: data.agent_id,
             agent_name: data.from_name,
             text: data.text,
+            ...(data.blocks !== undefined ? { blocks: data.blocks } : {}),
           },
         };
       case 'message.updated':
@@ -556,6 +558,7 @@ export class WsClient {
             agent_id: data.agent_id,
             agent_name: data.from_name,
             text: data.text,
+            ...(data.blocks !== undefined ? { blocks: data.blocks } : {}),
           },
         };
       case 'message.reacted':
@@ -584,6 +587,9 @@ export class WsClient {
             agent_id: message.agent_id ?? data.from_agent_id ?? data.agent_id,
             agent_name: message.agent_name ?? data.from_name,
             text: message.text ?? data.text,
+            ...((message.blocks !== undefined || data.blocks !== undefined)
+              ? { blocks: message.blocks !== undefined ? message.blocks : data.blocks }
+              : {}),
             ...((message.injection_mode ?? data.injection_mode) ? { injection_mode: message.injection_mode ?? data.injection_mode } : {}),
             ...(attachments.length ? { attachments } : {}),
           },

@@ -1,0 +1,83 @@
+{
+  "id": "traj_yxxsvqic8fhg",
+  "version": 1,
+  "task": {
+    "title": "Preserve realtime blocks for Relay issue1359",
+    "source": {
+      "system": "github",
+      "id": "1359",
+      "url": "https://github.com/AgentWorkforce/relay/issues/1359"
+    }
+  },
+  "status": "completed",
+  "startedAt": "2026-11-08T01:33:54.229Z",
+  "completedAt": "2026-11-08T01:33:55.38Z",
+  "agents": [
+    {
+      "name": "default",
+      "role": "lead",
+      "joinedAt": "2026-11-08T01:33:54.959Z"
+    }
+  ],
+  "chapters": [
+    {
+      "id": "chap_4dop6av9eoj8",
+      "title": "Work",
+      "agentName": "default",
+      "startedAt": "2026-11-08T01:33:54.959Z",
+      "endedAt": "2026-11-08T01:33:55.38Z",
+      "events": [
+        {
+          "ts": 1794101634963,
+          "type": "decision",
+          "content": "Repair both websocket schema parsing and node delivery transforms: Repair both websocket schema parsing and node delivery transforms",
+          "raw": {
+            "question": "Repair both websocket schema parsing and node delivery transforms",
+            "chosen": "Repair both websocket schema parsing and node delivery transforms",
+            "alternatives": [],
+            "reasoning": "Both paths independently drop blocks. Preserve absent/null/empty payloads and nested DM precedence. Cross-repo built SDK -> Relay adapter -> public listener parity passes for49KB blocks against fixture REST readback."
+          },
+          "significance": "high"
+        }
+      ]
+    }
+  ],
+  "retrospective": {
+    "summary": "Fixed realtime blocks loss across engine workspace transforms, node transforms, shared event parsing and realtime casing. Local final validation: SDK532 plus strict tsc; shared types281; engine transforms43; SDK/engine builds and package lints pass. DB-backed engine suite could not run because better-sqlite3 has no local WindowsARM64 addon. Original arbitrary kind/payload plus49KB blocks preserve Relay listener/REST parity in separate mocked cross-repo check. No release, deployment or production access. Final overload regression prevents opaque return types without a runtime true flag; widened flags return the conservative union. Strict tests, build, lint and cross-repo parity pass.",
+    "approach": "Standard approach",
+    "confidence": 0.95
+  },
+  "commits": [
+    "b6826dba57a21dff7b8ad4b281c156c31f7c925b",
+    "3af3b998f1a9d0bb4423d15fbd3737d5652681cf",
+    "9e9e9be81562e75b76d8ec01e3c2476892e25b8a",
+    "d826e11afe81eba4a2d6db49c4d2d9f20e219ac8",
+    "6e785f634492b525cbaeadf66564e8e1479d694a",
+    "906ed04e653dec477764f5ef8578539508e6f00e"
+  ],
+  "filesChanged": [
+    ".agentworkforce/trajectories/relay-1359-blocks/completed/2026-11/traj_yxxsvqic8fhg/summary.md",
+    ".agentworkforce/trajectories/relay-1359-blocks/completed/2026-11/traj_yxxsvqic8fhg/trajectory.json",
+    "CHANGELOG.md",
+    "packages/engine/CHANGELOG.md",
+    "packages/engine/src/engine/__tests__/wsTransform.test.ts",
+    "packages/engine/src/engine/wsTransform.ts",
+    "packages/sdk-typescript/CHANGELOG.md",
+    "packages/sdk-typescript/src/__tests__/agent-ws.test.ts",
+    "packages/sdk-typescript/src/__tests__/casing-type-safety.test.ts",
+    "packages/sdk-typescript/src/__tests__/casing.test.ts",
+    "packages/sdk-typescript/src/__tests__/ws.test.ts",
+    "packages/sdk-typescript/src/casing.ts",
+    "packages/sdk-typescript/src/ws.ts",
+    "packages/sdk-typescript/tsconfig.workspace-types.json",
+    "packages/types/CHANGELOG.md",
+    "packages/types/src/__tests__/events.test.ts",
+    "packages/types/src/message.ts"
+  ],
+  "projectId": "AgentWorkforce/relaycast",
+  "tags": [],
+  "_trace": {
+    "startRef": "ac38905aec759e5f4bdf7fe782dce60482d4ea1a",
+    "endRef": "906ed04e653dec477764f5ef8578539508e6f00e"
+  }
+}

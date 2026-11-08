@@ -78,6 +78,8 @@ export const CoreMessagePayloadSchema = z.object({
   /** Sender's `agent@machine` address at send time when the server recorded one. Omitted when the sender has no location node. */
   agent_address: z.string().optional(),
   text: z.string(),
+  // The engine accepts arbitrary JSON blocks; realtime must not strip extensions.
+  blocks: z.array(z.unknown()).nullable().optional(),
   injection_mode: MessageInjectionModeSchema.optional(),
   attachments: z.array(FileAttachmentSchema).optional(),
   metadata: z.record(z.string(), z.unknown()).optional(),

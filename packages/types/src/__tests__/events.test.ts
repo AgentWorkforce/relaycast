@@ -773,3 +773,21 @@ describe('WsClientEventSchema — client-only frames', () => {
     expect(hasIssueAtPath(r, 'type')).toBe(true);
   });
 });
+
+
+describe('realtime blocks wire contract', () => {
+  it.each([
+    { blocks: [{ kind: 'test', payload: 'abc' }] },
+    { blocks: [{ type: 'text', text: 'hello', custom_field: { proof_id: 'p1' } }] },
+    { blocks: [null, 7, false, ['arbitrary_json']] },
+  ])('retains accepted block values and extension fields ($blocks)', ({ blocks }) => {
+    const frame = ServerEventSchema.parse({
+      id: UUID,
+      type: 'message.created',
+      channel: 'general',
+      message: { ...channelMessage, blocks },
+    });
+    expect(frame).toMatchObject({ message: { blocks } });
+    expect((frame as { message: { blocks: unknown[] } }).message.blocks).toEqual(blocks);
+  });
+});
