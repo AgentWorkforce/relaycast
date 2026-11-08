@@ -1,12 +1,17 @@
 import { safeTelemetrySink } from '../../ports/telemetry.js';
 import { randomBytes } from 'node:crypto';
+import { hostname } from 'node:os';
 import type { EngineDeps, EngineConfig } from '../../ports/index.js';
 import type { AuthProvider } from '../../ports/auth.js';
 import type { AdmissionHooks } from '../../ports/admission.js';
 import type { TelemetrySink } from '../../ports/telemetry.js';
 import { SqliteApiKeyAuthProvider } from '../../auth/index.js';
 import { NoopTelemetrySink } from '../../providers/noop-telemetry.js';
-import { CollectorTelemetrySink } from '../../providers/collector-telemetry.js';
+import {
+  CollectorTelemetrySink,
+  resolveTelemetryDestination,
+  type TelemetryDestination,
+} from '../../providers/collector-telemetry.js';
 import { getSqliteDb, runMigrations, type SqliteDbHandle } from './database.js';
 import { InProcessRealtime } from './realtime.js';
 import { InProcessPresence, type InProcessPresenceOptions } from './presence.js';
@@ -58,6 +63,10 @@ export interface NodeTelemetryCollectorOptions {
   flushIntervalMs?: number;
   /** Transport attempts per batch, first try included. Default 3. */
   maxAttempts?: number;
+  /** Local retry backoff, ms (retry n waits n * backoffMs). Default 500. */
+  backoffMs?: number;
+  /** Longest honored Retry-After, ms (0 ignores it, at most 30000). Default 30000. */
+  retryAfterMaxMs?: number;
   /** Per-attempt request timeout, ms. Default 5000. */
   requestTimeoutMs?: number;
   /** Total delivery deadline per event from enqueue, ms. Default 60000. */
@@ -91,6 +100,13 @@ export interface NodeRuntimeOptions {
   telemetry?: TelemetrySink;
   /** Export observations to a self-host collector. Ignored when `telemetry` is set. Default: off. */
   telemetryCollector?: NodeTelemetryCollectorOptions;
+  /**
+   * Explicit analytics destination: `none` (no export) or `collector`
+   * (requires `telemetryCollector`, else startup fails). Any other value is
+   * refused; there is no PostHog fallback. Unset: `telemetryCollector` alone
+   * selects the collector.
+   */
+  telemetryDestination?: TelemetryDestination;
   /** Engine config (environment, version, workspace-stream default, etc.). Persist `workspaceBootstrapSecret` for replay across restarts. */
   config?: EngineConfig;
   /** Presence TTL / sweep tuning (tests use short windows). */
@@ -126,21 +142,26 @@ export interface NodeRuntime {
  */
 export function createNodeRuntime(options: NodeRuntimeOptions): NodeRuntime {
   // Built before the database opens so a bad collector config leaks nothing.
-  const collector = !options.telemetry && options.telemetryCollector
+  const collectorOptions = resolveTelemetryDestination(options.telemetryDestination, options.telemetryCollector);
+  const collector = !options.telemetry && collectorOptions
     ? new CollectorTelemetrySink({
-        url: options.telemetryCollector.url,
-        bearerToken: options.telemetryCollector.bearerToken,
-        deployment: options.telemetryCollector.deployment,
-        queueMax: options.telemetryCollector.queueMax,
-        batchMax: options.telemetryCollector.batchMax,
-        flushIntervalMs: options.telemetryCollector.flushIntervalMs,
-        maxAttempts: options.telemetryCollector.maxAttempts,
-        requestTimeoutMs: options.telemetryCollector.requestTimeoutMs,
-        deliveryDeadlineMs: options.telemetryCollector.deliveryDeadlineMs,
-        shutdownTimeoutMs: options.telemetryCollector.shutdownTimeoutMs,
-        eventMaxBytes: options.telemetryCollector.eventMaxBytes,
-        batchMaxBytes: options.telemetryCollector.batchMaxBytes,
-        queueMaxBytes: options.telemetryCollector.queueMaxBytes,
+        url: collectorOptions.url,
+        bearerToken: collectorOptions.bearerToken,
+        deployment: collectorOptions.deployment,
+        // A deployment id equal to this pod's hostname is per-replica, not stable.
+        replicaHostnames: [hostname(), process.env.HOSTNAME],
+        queueMax: collectorOptions.queueMax,
+        batchMax: collectorOptions.batchMax,
+        flushIntervalMs: collectorOptions.flushIntervalMs,
+        maxAttempts: collectorOptions.maxAttempts,
+        backoffMs: collectorOptions.backoffMs,
+        retryAfterMaxMs: collectorOptions.retryAfterMaxMs,
+        requestTimeoutMs: collectorOptions.requestTimeoutMs,
+        deliveryDeadlineMs: collectorOptions.deliveryDeadlineMs,
+        shutdownTimeoutMs: collectorOptions.shutdownTimeoutMs,
+        eventMaxBytes: collectorOptions.eventMaxBytes,
+        batchMaxBytes: collectorOptions.batchMaxBytes,
+        queueMaxBytes: collectorOptions.queueMaxBytes,
       })
     : undefined;
   let telemetryClosed: Promise<void> | undefined;

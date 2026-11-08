@@ -648,6 +648,8 @@ const TELEMETRY_DEFAULTS = {
   batchMax: 50,
   flushIntervalMs: 2000,
   maxAttempts: 3,
+  backoffMs: 500,
+  retryAfterMaxMs: 30000,
   requestTimeoutMs: 5000,
   deliveryDeadlineMs: 60000,
   shutdownTimeoutMs: 5000,
@@ -682,6 +684,8 @@ test('telemetry collector options come from the environment', () => {
       RELAYCAST_TELEMETRY_BATCH_MAX: '20',
       RELAYCAST_TELEMETRY_FLUSH_MS: '500',
       RELAYCAST_TELEMETRY_MAX_ATTEMPTS: '5',
+      RELAYCAST_TELEMETRY_BACKOFF_MS: '250',
+      RELAYCAST_TELEMETRY_RETRY_AFTER_MAX_MS: '10000',
       RELAYCAST_TELEMETRY_REQUEST_TIMEOUT_MS: '1500',
       RELAYCAST_TELEMETRY_DELIVERY_DEADLINE_MS: '30000',
       RELAYCAST_TELEMETRY_SHUTDOWN_TIMEOUT_MS: '2500',
@@ -697,6 +701,8 @@ test('telemetry collector options come from the environment', () => {
       batchMax: 20,
       flushIntervalMs: 500,
       maxAttempts: 5,
+      backoffMs: 250,
+      retryAfterMaxMs: 10000,
       requestTimeoutMs: 1500,
       deliveryDeadlineMs: 30000,
       shutdownTimeoutMs: 2500,
@@ -763,6 +769,7 @@ test('telemetry collector refuses malformed values', () => {
     'RELAYCAST_TELEMETRY_BATCH_MAX',
     'RELAYCAST_TELEMETRY_FLUSH_MS',
     'RELAYCAST_TELEMETRY_MAX_ATTEMPTS',
+    'RELAYCAST_TELEMETRY_BACKOFF_MS',
     'RELAYCAST_TELEMETRY_REQUEST_TIMEOUT_MS',
     'RELAYCAST_TELEMETRY_DELIVERY_DEADLINE_MS',
     'RELAYCAST_TELEMETRY_SHUTDOWN_TIMEOUT_MS',
@@ -841,4 +848,100 @@ test('a collector URL without a token or deployment id exits 64 before engine ha
   assert.equal(noDeployment.status, 64, noDeployment.stderr);
   assert.match(noDeployment.stderr, /missing_telemetry_collector_deployment_id|RELAYCAST_TELEMETRY_DEPLOYMENT_ID is not/);
   assert.doesNotMatch(noToken.stderr + noDeployment.stderr, /collector-token/);
+});
+
+// Review repairs (#636): explicit destination, token charset, replica hostname, retry knobs.
+
+const isRefusal = (code) => (error) => error instanceof BaseUrlError && error.code === code && /refused to start/.test(error.message);
+
+test('F5: RELAYCAST_TELEMETRY_DESTINATION=collector without a collector URL is a hard error (missing_telemetry_collector_url)', () => {
+  const { RELAYCAST_TELEMETRY_COLLECTOR_URL: _url, ...noUrl } = TELEMETRY_MINIMAL;
+  for (const env of [{ ...noUrl, RELAYCAST_TELEMETRY_DESTINATION: 'collector' }, { RELAYCAST_TELEMETRY_DESTINATION: 'collector', RELAYCAST_TELEMETRY_COLLECTOR_URL: '  ' }]) {
+    assert.throws(() => telemetryCollectorFromEnv(env), isRefusal('missing_telemetry_collector_url'));
+  }
+  assert.throws(
+    () => telemetryCollectorFromEnv({ RELAYCAST_TELEMETRY_DESTINATION: 'collector', RELAYCAST_TELEMETRY_COLLECTOR_URL: 'http://collector:8080/v1/events', RELAYCAST_TELEMETRY_DEPLOYMENT_ID: 'acme-prod' }),
+    isRefusal('missing_telemetry_collector_token'),
+  );
+  assert.equal(telemetryCollectorFromEnv({ ...TELEMETRY_MINIMAL, RELAYCAST_TELEMETRY_DESTINATION: 'collector' }).deployment, 'acme-prod');
+});
+
+test('F5: an unsupported RELAYCAST_TELEMETRY_DESTINATION (posthog, typos) is refused, never silently ignored', () => {
+  for (const destination of ['posthog', 'Collector', 'file', 'off']) {
+    assert.throws(
+      () => telemetryCollectorFromEnv({ ...TELEMETRY_MINIMAL, RELAYCAST_TELEMETRY_DESTINATION: destination }),
+      isRefusal('invalid_telemetry_destination'),
+      destination,
+    );
+  }
+});
+
+test('F5: RELAYCAST_TELEMETRY_DESTINATION=none disables export even with a collector URL set', () => {
+  assert.equal(telemetryCollectorFromEnv({ ...TELEMETRY_MINIMAL, RELAYCAST_TELEMETRY_DESTINATION: 'none' }), undefined);
+});
+
+test('F5: a collector token with whitespace or control characters is refused without echoing it (invalid_telemetry_collector_token)', () => {
+  for (const token of ['tok SECRET_VALUE', 'tok\tSECRET_VALUE', 'tok\u0001SECRET_VALUE', 'tok-SECRET_VALUE-é']) {
+    assert.throws(
+      () => telemetryCollectorFromEnv({ ...TELEMETRY_MINIMAL, RELAYCAST_TELEMETRY_COLLECTOR_TOKEN: token }),
+      (error) => isRefusal('invalid_telemetry_collector_token')(error) && !error.message.includes('SECRET_VALUE'),
+      JSON.stringify(token.length),
+    );
+  }
+});
+
+test('F6: a deployment id equal to the replica hostname is refused (invalid_telemetry_collector_deployment_id)', () => {
+  assert.throws(
+    () => telemetryCollectorFromEnv({ ...TELEMETRY_MINIMAL, RELAYCAST_TELEMETRY_DEPLOYMENT_ID: 'relaycast-0' }, { replicaHostnames: ['relaycast-0'] }),
+    isRefusal('invalid_telemetry_collector_deployment_id'),
+  );
+  assert.throws(
+    () => telemetryCollectorFromEnv({ ...TELEMETRY_MINIMAL, RELAYCAST_TELEMETRY_DEPLOYMENT_ID: 'Relaycast-7d9f-abcde' }, { replicaHostnames: ['relaycast-7d9f-abcde'] }),
+    isRefusal('invalid_telemetry_collector_deployment_id'),
+  );
+  // By default env.HOSTNAME is one of the replica hostnames.
+  assert.throws(
+    () => telemetryCollectorFromEnv({ ...TELEMETRY_MINIMAL, RELAYCAST_TELEMETRY_DEPLOYMENT_ID: 'relaycast-pod-xyz12', HOSTNAME: 'relaycast-pod-xyz12' }),
+    isRefusal('invalid_telemetry_collector_deployment_id'),
+  );
+  assert.equal(
+    telemetryCollectorFromEnv({ ...TELEMETRY_MINIMAL, HOSTNAME: 'relaycast-0' }, { replicaHostnames: ['relaycast-0', undefined, ''] }).deployment,
+    'acme-prod',
+  );
+});
+
+test('F6: a deployment id equal to HOSTNAME exits 64 before engine handoff', () => {
+  const base = { ...process.env };
+  for (const key of Object.keys(base)) if (key.startsWith('RELAYCAST_TELEMETRY_')) delete base[key];
+  const result = spawnSync(process.execPath, [entrypoint, ...acceptedArgs], {
+    encoding: 'utf8',
+    env: { ...base, ...TELEMETRY_MINIMAL, RELAYCAST_TELEMETRY_DEPLOYMENT_ID: 'relaycast-pod-xyz12', HOSTNAME: 'relaycast-pod-xyz12' },
+  });
+  assert.equal(result.status, 64, result.stderr);
+  assert.match(result.stderr, /not this replica's hostname/);
+  assert.doesNotMatch(result.stderr, /collector-token/);
+});
+
+test('F7/F8: RELAYCAST_TELEMETRY_BACKOFF_MS and RELAYCAST_TELEMETRY_RETRY_AFTER_MAX_MS are knobs with defaults; Retry-After is capped at 30000', () => {
+  assert.deepEqual(
+    (({ backoffMs, retryAfterMaxMs }) => ({ backoffMs, retryAfterMaxMs }))(telemetryCollectorFromEnv(TELEMETRY_MINIMAL)),
+    { backoffMs: 500, retryAfterMaxMs: 30000 },
+  );
+  assert.equal(telemetryCollectorFromEnv({ ...TELEMETRY_MINIMAL, RELAYCAST_TELEMETRY_RETRY_AFTER_MAX_MS: '0' }).retryAfterMaxMs, 0);
+  assert.equal(telemetryCollectorFromEnv({ ...TELEMETRY_MINIMAL, RELAYCAST_TELEMETRY_RETRY_AFTER_MAX_MS: '30000' }).retryAfterMaxMs, 30000);
+  for (const value of ['30001', '60000', '-1', '1.5', 'soon']) {
+    assert.throws(
+      () => telemetryCollectorFromEnv({ ...TELEMETRY_MINIMAL, RELAYCAST_TELEMETRY_RETRY_AFTER_MAX_MS: value }),
+      (error) => isRefusal('invalid_telemetry_config')(error) && error.message.includes('RELAYCAST_TELEMETRY_RETRY_AFTER_MAX_MS'),
+      value,
+    );
+  }
+});
+
+test('F5/F7/F8: help documents the destination, token charset, hostname rule and retry knobs', () => {
+  const result = run(['--help']);
+  assert.equal(result.status, 0, result.stderr);
+  for (const name of ['RELAYCAST_TELEMETRY_DESTINATION', 'RELAYCAST_TELEMETRY_BACKOFF_MS', 'RELAYCAST_TELEMETRY_RETRY_AFTER_MAX_MS']) {
+    assert.match(result.stdout, new RegExp(name));
+  }
 });

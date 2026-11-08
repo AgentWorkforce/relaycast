@@ -70,8 +70,13 @@ export {
   COLLECTOR_TELEMETRY_DEFAULTS,
   CollectorConfigError,
   validateCollectorIdentity,
+  resolveTelemetryDestination,
+  TELEMETRY_DESTINATIONS,
+  BEARER_TOKEN_PATTERN,
   type CollectorConfigErrorCode,
   type CollectorTelemetrySinkOptions,
+  type CollectorTelemetryStats,
+  type TelemetryDestination,
 } from './providers/collector-telemetry.js';
 export {
   EXPORT_ENVELOPE_VERSION,
@@ -86,8 +91,14 @@ export {
   isOpaqueId,
   projectObservation,
   projectException,
+  validateExportEvent,
+  workspaceIdOf,
+  exportProperties,
+  EXPORT_EVENT_SCOPES,
   type AnalyticsFieldRule,
   type ExportEvent,
+  type ExportEventScope,
+  type ExportEventInvalidReason,
   type ExportIdentity,
   type ExportOrigin,
 } from './telemetry/exportEnvelope.js';

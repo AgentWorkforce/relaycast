@@ -1,5 +1,6 @@
 import { readFileSync } from 'node:fs';
 import { isIP } from 'node:net';
+import { hostname as osHostname } from 'node:os';
 
 const CONFIG_EXIT_CODE = 64;
 
@@ -36,14 +37,20 @@ Environment:
                                         custom clusterDomain); needs ALLOW_INSECURE_BASE_URL
   RELAYCAST_INSECURE_BASE_URL_HOSTS     Exact private hosts (comma list, e.g. relaycast.relaycast
                                         for <svc>.<ns>); needs ALLOW_INSECURE_BASE_URL
+  RELAYCAST_TELEMETRY_DESTINATION       Analytics destination: none or collector. collector requires
+                                        RELAYCAST_TELEMETRY_COLLECTOR_URL; none disables export even if
+                                        the URL is set; any other value (e.g. posthog) exits 64.
+                                        Unset: the URL alone selects the collector
   RELAYCAST_TELEMETRY_COLLECTOR_URL      Opt in to analytics export: POST batches to this in-installation
                                         collector (https, or http to localhost / *.svc / single-label host).
                                         The complete endpoint, including /v1/events (no path is appended);
                                         no credentials, query or fragment. Unset: no analytics leave the process
   RELAYCAST_TELEMETRY_COLLECTOR_TOKEN(_FILE)  Collector bearer token; REQUIRED when the URL is set
+                                        (visible ASCII, no whitespace; never logged)
   RELAYCAST_TELEMETRY_DEPLOYMENT_ID     Stable installation/deployment id on exported events; REQUIRED
                                         when the URL is set (no hostname default). 1-128 chars of
-                                        [A-Za-z0-9._:-], starting with a letter or digit
+                                        [A-Za-z0-9._:-], starting with a letter or digit; must not
+                                        equal this replica's hostname / $HOSTNAME
   RELAYCAST_TELEMETRY_QUEUE_MAX         Most queued events before dropping the newest (default 1000)
   RELAYCAST_TELEMETRY_QUEUE_MAX_BYTES   Queue byte budget, serialized UTF-8 (default 1048576)
   RELAYCAST_TELEMETRY_BATCH_MAX         Most events per POST (default 50)
@@ -51,6 +58,8 @@ Environment:
   RELAYCAST_TELEMETRY_EVENT_MAX_BYTES   Largest single event; larger ones are dropped (default 8192)
   RELAYCAST_TELEMETRY_FLUSH_MS          Longest wait before a partial batch is sent (default 2000)
   RELAYCAST_TELEMETRY_MAX_ATTEMPTS      POST attempts per batch, first included (default 3)
+  RELAYCAST_TELEMETRY_BACKOFF_MS        Local retry backoff; retry n waits n * this (default 500)
+  RELAYCAST_TELEMETRY_RETRY_AFTER_MAX_MS  Longest honored Retry-After, 0-30000; 0 ignores it (default 30000)
   RELAYCAST_TELEMETRY_REQUEST_TIMEOUT_MS  Per-attempt request timeout (default 5000)
   RELAYCAST_TELEMETRY_DELIVERY_DEADLINE_MS  Total per-event delivery deadline from enqueue (default 60000)
   RELAYCAST_TELEMETRY_SHUTDOWN_TIMEOUT_MS  Longest shutdown drain (default 5000)
@@ -664,6 +673,21 @@ function isPlaintextCollectorHost(hostname) {
 const TELEMETRY_DEPLOYMENT_ID = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/;
 /** Bytes of `{"schema":"agent-relay.analytics.batch/v1","events":[]}` (the engine's WIRE_BATCH_FRAME_BYTES). */
 const TELEMETRY_BATCH_FRAME_BYTES = 55;
+/** Opaque bearer token: visible ASCII only (the engine's BEARER_TOKEN_PATTERN). */
+const TELEMETRY_BEARER_TOKEN = /^[\x21-\x7E]+$/;
+/** The contract's ceiling on an honored Retry-After. */
+const TELEMETRY_RETRY_AFTER_CEILING_MS = 30000;
+const TELEMETRY_DESTINATIONS = new Set(['none', 'collector']);
+
+function telemetryNonNegativeInteger(env, name, fallback, max) {
+  const raw = env[name]?.trim();
+  if (!raw) return fallback;
+  const value = Number(raw);
+  if (!/^[0-9]+$/.test(raw) || !Number.isSafeInteger(value) || value > max) {
+    refusal('invalid_telemetry_config', `${name} must be an integer from 0 to ${max}.`);
+  }
+  return value;
+}
 
 function telemetryPositiveInteger(env, name, fallback) {
   const raw = env[name]?.trim();
@@ -683,15 +707,34 @@ function telemetryPositiveInteger(env, name, fallback) {
  * a query string or a fragment. It is the complete endpoint, including
  * `/v1/events`; no path is appended.
  * The token is read from RELAYCAST_TELEMETRY_COLLECTOR_TOKEN(_FILE) and never
- * logged. Once the URL is set, both the token and an explicit
- * RELAYCAST_TELEMETRY_DEPLOYMENT_ID are required (no hostname default):
+ * logged. RELAYCAST_TELEMETRY_DESTINATION may select `none` (no export) or
+ * `collector` (the URL is then required); any other value is refused.
+ * Once the URL is set, both the token and an explicit
+ * RELAYCAST_TELEMETRY_DEPLOYMENT_ID are required (no hostname default, and a
+ * value equal to this replica's hostname / $HOSTNAME is refused):
  * missing ones refuse with `missing_telemetry_collector_token` /
  * `missing_telemetry_collector_deployment_id`. Throws a refusal (exit 64) on
  * any missing or malformed value.
  */
-export function telemetryCollectorFromEnv(env = process.env) {
+export function telemetryCollectorFromEnv(env = process.env, { replicaHostnames = [osHostname(), env.HOSTNAME] } = {}) {
+  const destination = env.RELAYCAST_TELEMETRY_DESTINATION?.trim();
+  if (destination && !TELEMETRY_DESTINATIONS.has(destination)) {
+    refusal(
+      'invalid_telemetry_destination',
+      'RELAYCAST_TELEMETRY_DESTINATION must be none or collector.',
+    );
+  }
+  if (destination === 'none') return undefined;
   const rawUrl = env.RELAYCAST_TELEMETRY_COLLECTOR_URL?.trim();
-  if (!rawUrl) return undefined;
+  if (!rawUrl) {
+    if (destination === 'collector') {
+      refusal(
+        'missing_telemetry_collector_url',
+        'RELAYCAST_TELEMETRY_DESTINATION is collector but RELAYCAST_TELEMETRY_COLLECTOR_URL is not set.',
+      );
+    }
+    return undefined;
+  }
   let url;
   try {
     url = new URL(rawUrl);
@@ -727,6 +770,13 @@ export function telemetryCollectorFromEnv(env = process.env) {
       'RELAYCAST_TELEMETRY_COLLECTOR_URL is set but RELAYCAST_TELEMETRY_COLLECTOR_TOKEN(_FILE) is not; the collector requires a producer bearer token.',
     );
   }
+  if (!TELEMETRY_BEARER_TOKEN.test(bearerToken)) {
+    // Never echo the value.
+    refusal(
+      'invalid_telemetry_collector_token',
+      'RELAYCAST_TELEMETRY_COLLECTOR_TOKEN(_FILE) must be visible ASCII without whitespace.',
+    );
+  }
   const deployment = env.RELAYCAST_TELEMETRY_DEPLOYMENT_ID?.trim();
   if (!deployment) {
     refusal(
@@ -738,6 +788,13 @@ export function telemetryCollectorFromEnv(env = process.env) {
     refusal(
       'invalid_telemetry_config',
       'RELAYCAST_TELEMETRY_DEPLOYMENT_ID must be 1-128 characters of [A-Za-z0-9._:-], starting with a letter or digit.',
+    );
+  }
+  const lowerDeployment = deployment.toLowerCase();
+  if (replicaHostnames.some((host) => typeof host === 'string' && host !== '' && host.toLowerCase() === lowerDeployment)) {
+    refusal(
+      'invalid_telemetry_collector_deployment_id',
+      'RELAYCAST_TELEMETRY_DEPLOYMENT_ID must be a stable installation id, not this replica\'s hostname.',
     );
   }
   const eventMaxBytes = telemetryPositiveInteger(env, 'RELAYCAST_TELEMETRY_EVENT_MAX_BYTES', 8192);
@@ -764,6 +821,13 @@ export function telemetryCollectorFromEnv(env = process.env) {
     batchMax: telemetryPositiveInteger(env, 'RELAYCAST_TELEMETRY_BATCH_MAX', 50),
     flushIntervalMs: telemetryPositiveInteger(env, 'RELAYCAST_TELEMETRY_FLUSH_MS', 2000),
     maxAttempts: telemetryPositiveInteger(env, 'RELAYCAST_TELEMETRY_MAX_ATTEMPTS', 3),
+    backoffMs: telemetryPositiveInteger(env, 'RELAYCAST_TELEMETRY_BACKOFF_MS', 500),
+    retryAfterMaxMs: telemetryNonNegativeInteger(
+      env,
+      'RELAYCAST_TELEMETRY_RETRY_AFTER_MAX_MS',
+      TELEMETRY_RETRY_AFTER_CEILING_MS,
+      TELEMETRY_RETRY_AFTER_CEILING_MS,
+    ),
     requestTimeoutMs: telemetryPositiveInteger(env, 'RELAYCAST_TELEMETRY_REQUEST_TIMEOUT_MS', 5000),
     deliveryDeadlineMs: telemetryPositiveInteger(env, 'RELAYCAST_TELEMETRY_DELIVERY_DEADLINE_MS', 60000),
     shutdownTimeoutMs: telemetryPositiveInteger(env, 'RELAYCAST_TELEMETRY_SHUTDOWN_TIMEOUT_MS', 5000),
@@ -847,7 +911,7 @@ async function launchPinnedEngine(args) {
       RELAYCAST_ENV: options.environment,
     }, mailbox, engine),
     ...(eventQueue ? { eventQueue } : {}),
-    ...(telemetryCollector ? { telemetryCollector } : {}),
+    ...(telemetryCollector ? { telemetryCollector, telemetryDestination: 'collector' } : {}),
   });
 
   installPublicAuthorityMarker(running.server, options.baseUrl);

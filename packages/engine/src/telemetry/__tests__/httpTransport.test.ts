@@ -15,10 +15,13 @@ import {
   wireEventBytes,
 } from '../httpTransport.js';
 
+/** A native engine workspace id (64-bit snowflake). */
+const WS_1 = '1189827393826947072';
+
 const TOKEN = 'tok_test';
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 
-const event = projectException(new Error('x'), undefined, { deployment: 'd' });
+const event = projectException(new Error('x'), { request_id: 'req-exc-1' }, { deployment: 'd' })!;
 
 async function failure(promise: Promise<unknown>): Promise<CollectorExportError> {
   const err = await promise.then(() => undefined, (e: unknown) => e);
@@ -34,10 +37,11 @@ describe('toWireEvent', () => {
   const observed = projectObservation({
     kind: 'message.created',
     occurredAt: '2026-11-08T10:00:00.000Z',
-    workspaceId: 'ws_1',
+    workspaceId: WS_1,
     authenticatedActor: { agentId: 'agent_1', credentialHash: 'HASH_POISON', type: 'agent' },
     sender: { id: 'agent_1', name: 'SENDER_POISON', type: 'agent' },
     origin: { actor: 'agent-relay-cli/agent/ORIGIN_NAME_POISON', client: '@relaycast/sdk', version: '1.2.3-VERSION_POISON' },
+    traceId: 'req_1',
     facts: { channel_id: '1001', message_id: '2002', request_id: 'req_1', text: 'TEXT_POISON' },
   }, { deployment: 'acme' })!;
 
@@ -50,7 +54,7 @@ describe('toWireEvent', () => {
       deployment_id: 'acme',
       event: 'message.created',
       trace_id: 'req_1',
-      workspace_id: 'ws_1',
+      workspace_id: WS_1,
       properties: {
         channel_id: '1001',
         message_id: '2002',
@@ -68,30 +72,31 @@ describe('toWireEvent', () => {
 
   it('always sends a trace_id, omits workspace_id when absent and never sends tenant_id', () => {
     const wire = toWireEvent(event);
-    expect(wire.trace_id).toMatch(UUID);
+    expect(wire.trace_id).toBe('req-exc-1');
     expect(wire).not.toHaveProperty('workspace_id');
     expect(wire).not.toHaveProperty('tenant_id');
     expect(wire).toMatchObject({ version: 1, event: 'exception', deployment_id: 'd', properties: { error_name: 'Error' } });
     expect(toWireEvent({ ...observed, workspace_id: '' })).not.toHaveProperty('workspace_id');
   });
 
-  it('attributes a workspace exception by workspace_id only, never a tenant_id', () => {
-    const wire = toWireEvent(projectException(new Error('x'), { workspace_id: 'ws_7' }, { deployment: 'd' }));
-    expect(wire.workspace_id).toBe('ws_7');
+  it('F4: attributes an exception (installation-only) without workspace_id or tenant_id, whatever the context says', () => {
+    const wire = toWireEvent(projectException(new Error('x'), { workspace_id: 'ws_7', request_id: 'req-7' }, { deployment: 'd' })!);
+    expect(wire).not.toHaveProperty('workspace_id');
     expect(wire).not.toHaveProperty('tenant_id');
-    expect(Object.values(wire).filter((value) => value === 'ws_7')).toEqual(['ws_7']);
+    expect(JSON.stringify(wire)).not.toContain('ws_7');
     expect(toWireEvent(observed)).not.toHaveProperty('tenant_id');
+    expect(toWireEvent(observed).workspace_id).toBe(WS_1);
   });
 
   it('strips reserved field names from properties', () => {
-    const facts: ExportEvent['facts'] = { ok: 1 };
+    const facts: ExportEvent['facts'] = { channel_id: '1001' };
     for (const name of COLLECTOR_RESERVED_FIELDS) facts[name] = 'OVERRIDE_POISON';
     const wire = toWireEvent({ ...observed, facts });
     expect(Object.keys(wire.properties).filter((key) => COLLECTOR_RESERVED_FIELDS.has(key))).toEqual([]);
-    expect(wire.properties.ok).toBe(1);
+    expect(wire.properties.channel_id).toBe('1001');
     expect(JSON.stringify(wire)).not.toContain('OVERRIDE_POISON');
     expect(wire.event_id).toBe(observed.event_id);
-    expect(wire.workspace_id).toBe('ws_1');
+    expect(wire.workspace_id).toBe(WS_1);
   });
 });
 
@@ -435,7 +440,14 @@ describe('collector contract responses through the batcher', () => {
     return { calls, fetch, log, batcher };
   }
 
-  const events = (n: number) => Array.from({ length: n }, (_, i) => projectException(new Error('x'), { request_id: `req-${i}` }, { deployment: 'd' }));
+  const events = (n: number) => Array.from({ length: n }, (_, i) => projectException(new Error('x'), { request_id: `req-${i}` }, { deployment: 'd' })!);
+  const observations = (n: number, workspaceId: (i: number) => string) => Array.from({ length: n }, (_, i) => projectObservation({
+    kind: 'message.created',
+    occurredAt: '2026-11-08T10:00:00.000Z',
+    workspaceId: workspaceId(i),
+    traceId: `req-${i}`,
+    facts: { channel_id: '1001', message_id: String(2000 + i) },
+  }, { deployment: 'd' })!);
 
   it.each([301, 302, 303, 307, 308])('does not follow or retry a %i redirect, never re-sending the token', async (status) => {
     vi.useFakeTimers();
@@ -492,11 +504,13 @@ describe('collector contract responses through the batcher', () => {
   });
 
   it('drops an event over eventMaxBytes (UTF-8) before sending and counts it as oversized', async () => {
-    const [small] = events(1);
+    // Workspace-scoped observations: only those carry a workspace_id.
+    const [small] = observations(1, () => WS_1);
     const huge: ExportEvent = { ...small!, event_id: globalThis.crypto.randomUUID(), workspace_id: '中'.repeat(120) };
-    const ascii: ExportEvent = { ...small!, event_id: globalThis.crypto.randomUUID(), workspace_id: 'w'.repeat(120) };
-    // The CJK workspace id is 120 code units but 360 bytes; the ASCII one is 120 bytes.
-    const eventMaxBytes = wireEventBytes(ascii) + 100;
+    const ascii: ExportEvent = { ...small!, event_id: globalThis.crypto.randomUUID() };
+    // The CJK workspace id is 120 code units but 360 bytes (measured before any
+    // validation); the valid snowflake one is 19 bytes.
+    const eventMaxBytes = wireEventBytes(ascii) + 150;
     expect(JSON.stringify(toWireEvent(huge)).length).toBeLessThan(eventMaxBytes);
     expect(wireEventBytes(huge)).toBeGreaterThan(eventMaxBytes);
     const { calls, batcher } = harness(() => [204], { eventMaxBytes, batchMaxBytes: 64 * 1024, queueMaxBytes: 64 * 1024 });
@@ -531,10 +545,7 @@ describe('collector contract responses through the batcher', () => {
 
   it('keeps event_id and trace_id stable across retries and splits', async () => {
     vi.useFakeTimers();
-    const all = [
-      ...events(3),
-      projectException(new Error('x'), undefined, { deployment: 'd' }), // no request id: random UUID trace
-    ];
+    const all = events(4);
     const splitTarget = all[3]!.event_id;
     const { calls, batcher } = harness((call, n) => {
       if (n === 1) return [503];
@@ -546,8 +557,7 @@ describe('collector contract responses through the batcher', () => {
     await flushed;
     expect(batcher.stats()).toMatchObject({ exported: 4, retries: 1, splits: 2 });
     const expected = new Map(all.map((e) => [e.event_id, e.trace_id]));
-    expect(all.map((e) => e.trace_id).slice(0, 3)).toEqual(['req-0', 'req-1', 'req-2']);
-    expect(all[3]!.trace_id).toMatch(UUID);
+    expect(all.map((e) => e.trace_id)).toEqual(['req-0', 'req-1', 'req-2', 'req-3']);
     let seen = 0;
     for (const call of calls) {
       for (const wire of call.events) {
@@ -562,14 +572,14 @@ describe('collector contract responses through the batcher', () => {
     expect(WIRE_BATCH_FRAME_BYTES).toBe(55);
     expect(utf8Bytes(JSON.stringify({ schema: COLLECTOR_BATCH_SCHEMA, events: [] }))).toBe(55);
     expect(utf8Bytes('é中\u{1F600}')).toBe(9);
-    const all = events(3).map((e, i) => ({ ...e, workspace_id: `wé${'中'.repeat(i)}` }));
+    const all = observations(3, (i) => String(1189827393826947072n + BigInt(i) * 1_000_003n));
     const { calls, batcher } = harness(() => [204]);
     for (const e of all) batcher.enqueue(e);
     await batcher.flush();
     const body = calls[0]!.init.body as string;
     const sum = all.reduce((total, e) => total + wireEventBytes(e), 0);
     expect(utf8Bytes(body)).toBe(WIRE_BATCH_FRAME_BYTES + sum + all.length - 1);
-    expect(utf8Bytes(body)).toBeGreaterThan(body.length);
+    for (const e of all) expect(wireEventBytes(e)).toBe(utf8Bytes(JSON.stringify(toWireEvent(e))));
   });
 
   it('forms batches within batchMaxBytes of the real wire body', async () => {
@@ -581,5 +591,145 @@ describe('collector contract responses through the batcher', () => {
     await batcher.flush();
     expect(calls.map((call) => call.events.length)).toEqual([3, 3, 3, 1]);
     for (const call of calls) expect(utf8Bytes(call.init.body as string)).toBeLessThanOrEqual(batchMaxBytes);
+  });
+});
+
+describe('review repairs (#636): wire allowlist, classification, acceptance, ids, auth header', () => {
+  const identity = { deployment: 'd' };
+  const observationEvent = (facts: ExportEvent['facts']): ExportEvent => ({
+    ...projectObservation({ kind: 'agent.updated', occurredAt: '2026-11-08T10:00:00.000Z', workspaceId: WS_1, traceId: 'req-1', facts: {} }, identity)!,
+    facts,
+  });
+
+  it('F1: toWireEvent never exports agent_name or other product facts, even on a hand-built event', () => {
+    const wire = toWireEvent(observationEvent({
+      agent_name: 'alice-the-agent',
+      sender_name: 'bob-sender',
+      channel_name: 'secret-launch',
+      content: 'PRODUCT_CONTENT_POISON',
+      text: 'PRODUCT_TEXT_POISON',
+      changed_status: true,
+    }));
+    expect(wire.properties.changed_status).toBe(true);
+    expect(Object.keys(wire.properties).sort()).toEqual(['changed_status', 'origin_actor_type', 'origin_app', 'origin_client']);
+    const json = JSON.stringify(wire);
+    for (const leak of ['alice-the-agent', 'bob-sender', 'secret-launch', 'PRODUCT_CONTENT_POISON', 'PRODUCT_TEXT_POISON', 'agent_name', 'channel_name']) {
+      expect(json).not.toContain(leak);
+    }
+  });
+
+  it('F2: toWireEvent maps arbitrary exception names, codes and operations to the fixed classification', () => {
+    const base = projectException(new Error('x'), { request_id: 'req-2' }, identity)!;
+    const wire = toWireEvent({
+      ...base,
+      facts: { error_name: 'AcmeVendorError', error_code: 'ACME_CUSTOMER_42', operation: 'billing.charge_alice', message: 'MESSAGE_POISON', stack: 'STACK_POISON' },
+    });
+    expect(wire.properties).toEqual({ error_name: 'unregistered' });
+    const json = JSON.stringify(wire);
+    for (const leak of ['AcmeVendorError', 'ACME_CUSTOMER_42', 'billing.charge_alice', 'MESSAGE_POISON', 'STACK_POISON']) expect(json).not.toContain(leak);
+    // Registered values still pass.
+    expect(toWireEvent({ ...base, facts: { error_name: 'TypeError', error_code: 'SQLITE_BUSY', operation: 'inbox.get' } }).properties)
+      .toEqual({ error_name: 'TypeError', error_code: 'SQLITE_BUSY', operation: 'inbox.get' });
+  });
+
+  function batched(status: number, overrides: Partial<BatcherOptions> = {}) {
+    const fetch = vi.fn(async () => new Response(status === 204 ? null : 'BODY', { status }));
+    const transport = createHttpCollectorTransport({ bearerToken: TOKEN, url: 'http://collector/v1/events', timeoutMs: 1000, fetch });
+    const batcher = createBatcher<ExportEvent>(transport, { queueMax: 10, batchMax: 10, flushIntervalMs: 0, maxAttempts: 3, backoffMs: 100, shutdownTimeoutMs: 60_000, ...overrides }, { log: () => {} });
+    return { fetch, batcher };
+  }
+
+  it.each([200, 202, 206])('F3: a %i is a counted protocol error, never an acceptance, and its events are lost after the budget', async (status) => {
+    vi.useFakeTimers();
+    const { fetch, batcher } = batched(status);
+    batcher.enqueue(event);
+    batcher.enqueue(event);
+    const flushed = batcher.flush();
+    await vi.advanceTimersByTimeAsync(10_000);
+    await flushed;
+    expect(fetch).toHaveBeenCalledTimes(3);
+    expect(batcher.stats()).toMatchObject({ exported: 0, dropped: 2, failedBatches: 1, protocolErrors: 3, queued: 0, inFlight: 0 });
+  });
+
+  it('F3: 507 is counted as a storage failure and a redirect as a redirect, never as acceptance', async () => {
+    vi.useFakeTimers();
+    const storage = batched(507);
+    storage.batcher.enqueue(event);
+    const flushedStorage = storage.batcher.flush();
+    await vi.advanceTimersByTimeAsync(10_000);
+    await flushedStorage;
+    expect(storage.batcher.stats()).toMatchObject({ exported: 0, dropped: 1, storageFailures: 3 });
+    const redirect = batched(307);
+    redirect.batcher.enqueue(event);
+    await redirect.batcher.flush();
+    expect(redirect.fetch).toHaveBeenCalledTimes(1);
+    expect(redirect.batcher.stats()).toMatchObject({ exported: 0, dropped: 1, redirects: 1 });
+  });
+
+  it('F4: the transport refuses a batch with an event missing trace_id or carrying tenant_id, without sending it', async () => {
+    const fetch = vi.fn(async () => new Response(null, { status: 204 }));
+    const transport = createHttpCollectorTransport({ bearerToken: TOKEN, url: 'http://collector/v1/events', timeoutMs: 1000, fetch });
+    const { trace_id: _omit, ...noTrace } = event;
+    for (const bad of [
+      noTrace as ExportEvent,
+      { ...event, trace_id: '' },
+      { ...event, tenant_id: 'tenant_1' } as ExportEvent,
+      { ...observationEvent({}), workspace_id: null },
+      { ...event, workspace_id: 'ws_substituted' },
+    ]) {
+      const err = await failure(transport.send([event, bad]));
+      expect(err.retryable).toBe(false);
+      expect(err.message).toMatch(/^invalid export event \((missing_trace_id|tenant_id_not_allowed|missing_workspace_id|unauthorized_workspace_id)\); not sent$/);
+    }
+    expect(fetch).not.toHaveBeenCalled();
+  });
+
+  it('F5 (guard, already held on 48a20866): sends exactly one Authorization: Bearer header and never puts the token in the body or URL', async () => {
+    const fetch = vi.fn(async () => new Response(null, { status: 204 }));
+    const transport = createHttpCollectorTransport({ bearerToken: 'tok_SECRET_VALUE', url: 'http://collector/v1/events', timeoutMs: 1000, fetch });
+    await transport.send([event]);
+    const [url, init] = fetch.mock.calls[0] as unknown as [string, RequestInit];
+    const headers = new Headers(init.headers);
+    const authNames = Object.keys(init.headers as Record<string, string>).filter((name) => name.toLowerCase() === 'authorization');
+    expect(authNames).toHaveLength(1);
+    expect(headers.get('authorization')).toBe('Bearer tok_SECRET_VALUE');
+    expect(String(init.body)).not.toContain('tok_SECRET_VALUE');
+    expect(url).not.toContain('tok_SECRET_VALUE');
+  });
+});
+
+describe('review repairs (#636 re-review): shutdown abort reaches the request (F10)', () => {
+  function hangingFetch() {
+    const signals: AbortSignal[] = [];
+    const fetch = vi.fn((_url: string, init: RequestInit) => new Promise<Response>((_resolve, reject) => {
+      signals.push(init.signal!);
+      // Like a real fetch: an already-aborted signal rejects at once.
+      if (init.signal!.aborted) reject(new DOMException('aborted', 'AbortError'));
+      init.signal!.addEventListener('abort', () => reject(new DOMException('aborted', 'AbortError')));
+    }));
+    return { fetch, signals };
+  }
+
+  it("F10: the transport aborts its fetch when the batcher's attempt signal is aborted", async () => {
+    const { fetch, signals } = hangingFetch();
+    const transport = createHttpCollectorTransport({ bearerToken: TOKEN, url: 'http://collector/ingest', timeoutMs: 60_000, fetch: fetch as never });
+    const attempt = new AbortController();
+    const sent = transport.send([event], { timeoutMs: 60_000, signal: attempt.signal });
+    const settled = expect(sent).rejects.toMatchObject({ retryable: true });
+    await Promise.resolve();
+    expect(signals[0]!.aborted).toBe(false);
+    attempt.abort();
+    await settled;
+    await expect(sent).rejects.toMatchObject({ message: 'collector request cancelled' });
+    expect(signals[0]!.aborted).toBe(true);
+  });
+
+  it('F10: an attempt signal aborted before send starts aborts the fetch immediately', async () => {
+    const { fetch, signals } = hangingFetch();
+    const transport = createHttpCollectorTransport({ bearerToken: TOKEN, url: 'http://collector/ingest', timeoutMs: 60_000, fetch: fetch as never });
+    const attempt = new AbortController();
+    attempt.abort();
+    await expect(transport.send([event], { timeoutMs: 60_000, signal: attempt.signal })).rejects.toMatchObject({ retryable: true });
+    expect(signals.every((s) => s.aborted)).toBe(true);
   });
 });

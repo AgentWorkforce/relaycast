@@ -43,8 +43,8 @@
  * the URL are refused; use the bearer token. There is no fallback
  * destination: a failed send fails.
  */
-import { RETRY_DELAY_MAX_MS, type BatchAttempt, type ExportFailureHint } from './batcher.js';
-import type { ExportEvent, ExportFactValue } from './exportEnvelope.js';
+import { RETRY_DELAY_MAX_MS, type BatchAttempt, type ExportFailureCategory, type ExportFailureHint } from './batcher.js';
+import { exportProperties, validateExportEvent, type ExportEvent, type ExportFactValue } from './exportEnvelope.js';
 
 /** `schema` value of every batch body. */
 export const COLLECTOR_BATCH_SCHEMA = 'agent-relay.analytics.batch/v1' as const;
@@ -76,7 +76,7 @@ export interface WireEvent {
   component: string;
   deployment_id: string;
   event: string;
-  /** Always present: the request id, or a UUID created once at projection. */
+  /** Always present: the engine request id. An event without one is invalid and never sent. */
   trace_id: string;
   // tenant_id: never sent. Relaycast is a "native workspace with no separate
   // tenant model": workspace events carry workspace_id only, and
@@ -92,23 +92,18 @@ export interface WireBatch {
 }
 
 /**
- * Map an internal export event to the collector wire shape. Pure. `facts`
- * plus the envelope's `actor_type` and `origin` (flattened to `origin_app`,
- * `origin_actor_type`, `origin_client`) become `properties`; reserved field
- * names are stripped from `properties`.
+ * Map an internal export event to the collector wire shape. Pure.
+ * `properties` is {@link exportProperties}: the per-kind allowlist (or the
+ * exception classification registries) re-applied to `facts`, plus
+ * `actor_type` and the origin enums flattened to `origin_app`,
+ * `origin_actor_type`, `origin_client`. Reserved field names never appear in
+ * `properties`.
  */
 export function toWireEvent(event: ExportEvent): WireEvent {
   const properties: Record<string, ExportFactValue> = {};
-  const put = (key: string, value: ExportFactValue | undefined): void => {
-    if (value === undefined || COLLECTOR_RESERVED_FIELDS.has(key) || key === '__proto__') return;
+  for (const [key, value] of Object.entries(exportProperties(event))) {
+    if (COLLECTOR_RESERVED_FIELDS.has(key) || key === '__proto__') continue;
     properties[key] = value;
-  };
-  for (const [key, value] of Object.entries(event.facts)) put(key, value);
-  put('actor_type', event.actor_type);
-  if (event.origin) {
-    put('origin_app', event.origin.app);
-    put('origin_actor_type', event.origin.actor_type);
-    put('origin_client', event.origin.client);
   }
   return {
     version: COLLECTOR_EVENT_VERSION,
@@ -118,7 +113,7 @@ export function toWireEvent(event: ExportEvent): WireEvent {
     deployment_id: event.deployment,
     event: event.kind,
     trace_id: event.trace_id,
-    // Present only for workspace-scoped events.
+    // Present only for workspace-scoped kinds (validateExportEvent enforces the registry).
     ...(event.workspace_id ? { workspace_id: event.workspace_id } : {}),
     properties,
   };
@@ -157,9 +152,10 @@ export class CollectorExportError extends Error implements ExportFailureHint {
   readonly retryAfterMs?: number;
   readonly split?: boolean;
   readonly configuration?: boolean;
+  readonly category?: ExportFailureCategory;
   readonly reason: string;
 
-  constructor(reason: string, init: { retryable: boolean; status?: number; retryAfterMs?: number; split?: boolean; configuration?: boolean }) {
+  constructor(reason: string, init: { retryable: boolean; status?: number; retryAfterMs?: number; split?: boolean; configuration?: boolean; category?: ExportFailureCategory }) {
     super(reason);
     this.name = 'CollectorExportError';
     this.reason = reason;
@@ -168,6 +164,7 @@ export class CollectorExportError extends Error implements ExportFailureHint {
     if (init.retryAfterMs !== undefined) this.retryAfterMs = init.retryAfterMs;
     if (init.split) this.split = true;
     if (init.configuration) this.configuration = true;
+    if (init.category) this.category = init.category;
   }
 }
 
@@ -187,7 +184,7 @@ export function collectorResponseError(status: number, retryAfter: string | null
   };
   if (status >= 200 && status < 300) {
     // Only 204 acknowledges acceptance; another 2xx proves nothing was committed.
-    return new CollectorExportError(`collector protocol error: ${status} is not an acceptance (204)`, { retryable: true, status });
+    return new CollectorExportError(`collector protocol error: ${status} is not an acceptance (204)`, { retryable: true, status, category: 'protocol' });
   }
   if (status === 401 || status === 403) {
     return new CollectorExportError(`collector rejected producer credential (${status}); check the collector token and deployment id`, { retryable: false, status, configuration: true });
@@ -197,10 +194,10 @@ export function collectorResponseError(status: number, retryAfter: string | null
   }
   if (status === 429) return new CollectorExportError('collector backpressure (429)', { retryable: true, status, ...delay() });
   if (status === 503) return new CollectorExportError('collector unavailable (503)', { retryable: true, status, ...delay() });
-  if (status === 507) return new CollectorExportError('collector storage exhausted (507)', { retryable: true, status, ...delay() });
+  if (status === 507) return new CollectorExportError('collector storage exhausted (507)', { retryable: true, status, category: 'storage', ...delay() });
   if (status >= 300 && status < 400) {
     // Never followed; a redirect does not change on retry.
-    return new CollectorExportError(`collector redirected (${status}); not followed`, { retryable: false, status });
+    return new CollectorExportError(`collector redirected (${status}); not followed`, { retryable: false, status, category: 'redirect' });
   }
   if (status === 408) return new CollectorExportError('collector request timeout (408)', { retryable: true, status });
   if (status >= 400 && status < 500) {
@@ -285,10 +282,22 @@ export function createHttpCollectorTransport(options: HttpCollectorTransportOpti
       const attemptTimeoutMs = typeof limit === 'number' && Number.isFinite(limit) && limit > 0
         ? Math.min(timeoutMs, Math.ceil(limit))
         : timeoutMs;
+      // Backstop for the sink's gate: an event outside its registered scope or
+      // without a trace id is never sent (the batch is refused, terminally).
+      for (const event of events) {
+        const invalid = validateExportEvent(event);
+        if (invalid) throw new CollectorExportError(`invalid export event (${invalid}); not sent`, { retryable: false });
+      }
       const doFetch = options.fetch ?? globalThis.fetch;
       const body = JSON.stringify(toWireBatch(events));
       const controller = new AbortController();
       const timer = setTimeout(() => controller.abort(), attemptTimeoutMs);
+      // The batcher aborts this signal at its shutdown deadline (or when it
+      // abandons the attempt): the request is cancelled, not left running.
+      const cancel = attempt?.signal;
+      const onCancel = (): void => controller.abort();
+      if (cancel?.aborted) controller.abort();
+      else cancel?.addEventListener('abort', onCancel, { once: true });
       let response: Response;
       try {
         response = await doFetch(url, {
@@ -303,16 +312,18 @@ export function createHttpCollectorTransport(options: HttpCollectorTransportOpti
       } catch {
         // The error text is not logged: it can echo network details.
         throw new CollectorExportError(
-          controller.signal.aborted ? 'collector request timed out' : 'collector connection failed',
+          cancel?.aborted ? 'collector request cancelled'
+            : controller.signal.aborted ? 'collector request timed out' : 'collector connection failed',
           { retryable: true },
         );
       } finally {
         clearTimeout(timer);
+        cancel?.removeEventListener('abort', onCancel);
       }
       // Release the connection; the body is never read.
       try { await response.body?.cancel(); } catch { /* ignore */ }
       if (response.type === 'opaqueredirect') {
-        throw new CollectorExportError('collector redirected; not followed', { retryable: false });
+        throw new CollectorExportError('collector redirected; not followed', { retryable: false, category: 'redirect' });
       }
       if (response.status !== 204) {
         throw collectorResponseError(response.status, response.headers.get('retry-after'));

@@ -126,9 +126,10 @@ writes no analytics files and needs no extra volume.
 
 | Variable | Default | Meaning |
 |---|---|---|
+| `RELAYCAST_TELEMETRY_DESTINATION` | unset (the URL alone selects the collector) | Explicit destination: `none` or `collector`. `collector` without `RELAYCAST_TELEMETRY_COLLECTOR_URL` stops startup (exit `64`, `missing_telemetry_collector_url`); `none` disables export even when a URL is set; any other value (including `posthog`) is refused with `invalid_telemetry_destination`. |
 | `RELAYCAST_TELEMETRY_COLLECTOR_URL` | unset (off) | Collector ingest URL. Must be `https://`, or `http://` only to `localhost`, `127.0.0.1`, `[::1]`, a `*.svc` / `*.svc.cluster.local` Service or a single-label host (e.g. `http://collector:8080/v1/events`). Credentials, a query string (`?…`) or a fragment (`#…`) in the URL are refused. |
-| `RELAYCAST_TELEMETRY_COLLECTOR_TOKEN` / `RELAYCAST_TELEMETRY_COLLECTOR_TOKEN_FILE` | **required** when the URL is set | This server's per-producer collector credential, sent as `Authorization: Bearer …`. Mount it from a Secret and use the `_FILE` form; do not reuse a database, user or migration credential. Trimmed; never logged. Missing: exit `64`, `missing_telemetry_collector_token`. |
-| `RELAYCAST_TELEMETRY_DEPLOYMENT_ID` | **required** when the URL is set | Stable, opaque installation/deployment id sent as `deployment_id` on every event; it must match the collector's producer registration. 1–128 characters of `[A-Za-z0-9._:-]`, starting with a letter or digit. There is no hostname default (a pod name changes on every restart). Missing: exit `64`, `missing_telemetry_collector_deployment_id`; malformed: `invalid_telemetry_config`. |
+| `RELAYCAST_TELEMETRY_COLLECTOR_TOKEN` / `RELAYCAST_TELEMETRY_COLLECTOR_TOKEN_FILE` | **required** when the URL is set | This server's per-producer collector credential, sent as `Authorization: Bearer …`. Mount it from a Secret and use the `_FILE` form; do not reuse a database, user or migration credential. Trimmed, then treated as opaque and case-sensitive; it must be visible ASCII with no inner whitespace or control characters, so it fits one header value unchanged. Never logged, echoed or exported. Missing or empty: exit `64`, `missing_telemetry_collector_token`; whitespace/control/non-ASCII characters: exit `64`, `invalid_telemetry_collector_token` (the message never contains the token). |
+| `RELAYCAST_TELEMETRY_DEPLOYMENT_ID` | **required** when the URL is set | Stable, opaque installation/deployment id sent as `deployment_id` on every event; it must match the collector's producer registration. 1–128 characters of `[A-Za-z0-9._:-]`, starting with a letter or digit. There is no hostname default (a pod name changes on every restart), and a value equal to this replica's hostname (`os.hostname()` or `HOSTNAME`, case-insensitive) is refused. Missing: exit `64`, `missing_telemetry_collector_deployment_id`; malformed: `invalid_telemetry_config`; equal to the hostname: `invalid_telemetry_collector_deployment_id`. |
 | `RELAYCAST_TELEMETRY_QUEUE_MAX` | `1000` | Most events held in memory. |
 | `RELAYCAST_TELEMETRY_QUEUE_MAX_BYTES` | `1048576` (1 MiB) | Queue budget in serialized UTF-8 bytes. Must be at least `RELAYCAST_TELEMETRY_EVENT_MAX_BYTES`. |
 | `RELAYCAST_TELEMETRY_BATCH_MAX` | `50` | Most events per POST. |
@@ -136,6 +137,8 @@ writes no analytics files and needs no extra volume.
 | `RELAYCAST_TELEMETRY_EVENT_MAX_BYTES` | `8192` (8 KiB) | Largest single serialized event in UTF-8 bytes; a larger event is dropped before it is queued and counted as `oversized`. |
 | `RELAYCAST_TELEMETRY_FLUSH_MS` | `2000` | Longest wait before a partial batch is sent. |
 | `RELAYCAST_TELEMETRY_MAX_ATTEMPTS` | `3` | POST attempts per batch, the first included. |
+| `RELAYCAST_TELEMETRY_BACKOFF_MS` | `500` | Local retry backoff: retry *n* waits *n* × this (used when there is no valid `Retry-After`). |
+| `RELAYCAST_TELEMETRY_RETRY_AFTER_MAX_MS` | `30000` | Longest honored `Retry-After`, `0`–`30000` (the contract's 30 s ceiling; larger values are refused). `0` ignores `Retry-After` and uses the local backoff. |
 | `RELAYCAST_TELEMETRY_REQUEST_TIMEOUT_MS` | `5000` | Per-attempt request timeout (also clipped to the remaining delivery deadline). |
 | `RELAYCAST_TELEMETRY_DELIVERY_DEADLINE_MS` | `60000` | Total per-event delivery deadline, from enqueue (see below). |
 | `RELAYCAST_TELEMETRY_SHUTDOWN_TIMEOUT_MS` | `5000` | Longest drain on shutdown; anything left is dropped. |
@@ -144,12 +147,16 @@ The numeric defaults are conservative **producer defaults**: the collector
 contract requires finite, configurable limits but does not publish numbers.
 Keep `RELAYCAST_TELEMETRY_BATCH_MAX_BYTES` and
 `RELAYCAST_TELEMETRY_EVENT_MAX_BYTES` at or below your collector's own request
-and event limits. Every numeric setting must be a positive decimal integer. A
+and event limits. Every numeric setting must be a positive decimal integer
+(`RELAYCAST_TELEMETRY_RETRY_AFTER_MAX_MS` may also be `0`). A
 missing required value, a malformed value or an inconsistent byte budget stops
 startup with exit code `64`. Library users pass the same settings as
 `telemetryCollector` to `startServer` / `createNodeRuntime` (`bearerToken` and
 `deployment` are required there too and throw a `CollectorConfigError` with the
-same codes; an explicit `telemetry` sink takes precedence).
+same codes, plus `backoffMs` and `retryAfterMaxMs`; an explicit `telemetry`
+sink takes precedence). `telemetryDestination: 'collector'` without a
+`telemetryCollector` throws `missing_telemetry_collector_config`, `'none'`
+disables export, and any other value throws `unsupported_telemetry_destination`.
 
 The container image pins a published `@relaycast/engine`; until a release that
 includes collector support is pinned there, setting
@@ -162,11 +169,23 @@ Each request is `POST <url>` with `content-type: application/json`, exactly one
 has `version` (`1`), `event_id` (random UUID, kept across retries and splits),
 `occurred_at` (UTC), `component` (`relaycast`), `deployment_id` (the configured
 `RELAYCAST_TELEMETRY_DEPLOYMENT_ID`), `event` (the engine observation kind, or
-`exception`), `trace_id` (always present: the request id when one is known,
-otherwise a random UUID; kept across retries and splits), `workspace_id` (for
-workspace-scoped events) and `properties`. `tenant_id` is never sent:
+`exception`), `trace_id` (required: the engine request id of the request that
+produced the event; kept across retries and splits), `workspace_id` (for
+workspace-scoped events) and `properties`. No trace id is ever invented: an
+observation or exception without a well-formed request id is not exported and
+is counted as `invalid` in the sink's `stats()`. `tenant_id` is never sent:
 Relaycast is a native workspace with no separate tenant model, so workspace
 events carry `workspace_id` only and installation-wide events carry neither.
+The scope is fixed per event kind (`EXPORT_EVENT_SCOPES`): observations are
+workspace-scoped and must carry an authorized `workspace_id`; `exception` is
+installation-only and never carries one, whatever its error context holds.
+`workspace_id` must be a native engine workspace id (an unsigned 64-bit
+decimal snowflake, as the engine mints and derives them); any other text (an
+email, a workspace name, a prefixed or padded value) is never exported as
+attribution: such an observation is dropped and counted as `invalid`. An event
+with a missing id, a
+`tenant_id`, a substituted scope or a foreign deployment/component is refused
+before it is sent.
 
 `properties` is built from a reviewed allowlist (`ANALYTICS_FIELD_RULES` and
 `ANALYTICS_EVENT_FIELDS` in `@relaycast/engine`) with a value rule per field;
@@ -209,27 +228,30 @@ Collector responses:
 | Response | What the server does |
 |---|---|
 | `204` | Batch accepted. This is the only acceptance. |
-| Any other `2xx` (`200`, `202`, `206`, …) | Protocol error, never counted as accepted: retried within the attempt and deadline budget, then dropped and counted (`dropped`, `failedBatches`). |
+| Any other `2xx` (`200`, `202`, `206`, …) | Protocol error, never counted as accepted: counted per attempt in `protocolErrors`, retried within the attempt and deadline budget, then dropped and counted (`dropped`, `failedBatches`). |
 | `400` and other `4xx` (except `408`, retried) | Terminal: batch dropped and counted as `rejected`; never retried unchanged. |
 | `401` / `403` | Terminal configuration failure: batch dropped and counted as `rejected` and `configFailures`; a `CONFIGURATION FAILURE` line says `collector rejected producer credential (401)` (or `403`): check the token and `RELAYCAST_TELEMETRY_DEPLOYMENT_ID`. |
 | `413` | The batch is split in halves (bounded depth) and each half is sent again within the original deadline; a single event that is still too large is dropped and counted as `oversized` and `rejected`. |
-| `429` / `503` / `507` | Retried within the budget. A `Retry-After` in unsigned decimal seconds is honored, capped at 30 s and clipped to the remaining delivery and shutdown deadlines; an HTTP-date or malformed value is ignored (the normal backoff applies), and `0` never allows more than the usual attempts. `507` logs `collector storage exhausted (507)`; once the budget is spent the loss is counted. |
-| Other `5xx`, timeout or connection failure | Retried within the budget. |
-| Redirect (`3xx`) | Not followed (`redirect: 'manual'`, so the credential is never forwarded) and not retried; batch dropped and counted (`rejected`, `failedBatches`). |
+| `429` / `503` / `507` | Retried within the budget. A `Retry-After` in unsigned decimal seconds is honored, capped at 30 s and clipped to the remaining delivery and shutdown deadlines; an HTTP-date or malformed value is ignored (the normal backoff applies), and `0` never allows more than the usual attempts. `507` is counted per attempt in `storageFailures` and logs `collector storage exhausted (507)`; once the budget is spent the loss is counted. |
+| Other `5xx`, timeout or connection failure | Retried within the budget. An attempt still running at its timeout (or at the delivery deadline) is abandoned and counted in `attemptTimeouts`, even if the request itself does not abort. |
+| Redirect (`3xx`) | Not followed (`redirect: 'manual'`, so the credential is never forwarded) and not retried; batch dropped and counted (`redirects`, `rejected`, `failedBatches`). |
 
 Export never affects requests. Every event is measured as serialized UTF-8
 bytes before it is queued: one over `RELAYCAST_TELEMETRY_EVENT_MAX_BYTES` is
 dropped and counted as `oversized`. The queue is bounded by both
 `RELAYCAST_TELEMETRY_QUEUE_MAX` and `RELAYCAST_TELEMETRY_QUEUE_MAX_BYTES`;
-when either is exhausted the **newest** event (the one being added) is dropped
-and counted as `queueFull`. Batches are formed under both
+the batch currently being sent still counts against both (`inFlight`,
+`inFlightBytes`), so memory stays bounded during a slow request. When either is
+exhausted the **newest** event (the one being added) is dropped and counted as
+`queueFull`. Batches are formed under both
 `RELAYCAST_TELEMETRY_BATCH_MAX` and `RELAYCAST_TELEMETRY_BATCH_MAX_BYTES`, sent
 one at a time and retried up to `RELAYCAST_TELEMETRY_MAX_ATTEMPTS` with a short
-backoff. Each event also has a total delivery deadline
+backoff (`RELAYCAST_TELEMETRY_BACKOFF_MS`, or a `Retry-After` capped at
+`RELAYCAST_TELEMETRY_RETRY_AFTER_MAX_MS`). Each event also has a total delivery deadline
 (`RELAYCAST_TELEMETRY_DELIVERY_DEADLINE_MS`) that starts when it is enqueued
 and covers queued time, every attempt and every backoff or `Retry-After` wait;
 a batch uses its earliest event's deadline, and neither a retry nor a `413`
-split resets it. Each request's timeout is shortened to the time left, and
+split resets it (each half inherits its parent's deadline). Each request's timeout is shortened to the time left, and
 once the deadline passes (or a wait would pass it) the events are dropped and
 counted as `expired` instead of retried. A retry can duplicate a batch the
 collector already stored (same `event_id`s). A failed export logs at most one
@@ -238,7 +260,12 @@ failures have their own rate limit, so they are not hidden behind transient
 errors), with the `exported`, `dropped`, `rejected`, `expired`, `queueFull`,
 `oversized`, `configFailures`, `failedBatches` and `retries` counters, and
 never the token or a response body. On shutdown the queue is drained for up to
-`RELAYCAST_TELEMETRY_SHUTDOWN_TIMEOUT_MS`; anything left is dropped. There is
+`RELAYCAST_TELEMETRY_SHUTDOWN_TIMEOUT_MS`. At that deadline the request still
+in flight is aborted and its batch is counted once as dropped (a late response
+is ignored, never counted again or retried); the collector may already have
+stored it, since delivery is at-least-once at best and never exactly-once.
+Queued batches and batches waiting to retry are dropped and counted without a
+new request. There is
 no hosted fallback: a failed export is dropped, never sent anywhere else.
 
 Migrations run automatically on every boot and are tracked in an internal

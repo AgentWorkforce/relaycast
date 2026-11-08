@@ -25,11 +25,22 @@
  * projector builds a new object from named fields rather than copying and
  * scrubbing the input. Origin strings are reduced to registered enums.
  *
- * Every event carries a non-empty `trace_id`: the observation's well-formed
- * `request_id` when present, else a random UUID created once here. The event
- * object is immutable after projection, so retries and 413 splits re-send the
- * same `event_id` and `trace_id`.
+ * Every event carries a non-empty `trace_id`: the observation's `traceId`
+ * (the engine request id) or the exception context's `request_id`. An input
+ * without a well-formed one is invalid: the projector returns `null` (the sink
+ * counts it as `invalid`) and never invents an id. The event object is
+ * immutable after projection, so retries and 413 splits re-send the same
+ * `event_id` and `trace_id`.
+ *
+ * Scope. {@link EXPORT_EVENT_SCOPES} fixes each kind's identity model:
+ * observations are native-workspace events (`workspace_id` required, no
+ * tenant), `exception` is installation-only (neither). Relaycast has no tenant
+ * model separate from its workspace, so `tenant_id` is never produced.
+ * {@link validateExportEvent} rejects missing or substituted attribution, and
+ * {@link exportProperties} re-applies the allowlist when the wire event is
+ * built, so a hand-built event cannot carry an unreviewed property either.
  */
+import { isArWorkspaceId } from '@relaycast/types';
 import type { EngineObservation, EngineObservationKind } from '../ports/telemetry.js';
 import type { EngineOperationLabel } from '../ports/diagnostics.js';
 
@@ -59,6 +70,9 @@ export interface ExportOrigin {
   client: string;
 }
 
+/** Registered identity model of an export event kind. */
+export type ExportEventScope = 'installation' | 'workspace';
+
 export interface ExportEvent {
   v: typeof EXPORT_ENVELOPE_VERSION;
   event_id: string;
@@ -68,9 +82,10 @@ export interface ExportEvent {
   /** Engine observation kind, or `exception`. */
   kind: EngineObservationKind | 'exception';
   /**
-   * Workspace attribution; null only for an exception raised outside a
-   * workspace (installation-only). Relaycast has no tenant model separate from
-   * its workspace, so there is no tenant id field.
+   * Workspace attribution: required for workspace-scoped kinds (every
+   * observation), always null for installation-only kinds (`exception`).
+   * Relaycast has no tenant model separate from its workspace, so there is no
+   * tenant id field.
    */
   workspace_id: string | null;
   /** Required, non-empty; stable across retries and splits. */
@@ -415,9 +430,9 @@ export function projectOrigin(origin: unknown): ExportOrigin {
   };
 }
 
-/** The request id when well-formed, else a fresh random UUID. Never empty. */
-export function traceIdOf(requestId: unknown): string {
-  return typeof requestId === 'string' && REQUEST_ID.test(requestId) ? requestId : globalThis.crypto.randomUUID();
+/** The request id when well-formed, else undefined (the event is then invalid). Never invents an id. */
+export function traceIdOf(requestId: unknown): string | undefined {
+  return typeof requestId === 'string' && REQUEST_ID.test(requestId) ? requestId : undefined;
 }
 
 function isoTime(value: unknown): string {
@@ -428,8 +443,15 @@ function isoTime(value: unknown): string {
   return new Date().toISOString();
 }
 
-function workspaceIdOf(value: unknown): string | null {
-  return typeof value === 'string' && value !== '' && value.length <= EXPORT_STRING_MAX ? value : null;
+/**
+ * The workspace id when it matches the engine's native workspace-id grammar
+ * (a 64-bit decimal snowflake, as `generateWorkspaceId` mints and
+ * `deriveKeyedWorkspaceId` derives; the same check `ar_` credentials use,
+ * `isArWorkspaceId`), else null. Any other text (an email, a name, a product
+ * string) is never exported as workspace attribution.
+ */
+export function workspaceIdOf(value: unknown): string | null {
+  return typeof value === 'string' && isArWorkspaceId(value) ? value : null;
 }
 
 function base(identity: ExportIdentity, occurredAt: unknown): Pick<ExportEvent, 'v' | 'event_id' | 'occurred_at' | 'component' | 'deployment'> {
@@ -447,8 +469,9 @@ function isKnownKind(kind: unknown): kind is EngineObservationKind {
 }
 
 /**
- * Project an engine observation into the export envelope, or `null` for a kind
- * outside {@link ANALYTICS_EVENT_FIELDS} or without a workspace (never exported).
+ * Project an engine observation into the export envelope, or `null` (invalid,
+ * never exported) for a kind outside {@link ANALYTICS_EVENT_FIELDS}, without a
+ * workspace or without a well-formed `traceId`.
  */
 export function projectObservation(obs: EngineObservation, identity: ExportIdentity): ExportEvent | null {
   if (!isKnownKind(obs?.kind)) return null;
@@ -456,27 +479,40 @@ export function projectObservation(obs: EngineObservation, identity: ExportIdent
   const workspaceId = workspaceIdOf(obs.workspaceId);
   // Observations are native-workspace events: workspace_id is required.
   if (workspaceId === null) return null;
+  // trace_id is required; a missing one is never replaced by an invented id.
+  const traceId = traceIdOf(obs.traceId);
+  if (traceId === undefined) return null;
   const sourceFacts: Record<string, unknown> = obs.facts && typeof obs.facts === 'object' ? obs.facts : {};
   const actorType = obs.authenticatedActor?.type;
   return {
     ...base(identity, obs.occurredAt),
     kind,
     workspace_id: workspaceId,
-    trace_id: traceIdOf(sourceFacts.request_id),
+    trace_id: traceId,
     ...(typeof actorType === 'string' && ACTOR_TYPES.has(actorType) ? { actor_type: actorType } : {}),
     origin: projectOrigin(obs.origin),
     facts: projectFacts(kind, sourceFacts),
   };
 }
 
+/** `error_name` values for a thrown non-Error: `typeof` yields a fixed set, so this is closed too. */
+export const NON_ERROR_NAMES: ReadonlySet<string> = new Set(
+  ['null', 'undefined', 'string', 'number', 'bigint', 'boolean', 'symbol', 'object', 'function'].map((t) => `NonError:${t}`),
+);
+
 function errorName(err: unknown): string {
   if (err instanceof Error) {
     const ctorName = (err.constructor as { name?: unknown } | undefined)?.name;
     return typeof ctorName === 'string' && REGISTERED_ERROR_NAMES.has(ctorName) ? ctorName : UNREGISTERED_ERROR_NAME;
   }
-  // `typeof` yields a fixed set of values, so this is a closed classification too.
   return err === null ? 'NonError:null' : `NonError:${typeof err}`;
 }
+
+/** Every exported exception `operation` value. */
+export const REGISTERED_EXCEPTION_OPERATIONS: ReadonlySet<string> = new Set([
+  ...Object.entries(EXCEPTION_SOURCES).flatMap(([source, ops]) => [source, ...ops.map((op) => `${source}.${op}`)]),
+  ...ENGINE_OPERATIONS,
+]);
 
 function codeOf(value: unknown): string | undefined {
   return typeof value === 'string' && REGISTERED_ERROR_CODES.has(value) ? value : undefined;
@@ -499,24 +535,115 @@ function operationOf(context: Record<string, unknown>): string | undefined {
  * Classify an exception: a registered constructor name (else
  * {@link UNREGISTERED_ERROR_NAME}), a registered `code` (from the error, else
  * the context's `error_code`; omitted when unregistered), an allowlisted
- * operation, the workspace id and a trace id (the context's well-formed
- * `request_id`, else a random UUID). Never the message, stack or any other
- * context value.
+ * operation and the trace id (the context's well-formed `request_id`). Never
+ * the message, stack or any other context value. `exception` is an
+ * installation-only kind: it never carries a workspace id, whatever the
+ * context says. Returns `null` (invalid, never exported) without a trace id.
  */
-export function projectException(err: unknown, context: unknown, identity: ExportIdentity): ExportEvent {
+export function projectException(err: unknown, context: unknown, identity: ExportIdentity): ExportEvent | null {
   const ctx: Record<string, unknown> = context && typeof context === 'object' ? context as Record<string, unknown> : {};
+  const traceId = traceIdOf(ctx.request_id ?? ctx.requestId);
+  if (traceId === undefined) return null;
   const errorCode = codeOf(err && typeof err === 'object' ? (err as { code?: unknown }).code : undefined)
     ?? codeOf(ctx.error_code);
   const operation = operationOf(ctx);
   return {
     ...base(identity, undefined),
     kind: 'exception',
-    workspace_id: workspaceIdOf(ctx.workspace_id ?? ctx.workspaceId),
-    trace_id: traceIdOf(ctx.request_id ?? ctx.requestId),
+    workspace_id: null,
+    trace_id: traceId,
     facts: {
       error_name: errorName(err),
       ...(errorCode ? { error_code: errorCode } : {}),
       ...(operation ? { operation } : {}),
     },
   };
+}
+
+/**
+ * The registered identity model of every export kind. Observations are
+ * native-workspace events; `exception` is installation-only. The registry,
+ * not the event's content, decides which attribution a kind carries.
+ */
+export const EXPORT_EVENT_SCOPES: Readonly<Record<EngineObservationKind | 'exception', ExportEventScope>> = {
+  ...(Object.fromEntries(Object.keys(ANALYTICS_EVENT_FIELDS).map((kind) => [kind, 'workspace'])) as Record<EngineObservationKind, 'workspace'>),
+  exception: 'installation',
+};
+
+/** Stable reasons an export event is invalid. */
+export type ExportEventInvalidReason =
+  | 'unregistered_kind'
+  | 'missing_trace_id'
+  | 'missing_event_id'
+  | 'missing_workspace_id'
+  | 'unauthorized_workspace_id'
+  | 'tenant_id_not_allowed'
+  | 'deployment_mismatch'
+  | 'component_mismatch';
+
+/**
+ * Validate an export event against the registered scope of its kind and, when
+ * given, the producer registration (`deployment`, component `relaycast`).
+ * Returns the reason it is invalid, or `null`. Missing trace/event ids,
+ * missing required workspace attribution, workspace attribution on an
+ * installation-only kind, any tenant id (Relaycast has no tenant model) and a
+ * deployment/component other than the registration are all invalid.
+ */
+export function validateExportEvent(event: unknown, identity?: ExportIdentity): ExportEventInvalidReason | null {
+  const e = (event && typeof event === 'object' ? event : {}) as Record<string, unknown>;
+  const kind = e.kind;
+  if (typeof kind !== 'string' || !Object.prototype.hasOwnProperty.call(EXPORT_EVENT_SCOPES, kind)) return 'unregistered_kind';
+  if (traceIdOf(e.trace_id) === undefined) return 'missing_trace_id';
+  if (typeof e.event_id !== 'string' || !UUID_ID.test(e.event_id)) return 'missing_event_id';
+  if (Object.prototype.hasOwnProperty.call(e, 'tenant_id')) return 'tenant_id_not_allowed';
+  const scope = EXPORT_EVENT_SCOPES[kind as keyof typeof EXPORT_EVENT_SCOPES];
+  const workspaceId = e.workspace_id;
+  if (scope === 'workspace' && workspaceIdOf(workspaceId) === null) return 'missing_workspace_id';
+  if (scope === 'installation' && workspaceId !== null && workspaceId !== undefined) return 'unauthorized_workspace_id';
+  if (e.component !== 'relaycast') return 'component_mismatch';
+  if (identity && e.deployment !== identity.deployment) return 'deployment_mismatch';
+  return null;
+}
+
+const ACTOR_TYPE_RULE: AnalyticsFieldRule = { type: 'enum', values: ['human', 'agent', 'system'], doc: 'authenticated actor type' };
+const EXCEPTION_FIELD_RULES: Readonly<Record<string, ReadonlySet<string>>> = {
+  error_name: new Set([...REGISTERED_ERROR_NAMES, UNREGISTERED_ERROR_NAME, ...NON_ERROR_NAMES]),
+  error_code: REGISTERED_ERROR_CODES,
+  operation: REGISTERED_EXCEPTION_OPERATIONS,
+};
+
+function originEnum(value: unknown, set: ReadonlySet<string>): string {
+  return typeof value === 'string' && (set.has(value) || value === OTHER_VALUE || value === UNKNOWN_VALUE) ? value : OTHER_VALUE;
+}
+
+/**
+ * The exported `properties` of an event: re-applies the per-kind allowlist and
+ * value rules to `facts` (observations) or the exception classification
+ * registries, plus `actor_type` and the origin enums. Built from named fields
+ * only, so nothing outside the reviewed allowlist (names, content, arbitrary
+ * exception names/codes, reserved envelope fields) can leave, even on an event
+ * that did not come from the projector.
+ */
+export function exportProperties(event: ExportEvent): Record<string, ExportFactValue> {
+  const facts: Record<string, unknown> = event.facts && typeof event.facts === 'object' ? event.facts : {};
+  const properties: Record<string, ExportFactValue> = {};
+  if (event.kind === 'exception') {
+    const name = facts.error_name;
+    properties.error_name = typeof name === 'string' && EXCEPTION_FIELD_RULES.error_name!.has(name) ? name : UNREGISTERED_ERROR_NAME;
+    for (const key of ['error_code', 'operation'] as const) {
+      const value = facts[key];
+      if (typeof value === 'string' && EXCEPTION_FIELD_RULES[key]!.has(value)) properties[key] = value;
+    }
+    return properties;
+  }
+  if (!isKnownKind(event.kind)) return properties;
+  Object.assign(properties, projectFacts(event.kind, facts));
+  const actorType = applyRule(ACTOR_TYPE_RULE, event.actor_type);
+  if (actorType !== undefined && actorType !== OTHER_VALUE) properties.actor_type = actorType;
+  if (event.origin) {
+    properties.origin_app = originEnum(event.origin.app, REGISTERED_ORIGIN_APPS);
+    properties.origin_actor_type = originEnum(event.origin.actor_type, REGISTERED_ORIGIN_ACTOR_TYPES);
+    properties.origin_client = originEnum(event.origin.client, REGISTERED_ORIGIN_CLIENTS);
+  }
+  return properties;
 }

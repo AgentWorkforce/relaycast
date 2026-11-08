@@ -16,11 +16,15 @@
  * retry wait. A batch uses its earliest event deadline; a retry or a split
  * never resets or extends it (split halves keep their events' deadlines).
  * Each attempt's timeout handed to the transport is clipped to that remaining
- * deadline (and, once shutdown begins, to the shutdown deadline). When the
+ * deadline (and, once shutdown begins, to the shutdown deadline), and the
+ * batcher enforces that bound itself: an attempt still pending when it ends is
+ * abandoned as a retryable timeout even if the transport ignores `timeoutMs`.
+ * Split halves inherit the parent batch's deadline. When the
  * deadline would pass before another attempt could start, the events are
  * dropped and counted as `expired` instead of starting another request or
- * wait. Every retry wait, including one lengthened by `retryAfterMs`, is also
- * capped at {@link RETRY_DELAY_MAX_MS} and counts against `maxAttempts` (a zero
+ * wait. A `retryAfterMs` hint is capped at `retryAfterMaxMs` (at most
+ * {@link RETRY_DELAY_MAX_MS}); every retry wait is capped at
+ * {@link RETRY_DELAY_MAX_MS} and counts against `maxAttempts` (a zero
  * hint falls back to the local backoff and never permits extra attempts). Once
  * shutdown begins no wait outlasts the shutdown deadline: at that deadline a
  * batch waiting to be retried, unsent split halves and the queue are dropped
@@ -33,8 +37,13 @@
  * counted as `queueFull`. A batch never exceeds `batchMax` events nor
  * `batchMaxBytes` bytes, computed as `batchFrameBytes` plus the events' sizes
  * plus one separator byte between events (exactly the JSON array encoding).
- * The one in-flight batch is not counted against the queue bounds.
+ * The in-flight batch (including its split halves and retry waits) still
+ * counts against both queue bounds until it settles, so `queueMax` /
+ * `queueMaxBytes` bound everything the producer holds.
  */
+
+/** Observable failure class: a non-204 2xx, a 507 storage failure, or a refused redirect. */
+export type ExportFailureCategory = 'protocol' | 'storage' | 'redirect';
 
 /** Optional fields a transport may set on a thrown error to steer retries. */
 export interface ExportFailureHint {
@@ -48,22 +57,27 @@ export interface ExportFailureHint {
   reason?: string;
   /** The failure is a producer configuration problem (credential / authority); counted and logged separately. */
   configuration?: boolean;
+  /** Counted per failed attempt in `protocolErrors` / `storageFailures` / `redirects`. */
+  category?: ExportFailureCategory;
 }
 
 /** Longest delay a `retryAfterMs` hint can impose. */
 export const RETRY_DELAY_MAX_MS = 30_000;
 
-function hintOf(err: unknown): ExportFailureHint {
+const CATEGORIES: ReadonlySet<string> = new Set(['protocol', 'storage', 'redirect']);
+
+function hintOf(err: unknown, retryAfterMaxMs: number): ExportFailureHint {
   if (!err || typeof err !== 'object') return {};
-  const { retryable, retryAfterMs, split, reason, configuration } = err as Record<string, unknown>;
+  const { retryable, retryAfterMs, split, reason, configuration, category } = err as Record<string, unknown>;
   return {
     ...(typeof retryable === 'boolean' ? { retryable } : {}),
-    ...(typeof retryAfterMs === 'number' && Number.isFinite(retryAfterMs) && retryAfterMs > 0
-      ? { retryAfterMs: Math.min(retryAfterMs, RETRY_DELAY_MAX_MS) }
+    ...(typeof retryAfterMs === 'number' && Number.isFinite(retryAfterMs) && retryAfterMs > 0 && retryAfterMaxMs > 0
+      ? { retryAfterMs: Math.min(retryAfterMs, retryAfterMaxMs, RETRY_DELAY_MAX_MS) }
       : {}),
     ...(split === true ? { split } : {}),
     ...(typeof reason === 'string' ? { reason } : {}),
     ...(configuration === true ? { configuration } : {}),
+    ...(typeof category === 'string' && CATEGORIES.has(category) ? { category: category as ExportFailureCategory } : {}),
   };
 }
 
@@ -75,6 +89,14 @@ export interface BatchAttempt {
    * transport applies the smaller of this and its own request timeout.
    */
   timeoutMs: number;
+  /**
+   * Aborted when the batcher gives up on this attempt: at its timeout, or at
+   * the shutdown deadline for an attempt that was already running when
+   * shutdown began. The transport cancels its request on abort; any result
+   * that arrives later is ignored (the collector may still have committed the
+   * batch: delivery is at-least-once at best, never exactly-once).
+   */
+  signal?: AbortSignal;
 }
 
 export interface BatchTransport<T> {
@@ -127,6 +149,11 @@ export interface BatcherOptions<T = unknown> {
   sizeOf?: (item: T) => number;
   /** Serialized bytes of a batch body with zero events. Default 2 (`[]`). */
   batchFrameBytes?: number;
+  /**
+   * Longest delay a `retryAfterMs` hint (Retry-After) may impose, ms: 0 to
+   * {@link RETRY_DELAY_MAX_MS}. 0 ignores the hint. Default {@link RETRY_DELAY_MAX_MS}.
+   */
+  retryAfterMaxMs?: number;
 }
 
 export interface BatcherStats {
@@ -149,10 +176,22 @@ export interface BatcherStats {
   retries: number;
   /** Batches re-sent as two halves after a `split` failure. */
   splits: number;
+  /** Failed attempts answered with a non-204 2xx (a protocol error, never an acceptance). */
+  protocolErrors: number;
+  /** Failed attempts answered with 507 (collector storage exhausted). */
+  storageFailures: number;
+  /** Attempts answered with a redirect (never followed). */
+  redirects: number;
+  /** Attempts the batcher abandoned at their (delivery- or shutdown-clipped) attempt deadline. */
+  attemptTimeouts: number;
   /** Events currently waiting (not counting an in-flight batch). */
   queued: number;
   /** Serialized bytes currently waiting (not counting an in-flight batch). */
   queuedBytes: number;
+  /** Events in the batch being sent (counted against the queue bounds). */
+  inFlight: number;
+  /** Serialized bytes of the batch being sent (counted against the queue bytes bound). */
+  inFlightBytes: number;
 }
 
 type TimerHandle = unknown;
@@ -216,6 +255,10 @@ export function createBatcher<T>(transport: BatchTransport<T>, opts: BatcherOpti
     throw new Error('telemetry batcher: queueMaxBytes must be at least eventMaxBytes');
   }
   const sizeOf = opts.sizeOf ?? jsonUtf8Bytes;
+  const retryAfterMaxMs = nonNegativeInteger('retryAfterMaxMs', opts.retryAfterMaxMs ?? RETRY_DELAY_MAX_MS);
+  if (retryAfterMaxMs > RETRY_DELAY_MAX_MS) {
+    throw new Error(`telemetry batcher: retryAfterMaxMs must be at most ${RETRY_DELAY_MAX_MS}`);
+  }
 
   // Resolved per call so test fake timers installed later still apply.
   const setTimer = (fn: () => void, ms: number): TimerHandle => (deps.setTimeout ?? ((f, m) => setTimeout(f, m)))(fn, ms);
@@ -225,7 +268,13 @@ export function createBatcher<T>(transport: BatchTransport<T>, opts: BatcherOpti
 
   const queue: Array<Entry<T>> = [];
   let queuedBytes = 0;
-  const counters = { enqueued: 0, exported: 0, dropped: 0, queueFull: 0, oversized: 0, configFailures: 0, rejected: 0, expired: 0, failedBatches: 0, retries: 0, splits: 0 };
+  // The batch taken from the queue and not yet settled (sent, split, waiting or dropped).
+  let inFlight = 0;
+  let inFlightBytes = 0;
+  const counters = {
+    enqueued: 0, exported: 0, dropped: 0, queueFull: 0, oversized: 0, configFailures: 0, rejected: 0, expired: 0,
+    failedBatches: 0, retries: 0, splits: 0, protocolErrors: 0, storageFailures: 0, redirects: 0, attemptTimeouts: 0,
+  };
   // Halving a batch of at most batchMax reaches single items within this many splits.
   const maxSplitDepth = Math.ceil(Math.log2(batchMax));
   let flushTimer: TimerHandle | undefined;
@@ -240,6 +289,8 @@ export function createBatcher<T>(transport: BatchTransport<T>, opts: BatcherOpti
   let lastConfigLogAt = Number.NEGATIVE_INFINITY;
   // The batch currently sleeping before a retry (one batch is in flight at a time).
   let waiting: { batch: Array<Entry<T>>; why: string; wake: () => void; dropped: boolean } | undefined;
+  // The transport attempt currently running; cancelled at the shutdown deadline.
+  let active: { cancel: () => void } | undefined;
   // Second halves of split batches not yet sent; dropped at the shutdown deadline.
   const deferredHalves: Array<{ batch: Array<Entry<T>>; why: string; dropped: boolean }> = [];
 
@@ -291,9 +342,58 @@ export function createBatcher<T>(transport: BatchTransport<T>, opts: BatcherOpti
   const earliestDeadline = (batch: Array<Entry<T>>): number =>
     batch.reduce((earliest, entry) => Math.min(earliest, entry.deadlineAt), Number.POSITIVE_INFINITY);
 
-  const sendWithRetry = async (batch: Array<Entry<T>>, depth = 0): Promise<void> => {
-    // A batch uses its earliest event deadline; nothing below resets it.
-    const deadlineAt = earliestDeadline(batch);
+  /**
+   * One transport attempt, bounded by `timeoutMs` here as well as in the
+   * transport: a send still pending at that point is aborted (through the
+   * attempt's signal) and abandoned as a retryable timeout. At the shutdown
+   * deadline an attempt that is still running is aborted too, and its batch is
+   * counted as dropped there, exactly once (the collector may still have
+   * committed it). Either way the late result is ignored: once settled, an
+   * attempt never changes a counter again. A success is counted here, in the
+   * same step that settles the attempt, so no completion can land after the
+   * batch was settled.
+   */
+  const SETTLED_AT_SHUTDOWN = Symbol('settled at shutdown');
+  const attemptSend = (batch: Array<Entry<T>>, items: T[], timeoutMs: number): Promise<void> => new Promise<void>((resolve, reject) => {
+    let settled = false;
+    const controller = new AbortController();
+    const done = (): boolean => {
+      if (settled) return false;
+      settled = true;
+      clearTimer(handle);
+      if (active === current) active = undefined;
+      return true;
+    };
+    const handle = setTimer(() => {
+      if (!done()) return;
+      controller.abort();
+      counters.attemptTimeouts += 1;
+      reject(Object.assign(new Error('attempt deadline'), { name: 'AttemptTimeout', retryable: true, reason: 'attempt deadline passed' }));
+    }, timeoutMs);
+    unref(handle);
+    const current = {
+      cancel: () => {
+        if (!done()) return;
+        controller.abort();
+        giveUp(batch, false, `aborted an in-flight batch of ${batch.length} at the shutdown deadline; the collector may already have committed it`);
+        reject(SETTLED_AT_SHUTDOWN);
+      },
+    };
+    active = current;
+    Promise.resolve().then(() => transport.send(items, { timeoutMs, signal: controller.signal })).then(() => {
+      if (!done()) return;
+      counters.exported += batch.length;
+      resolve();
+    }, (err: unknown) => {
+      if (!done()) return;
+      reject(err);
+    });
+  });
+
+  const sendWithRetry = async (batch: Array<Entry<T>>, depth = 0, inheritedDeadlineAt = Number.POSITIVE_INFINITY): Promise<void> => {
+    // A batch uses its earliest event deadline, and split halves keep their
+    // parent's: nothing below resets or extends it.
+    const deadlineAt = Math.min(earliestDeadline(batch), inheritedDeadlineAt);
     const items = batch.map((entry) => entry.item);
     let why = 'delivery deadline';
     for (let attempt = 1; ; attempt += 1) {
@@ -310,13 +410,17 @@ export function createBatcher<T>(transport: BatchTransport<T>, opts: BatcherOpti
       }
       let failure: unknown;
       try {
-        await Promise.resolve().then(() => transport.send(items, { timeoutMs: Math.max(1, Math.ceil(timeoutMs)) }));
-        counters.exported += batch.length;
+        await attemptSend(batch, items, Math.max(1, Math.ceil(timeoutMs)));
         return;
       } catch (err) {
+        // Already counted (dropped) when the shutdown deadline aborted it.
+        if (err === SETTLED_AT_SHUTDOWN) return;
         failure = err;
       }
-      const hint = hintOf(failure);
+      const hint = hintOf(failure, retryAfterMaxMs);
+      if (hint.category === 'protocol') counters.protocolErrors += 1;
+      else if (hint.category === 'storage') counters.storageFailures += 1;
+      else if (hint.category === 'redirect') counters.redirects += 1;
       why = hint.reason ?? (failure instanceof Error ? failure.name : typeof failure);
       if (hint.split) {
         if (batch.length > 1 && depth < maxSplitDepth && !abandoned) {
@@ -327,11 +431,11 @@ export function createBatcher<T>(transport: BatchTransport<T>, opts: BatcherOpti
           const rest = { batch: batch.slice(middle), why, dropped: false };
           deferredHalves.push(rest);
           try {
-            await sendWithRetry(batch.slice(0, middle), depth + 1);
+            await sendWithRetry(batch.slice(0, middle), depth + 1, deadlineAt);
           } finally {
             deferredHalves.splice(deferredHalves.indexOf(rest), 1);
           }
-          if (!rest.dropped) await sendWithRetry(rest.batch, depth + 1);
+          if (!rest.dropped) await sendWithRetry(rest.batch, depth + 1, deadlineAt);
           return;
         }
         // A single event the collector still finds too large is oversized.
@@ -401,7 +505,16 @@ export function createBatcher<T>(transport: BatchTransport<T>, opts: BatcherOpti
         while (queue.length > 0 && !abandoned) {
           expireQueued();
           if (queue.length === 0) break;
-          await sendWithRetry(takeBatch());
+          const batch = takeBatch();
+          const bytes = batch.reduce((sum, entry) => sum + entry.bytes, 0);
+          inFlight = batch.length;
+          inFlightBytes = bytes;
+          try {
+            await sendWithRetry(batch);
+          } finally {
+            inFlight = 0;
+            inFlightBytes = 0;
+          }
         }
       } finally {
         pumping = undefined;
@@ -448,11 +561,13 @@ export function createBatcher<T>(transport: BatchTransport<T>, opts: BatcherOpti
           report(`dropped an event over ${eventMaxBytes} bytes`);
           return;
         }
-        // Queue exhaustion (count or bytes) drops the newest event: this one.
-        if (queue.length >= queueMax || queuedBytes + bytes > queueMaxBytes) {
+        // Queue exhaustion (count or bytes, the in-flight batch included)
+        // drops the newest event: this one.
+        const held = queue.length + inFlight;
+        if (held >= queueMax || queuedBytes + inFlightBytes + bytes > queueMaxBytes) {
           counters.dropped += 1;
           counters.queueFull += 1;
-          report(queue.length >= queueMax
+          report(held >= queueMax
             ? `queue full (${queueMax} events); dropped the newest event`
             : `queue full (${queueMaxBytes} bytes); dropped the newest event`);
           return;
@@ -492,6 +607,9 @@ export function createBatcher<T>(transport: BatchTransport<T>, opts: BatcherOpti
         };
         const deadline = setTimer(() => {
           abandoned = true;
+          // An attempt already running (started before shutdown, with a
+          // longer timeout) is aborted and its batch settled now.
+          active?.cancel();
           // A batch sleeping before its retry is dropped now, not when its
           // (possibly Retry-After lengthened) wait would have ended.
           const sleeper = waiting;
@@ -520,7 +638,7 @@ export function createBatcher<T>(transport: BatchTransport<T>, opts: BatcherOpti
     },
 
     stats(): BatcherStats {
-      return { ...counters, queued: queue.length, queuedBytes };
+      return { ...counters, queued: queue.length, queuedBytes, inFlight, inFlightBytes };
     },
   };
   return batcher;

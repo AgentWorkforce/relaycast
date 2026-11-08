@@ -21,8 +21,17 @@ import {
   REGISTERED_ERROR_NAMES,
   traceIdOf,
   UNREGISTERED_ERROR_NAME,
+  EXPORT_EVENT_SCOPES,
+  validateExportEvent,
+  workspaceIdOf,
   type AnalyticsFieldRule,
+  type ExportEvent,
 } from '../exportEnvelope.js';
+import { toWireEvent } from '../httpTransport.js';
+import { deriveKeyedWorkspaceId, generateWorkspaceId } from '../../gateway.js';
+
+/** A native engine workspace id (64-bit snowflake). */
+const WS_1 = '1189827393826947072';
 
 const identity = { deployment: 'acme-prod' };
 const KINDS = Object.keys(ENGINE_OBSERVATION_FACTS) as EngineObservationKind[];
@@ -42,6 +51,9 @@ const POISON = {
 };
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 const SNOWFLAKE = '1234567890123456789';
+/** The engine request id an observation / exception context carries as its trace id. */
+const TRACE_ID = 'req-trace-0001';
+const TRACE = { request_id: TRACE_ID };
 
 /** A value that satisfies `rule`. */
 function validValue(rule: AnalyticsFieldRule): string | number | boolean {
@@ -75,7 +87,8 @@ function observation(kind: EngineObservationKind, extra: Record<string, unknown>
   return {
     kind,
     occurredAt: '2026-11-08T10:00:00.000Z',
-    workspaceId: 'ws_1',
+    workspaceId: WS_1,
+    traceId: TRACE_ID,
     authenticatedActor: { agentId: POISON.actorId, credentialHash: POISON.credentialHash, type: 'agent' },
     sender: { id: POISON.senderId, name: POISON.senderName, type: 'human' },
     origin: { actor: `agent-relay-cli/agent/${POISON.originName}`, client: '@relaycast/sdk', version: POISON.originVersion },
@@ -176,13 +189,13 @@ describe('projectObservation', () => {
       component: 'relaycast',
       deployment: 'acme-prod',
       kind,
-      workspace_id: 'ws_1',
+      workspace_id: WS_1,
       actor_type: 'agent',
       origin: { app: 'agent-relay-cli', actor_type: 'agent', client: '@relaycast/sdk' },
       occurred_at: '2026-11-08T10:00:00.000Z',
     });
     expect(event.event_id).toMatch(UUID);
-    expect(event.trace_id).toMatch(UUID);
+    expect(event.trace_id).toBe(TRACE_ID);
     const portFields = ENGINE_OBSERVATION_FACTS[kind] as readonly string[];
     const expected = portFields.filter((field) => ANALYTICS_EVENT_FIELDS[kind].includes(field));
     expect(Object.keys(event.facts).sort()).toEqual([...expected].sort());
@@ -282,19 +295,23 @@ describe('projectObservation', () => {
     expect(Object.keys(event.origin!).sort()).toEqual(['actor_type', 'app', 'client']);
   });
 
-  it('always sets trace_id: the well-formed request id, else a random UUID', () => {
-    const withRequest = projectObservation(observation('search.executed', { request_id: 'req-0123abc' }), identity)!;
-    expect(withRequest.trace_id).toBe('req-0123abc');
-    expect(withRequest.facts).not.toHaveProperty('request_id');
-    const a = projectObservation(observation('search.executed'), identity)!;
-    const b = projectObservation(observation('search.executed'), identity)!;
-    expect(a.trace_id).toMatch(UUID);
-    expect(a.trace_id).not.toBe(b.trace_id);
-    const malformed = projectObservation(observation('search.executed', { request_id: 'has spaces <script>' }), identity)!;
-    expect(malformed.trace_id).toMatch(UUID);
-    expect(traceIdOf('r'.repeat(129))).toMatch(UUID);
-    expect(traceIdOf('')).toMatch(UUID);
-    expect(traceIdOf(42)).toMatch(UUID);
+  it('F4: takes trace_id from the observation request id and never exports request_id as a fact', () => {
+    const event = projectObservation({ ...observation('search.executed', { request_id: 'req-other' }), traceId: 'req-0123abc' }, identity)!;
+    expect(event.trace_id).toBe('req-0123abc');
+    expect(event.facts).not.toHaveProperty('request_id');
+  });
+
+  it('F4: rejects an observation without a well-formed trace id instead of inventing one', () => {
+    const missing = { ...observation('search.executed', { request_id: 'req-in-facts-only' }) };
+    delete (missing as { traceId?: unknown }).traceId;
+    expect(projectObservation(missing, identity)).toBeNull();
+    for (const traceId of ['', 'has spaces <script>', 'r'.repeat(129), 42]) {
+      expect(projectObservation({ ...observation('search.executed'), traceId } as unknown as EngineObservation, identity), String(traceId)).toBeNull();
+    }
+    expect(traceIdOf('r'.repeat(129))).toBeUndefined();
+    expect(traceIdOf('')).toBeUndefined();
+    expect(traceIdOf(42)).toBeUndefined();
+    expect(traceIdOf('req-0123abc')).toBe('req-0123abc');
   });
 
   it('omits actor_type without an authenticated actor and drops unknown kinds or a missing workspace', () => {
@@ -323,12 +340,15 @@ describe('projectException', () => {
       workspace_id: 'ws_9',
       url: 'https://hook.example/POISON_URL',
       payload: { text: POISON.text },
-    }, identity);
+      ...TRACE,
+    }, identity)!;
     const wire = JSON.stringify(event);
     for (const value of ['POISON_MESSAGE', 'POISON_STACK', 'POISON_URL', POISON.text, 'at_live_123']) expect(wire).not.toContain(value);
     expect(event.facts).toEqual({ error_name: 'TypeError', error_code: 'SQLITE_BUSY', operation: 'node.event_queue.deliver' });
-    expect(event).toMatchObject({ v: 1, kind: 'exception', workspace_id: 'ws_9', component: 'relaycast', deployment: 'acme-prod' });
-    expect(event.trace_id).toMatch(UUID);
+    // exception is installation-only: the context's workspace_id is never attributed.
+    expect(event).toMatchObject({ v: 1, kind: 'exception', workspace_id: null, component: 'relaycast', deployment: 'acme-prod' });
+    expect(event.trace_id).toBe(TRACE_ID);
+    expect(wire).not.toContain('ws_9');
     expect(event).not.toHaveProperty('origin');
     expect(event).not.toHaveProperty('actor_type');
     expect(wire).not.toContain('tenant');
@@ -336,18 +356,24 @@ describe('projectException', () => {
 
   it('drops unknown operations, unregistered codes and non-errors', () => {
     const err = Object.assign(new Error('x'), { code: 'not a code: POISON' });
-    const event = projectException(err, { source: 'POISON_SOURCE', op: 'x', path: '/v1/POISON' }, identity);
+    const event = projectException(err, { source: 'POISON_SOURCE', op: 'x', path: '/v1/POISON', ...TRACE }, identity)!;
     expect(event.facts).toEqual({ error_name: 'Error' });
     expect(event.workspace_id).toBeNull();
-    expect(projectException('POISON_STRING', undefined, identity).facts).toEqual({ error_name: 'NonError:string' });
-    expect(JSON.stringify(projectException('POISON_STRING', undefined, identity))).not.toContain('POISON');
+    expect(projectException('POISON_STRING', TRACE, identity)!.facts).toEqual({ error_name: 'NonError:string' });
+    expect(JSON.stringify(projectException('POISON_STRING', TRACE, identity))).not.toContain('POISON');
   });
 
   it('takes a context error_code, an allowlisted engine operation and the request id as trace_id', () => {
-    const event = projectException(new Error('internal_error'), { error_code: 'internal_error', engine_operation: 'inbox.get', request_id: 'r1' }, identity);
+    const event = projectException(new Error('internal_error'), { error_code: 'internal_error', engine_operation: 'inbox.get', request_id: 'r1' }, identity)!;
     expect(event.facts).toEqual({ error_name: 'Error', error_code: 'internal_error', operation: 'inbox.get' });
     expect(event.trace_id).toBe('r1');
-    expect(projectException(new Error('x'), { requestId: 'r2' }, identity).trace_id).toBe('r2');
+    expect(projectException(new Error('x'), { requestId: 'r2' }, identity)!.trace_id).toBe('r2');
+  });
+
+  it('F4: rejects an exception without a request id instead of inventing a trace id', () => {
+    expect(projectException(new Error('x'), undefined, identity)).toBeNull();
+    expect(projectException(new Error('x'), { workspace_id: 'ws_9' }, identity)).toBeNull();
+    expect(projectException(new Error('x'), { request_id: 'bad id with spaces' }, identity)).toBeNull();
   });
 
   it('passes registered names and codes through', () => {
@@ -360,11 +386,11 @@ describe('projectException', () => {
       new RangeError('POISON_MESSAGE'),
     ]) {
       expect(REGISTERED_ERROR_NAMES.has(err.constructor.name)).toBe(true);
-      expect(projectException(err, undefined, identity).facts.error_name).toBe(err.constructor.name);
+      expect(projectException(err, TRACE, identity)!.facts.error_name).toBe(err.constructor.name);
     }
     for (const code of ['SQLITE_CONSTRAINT_UNIQUE', 'ECONNRESET', 'delivery_failed']) {
       expect(REGISTERED_ERROR_CODES.has(code)).toBe(true);
-      expect(projectException(Object.assign(new Error('x'), { code }), undefined, identity).facts.error_code).toBe(code);
+      expect(projectException(Object.assign(new Error('x'), { code }), TRACE, identity)!.facts.error_code).toBe(code);
     }
   });
 
@@ -378,7 +404,7 @@ describe('projectException', () => {
       expect(Ctor.name).toBe(name);
       for (const code of codes) {
         expect(REGISTERED_ERROR_CODES.has(code), code).toBe(false);
-        const event = projectException(Object.assign(new Ctor('x'), { code }), { error_code: code }, identity);
+        const event = projectException(Object.assign(new Ctor('x'), { code }), { error_code: code, ...TRACE }, identity)!;
         expect(event.facts, `${name}/${code}`).toEqual({ error_name: UNREGISTERED_ERROR_NAME });
         const wire = JSON.stringify(event);
         expect(wire).not.toContain(name);
@@ -393,7 +419,7 @@ describe('projectException', () => {
     class Leaky extends Error {}
     Object.defineProperty(Leaky, 'name', { value: message });
     const err = Object.assign(new Leaky(message), { name: message, code: message });
-    const event = projectException(err, { error_code: message, message, context: { message } }, identity);
+    const event = projectException(err, { error_code: message, message, context: { message }, ...TRACE }, identity)!;
     expect(event.facts).toEqual({ error_name: UNREGISTERED_ERROR_NAME });
     const wire = JSON.stringify(event);
     for (const value of ['POISON_MSG', 'alice@example.com', 'at_live_123']) expect(wire).not.toContain(value);
@@ -402,6 +428,102 @@ describe('projectException', () => {
   it('classifies by constructor, not a reassigned name property', () => {
     const err = new Error('x');
     err.name = 'POISON_NAME';
-    expect(projectException(err, undefined, identity).facts.error_name).toBe('Error');
+    expect(projectException(err, TRACE, identity)!.facts.error_name).toBe('Error');
+  });
+});
+
+describe('validateExportEvent (F4: required ids and registered scope)', () => {
+  const workspaceEvent = (): ExportEvent => projectObservation(observation('message.created'), identity)!;
+  const exceptionEvent = (): ExportEvent => projectException(new Error('x'), TRACE, identity)!;
+
+  it('F4: accepts projector output for both registered scopes', () => {
+    expect(validateExportEvent(workspaceEvent(), identity)).toBeNull();
+    expect(validateExportEvent(exceptionEvent(), identity)).toBeNull();
+    for (const kind of KINDS) expect(EXPORT_EVENT_SCOPES[kind], kind).toBe('workspace');
+    expect(EXPORT_EVENT_SCOPES.exception).toBe('installation');
+  });
+
+  it('F4: rejects a missing or malformed trace_id', () => {
+    const { trace_id: _omit, ...withoutTrace } = workspaceEvent();
+    expect(validateExportEvent(withoutTrace, identity)).toBe('missing_trace_id');
+    expect(validateExportEvent({ ...workspaceEvent(), trace_id: '' }, identity)).toBe('missing_trace_id');
+    expect(validateExportEvent({ ...exceptionEvent(), trace_id: 'bad id' }, identity)).toBe('missing_trace_id');
+  });
+
+  it('F4: rejects a missing event_id', () => {
+    expect(validateExportEvent({ ...workspaceEvent(), event_id: '' }, identity)).toBe('missing_event_id');
+    expect(validateExportEvent({ ...workspaceEvent(), event_id: '1' }, identity)).toBe('missing_event_id');
+  });
+
+  it('F4: rejects a workspace-scoped event without workspace_id', () => {
+    expect(validateExportEvent({ ...workspaceEvent(), workspace_id: null }, identity)).toBe('missing_workspace_id');
+    expect(validateExportEvent({ ...workspaceEvent(), workspace_id: '' }, identity)).toBe('missing_workspace_id');
+  });
+
+  it('F4: rejects scope substitution: workspace attribution on an installation-only kind', () => {
+    expect(validateExportEvent({ ...exceptionEvent(), workspace_id: 'ws_9' }, identity)).toBe('unauthorized_workspace_id');
+  });
+
+  it('F4: rejects any tenant_id, including one set equal to the workspace id', () => {
+    const event = workspaceEvent();
+    expect(validateExportEvent({ ...event, tenant_id: event.workspace_id }, identity)).toBe('tenant_id_not_allowed');
+    expect(validateExportEvent({ ...event, tenant_id: 'tenant_1' }, identity)).toBe('tenant_id_not_allowed');
+    expect(validateExportEvent({ ...exceptionEvent(), tenant_id: 'tenant_1' }, identity)).toBe('tenant_id_not_allowed');
+  });
+
+  it('F4: rejects an unregistered kind and a deployment/component other than the registration', () => {
+    expect(validateExportEvent({ ...workspaceEvent(), kind: 'tenant.created' }, identity)).toBe('unregistered_kind');
+    expect(validateExportEvent({ ...workspaceEvent(), deployment: 'other-prod' }, identity)).toBe('deployment_mismatch');
+    expect(validateExportEvent({ ...workspaceEvent(), component: 'cloud' }, identity)).toBe('component_mismatch');
+  });
+});
+
+describe('review repairs (#636 re-review): native workspace-id grammar (F9)', () => {
+  const INVALID_WORKSPACE_IDS: Array<[string, string]> = [
+    ['email-shaped', 'alice@example.com'],
+    ['product-looking name', 'acme-production'],
+    ['prefixed product id', 'ws_1'],
+    ['over-long digits', '1'.repeat(25)],
+    ['over-long text', 'x'.repeat(129)],
+    ['leading whitespace', ' 1189827393826947072'],
+    ['inner whitespace', '1189 827'],
+    ['above 64 bits', '18446744073709551616'],
+    ['leading zero', '01189827393826947072'],
+  ];
+
+  it('F9: controls: workspace ids minted by generateWorkspaceId and deriveKeyedWorkspaceId still export', async () => {
+    const generated = generateWorkspaceId();
+    const derived = await deriveKeyedWorkspaceId('test-secret', 'key-1');
+    for (const id of [generated, derived, WS_1]) {
+      expect(workspaceIdOf(id), id).toBe(id);
+      const event = projectObservation({ ...observation('message.created'), workspaceId: id }, identity)!;
+      expect(event, id).not.toBeNull();
+      expect(event.workspace_id).toBe(id);
+      expect(validateExportEvent(event, identity)).toBeNull();
+      expect(toWireEvent(event).workspace_id).toBe(id);
+    }
+  });
+
+  it.each(INVALID_WORKSPACE_IDS)('F9: the observation path rejects a %s workspace id (never exported as attribution)', (_label, bad) => {
+    expect(workspaceIdOf(bad)).toBeNull();
+    expect(projectObservation({ ...observation('message.created'), workspaceId: bad }, identity)).toBeNull();
+    const valid = projectObservation(observation('message.created'), identity)!;
+    expect(validateExportEvent({ ...valid, workspace_id: bad }, identity)).toBe('missing_workspace_id');
+  });
+
+  it.each(INVALID_WORKSPACE_IDS)('F9: the exception path never carries a %s workspace id from its context', (_label, bad) => {
+    const event = projectException(new Error('x'), { workspace_id: bad, workspaceId: bad, ...TRACE }, identity)!;
+    expect(event).not.toBeNull();
+    expect(event.workspace_id).toBeNull();
+    expect(JSON.stringify(toWireEvent(event))).not.toContain(bad.trim());
+  });
+
+  it('F9: the exception path never carries even a valid workspace id (installation-only)', async () => {
+    const derived = await deriveKeyedWorkspaceId('test-secret', 'key-1');
+    for (const id of [generateWorkspaceId(), derived]) {
+      const event = projectException(new Error('x'), { workspace_id: id, ...TRACE }, identity)!;
+      expect(event.workspace_id).toBeNull();
+      expect(JSON.stringify(toWireEvent(event))).not.toContain(id);
+    }
   });
 });

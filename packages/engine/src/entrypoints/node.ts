@@ -20,6 +20,7 @@ import {
   type InProcessPresenceOptions,
   type NodeRuntime,
   type NodeTelemetryCollectorOptions,
+  type NodeRuntimeOptions,
 } from '../adapters/node/index.js';
 import {
   authenticateNodeWs,
@@ -46,6 +47,8 @@ export interface StartServerOptions {
   telemetry?: TelemetrySink;
   /** Opt-in self-host analytics collector; ignored when `telemetry` is set. */
   telemetryCollector?: NodeTelemetryCollectorOptions;
+  /** Explicit analytics destination (`none` | `collector`); see `NodeRuntimeOptions.telemetryDestination`. */
+  telemetryDestination?: NodeRuntimeOptions['telemetryDestination'];
   config?: EngineConfig;
   presence?: InProcessPresenceOptions;
   /** Durable webhook outbox + retention pruning tuning. */
@@ -97,6 +100,7 @@ export function startServer(options: StartServerOptions): RunningServer {
     admission: options.admission,
     telemetry: options.telemetry,
     telemetryCollector: options.telemetryCollector,
+    telemetryDestination: options.telemetryDestination,
     config: options.config,
     presence: options.presence,
     eventQueue: options.eventQueue,
