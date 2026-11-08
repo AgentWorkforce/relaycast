@@ -677,7 +677,16 @@ test('telemetry collector refuses malformed values', () => {
       (error) => error instanceof BaseUrlError && error.code === 'invalid_telemetry_config' && /refused to start/.test(error.message) && error.message.includes(name),
     );
   }
-  for (const bad of ['not a url', 'http://collector.example.com/', 'https://user:pw@collector.example.com/', 'ftp://collector/']) {
+  for (const bad of [
+    'not a url',
+    'http://collector.example.com/',
+    'https://user:pw@collector.example.com/',
+    'ftp://collector/',
+    'http://collector:8080/v1/events?token=x',
+    'http://collector:8080/v1/events?',
+    'http://collector:8080/v1/events#frag',
+    'http://collector:8080/v1/events#',
+  ]) {
     assert.throws(
       () => telemetryCollectorFromEnv({ RELAYCAST_TELEMETRY_COLLECTOR_URL: bad }),
       (error) => error instanceof BaseUrlError && error.code === 'invalid_telemetry_collector_url',

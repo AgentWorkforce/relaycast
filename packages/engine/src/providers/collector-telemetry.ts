@@ -1,5 +1,5 @@
 import type { TelemetryEvent, TelemetrySink } from '../ports/telemetry.js';
-import { createBatcher, type Batcher, type BatcherDeps, type BatcherStats } from '../telemetry/batcher.js';
+import { createBatcher, DELIVERY_DEADLINE_DEFAULT_MS, type Batcher, type BatcherDeps, type BatcherStats } from '../telemetry/batcher.js';
 import { projectException, projectObservation, type ExportEvent, type ExportIdentity } from '../telemetry/exportEnvelope.js';
 import { createHttpCollectorTransport, type CollectorTransport } from '../telemetry/httpTransport.js';
 import { NoopTelemetrySink } from './noop-telemetry.js';
@@ -24,7 +24,13 @@ export interface CollectorTelemetrySinkOptions {
   backoffMs?: number;
   /** Default 5000. */
   shutdownTimeoutMs?: number;
-  /** Per-request timeout. Default 5000. */
+  /**
+   * Total delivery deadline per event, from enqueue across queued time, every
+   * attempt and every retry wait; splits and retries never extend it. Expired
+   * events are dropped and counted. Default 60000.
+   */
+  deliveryDeadlineMs?: number;
+  /** Per-attempt request timeout, clipped to the remaining delivery deadline. Default 5000. */
   requestTimeoutMs?: number;
   fetch?: typeof globalThis.fetch;
   /** Replace the HTTP transport (tests). */
@@ -45,6 +51,7 @@ export const COLLECTOR_TELEMETRY_DEFAULTS = {
   maxAttempts: 3,
   backoffMs: 500,
   shutdownTimeoutMs: 5000,
+  deliveryDeadlineMs: DELIVERY_DEADLINE_DEFAULT_MS,
   requestTimeoutMs: 5000,
 } as const;
 
@@ -76,6 +83,7 @@ export class CollectorTelemetrySink implements TelemetrySink {
       maxAttempts: options.maxAttempts ?? COLLECTOR_TELEMETRY_DEFAULTS.maxAttempts,
       backoffMs: options.backoffMs ?? COLLECTOR_TELEMETRY_DEFAULTS.backoffMs,
       shutdownTimeoutMs: options.shutdownTimeoutMs ?? COLLECTOR_TELEMETRY_DEFAULTS.shutdownTimeoutMs,
+      deliveryDeadlineMs: options.deliveryDeadlineMs ?? COLLECTOR_TELEMETRY_DEFAULTS.deliveryDeadlineMs,
     }, options.batcherDeps);
     this.local = options.local ?? new NoopTelemetrySink();
   }

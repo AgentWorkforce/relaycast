@@ -1,6 +1,20 @@
 import { describe, expect, it } from 'vitest';
 import { ENGINE_OBSERVATION_FACTS, type EngineObservation, type EngineObservationKind } from '../../ports/telemetry.js';
-import { EXPORT_ENVELOPE_VERSION, EXPORT_STRING_MAX, OPTIONAL_EXPORT_FACTS, projectException, projectObservation } from '../exportEnvelope.js';
+import { WorkspaceIdNotSnowflakeError } from '../../auth/credentials.js';
+import { ConfigError } from '../../bin/secretEnv.js';
+import { WorkspaceDeliveryCapacityError } from '../../engine/workspaceDeliveryPolicy.js';
+import { AdmissionDeniedError } from '../../lib/admissionError.js';
+import { D1WriteRetryExhaustedError } from '../../lib/d1Retry.js';
+import {
+  EXPORT_ENVELOPE_VERSION,
+  EXPORT_STRING_MAX,
+  OPTIONAL_EXPORT_FACTS,
+  projectException,
+  projectObservation,
+  REGISTERED_ERROR_CODES,
+  REGISTERED_ERROR_NAMES,
+  UNREGISTERED_ERROR_NAME,
+} from '../exportEnvelope.js';
 
 const identity = { deployment: 'acme-prod', instance: 'relaycast-0' };
 const POISON = {
@@ -136,7 +150,7 @@ describe('projectException', () => {
     expect(event).not.toHaveProperty('actor_type');
   });
 
-  it('drops unknown operations, non-code codes and non-errors', () => {
+  it('drops unknown operations, unregistered codes and non-errors', () => {
     const err = Object.assign(new Error('x'), { code: 'not a code: POISON' });
     const event = projectException(err, { source: 'POISON_SOURCE', op: 'x', path: '/v1/POISON' }, identity);
     expect(event.facts).toEqual({ error_name: 'Error' });
@@ -148,5 +162,47 @@ describe('projectException', () => {
   it('takes a context error_code and an allowlisted engine operation', () => {
     const event = projectException(new Error('internal_error'), { error_code: 'internal_error', engine_operation: 'inbox.get', request_id: 'r1' }, identity);
     expect(event.facts).toEqual({ error_name: 'Error', error_code: 'internal_error', operation: 'inbox.get' });
+  });
+
+  it('passes registered names and codes through', () => {
+    for (const err of [
+      new WorkspaceIdNotSnowflakeError('POISON_WS'),
+      new WorkspaceDeliveryCapacityError('POISON_MESSAGE'),
+      new D1WriteRetryExhaustedError(3, 'queue_full'),
+      new AdmissionDeniedError({ message: 'POISON_MESSAGE' } as ConstructorParameters<typeof AdmissionDeniedError>[0]),
+      new ConfigError('POISON_MESSAGE'),
+      new RangeError('POISON_MESSAGE'),
+    ]) {
+      expect(REGISTERED_ERROR_NAMES.has(err.constructor.name)).toBe(true);
+      expect(projectException(err, undefined, identity).facts.error_name).toBe(err.constructor.name);
+    }
+    for (const code of ['SQLITE_CONSTRAINT_UNIQUE', 'ECONNRESET', 'delivery_failed']) {
+      expect(REGISTERED_ERROR_CODES.has(code)).toBe(true);
+      expect(projectException(Object.assign(new Error('x'), { code }), undefined, identity).facts.error_code).toBe(code);
+    }
+  });
+
+  it('replaces an unregistered name and omits an unregistered code, even when they look valid', () => {
+    class AcmeVendorError extends Error {}
+    const err = Object.assign(new AcmeVendorError('x'), { code: 'ACME_VENDOR_FAILURE' });
+    expect(projectException(err, { error_code: 'acme_failure' }, identity).facts).toEqual({ error_name: UNREGISTERED_ERROR_NAME });
+    expect(UNREGISTERED_ERROR_NAME).toBe('unregistered');
+  });
+
+  it('never exports a message-like name or code', () => {
+    const message = 'POISON_MSG user alice@example.com token=at_live_123';
+    class Leaky extends Error {}
+    Object.defineProperty(Leaky, 'name', { value: message });
+    const err = Object.assign(new Leaky(message), { name: message, code: message });
+    const event = projectException(err, { error_code: message, message, context: { message } }, identity);
+    expect(event.facts).toEqual({ error_name: UNREGISTERED_ERROR_NAME });
+    const wire = JSON.stringify(event);
+    for (const value of ['POISON_MSG', 'alice@example.com', 'at_live_123']) expect(wire).not.toContain(value);
+  });
+
+  it('classifies by constructor, not a reassigned name property', () => {
+    const err = new Error('x');
+    err.name = 'POISON_NAME';
+    expect(projectException(err, undefined, identity).facts.error_name).toBe('Error');
   });
 });

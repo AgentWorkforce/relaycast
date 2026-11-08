@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { createBatcher, RETRY_DELAY_MAX_MS, type BatcherOptions } from '../batcher.js';
 import { projectException, projectObservation, type ExportEvent } from '../exportEnvelope.js';
 import {
   COLLECTOR_BATCH_SCHEMA,
@@ -68,6 +69,14 @@ describe('toWireEvent', () => {
     expect(toWireEvent({ ...observed, workspace_id: '' })).not.toHaveProperty('workspace_id');
   });
 
+  it('attributes a workspace exception by workspace_id only, never a tenant_id', () => {
+    const wire = toWireEvent(projectException(new Error('x'), { workspace_id: 'ws_7' }, { deployment: 'd' }));
+    expect(wire.workspace_id).toBe('ws_7');
+    expect(wire).not.toHaveProperty('tenant_id');
+    expect(Object.values(wire).filter((value) => value === 'ws_7')).toEqual(['ws_7']);
+    expect(toWireEvent(observed)).not.toHaveProperty('tenant_id');
+  });
+
   it('strips reserved field names from properties', () => {
     const facts: ExportEvent['facts'] = { ok: 1 };
     for (const name of COLLECTOR_RESERVED_FIELDS) facts[name] = 'OVERRIDE_POISON';
@@ -86,9 +95,15 @@ describe('parseRetryAfter', () => {
     expect(parseRetryAfter('0')).toBe(0);
     expect(parseRetryAfter(' 7 ')).toBe(7000);
     expect(parseRetryAfter('3600')).toBe(30_000);
+    expect(parseRetryAfter('999999')).toBe(RETRY_DELAY_MAX_MS);
+    expect(parseRetryAfter('99999999999')).toBeUndefined();
     expect(parseRetryAfter('Wed, 21 Oct 2026 07:28:00 GMT')).toBeUndefined();
     expect(parseRetryAfter('-1')).toBeUndefined();
+    expect(parseRetryAfter('+5')).toBeUndefined();
     expect(parseRetryAfter('1.5')).toBeUndefined();
+    expect(parseRetryAfter('5s')).toBeUndefined();
+    expect(parseRetryAfter('0x10')).toBeUndefined();
+    expect(parseRetryAfter('soon')).toBeUndefined();
     expect(parseRetryAfter('')).toBeUndefined();
   });
 });
@@ -108,6 +123,9 @@ describe('collectorResponseError', () => {
       [503, { retryable: true }],
       [507, { retryable: true, reason: 'collector storage exhausted (507)' }],
       [302, { retryable: false }],
+      [200, { retryable: true }],
+      [202, { retryable: true }],
+      [206, { retryable: true }],
     ];
     for (const [status, expected] of cases) {
       const err = collectorResponseError(status, null);
@@ -116,6 +134,14 @@ describe('collectorResponseError', () => {
       expect(err.message).toContain(String(status));
     }
     expect(collectorResponseError(400, null).split).toBeUndefined();
+    for (const status of [200, 201, 202, 206]) {
+      expect(collectorResponseError(status, '5')).toMatchObject({
+        status,
+        retryable: true,
+        reason: `collector protocol error: ${status} is not an acceptance (204)`,
+      });
+      expect(collectorResponseError(status, '5').retryAfterMs).toBeUndefined();
+    }
   });
 
   it('honors Retry-After only on 429, 503 and 507', () => {
@@ -147,7 +173,7 @@ describe('createHttpCollectorTransport', () => {
   });
 
   it('omits authorization without a token and skips empty batches', async () => {
-    const fetch = vi.fn(async () => new Response('ok'));
+    const fetch = vi.fn(async () => new Response(null, { status: 204 }));
     const transport = createHttpCollectorTransport({ url: 'https://collector.example.com/ingest', timeoutMs: 1000, fetch });
     await transport.send([]);
     expect(fetch).not.toHaveBeenCalled();
@@ -169,6 +195,17 @@ describe('createHttpCollectorTransport', () => {
     expect(redirected).toMatchObject({ retryable: false, status: 307 });
     for (const err of [unavailable, denied, tooLarge, redirected]) {
       expect(`${err.message} ${err.stack}`).not.toMatch(/SECRET/);
+    }
+  });
+
+  it('accepts only 204; any other 2xx is a retryable protocol error', async () => {
+    const transport = (fetch: typeof globalThis.fetch) =>
+      createHttpCollectorTransport({ url: 'http://collector/v1/events', timeoutMs: 1000, fetch });
+    await expect(transport(respond(204)).send([event])).resolves.toBeUndefined();
+    for (const status of [200, 202, 206]) {
+      const err = await failure(transport(respond(status)).send([event]));
+      expect(err, String(status)).toMatchObject({ retryable: true, status });
+      expect(err.message).not.toMatch(/SECRET_BODY_POISON/);
     }
   });
 
@@ -201,6 +238,26 @@ describe('createHttpCollectorTransport', () => {
     expect(signal?.aborted).toBe(true);
   });
 
+  it('shortens the abort to the per-attempt timeout the batcher passes, never lengthens it', async () => {
+    vi.useFakeTimers();
+    const signals: AbortSignal[] = [];
+    const fetch = vi.fn((_url: string, init: RequestInit) => new Promise<Response>((_resolve, reject) => {
+      signals.push(init.signal!);
+      init.signal!.addEventListener('abort', () => reject(new DOMException('aborted', 'AbortError')));
+    }));
+    const transport = createHttpCollectorTransport({ url: 'http://localhost:4318/x', timeoutMs: 1000, fetch: fetch as never });
+    const short = expect(transport.send([event], { timeoutMs: 120 })).rejects.toMatchObject({ retryable: true });
+    await vi.advanceTimersByTimeAsync(119);
+    expect(signals[0]!.aborted).toBe(false);
+    await vi.advanceTimersByTimeAsync(1);
+    await short;
+    expect(signals[0]!.aborted).toBe(true);
+    const long = expect(transport.send([event], { timeoutMs: 5000 })).rejects.toMatchObject({ retryable: true });
+    await vi.advanceTimersByTimeAsync(1000);
+    await long;
+    expect(signals[1]!.aborted).toBe(true);
+  });
+
   it('requires https except for loopback, in-cluster Service and single-label hosts', () => {
     for (const url of ['http://example.com/x', 'http://collector.example.svc.evil.com/', 'http://10.0.0.5/', 'http://0x0a000005/', 'ftp://collector/']) {
       expect(() => createHttpCollectorTransport({ url, timeoutMs: 1000 }), url).toThrow(/telemetry collector URL/);
@@ -217,6 +274,129 @@ describe('createHttpCollectorTransport', () => {
       expect(() => validateCollectorUrl(url), url).not.toThrow();
     }
     expect(() => validateCollectorUrl('https://user:pass@collector.example.com/')).toThrow(/credentials/);
+    for (const url of [
+      'http://collector:8080/v1/events?token=x',
+      'http://collector:8080/v1/events?',
+      'https://collector.example.com/v1/events#frag',
+      'https://collector.example.com/v1/events#',
+    ]) {
+      expect(() => validateCollectorUrl(url), url).toThrow(/query string or fragment/);
+      expect(() => createHttpCollectorTransport({ url, timeoutMs: 1000 }), url).toThrow(/query string or fragment/);
+    }
     expect(() => validateCollectorUrl('not a url')).toThrow(/valid absolute URL/);
+  });
+
+  it('sends to the configured URL exactly, never appending /v1/events', async () => {
+    const fetch = respond(204);
+    await createHttpCollectorTransport({ url: 'http://collector:8080/v1/events', timeoutMs: 1000, fetch }).send([event]);
+    await createHttpCollectorTransport({ url: 'http://collector:8080/custom/intake', timeoutMs: 1000, fetch }).send([event]);
+    expect(fetch.mock.calls.map((call) => (call as unknown as [string])[0])).toEqual([
+      'http://collector:8080/v1/events',
+      'http://collector:8080/custom/intake',
+    ]);
+  });
+});
+
+describe('collector transport with the batcher', () => {
+  const opts: BatcherOptions = { queueMax: 10, batchMax: 10, flushIntervalMs: 0, maxAttempts: 3, backoffMs: 100, shutdownTimeoutMs: 60_000 };
+
+  function setup(statuses: (call: number) => [number, Record<string, string>?], overrides: Partial<BatcherOptions> = {}) {
+    const fetch = vi.fn(async () => {
+      const [status, headers] = statuses(fetch.mock.calls.length);
+      return new Response(status === 204 ? null : 'SECRET_BODY_POISON', { status, headers });
+    });
+    const transport = createHttpCollectorTransport({ url: 'http://collector/v1/events', timeoutMs: 1000, fetch });
+    const batcher = createBatcher<ExportEvent>(transport, { ...opts, ...overrides }, { log: () => {} });
+    return { fetch, batcher };
+  }
+
+  it.each([200, 202, 206])('retries a %i within maxAttempts, then counts the loss', async (status) => {
+    vi.useFakeTimers();
+    const { fetch, batcher } = setup(() => [status]);
+    batcher.enqueue(event);
+    batcher.enqueue(event);
+    const flushed = batcher.flush();
+    await vi.advanceTimersByTimeAsync(10_000);
+    await flushed;
+    expect(fetch).toHaveBeenCalledTimes(opts.maxAttempts);
+    expect(batcher.stats()).toMatchObject({ exported: 0, dropped: 2, rejected: 0, failedBatches: 1, retries: opts.maxAttempts - 1 });
+  });
+
+  it('counts a 204 as accepted', async () => {
+    const { fetch, batcher } = setup(() => [204]);
+    batcher.enqueue(event);
+    await batcher.flush();
+    expect(fetch).toHaveBeenCalledTimes(1);
+    expect(batcher.stats()).toMatchObject({ exported: 1, dropped: 0, retries: 0 });
+  });
+
+  it.each([
+    ['malformed', 'soon'],
+    ['an HTTP-date', 'Wed, 21 Oct 2026 07:28:00 GMT'],
+    ['zero', '0'],
+  ])('falls back to the local backoff for a %s Retry-After', async (_label, value) => {
+    vi.useFakeTimers();
+    const { fetch, batcher } = setup((call) => (call === 1 ? [429, { 'retry-after': value }] : [204]));
+    batcher.enqueue(event);
+    const flushed = batcher.flush();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(fetch).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(99);
+    expect(fetch).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(1);
+    await flushed;
+    expect(fetch).toHaveBeenCalledTimes(2);
+    expect(batcher.stats()).toMatchObject({ exported: 1, retries: 1 });
+  });
+
+  it('never makes more than maxAttempts attempts on a zero Retry-After', async () => {
+    vi.useFakeTimers();
+    const { fetch, batcher } = setup(() => [503, { 'retry-after': '0' }], { backoffMs: 0 });
+    batcher.enqueue(event);
+    const flushed = batcher.flush();
+    await vi.advanceTimersByTimeAsync(1000);
+    await flushed;
+    expect(fetch).toHaveBeenCalledTimes(opts.maxAttempts);
+    expect(batcher.stats()).toMatchObject({ exported: 0, dropped: 1, failedBatches: 1 });
+  });
+
+  it('caps an oversized Retry-After at 30 s', async () => {
+    vi.useFakeTimers();
+    const { fetch, batcher } = setup((call) => (call === 1 ? [503, { 'retry-after': '999999' }] : [204]));
+    batcher.enqueue(event);
+    const flushed = batcher.flush();
+    await vi.advanceTimersByTimeAsync(RETRY_DELAY_MAX_MS - 1);
+    expect(fetch).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(1);
+    await flushed;
+    expect(fetch).toHaveBeenCalledTimes(2);
+    expect(batcher.stats()).toMatchObject({ exported: 1, retries: 1 });
+  });
+
+  it('drops a batch waiting on Retry-After at the shutdown deadline', async () => {
+    vi.useFakeTimers();
+    const { fetch, batcher } = setup(() => [429, { 'retry-after': '30' }], { shutdownTimeoutMs: 2000, batchMax: 1 });
+    batcher.enqueue(event);
+    batcher.enqueue(event);
+    let done = false;
+    void batcher.shutdown().then(() => { done = true; });
+    await vi.advanceTimersByTimeAsync(1999);
+    expect(done).toBe(false);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(done).toBe(true);
+    // Counted at the deadline: the waiting batch and the one queued behind it.
+    expect(batcher.stats()).toMatchObject({ exported: 0, dropped: 2, failedBatches: 1, queued: 0 });
+    await vi.advanceTimersByTimeAsync(RETRY_DELAY_MAX_MS * 2);
+    expect(fetch).toHaveBeenCalledTimes(1);
+    expect(batcher.stats()).toMatchObject({ dropped: 2, failedBatches: 1 });
+  });
+
+  it('drops a batch whose Retry-After would outlast the delivery deadline', async () => {
+    vi.useFakeTimers();
+    const { fetch, batcher } = setup(() => [503, { 'retry-after': '20' }], { deliveryDeadlineMs: 10_000 });
+    batcher.enqueue(event);
+    await batcher.flush();
+    expect(fetch).toHaveBeenCalledTimes(1);
+    expect(batcher.stats()).toMatchObject({ exported: 0, dropped: 1, expired: 1, retries: 0 });
   });
 });

@@ -10,6 +10,21 @@
  * terminal failure is dropped without retry, a `split` failure is retried as
  * two halves, and `retryAfterMs` lengthens the next backoff. A plain error is
  * retryable.
+ *
+ * Deadlines. Every event has a total delivery deadline, `deliveryDeadlineMs`
+ * after it is enqueued, covering its queued time, every attempt and every
+ * retry wait. A batch uses its earliest event deadline; a retry or a split
+ * never resets or extends it (split halves keep their events' deadlines).
+ * Each attempt's timeout handed to the transport is clipped to that remaining
+ * deadline (and, once shutdown begins, to the shutdown deadline). When the
+ * deadline would pass before another attempt could start, the events are
+ * dropped and counted as `expired` instead of starting another request or
+ * wait. Every retry wait, including one lengthened by `retryAfterMs`, is also
+ * capped at {@link RETRY_DELAY_MAX_MS} and counts against `maxAttempts` (a zero
+ * hint falls back to the local backoff and never permits extra attempts). Once
+ * shutdown begins no wait outlasts the shutdown deadline: at that deadline a
+ * batch waiting to be retried, unsent split halves and the queue are dropped
+ * and counted.
  */
 
 /** Optional fields a transport may set on a thrown error to steer retries. */
@@ -40,9 +55,22 @@ function hintOf(err: unknown): ExportFailureHint {
   };
 }
 
-export interface BatchTransport<T> {
-  send(items: T[]): Promise<void>;
+/** Per-attempt bounds the batcher hands the transport. */
+export interface BatchAttempt {
+  /**
+   * Longest this attempt may take, in ms: the remaining delivery deadline,
+   * further clipped to the shutdown deadline once shutdown has begun. The
+   * transport applies the smaller of this and its own request timeout.
+   */
+  timeoutMs: number;
 }
+
+export interface BatchTransport<T> {
+  send(items: T[], attempt?: BatchAttempt): Promise<void>;
+}
+
+/** Default total delivery deadline per event (enqueue to acknowledgement). */
+export const DELIVERY_DEADLINE_DEFAULT_MS = 60_000;
 
 export interface BatcherOptions {
   /** Most events waiting to be sent; further events are dropped. */
@@ -57,18 +85,25 @@ export interface BatcherOptions {
   backoffMs: number;
   /** Longest time `shutdown()` waits for the queue to drain. */
   shutdownTimeoutMs: number;
+  /**
+   * Total delivery deadline per event, from enqueue across queued time, all
+   * attempts and all waits. Default {@link DELIVERY_DEADLINE_DEFAULT_MS}.
+   */
+  deliveryDeadlineMs?: number;
 }
 
 export interface BatcherStats {
   enqueued: number;
   exported: number;
-  /** Events not exported, for any reason: queue full, enqueued after shutdown, rejected, retries exhausted, or left at the shutdown deadline. */
+  /** Events not exported, for any reason: queue full, enqueued after shutdown, rejected, retries exhausted, delivery deadline passed, or left at the shutdown deadline. */
   dropped: number;
   /** Of `dropped`: events refused because the queue was full. */
   queueFull: number;
   /** Of `dropped`: events in batches the transport reported as terminal (not retryable), or single items too large to send. */
   rejected: number;
-  /** Batches (or split halves) given up: rejected or retries exhausted. */
+  /** Of `dropped`: events whose total delivery deadline passed (while queued or between attempts). */
+  expired: number;
+  /** Batches (or split halves) given up: rejected, retries exhausted or delivery deadline passed. */
   failedBatches: number;
   retries: number;
   /** Batches re-sent as two halves after a `split` failure. */
@@ -111,6 +146,12 @@ function unref(handle: TimerHandle): void {
   (handle as { unref?: () => void } | null)?.unref?.();
 }
 
+interface Entry<T> {
+  item: T;
+  /** `now()` value after which this event is no longer sent. */
+  deadlineAt: number;
+}
+
 export function createBatcher<T>(transport: BatchTransport<T>, opts: BatcherOptions, deps: BatcherDeps = {}): Batcher<T> {
   const queueMax = positiveInteger('queueMax', opts.queueMax);
   const batchMax = positiveInteger('batchMax', opts.batchMax);
@@ -118,6 +159,7 @@ export function createBatcher<T>(transport: BatchTransport<T>, opts: BatcherOpti
   const maxAttempts = positiveInteger('maxAttempts', opts.maxAttempts);
   const backoffMs = nonNegativeInteger('backoffMs', opts.backoffMs);
   const shutdownTimeoutMs = nonNegativeInteger('shutdownTimeoutMs', opts.shutdownTimeoutMs);
+  const deliveryDeadlineMs = positiveInteger('deliveryDeadlineMs', opts.deliveryDeadlineMs ?? DELIVERY_DEADLINE_DEFAULT_MS);
 
   // Resolved per call so test fake timers installed later still apply.
   const setTimer = (fn: () => void, ms: number): TimerHandle => (deps.setTimeout ?? ((f, m) => setTimeout(f, m)))(fn, ms);
@@ -125,60 +167,109 @@ export function createBatcher<T>(transport: BatchTransport<T>, opts: BatcherOpti
   const now = (): number => (deps.now ?? Date.now)();
   const log = (line: string): void => (deps.log ?? ((l) => console.error(l)))(line);
 
-  const queue: T[] = [];
-  const counters = { enqueued: 0, exported: 0, dropped: 0, queueFull: 0, rejected: 0, failedBatches: 0, retries: 0, splits: 0 };
+  const queue: Array<Entry<T>> = [];
+  const counters = { enqueued: 0, exported: 0, dropped: 0, queueFull: 0, rejected: 0, expired: 0, failedBatches: 0, retries: 0, splits: 0 };
   // Halving a batch of at most batchMax reaches single items within this many splits.
   const maxSplitDepth = Math.ceil(Math.log2(batchMax));
   let flushTimer: TimerHandle | undefined;
   let pumping: Promise<void> | undefined;
   let closed = false;
+  // Set when shutdown begins: no attempt or wait may run past it.
+  let shutdownAt: number | undefined;
   // Set at the shutdown deadline: stop retrying and starting new batches.
   let abandoned = false;
   let shutdownPromise: Promise<void> | undefined;
   let lastLogAt = Number.NEGATIVE_INFINITY;
+  // The batch currently sleeping before a retry (one batch is in flight at a time).
+  let waiting: { batch: Array<Entry<T>>; why: string; wake: () => void; dropped: boolean } | undefined;
+  // Second halves of split batches not yet sent; dropped at the shutdown deadline.
+  const deferredHalves: Array<{ batch: Array<Entry<T>>; why: string; dropped: boolean }> = [];
 
   const report = (reason: string): void => {
     try {
       const at = now();
       if (at - lastLogAt < FAILURE_LOG_INTERVAL_MS) return;
       lastLogAt = at;
-      log(`[telemetry] collector export: ${reason} (exported=${counters.exported} dropped=${counters.dropped} rejected=${counters.rejected} queueFull=${counters.queueFull} failedBatches=${counters.failedBatches} retries=${counters.retries})`);
+      log(`[telemetry] collector export: ${reason} (exported=${counters.exported} dropped=${counters.dropped} rejected=${counters.rejected} expired=${counters.expired} queueFull=${counters.queueFull} failedBatches=${counters.failedBatches} retries=${counters.retries})`);
     } catch {
       // logging is best effort
     }
   };
 
-  const sleep = (ms: number): Promise<void> => new Promise((resolve) => {
-    if (ms <= 0) { resolve(); return; }
-    unref(setTimer(resolve, ms));
+  /**
+   * Wait before retrying `batch`. Resolves false when the shutdown deadline
+   * passed during the wait, in which case the batch was already counted as
+   * dropped: the wait is cut short at that deadline rather than overrunning it.
+   */
+  const retryWait = (batch: Array<Entry<T>>, why: string, ms: number): Promise<boolean> => new Promise((resolve) => {
+    if (ms <= 0) { resolve(true); return; }
+    const entry = { batch, why, dropped: false, wake: () => {} };
+    const handle = setTimer(() => entry.wake(), ms);
+    unref(handle);
+    entry.wake = () => {
+      clearTimer(handle);
+      if (waiting === entry) waiting = undefined;
+      resolve(!entry.dropped);
+    };
+    waiting = entry;
   });
 
-  const giveUp = (batch: T[], rejected: boolean, reason: string): void => {
+  const giveUp = (batch: Array<Entry<T>>, rejected: boolean, reason: string): void => {
     counters.failedBatches += 1;
     counters.dropped += batch.length;
     if (rejected) counters.rejected += batch.length;
     report(reason);
   };
 
-  const sendWithRetry = async (batch: T[], depth = 0): Promise<void> => {
+  const expire = (batch: Array<Entry<T>>, reason: string): void => {
+    counters.expired += batch.length;
+    giveUp(batch, false, reason);
+  };
+
+  const earliestDeadline = (batch: Array<Entry<T>>): number =>
+    batch.reduce((earliest, entry) => Math.min(earliest, entry.deadlineAt), Number.POSITIVE_INFINITY);
+
+  const sendWithRetry = async (batch: Array<Entry<T>>, depth = 0): Promise<void> => {
+    // A batch uses its earliest event deadline; nothing below resets it.
+    const deadlineAt = earliestDeadline(batch);
+    const items = batch.map((entry) => entry.item);
+    let why = 'delivery deadline';
     for (let attempt = 1; ; attempt += 1) {
+      if (abandoned) {
+        giveUp(batch, false, `dropped a batch of ${batch.length} at the shutdown deadline (${why})`);
+        return;
+      }
+      const at = now();
+      let timeoutMs = deadlineAt - at;
+      if (shutdownAt !== undefined) timeoutMs = Math.min(timeoutMs, shutdownAt - at);
+      if (deadlineAt - at <= 0) {
+        expire(batch, `dropped a batch of ${batch.length} at its delivery deadline (${why})`);
+        return;
+      }
       let failure: unknown;
       try {
-        await Promise.resolve().then(() => transport.send(batch));
+        await Promise.resolve().then(() => transport.send(items, { timeoutMs: Math.max(1, Math.ceil(timeoutMs)) }));
         counters.exported += batch.length;
         return;
       } catch (err) {
         failure = err;
       }
       const hint = hintOf(failure);
-      const why = hint.reason ?? (failure instanceof Error ? failure.name : typeof failure);
+      why = hint.reason ?? (failure instanceof Error ? failure.name : typeof failure);
       if (hint.split) {
         if (batch.length > 1 && depth < maxSplitDepth && !abandoned) {
-          // Each half gets its own attempt budget; the same items (and ids) are re-sent.
+          // Each half gets its own attempt budget but keeps its events' delivery
+          // deadlines; the same items (and ids) are re-sent.
           counters.splits += 1;
           const middle = Math.ceil(batch.length / 2);
-          await sendWithRetry(batch.slice(0, middle), depth + 1);
-          await sendWithRetry(batch.slice(middle), depth + 1);
+          const rest = { batch: batch.slice(middle), why, dropped: false };
+          deferredHalves.push(rest);
+          try {
+            await sendWithRetry(batch.slice(0, middle), depth + 1);
+          } finally {
+            deferredHalves.splice(deferredHalves.indexOf(rest), 1);
+          }
+          if (!rest.dropped) await sendWithRetry(rest.batch, depth + 1);
           return;
         }
         giveUp(batch, true, `rejected a batch of ${batch.length} that cannot be split further (${why})`);
@@ -192,13 +283,28 @@ export function createBatcher<T>(transport: BatchTransport<T>, opts: BatcherOpti
         giveUp(batch, false, `dropped a batch of ${batch.length} after ${attempt} attempt(s) (${why})`);
         return;
       }
-      counters.retries += 1;
-      await sleep(Math.max(backoffMs * attempt, hint.retryAfterMs ?? 0));
-      if (abandoned) {
-        giveUp(batch, false, `dropped a batch of ${batch.length} at the shutdown deadline (${why})`);
+      const delay = Math.min(Math.max(backoffMs * attempt, hint.retryAfterMs ?? 0), RETRY_DELAY_MAX_MS);
+      if (now() + delay >= deadlineAt) {
+        // The wait would consume the rest of the delivery budget: drop now
+        // rather than start a wait that no attempt can follow.
+        expire(batch, `dropped a batch of ${batch.length} at its delivery deadline (${why})`);
         return;
       }
+      counters.retries += 1;
+      if (!(await retryWait(batch, why, delay))) return;
     }
+  };
+
+  /** Drop queued events whose delivery deadline already passed (the queue is in deadline order). */
+  const expireQueued = (): void => {
+    const at = now();
+    let count = 0;
+    while (count < queue.length && queue[count]!.deadlineAt <= at) count += 1;
+    if (count === 0) return;
+    queue.splice(0, count);
+    counters.dropped += count;
+    counters.expired += count;
+    report(`delivery deadline; dropped ${count} queued event(s)`);
   };
 
   const pump = (): Promise<void> => {
@@ -206,6 +312,8 @@ export function createBatcher<T>(transport: BatchTransport<T>, opts: BatcherOpti
     pumping = (async () => {
       try {
         while (queue.length > 0 && !abandoned) {
+          expireQueued();
+          if (queue.length === 0) break;
           await sendWithRetry(queue.splice(0, batchMax));
         }
       } finally {
@@ -242,7 +350,7 @@ export function createBatcher<T>(transport: BatchTransport<T>, opts: BatcherOpti
           report(closed ? 'dropped an event after shutdown' : `queue full (${queueMax}); dropped an event`);
           return;
         }
-        queue.push(item);
+        queue.push({ item, deadlineAt: now() + deliveryDeadlineMs });
         counters.enqueued += 1;
         if (queue.length >= batchMax && !pumping) {
           cancelTimer();
@@ -265,6 +373,7 @@ export function createBatcher<T>(transport: BatchTransport<T>, opts: BatcherOpti
     shutdown(): Promise<void> {
       if (shutdownPromise) return shutdownPromise;
       closed = true;
+      shutdownAt = now() + shutdownTimeoutMs;
       cancelTimer();
       shutdownPromise = new Promise<void>((resolve) => {
         let settled = false;
@@ -275,6 +384,19 @@ export function createBatcher<T>(transport: BatchTransport<T>, opts: BatcherOpti
         };
         const deadline = setTimer(() => {
           abandoned = true;
+          // A batch sleeping before its retry is dropped now, not when its
+          // (possibly Retry-After lengthened) wait would have ended.
+          const sleeper = waiting;
+          if (sleeper) {
+            sleeper.dropped = true;
+            giveUp(sleeper.batch, false, `dropped a batch of ${sleeper.batch.length} at the shutdown deadline (${sleeper.why})`);
+            sleeper.wake();
+          }
+          for (const half of deferredHalves) {
+            if (half.dropped) continue;
+            half.dropped = true;
+            giveUp(half.batch, false, `dropped a batch of ${half.batch.length} at the shutdown deadline (${half.why})`);
+          }
           counters.dropped += queue.length;
           if (queue.length > 0) report(`shutdown deadline; dropped ${queue.length} queued event(s)`);
           queue.length = 0;

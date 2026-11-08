@@ -118,15 +118,15 @@ self-host, and no fallback to one.
 
 Set `RELAYCAST_TELEMETRY_COLLECTOR_URL` to send engine observations to an
 analytics collector inside your installation (for example a Kubernetes
-Service). Point it at the collector's internal batch endpoint, `/v1/events`
-(for example `http://analytics-collector.analytics.svc:8080/v1/events`); the
-URL is used as is, no path is appended. The server POSTs small JSON batches to
+Service). Give the complete endpoint URL, including `/v1/events` (for example
+`http://analytics-collector.analytics.svc:8080/v1/events`); the URL is used
+exactly as given and no path is ever appended. The server POSTs small JSON batches to
 it; the collector owns storage (for example rotated NDJSON files). Relaycast
 writes no analytics files and needs no extra volume.
 
 | Variable | Default | Meaning |
 |---|---|---|
-| `RELAYCAST_TELEMETRY_COLLECTOR_URL` | unset (off) | Collector ingest URL. Must be `https://`, or `http://` only to `localhost`, `127.0.0.1`, `[::1]`, a `*.svc` / `*.svc.cluster.local` Service or a single-label host (e.g. `http://collector:8080/v1/events`). Credentials in the URL are refused. |
+| `RELAYCAST_TELEMETRY_COLLECTOR_URL` | unset (off) | Collector ingest URL. Must be `https://`, or `http://` only to `localhost`, `127.0.0.1`, `[::1]`, a `*.svc` / `*.svc.cluster.local` Service or a single-label host (e.g. `http://collector:8080/v1/events`). Credentials, a query string (`?…`) or a fragment (`#…`) in the URL are refused. |
 | `RELAYCAST_TELEMETRY_COLLECTOR_TOKEN` / `RELAYCAST_TELEMETRY_COLLECTOR_TOKEN_FILE` | unset | This server's per-producer collector credential, sent as `Authorization: Bearer …`. Mount it from a Secret and use the `_FILE` form; do not reuse a database, user or migration credential. Trimmed; never logged. |
 | `RELAYCAST_TELEMETRY_DEPLOYMENT` | container hostname | Deployment label on every event. |
 | `RELAYCAST_TELEMETRY_QUEUE_MAX` | `1000` | Most events held in memory; more are dropped and counted. |
@@ -153,10 +153,15 @@ example `channel_id` and `message_id` for `message.created`) plus
 `actor_type` (`human` / `agent` / `system`, when authenticated),
 `origin_actor`, `origin_client`, `origin_version` and `instance` (hostname),
 as strings (at most 256 characters), numbers, booleans or null; it never
-repeats a top-level field name. An `exception` carries only `error_name`, an
-`error_code` and an allowlisted `operation`. `tenant_id` is not sent yet:
-Relaycast has no tenant separate from its workspace, and the collector's
-event-kind registry that says which events are tenant-scoped is still pending.
+repeats a top-level field name. An `exception` carries only a registered
+classification: `error_name` is a constructor name from a fixed list
+(JavaScript built-ins, Relaycast's own error classes, SQLite and Drizzle
+driver errors) or `unregistered`; `error_code` is sent only when it is on a
+fixed list of Relaycast wire codes, SQLite codes and Node system codes, and is
+omitted otherwise; `operation` is allowlisted. Error messages and exception
+context are never exported. `tenant_id` is never sent: Relaycast is a native
+workspace with no separate tenant model, so workspace events carry
+`workspace_id` only and installation-wide events carry neither.
 
 Never exported: message or file content, search queries, request bodies or
 headers, tokens, API keys, credential hashes, the sender's name, error messages
@@ -166,22 +171,29 @@ Collector responses:
 
 | Response | What the server does |
 |---|---|
-| `2xx` (the collector answers `204`) | Batch accepted. |
+| `204` | Batch accepted. This is the only acceptance. |
+| Any other `2xx` (`200`, `202`, `206`, …) | Protocol error: retried like a `5xx`, then dropped and counted. |
 | `400` and other `4xx` (except `408`, retried) | Batch dropped and counted as `rejected`; not retried. |
 | `401` / `403` | Batch dropped and counted as `rejected`; the log line says `collector rejected producer credential (401)` (or `403`): check the token. |
 | `413` | The batch is split in halves and each half is sent again; a single event that is still too large is dropped and counted as `rejected`. |
-| `429` / `503` / `507` | Retried; a `Retry-After` given in seconds is honored, up to 30 s. `507` logs `collector storage exhausted (507)`. |
+| `429` / `503` / `507` | Retried. A `Retry-After` in unsigned decimal seconds is honored, capped at 30 s and clipped to the remaining delivery and shutdown deadlines; an HTTP-date or malformed value is ignored (the normal backoff applies), and `0` never allows more than the usual attempts. `507` logs `collector storage exhausted (507)`. |
 | Other `5xx`, timeout or connection failure | Retried. |
 | Redirect | Not followed (the credential is never forwarded); batch dropped and counted. |
 
 Export never affects requests: events are queued in memory (bounded by
 `RELAYCAST_TELEMETRY_QUEUE_MAX`; when full, new events are dropped and counted
 as `queueFull`), sent one batch at a time with a 5 s request timeout, retried
-up to 3 attempts with a short backoff and then dropped. A retry can duplicate a
+up to 3 attempts with a short backoff and then dropped. Each event also has a
+total delivery deadline of 60 s (`deliveryDeadlineMs`, default `60000`) that
+starts when it is enqueued and covers queued time, every attempt and every
+backoff or `Retry-After` wait; a batch uses its earliest event's deadline, and
+neither a retry nor a `413` split resets it. Each request's timeout is
+shortened to the time left, and once the deadline passes (or a wait would pass
+it) the events are dropped and counted as `expired` instead of retried. A retry can duplicate a
 batch the collector already stored (same `event_id`s). A failed export logs at
 most one `[telemetry] collector export: …` line to stderr every 30 s, with the
-`exported`, `dropped`, `rejected`, `queueFull`, `failedBatches` and `retries`
-counters, and never the token or a response body. On shutdown the queue is
+`exported`, `dropped`, `rejected`, `queueFull`, `expired`, `failedBatches` and
+`retries` counters, and never the token or a response body. On shutdown the queue is
 drained for up to 5 s; anything left is dropped. There is no hosted fallback:
 a failed export is dropped, never sent anywhere else.
 

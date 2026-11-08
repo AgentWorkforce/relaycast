@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { createBatcher, FAILURE_LOG_INTERVAL_MS, RETRY_DELAY_MAX_MS, type BatcherOptions } from '../batcher.js';
+import { createBatcher, DELIVERY_DEADLINE_DEFAULT_MS, FAILURE_LOG_INTERVAL_MS, RETRY_DELAY_MAX_MS, type BatchAttempt, type BatcherOptions } from '../batcher.js';
 
 const base: BatcherOptions = { queueMax: 10, batchMax: 3, flushIntervalMs: 1000, maxAttempts: 3, backoffMs: 100, shutdownTimeoutMs: 500 };
 
@@ -210,5 +210,109 @@ describe('createBatcher', () => {
   it('rejects invalid bounds at construction', () => {
     expect(() => createBatcher(recorder(), { ...base, queueMax: 0 })).toThrow(/queueMax/);
     expect(() => createBatcher(recorder(), { ...base, maxAttempts: 1.5 })).toThrow(/maxAttempts/);
+    expect(() => createBatcher(recorder(), { ...base, deliveryDeadlineMs: 0 })).toThrow(/deliveryDeadlineMs/);
+    expect(() => createBatcher(recorder(), { ...base, deliveryDeadlineMs: Number.POSITIVE_INFINITY })).toThrow(/deliveryDeadlineMs/);
+  });
+});
+
+describe('delivery deadline', () => {
+  const retryable = (retryAfterMs?: number) => Object.assign(new Error('x'), { retryable: true, ...(retryAfterMs ? { retryAfterMs } : {}) });
+
+  it('defaults to a finite 60 s', () => {
+    expect(DELIVERY_DEADLINE_DEFAULT_MS).toBe(60_000);
+  });
+
+  it('drops a batch whose backoff would pass the deadline instead of waiting', async () => {
+    const send = vi.fn(async () => { throw retryable(); });
+    const log = vi.fn();
+    // backoff 100, 200, 300...: attempts at t=0, 100, 300; the next wait (300) would end at 600 > 500.
+    const batcher = createBatcher<number>({ send }, { ...base, maxAttempts: 10, deliveryDeadlineMs: 500 }, { log });
+    batcher.enqueue(1);
+    const flushed = batcher.flush();
+    await vi.advanceTimersByTimeAsync(300);
+    await flushed;
+    expect(send).toHaveBeenCalledTimes(3);
+    expect(batcher.stats()).toMatchObject({ exported: 0, dropped: 1, expired: 1, failedBatches: 1, retries: 2 });
+    expect(log.mock.calls[0]![0]).toMatch(/delivery deadline/);
+    await vi.advanceTimersByTimeAsync(10_000);
+    expect(send).toHaveBeenCalledTimes(3);
+  });
+
+  it('drops a batch whose Retry-After wait would pass the deadline', async () => {
+    const send = vi.fn(async () => { throw retryable(20_000); });
+    const batcher = createBatcher<number>({ send }, { ...base, deliveryDeadlineMs: 10_000 }, { log: () => {} });
+    batcher.enqueue(1);
+    await batcher.flush();
+    expect(send).toHaveBeenCalledTimes(1);
+    expect(batcher.stats()).toMatchObject({ dropped: 1, expired: 1, retries: 0 });
+  });
+
+  it('counts time spent queued and in earlier attempts against the deadline', async () => {
+    const attempts: BatchAttempt[] = [];
+    let calls = 0;
+    const send = vi.fn(async (_items: number[], attempt?: BatchAttempt) => {
+      attempts.push(attempt!);
+      calls += 1;
+      if (calls === 1) await new Promise((resolve) => setTimeout(resolve, 600));
+      throw retryable();
+    });
+    const batcher = createBatcher<number>({ send }, { ...base, maxAttempts: 10, flushIntervalMs: 300, deliveryDeadlineMs: 1000 }, { log: () => {} });
+    batcher.enqueue(1);
+    // Queued 300 ms, first attempt takes 600 ms, backoff 100: the second attempt starts at 1000 = deadline.
+    await vi.advanceTimersByTimeAsync(2000);
+    expect(send).toHaveBeenCalledTimes(1);
+    expect(attempts[0]!.timeoutMs).toBe(700);
+    expect(batcher.stats()).toMatchObject({ dropped: 1, expired: 1 });
+  });
+
+  it('drops queued events whose deadline passed before they were sent', async () => {
+    let release: () => void = () => {};
+    let calls = 0;
+    const send = vi.fn(async () => {
+      calls += 1;
+      if (calls === 1) await new Promise<void>((resolve) => { release = resolve; });
+    });
+    const batcher = createBatcher<number>({ send }, { ...base, batchMax: 1, deliveryDeadlineMs: 1000 }, { log: () => {} });
+    batcher.enqueue(1);
+    batcher.enqueue(2);
+    await vi.advanceTimersByTimeAsync(1500);
+    release();
+    await batcher.flush();
+    expect(send).toHaveBeenCalledTimes(1);
+    expect(batcher.stats()).toMatchObject({ exported: 1, dropped: 1, expired: 1, queued: 0 });
+  });
+
+  it('keeps the original enqueue deadline for split halves', async () => {
+    const attempts: Array<{ items: number[]; at: number; timeoutMs: number }> = [];
+    const send = vi.fn(async (items: number[], attempt?: BatchAttempt) => {
+      attempts.push({ items, at: Date.now(), timeoutMs: attempt!.timeoutMs });
+      await new Promise((resolve) => setTimeout(resolve, 400));
+      if (items.length > 1) throw Object.assign(new Error('x'), { retryable: false, split: true });
+    });
+    const start = Date.now();
+    const batcher = createBatcher<number>({ send }, { ...base, batchMax: 4, deliveryDeadlineMs: 1000 }, { log: () => {} });
+    for (let i = 0; i < 4; i += 1) batcher.enqueue(i);
+    const flushed = batcher.flush();
+    await vi.advanceTimersByTimeAsync(5000);
+    await flushed;
+    // [0..3] at 0 (fails at 400) -> [0,1] at 400 (fails at 800) -> [0] at 800 (ok at 1200);
+    // [1] would start at 1200, past the deadline at 1000, as would [2,3].
+    expect(attempts.map((a) => [a.items, a.at - start, a.timeoutMs])).toEqual([
+      [[0, 1, 2, 3], 0, 1000],
+      [[0, 1], 400, 600],
+      [[0], 800, 200],
+    ]);
+    expect(batcher.stats()).toMatchObject({ exported: 1, dropped: 3, expired: 3, splits: 2 });
+  });
+
+  it('clips the per-attempt timeout to the shutdown deadline', async () => {
+    const attempts: BatchAttempt[] = [];
+    const send = vi.fn(async (_items: number[], attempt?: BatchAttempt) => { attempts.push(attempt!); });
+    const batcher = createBatcher<number>({ send }, { ...base, shutdownTimeoutMs: 500, deliveryDeadlineMs: 60_000 }, { log: () => {} });
+    batcher.enqueue(1);
+    await batcher.flush();
+    batcher.enqueue(2);
+    await batcher.shutdown();
+    expect(attempts.map((a) => a.timeoutMs)).toEqual([60_000, 500]);
   });
 });

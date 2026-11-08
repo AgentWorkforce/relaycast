@@ -34,7 +34,11 @@ export interface ExportEvent {
   instance?: string;
   /** Engine observation kind, or `exception`. */
   kind: EngineObservationKind | 'exception';
-  /** Tenant attribution; null only for an exception raised outside a workspace. */
+  /**
+   * Workspace attribution; null only for an exception raised outside a
+   * workspace (installation-only). Relaycast has no tenant model separate from
+   * its workspace, so there is no tenant id field.
+   */
   workspace_id: string | null;
   /** `authenticatedActor.type` only; never the actor id or credential hash. */
   actor_type?: 'human' | 'agent' | 'system';
@@ -89,8 +93,102 @@ const ENGINE_OPERATIONS: ReadonlySet<EngineOperationLabel> = new Set<EngineOpera
   'invocations.sweep',
   'backfill.mention_fts',
 ]);
-const ERROR_NAME = /^[A-Za-z_$][A-Za-z0-9_$.]{0,63}$/;
-const ERROR_CODE = /^[A-Za-z0-9_.:-]{1,64}$/;
+
+/** `error_name` for an Error whose constructor is not in {@link REGISTERED_ERROR_NAMES}. */
+export const UNREGISTERED_ERROR_NAME = 'unregistered' as const;
+
+/**
+ * Registered exception classifications: the error constructor names an
+ * exported `error_name` may carry. The JavaScript built-ins, the classes the
+ * engine defines (`class ... extends Error`) and the driver errors its storage
+ * layer surfaces. Any other constructor name is exported as
+ * {@link UNREGISTERED_ERROR_NAME}, never as is: a name is caller-controlled
+ * text, and a code-shaped string alone is not a privacy allowlist.
+ */
+export const REGISTERED_ERROR_NAMES: ReadonlySet<string> = new Set([
+  // JavaScript / platform built-ins
+  'Error',
+  'TypeError',
+  'RangeError',
+  'SyntaxError',
+  'ReferenceError',
+  'EvalError',
+  'URIError',
+  'AggregateError',
+  'DOMException',
+  // Engine-defined (src/**: `class ... extends Error`)
+  'AdmissionDeniedError',
+  'ConfigError',
+  'D1WriteRetryExhaustedError',
+  'ExternalIoOutsideMaintenance',
+  'WorkspaceDeliveryCapacityError',
+  'WorkspaceIdNotSnowflakeError',
+  // Storage drivers (better-sqlite3, drizzle-orm)
+  'SqliteError',
+  'DrizzleError',
+  'DrizzleQueryError',
+]);
+
+/**
+ * Registered exception codes an exported `error_code` may carry; any other
+ * code is omitted. There is no single exported enum of engine wire codes, so
+ * this lists the stable codes of the engine's server-side failures (the `5xx`
+ * responses that reach `captureException`), the generic fallback, and the
+ * storage-driver / Node system codes maintenance errors carry. 4xx codes are
+ * never captured as exceptions.
+ */
+export const REGISTERED_ERROR_CODES: ReadonlySet<string> = new Set([
+  // Engine wire codes (5xx)
+  'internal_error',
+  'delivery_failed',
+  'webhook_agent_provision_failed',
+  'workspace_id_collision',
+  'a2a_agent_card_fetch_failed',
+  'a2a_invalid_response',
+  'a2a_jsonrpc_error',
+  'a2a_redirect_forbidden',
+  'a2a_transport_unavailable',
+  'a2a_legacy_replay_unavailable',
+  'action_deleted',
+  'agent_host_unavailable',
+  'database_overloaded',
+  'event_delivery_fetch_required',
+  'event_delivery_retryable_failure',
+  'file_storage_delete_partial',
+  'file_storage_delete_unsupported',
+  'handler_unavailable',
+  'idempotency_unavailable',
+  'mailbox_full',
+  'node_dispatch_unavailable',
+  'relayfile_inbound_unavailable',
+  'spawn_target_unavailable',
+  'workspace_create_idempotency_unavailable',
+  'workspace_storage_unavailable',
+  // SQLite (better-sqlite3 `SqliteError.code`)
+  'SQLITE_ERROR',
+  'SQLITE_BUSY',
+  'SQLITE_LOCKED',
+  'SQLITE_FULL',
+  'SQLITE_IOERR',
+  'SQLITE_CORRUPT',
+  'SQLITE_READONLY',
+  'SQLITE_CANTOPEN',
+  'SQLITE_CONSTRAINT',
+  'SQLITE_CONSTRAINT_UNIQUE',
+  'SQLITE_CONSTRAINT_PRIMARYKEY',
+  'SQLITE_CONSTRAINT_FOREIGNKEY',
+  'SQLITE_CONSTRAINT_NOTNULL',
+  'SQLITE_CONSTRAINT_CHECK',
+  // Node system errors
+  'ECONNREFUSED',
+  'ECONNRESET',
+  'ETIMEDOUT',
+  'EPIPE',
+  'ENOSPC',
+  'EACCES',
+  'ENOENT',
+  'EMFILE',
+]);
 
 function truncate(value: string): string {
   return value.length > EXPORT_STRING_MAX ? value.slice(0, EXPORT_STRING_MAX) : value;
@@ -178,14 +276,14 @@ export function projectObservation(obs: EngineObservation, identity: ExportIdent
 function errorName(err: unknown): string {
   if (err instanceof Error) {
     const ctorName = (err.constructor as { name?: unknown } | undefined)?.name;
-    if (typeof ctorName === 'string' && ERROR_NAME.test(ctorName)) return ctorName;
-    return 'Error';
+    return typeof ctorName === 'string' && REGISTERED_ERROR_NAMES.has(ctorName) ? ctorName : UNREGISTERED_ERROR_NAME;
   }
+  // `typeof` yields a fixed set of values, so this is a closed classification too.
   return err === null ? 'NonError:null' : `NonError:${typeof err}`;
 }
 
 function codeOf(value: unknown): string | undefined {
-  return typeof value === 'string' && ERROR_CODE.test(value) ? value : undefined;
+  return typeof value === 'string' && REGISTERED_ERROR_CODES.has(value) ? value : undefined;
 }
 
 function operationOf(context: Record<string, unknown>): string | undefined {
@@ -202,9 +300,11 @@ function operationOf(context: Record<string, unknown>): string | undefined {
 }
 
 /**
- * Classify an exception: constructor name, a code-shaped `code` (from the
- * error, else the context's `error_code`), an allowlisted operation and the
- * workspace id. Never the message, stack or any other context value.
+ * Classify an exception: a registered constructor name (else
+ * {@link UNREGISTERED_ERROR_NAME}), a registered `code` (from the error, else
+ * the context's `error_code`; omitted when unregistered), an allowlisted
+ * operation and the workspace id. Never the message, stack or any other
+ * context value.
  */
 export function projectException(err: unknown, context: unknown, identity: ExportIdentity): ExportEvent {
   const ctx: Record<string, unknown> = context && typeof context === 'object' ? context as Record<string, unknown> : {};

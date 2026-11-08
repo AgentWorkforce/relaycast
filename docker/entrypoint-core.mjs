@@ -39,7 +39,8 @@ Environment:
                                         for <svc>.<ns>); needs ALLOW_INSECURE_BASE_URL
   RELAYCAST_TELEMETRY_COLLECTOR_URL      Opt in to analytics export: POST batches to this in-installation
                                         collector (https, or http to localhost / *.svc / single-label host).
-                                        Unset: no analytics leave the process
+                                        The complete endpoint, including /v1/events (no path is appended);
+                                        no credentials, query or fragment. Unset: no analytics leave the process
   RELAYCAST_TELEMETRY_COLLECTOR_TOKEN(_FILE)  Optional collector bearer token
   RELAYCAST_TELEMETRY_DEPLOYMENT        Deployment label on exported events (default: hostname)
   RELAYCAST_TELEMETRY_QUEUE_MAX         Most queued events before dropping (default 1000)
@@ -665,7 +666,9 @@ function telemetryPositiveInteger(env, name, fallback) {
  * The opt-in analytics collector settings, or undefined when
  * RELAYCAST_TELEMETRY_COLLECTOR_URL is unset (the default no-op sink then
  * stays in place, unchanged). The URL must be https, or http to a loopback,
- * `*.svc` / `*.svc.cluster.local` or single-label host, without credentials.
+ * `*.svc` / `*.svc.cluster.local` or single-label host, without credentials,
+ * a query string or a fragment. It is the complete endpoint, including
+ * `/v1/events`; no path is appended.
  * The token is read from RELAYCAST_TELEMETRY_COLLECTOR_TOKEN(_FILE) and never
  * logged. Throws a refusal (exit 64) on any malformed value.
  */
@@ -682,6 +685,13 @@ export function telemetryCollectorFromEnv(env = process.env, { hostname = osHost
     refusal(
       'invalid_telemetry_collector_url',
       'RELAYCAST_TELEMETRY_COLLECTOR_URL must not contain credentials; use RELAYCAST_TELEMETRY_COLLECTOR_TOKEN_FILE.',
+    );
+  }
+  // url.search / url.hash are empty for a bare '?' / '#', so check the raw value too.
+  if (url.search || url.hash || rawUrl.includes('?') || rawUrl.includes('#')) {
+    refusal(
+      'invalid_telemetry_collector_url',
+      'RELAYCAST_TELEMETRY_COLLECTOR_URL must not contain a query string or fragment; give the full endpoint URL, including /v1/events.',
     );
   }
   if (

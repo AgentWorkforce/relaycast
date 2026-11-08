@@ -5,22 +5,32 @@
  *
  * Contract: the collector's internal batch endpoint (`POST /v1/events`,
  * agent-relay infra "Self-host analytics collector interface"). The operator
- * configures the full URL; no path is appended.
+ * configures the complete endpoint URL, including `/v1/events`; no path is
+ * ever appended. The URL carries no credentials, query or fragment.
  *
  * Request: `POST <url>`, `content-type: application/json`, optional
  * `authorization: Bearer <per-producer credential>`, body
  * `{ "schema": "agent-relay.analytics.batch/v1", "events": [WireEvent...] }`.
  *
+ * Each attempt is aborted after the configured request timeout, or sooner when
+ * the batcher passes a shorter `timeoutMs` (the remaining total delivery or
+ * shutdown deadline).
+ *
  * Responses (thrown as {@link CollectorExportError}, which carries the
  * batcher's {@link ExportFailureHint}):
- * - 2xx (the collector returns 204): accepted.
+ * - 204: accepted; the only status that acknowledges a batch.
+ * - any other 2xx (200, 202, 206, ...): a protocol error, never accepted.
+ *   Retryable within the finite attempt budget, then dropped and counted.
  * - 400, 401, 403, other 4xx: terminal; the batch is dropped and counted.
  *   401/403 are reported as a producer-credential configuration failure.
  * - 413: terminal for that batch; the batcher splits it in halves, and a
  *   single oversized event is dropped.
  * - 408, 429, 503, 507, other 5xx, timeout, connection failure: retryable;
- *   a delta-seconds `Retry-After` (capped at {@link RETRY_DELAY_MAX_MS}) is
- *   honored on 429/503/507. HTTP-date and malformed values are ignored.
+ *   an unsigned delta-seconds `Retry-After` (capped at
+ *   {@link RETRY_DELAY_MAX_MS}; the batcher further clips the wait to the
+ *   shutdown deadline) is honored on 429/503/507. HTTP-date and malformed
+ *   values are ignored and the local backoff applies. A zero value never
+ *   permits more than the configured attempts.
  * - 3xx: never followed (credentials are never forwarded); terminal.
  * Response bodies are never read or logged.
  *
@@ -28,10 +38,11 @@
  * cannot be a public internet authority: `localhost` (or `*.localhost`),
  * `127.0.0.1`, `[::1]`, a Kubernetes Service name ending in `.svc` or
  * `.svc.cluster.local`, or a single-label hostname (a container/Service short
- * name such as `collector`). Credentials in the URL are refused; use the
- * bearer token. There is no fallback destination: a failed send fails.
+ * name such as `collector`). Credentials, a query string or a fragment in
+ * the URL are refused; use the bearer token. There is no fallback
+ * destination: a failed send fails.
  */
-import { RETRY_DELAY_MAX_MS, type ExportFailureHint } from './batcher.js';
+import { RETRY_DELAY_MAX_MS, type BatchAttempt, type ExportFailureHint } from './batcher.js';
 import type { ExportEvent, ExportFactValue } from './exportEnvelope.js';
 
 /** `schema` value of every batch body. */
@@ -65,9 +76,10 @@ export interface WireEvent {
   deployment_id: string;
   event: string;
   trace_id?: string;
-  // tenant_id: not sent. Relaycast has no tenant separate from its workspace,
-  // and which event kinds are tenant-scoped is pending the collector's
-  // event-kind registry.
+  // tenant_id: never sent. Relaycast is a "native workspace with no separate
+  // tenant model": workspace events carry workspace_id only, and
+  // installation-only events (an exception outside a workspace) carry
+  // neither. A tenant id is never invented or set equal to the workspace id.
   workspace_id?: string;
   properties: Record<string, ExportFactValue>;
 }
@@ -142,12 +154,16 @@ export function parseRetryAfter(value: string | null): number | undefined {
   return Math.min(Number(trimmed) * 1000, RETRY_DELAY_MAX_MS);
 }
 
-/** Classify a non-2xx collector response. */
+/** Classify any collector response other than 204. */
 export function collectorResponseError(status: number, retryAfter: string | null): CollectorExportError {
   const delay = (): { retryAfterMs?: number } => {
     const ms = parseRetryAfter(retryAfter);
     return ms === undefined ? {} : { retryAfterMs: ms };
   };
+  if (status >= 200 && status < 300) {
+    // Only 204 acknowledges acceptance; another 2xx proves nothing was committed.
+    return new CollectorExportError(`collector protocol error: ${status} is not an acceptance (204)`, { retryable: true, status });
+  }
   if (status === 401 || status === 403) {
     return new CollectorExportError(`collector rejected producer credential (${status})`, { retryable: false, status });
   }
@@ -174,13 +190,16 @@ export interface HttpCollectorTransportOptions {
   url: string;
   /** Optional bearer token for the collector. Never logged. */
   bearerToken?: string;
-  /** Per-request timeout. */
+  /**
+   * Per-attempt request timeout. An attempt's `timeoutMs` from the batcher
+   * (the remaining delivery or shutdown deadline) shortens it further.
+   */
   timeoutMs: number;
   fetch?: typeof globalThis.fetch;
 }
 
 export interface CollectorTransport {
-  send(events: ExportEvent[]): Promise<void>;
+  send(events: ExportEvent[], attempt?: BatchAttempt): Promise<void>;
 }
 
 const DNS_LABEL = /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/;
@@ -208,6 +227,10 @@ export function validateCollectorUrl(value: string): URL {
   if (url.username || url.password) {
     throw new Error('telemetry collector URL must not contain credentials; use the bearer token');
   }
+  // `url.search`/`url.hash` are empty for a bare `?`/`#`, so check the input too.
+  if (url.search || url.hash || value.includes('?') || value.includes('#')) {
+    throw new Error('telemetry collector URL must not contain a query string or fragment; give the full endpoint URL, including /v1/events');
+  }
   if (url.protocol === 'https:') return url;
   if (url.protocol === 'http:' && isPlaintextCollectorHost(url.hostname)) return url;
   if (url.protocol === 'http:') {
@@ -226,12 +249,16 @@ export function createHttpCollectorTransport(options: HttpCollectorTransportOpti
   const timeoutMs = options.timeoutMs;
 
   return {
-    async send(events: ExportEvent[]): Promise<void> {
+    async send(events: ExportEvent[], attempt?: BatchAttempt): Promise<void> {
       if (events.length === 0) return;
+      const limit = attempt?.timeoutMs;
+      const attemptTimeoutMs = typeof limit === 'number' && Number.isFinite(limit) && limit > 0
+        ? Math.min(timeoutMs, Math.ceil(limit))
+        : timeoutMs;
       const doFetch = options.fetch ?? globalThis.fetch;
       const body = JSON.stringify(toWireBatch(events));
       const controller = new AbortController();
-      const timer = setTimeout(() => controller.abort(), timeoutMs);
+      const timer = setTimeout(() => controller.abort(), attemptTimeoutMs);
       let response: Response;
       try {
         response = await doFetch(url, {
@@ -257,7 +284,7 @@ export function createHttpCollectorTransport(options: HttpCollectorTransportOpti
       if (response.type === 'opaqueredirect') {
         throw new CollectorExportError('collector redirected; not followed', { retryable: false });
       }
-      if (response.status < 200 || response.status >= 300) {
+      if (response.status !== 204) {
         throw collectorResponseError(response.status, response.headers.get('retry-after'));
       }
     },
