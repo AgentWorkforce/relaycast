@@ -16,7 +16,11 @@ This project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 Packages without a separate changelog are covered by the cross-package notes below.
 
-## [Unreleased - Patch]
+## [Unreleased - Minor]
+
+### Added
+
+- Self-hosted servers can export analytics to a collector inside the installation: set `RELAYCAST_TELEMETRY_COLLECTOR_URL` (plus optional `RELAYCAST_TELEMETRY_COLLECTOR_TOKEN_FILE`, `RELAYCAST_TELEMETRY_DEPLOYMENT`, `RELAYCAST_TELEMETRY_QUEUE_MAX`, `RELAYCAST_TELEMETRY_BATCH_MAX`, `RELAYCAST_TELEMETRY_FLUSH_MS`). Batches follow the collector's `agent-relay.analytics.batch/v1` contract (`POST` to the collector's `/v1/events`, per-producer bearer credential from a Secret file) with allowlisted fields only (no content, tokens, credential hashes or sender names; `tenant_id` is not sent yet); export is bounded, retried briefly (honoring `Retry-After`, splitting on `413`, never retrying `400`/`401`/`403`), counted and never affects requests. Off by default, with no hosted fallback. See `docs/self-hosting.md`.
 
 ### Fixed
 

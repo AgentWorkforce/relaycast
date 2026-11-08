@@ -7,7 +7,12 @@ See the [root changelog](../../CHANGELOG.md) for cross-package release highlight
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased - Patch]
+## [Unreleased - Minor]
+
+### Added
+
+- `CollectorTelemetrySink` / `createCollectorTelemetrySink`: an opt-in `TelemetrySink` that projects observations and exceptions into a version 1 export envelope (`EXPORT_ENVELOPE_VERSION`, `projectObservation`, `projectException`) and POSTs bounded batches to a self-host collector in its `agent-relay.analytics.batch/v1` wire shape (`{ schema, events }`, each event `version`, `event_id`, `occurred_at`, `component`, `deployment_id`, `event`, optional `trace_id` / `workspace_id`, `properties`; `tenant_id` not sent yet). Facts are limited to each kind's required keys plus a small per-kind allowlist; exceptions export only `error_name`, `error_code` and an allowlisted `operation`. Queue cap, batch size, flush interval, retry attempts and shutdown timeout are bounded. Collector responses are classified per the collector contract: `400`/`401`/`403`/other `4xx`/redirects are dropped without retry, `413` splits the batch, `429`/`503`/`507`/other `5xx`/timeouts are retried with a bounded `Retry-After`; retries keep `event_id`s. `stats()` reports `enqueued`, `exported`, `dropped`, `queueFull`, `rejected`, `failedBatches`, `retries` and `splits`. Failures log a rate-limited stderr line and are never re-captured. The URL must be https except for loopback, `*.svc` / `*.svc.cluster.local` and single-label hosts; redirects are never followed.
+- `createNodeRuntime` / `startServer` accept `telemetryCollector: { url, bearerToken?, deployment?, instance?, queueMax?, batchMax?, flushIntervalMs? }` (an explicit `telemetry` still wins); `NodeRuntime.closeTelemetry()` drains it and `RunningServer.stop()` awaits that drain. Without the option the no-op sink is unchanged.
 
 ### Fixed
 
