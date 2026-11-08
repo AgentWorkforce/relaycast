@@ -57,12 +57,18 @@ const VERBATIM_VALUE_KEYS = new Set([
   'metadata',
 ]);
 
-export function camelizeKeys<T, OpaqueBlocks extends boolean = false>(
+export function camelizeKeys<T>(value: T, options: { opaqueBlocks: true }): Camelize<T, true>;
+export function camelizeKeys<T>(value: T, options?: { opaqueBlocks?: false }): Camelize<T>;
+export function camelizeKeys<T>(
   value: T,
-  options: { opaqueBlocks?: OpaqueBlocks } = {},
-): Camelize<T, OpaqueBlocks> {
+  options: { opaqueBlocks?: boolean },
+): Camelize<T> | Camelize<T, true>;
+export function camelizeKeys<T>(
+  value: T,
+  options: { opaqueBlocks?: boolean } = {},
+): Camelize<T> | Camelize<T, true> {
   if (Array.isArray(value)) {
-    return value.map((item) => camelizeKeys(item, options)) as Camelize<T, OpaqueBlocks>;
+    return value.map((item) => camelizeKeys(item, options)) as Camelize<T> | Camelize<T, true>;
   }
   if (isPlainObject(value)) {
     const out: Record<string, unknown> = {};
@@ -73,9 +79,9 @@ export function camelizeKeys<T, OpaqueBlocks extends boolean = false>(
         ? val
         : camelizeKeys(val, options);
     }
-    return out as Camelize<T, OpaqueBlocks>;
+    return out as Camelize<T> | Camelize<T, true>;
   }
-  return value as Camelize<T, OpaqueBlocks>;
+  return value as Camelize<T> | Camelize<T, true>;
 }
 
 export function decamelizeKeys<T>(value: T): unknown {
