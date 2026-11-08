@@ -11,7 +11,7 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Added
 
-- New `@relaycast/engine/adapters/postgres` connection layer and `relaycast-engine migrate` / `verify-db` CLI for self-hosted PostgreSQL, with verify-full TLS and a pinned CA; neither creates schemas or roles. The server still serves from SQLite only and exits 64 if any `RELAYCAST_DATABASE_*` variable is set. See `docs/self-host-postgres.md`.
+- New `@relaycast/engine/adapters/postgres` connection layer and `relaycast-engine migrate` / `verify-db` CLI for self-hosted PostgreSQL, with verify-full TLS and a pinned CA; neither creates schemas or roles. Targets schema `public` of a dedicated database; the CA file may also come from `NODE_EXTRA_CA_CERTS`. The server still serves from SQLite only and exits 64 if any `RELAYCAST_DATABASE_*` variable is set. See `docs/self-host-postgres.md`.
 - Hosts can supply a message-search backend through the optional `search` engine dependency (`SearchIndex`); without it, existing SQLite search behavior is unchanged. Configured backend errors propagate without falling back to SQLite.
 
 ### Fixed

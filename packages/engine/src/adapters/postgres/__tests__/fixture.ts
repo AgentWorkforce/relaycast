@@ -6,7 +6,7 @@
  */
 import type pg from "pg";
 
-export const SCHEMA = "relaycast";
+export const SCHEMA = "public";
 
 /**
  * A session advisory key no product code uses (the migrator keys its lock on

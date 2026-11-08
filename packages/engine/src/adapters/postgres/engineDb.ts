@@ -11,9 +11,8 @@
  * is `relaycast-engine migrate`'s job, under the owner role. A failure is a
  * typed refusal, never a fallback to SQLite.
  *
- * Tables are declared with `pgSchema('relaycast')`, so every statement drizzle
- * builds names `"relaycast"."<table>"`. The pool still sets `search_path` (see
- * pool.ts) but no query depends on it.
+ * Tables are in the default schema `public`, and the pool sets
+ * `search_path=public` on every connection (see pool.ts).
  */
 import { is } from "drizzle-orm";
 import { drizzle, type NodePgDatabase } from "drizzle-orm/node-postgres";

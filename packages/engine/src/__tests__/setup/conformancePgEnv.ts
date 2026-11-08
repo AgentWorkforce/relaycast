@@ -6,11 +6,11 @@
  *   RELAYCAST_TEST_DATABASE_OWNER_URL  owner-role URL (migrate once, TRUNCATE between tests)
  *   RELAYCAST_TEST_DATABASE_CA_FILE    CA bundle for verify-full TLS
  *
- * The schema is always `relaycast`.
+ * The schema is always `public`.
  */
 import { loadPostgresConfig, type PostgresConfig, type PostgresMode } from '../../adapters/postgres/config.js';
 
-export const CONFORMANCE_PG_SCHEMA = 'relaycast';
+export const CONFORMANCE_PG_SCHEMA = 'public';
 
 const REQUIRED = ['RELAYCAST_TEST_DATABASE_URL', 'RELAYCAST_TEST_DATABASE_OWNER_URL', 'RELAYCAST_TEST_DATABASE_CA_FILE'] as const;
 

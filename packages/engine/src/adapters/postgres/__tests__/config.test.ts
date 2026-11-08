@@ -62,7 +62,7 @@ describe("loadPostgresConfig", () => {
       database: "app",
       user: "relaycast_runtime",
       password: PASSWORD,
-      schema: "relaycast",
+      schema: "public",
       ownerRole: "relaycast_owner",
       runtimeRole: "relaycast_runtime",
       expectedRole: "relaycast_runtime",
@@ -127,7 +127,7 @@ describe("loadPostgresConfig", () => {
     refuses(
       () =>
         loadPostgresConfig(env({ RELAYCAST_DATABASE_CA_FILE: "" }), "runtime"),
-      /RELAYCAST_DATABASE_CA_FILE is required/,
+      /RELAYCAST_DATABASE_CA_FILE \(or NODE_EXTRA_CA_CERTS\) is required/,
     );
   });
 
@@ -219,14 +219,14 @@ describe("loadPostgresConfig", () => {
     ).toBe("::1");
   });
 
-  it("refuses a schema other than relaycast and malformed identifiers", () => {
+  it("refuses a schema other than public and malformed identifiers", () => {
     refuses(
       () =>
         loadPostgresConfig(
           env({ RELAYCAST_DATABASE_SCHEMA: "other" }),
           "runtime",
         ),
-      /must be relaycast/,
+      /must be public/,
     );
     refuses(
       () =>

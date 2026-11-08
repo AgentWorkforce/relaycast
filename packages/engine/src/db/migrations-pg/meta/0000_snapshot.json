@@ -1,12 +1,12 @@
 {
-  "id": "dfa00e74-0a58-45a6-84b8-735a4ea214ff",
+  "id": "14eaca88-8a2b-4548-83aa-6017c25a1f09",
   "prevId": "00000000-0000-0000-0000-000000000000",
   "version": "7",
   "dialect": "postgresql",
   "tables": {
-    "relaycast.a2a_agents": {
+    "public.a2a_agents": {
       "name": "a2a_agents",
-      "schema": "relaycast",
+      "schema": "",
       "columns": {
         "rowid": {
           "name": "rowid",
@@ -16,7 +16,7 @@
           "identity": {
             "type": "always",
             "name": "a2a_agents_rowid_seq",
-            "schema": "relaycast",
+            "schema": "public",
             "increment": "1",
             "startWith": "1",
             "minValue": "1",
@@ -169,7 +169,6 @@
           "name": "a2a_agents_workspace_id_workspaces_id_fk",
           "tableFrom": "a2a_agents",
           "tableTo": "workspaces",
-          "schemaTo": "relaycast",
           "columnsFrom": [
             "workspace_id"
           ],
@@ -183,7 +182,6 @@
           "name": "a2a_agents_relay_agent_id_agents_id_fk",
           "tableFrom": "a2a_agents",
           "tableTo": "agents",
-          "schemaTo": "relaycast",
           "columnsFrom": [
             "relay_agent_id"
           ],
@@ -200,9 +198,9 @@
       "checkConstraints": {},
       "isRLSEnabled": false
     },
-    "relaycast.a2a_egress": {
+    "public.a2a_egress": {
       "name": "a2a_egress",
-      "schema": "relaycast",
+      "schema": "",
       "columns": {
         "rowid": {
           "name": "rowid",
@@ -212,7 +210,7 @@
           "identity": {
             "type": "always",
             "name": "a2a_egress_rowid_seq",
-            "schema": "relaycast",
+            "schema": "public",
             "increment": "1",
             "startWith": "1",
             "minValue": "1",
@@ -394,7 +392,6 @@
           "name": "a2a_egress_workspace_id_workspaces_id_fk",
           "tableFrom": "a2a_egress",
           "tableTo": "workspaces",
-          "schemaTo": "relaycast",
           "columnsFrom": [
             "workspace_id"
           ],
@@ -411,9 +408,9 @@
       "checkConstraints": {},
       "isRLSEnabled": false
     },
-    "relaycast.a2a_egress_context": {
+    "public.a2a_egress_context": {
       "name": "a2a_egress_context",
-      "schema": "relaycast",
+      "schema": "",
       "columns": {
         "rowid": {
           "name": "rowid",
@@ -423,7 +420,7 @@
           "identity": {
             "type": "always",
             "name": "a2a_egress_context_rowid_seq",
-            "schema": "relaycast",
+            "schema": "public",
             "increment": "1",
             "startWith": "1",
             "minValue": "1",
@@ -488,7 +485,6 @@
           "name": "a2a_egress_context_id_a2a_egress_id_fk",
           "tableFrom": "a2a_egress_context",
           "tableTo": "a2a_egress",
-          "schemaTo": "relaycast",
           "columnsFrom": [
             "id"
           ],
@@ -502,7 +498,6 @@
           "name": "a2a_egress_context_message_id_messages_id_fk",
           "tableFrom": "a2a_egress_context",
           "tableTo": "messages",
-          "schemaTo": "relaycast",
           "columnsFrom": [
             "message_id"
           ],
@@ -519,9 +514,9 @@
       "checkConstraints": {},
       "isRLSEnabled": false
     },
-    "relaycast.a2a_inbound": {
+    "public.a2a_inbound": {
       "name": "a2a_inbound",
-      "schema": "relaycast",
+      "schema": "",
       "columns": {
         "rowid": {
           "name": "rowid",
@@ -531,7 +526,7 @@
           "identity": {
             "type": "always",
             "name": "a2a_inbound_rowid_seq",
-            "schema": "relaycast",
+            "schema": "public",
             "increment": "1",
             "startWith": "1",
             "minValue": "1",
@@ -651,7 +646,6 @@
           "name": "a2a_inbound_workspace_id_workspaces_id_fk",
           "tableFrom": "a2a_inbound",
           "tableTo": "workspaces",
-          "schemaTo": "relaycast",
           "columnsFrom": [
             "workspace_id"
           ],
@@ -665,7 +659,6 @@
           "name": "a2a_inbound_message_id_messages_id_fk",
           "tableFrom": "a2a_inbound",
           "tableTo": "messages",
-          "schemaTo": "relaycast",
           "columnsFrom": [
             "message_id"
           ],
@@ -682,9 +675,9 @@
       "checkConstraints": {},
       "isRLSEnabled": false
     },
-    "relaycast.action_invocations": {
+    "public.action_invocations": {
       "name": "action_invocations",
-      "schema": "relaycast",
+      "schema": "",
       "columns": {
         "rowid": {
           "name": "rowid",
@@ -694,7 +687,7 @@
           "identity": {
             "type": "always",
             "name": "action_invocations_rowid_seq",
-            "schema": "relaycast",
+            "schema": "public",
             "increment": "1",
             "startWith": "1",
             "minValue": "1",
@@ -996,7 +989,7 @@
             }
           ],
           "isUnique": false,
-          "where": "\"relaycast\".\"action_invocations\".\"dispatched_node_id\" IS NOT NULL AND \"relaycast\".\"action_invocations\".\"status\" IN ('pending', 'dispatched', 'invoked')",
+          "where": "\"action_invocations\".\"dispatched_node_id\" IS NOT NULL AND \"action_invocations\".\"status\" IN ('pending', 'dispatched', 'invoked')",
           "concurrently": false,
           "method": "btree",
           "with": {}
@@ -1018,7 +1011,7 @@
             }
           ],
           "isUnique": false,
-          "where": "\"relaycast\".\"action_invocations\".\"status\" = 'pending'",
+          "where": "\"action_invocations\".\"status\" = 'pending'",
           "concurrently": false,
           "method": "btree",
           "with": {}
@@ -1103,7 +1096,7 @@
             }
           ],
           "isUnique": false,
-          "where": "\"relaycast\".\"action_invocations\".\"task_state\" IS NOT NULL",
+          "where": "\"action_invocations\".\"task_state\" IS NOT NULL",
           "concurrently": false,
           "method": "btree",
           "with": {}
@@ -1119,7 +1112,7 @@
             }
           ],
           "isUnique": false,
-          "where": "\"relaycast\".\"action_invocations\".\"task_state\" IS NOT NULL AND \"relaycast\".\"action_invocations\".\"status\" IN ('pending', 'dispatched', 'running')",
+          "where": "\"action_invocations\".\"task_state\" IS NOT NULL AND \"action_invocations\".\"status\" IN ('pending', 'dispatched', 'running')",
           "concurrently": false,
           "method": "btree",
           "with": {}
@@ -1130,7 +1123,6 @@
           "name": "action_invocations_workspace_id_workspaces_id_fk",
           "tableFrom": "action_invocations",
           "tableTo": "workspaces",
-          "schemaTo": "relaycast",
           "columnsFrom": [
             "workspace_id"
           ],
@@ -1144,7 +1136,6 @@
           "name": "action_invocations_action_id_actions_id_fk",
           "tableFrom": "action_invocations",
           "tableTo": "actions",
-          "schemaTo": "relaycast",
           "columnsFrom": [
             "action_id"
           ],
@@ -1158,7 +1149,6 @@
           "name": "action_invocations_caller_id_agents_id_fk",
           "tableFrom": "action_invocations",
           "tableTo": "agents",
-          "schemaTo": "relaycast",
           "columnsFrom": [
             "caller_id"
           ],
@@ -1172,7 +1162,6 @@
           "name": "action_invocations_dispatched_node_id_nodes_id_fk",
           "tableFrom": "action_invocations",
           "tableTo": "nodes",
-          "schemaTo": "relaycast",
           "columnsFrom": [
             "dispatched_node_id"
           ],
@@ -1189,14 +1178,14 @@
       "checkConstraints": {
         "action_invocations_invocation_origin_check": {
           "name": "action_invocations_invocation_origin_check",
-          "value": "\"relaycast\".\"action_invocations\".\"invocation_origin\" IN ('legacy_unknown', 'registered_action', 'builtin')"
+          "value": "\"action_invocations\".\"invocation_origin\" IN ('legacy_unknown', 'registered_action', 'builtin')"
         }
       },
       "isRLSEnabled": false
     },
-    "relaycast.actions": {
+    "public.actions": {
       "name": "actions",
-      "schema": "relaycast",
+      "schema": "",
       "columns": {
         "rowid": {
           "name": "rowid",
@@ -1206,7 +1195,7 @@
           "identity": {
             "type": "always",
             "name": "actions_rowid_seq",
-            "schema": "relaycast",
+            "schema": "public",
             "increment": "1",
             "startWith": "1",
             "minValue": "1",
@@ -1373,7 +1362,7 @@
             }
           ],
           "isUnique": true,
-          "where": "\"relaycast\".\"actions\".\"handler_node_id\" IS NULL",
+          "where": "\"actions\".\"handler_node_id\" IS NULL",
           "concurrently": false,
           "method": "btree",
           "with": {}
@@ -1395,7 +1384,7 @@
             }
           ],
           "isUnique": true,
-          "where": "\"relaycast\".\"actions\".\"is_global\" = true",
+          "where": "\"actions\".\"is_global\" = true",
           "concurrently": false,
           "method": "btree",
           "with": {}
@@ -1451,7 +1440,6 @@
           "name": "actions_workspace_id_workspaces_id_fk",
           "tableFrom": "actions",
           "tableTo": "workspaces",
-          "schemaTo": "relaycast",
           "columnsFrom": [
             "workspace_id"
           ],
@@ -1465,7 +1453,6 @@
           "name": "actions_handler_agent_id_agents_id_fk",
           "tableFrom": "actions",
           "tableTo": "agents",
-          "schemaTo": "relaycast",
           "columnsFrom": [
             "handler_agent_id"
           ],
@@ -1479,7 +1466,6 @@
           "name": "actions_handler_node_id_nodes_id_fk",
           "tableFrom": "actions",
           "tableTo": "nodes",
-          "schemaTo": "relaycast",
           "columnsFrom": [
             "handler_node_id"
           ],
@@ -1496,9 +1482,9 @@
       "checkConstraints": {},
       "isRLSEnabled": false
     },
-    "relaycast.agent_identity_audit": {
+    "public.agent_identity_audit": {
       "name": "agent_identity_audit",
-      "schema": "relaycast",
+      "schema": "",
       "columns": {
         "rowid": {
           "name": "rowid",
@@ -1508,7 +1494,7 @@
           "identity": {
             "type": "always",
             "name": "agent_identity_audit_rowid_seq",
-            "schema": "relaycast",
+            "schema": "public",
             "increment": "1",
             "startWith": "1",
             "minValue": "1",
@@ -1661,7 +1647,6 @@
           "name": "agent_identity_audit_workspace_id_workspaces_id_fk",
           "tableFrom": "agent_identity_audit",
           "tableTo": "workspaces",
-          "schemaTo": "relaycast",
           "columnsFrom": [
             "workspace_id"
           ],
@@ -1678,9 +1663,9 @@
       "checkConstraints": {},
       "isRLSEnabled": false
     },
-    "relaycast.agent_node_bindings": {
+    "public.agent_node_bindings": {
       "name": "agent_node_bindings",
-      "schema": "relaycast",
+      "schema": "",
       "columns": {
         "rowid": {
           "name": "rowid",
@@ -1690,7 +1675,7 @@
           "identity": {
             "type": "always",
             "name": "agent_node_bindings_rowid_seq",
-            "schema": "relaycast",
+            "schema": "public",
             "increment": "1",
             "startWith": "1",
             "minValue": "1",
@@ -1890,7 +1875,6 @@
           "name": "agent_node_bindings_workspace_id_workspaces_id_fk",
           "tableFrom": "agent_node_bindings",
           "tableTo": "workspaces",
-          "schemaTo": "relaycast",
           "columnsFrom": [
             "workspace_id"
           ],
@@ -1904,7 +1888,6 @@
           "name": "agent_node_bindings_agent_id_agents_id_fk",
           "tableFrom": "agent_node_bindings",
           "tableTo": "agents",
-          "schemaTo": "relaycast",
           "columnsFrom": [
             "agent_id"
           ],
@@ -1918,7 +1901,6 @@
           "name": "agent_node_bindings_node_id_nodes_id_fk",
           "tableFrom": "agent_node_bindings",
           "tableTo": "nodes",
-          "schemaTo": "relaycast",
           "columnsFrom": [
             "node_id"
           ],
@@ -1932,7 +1914,6 @@
           "name": "agent_node_bindings_agent_workspace_fk",
           "tableFrom": "agent_node_bindings",
           "tableTo": "agents",
-          "schemaTo": "relaycast",
           "columnsFrom": [
             "workspace_id",
             "agent_id"
@@ -1948,7 +1929,6 @@
           "name": "agent_node_bindings_node_workspace_fk",
           "tableFrom": "agent_node_bindings",
           "tableTo": "nodes",
-          "schemaTo": "relaycast",
           "columnsFrom": [
             "workspace_id",
             "node_id"
@@ -1967,9 +1947,9 @@
       "checkConstraints": {},
       "isRLSEnabled": false
     },
-    "relaycast.agent_recovery_credentials": {
+    "public.agent_recovery_credentials": {
       "name": "agent_recovery_credentials",
-      "schema": "relaycast",
+      "schema": "",
       "columns": {
         "rowid": {
           "name": "rowid",
@@ -1979,7 +1959,7 @@
           "identity": {
             "type": "always",
             "name": "agent_recovery_credentials_rowid_seq",
-            "schema": "relaycast",
+            "schema": "public",
             "increment": "1",
             "startWith": "1",
             "minValue": "1",
@@ -2097,7 +2077,6 @@
           "name": "agent_recovery_credentials_workspace_id_workspaces_id_fk",
           "tableFrom": "agent_recovery_credentials",
           "tableTo": "workspaces",
-          "schemaTo": "relaycast",
           "columnsFrom": [
             "workspace_id"
           ],
@@ -2111,7 +2090,6 @@
           "name": "agent_recovery_credentials_agent_fk",
           "tableFrom": "agent_recovery_credentials",
           "tableTo": "agents",
-          "schemaTo": "relaycast",
           "columnsFrom": [
             "workspace_id",
             "agent_id"
@@ -2130,9 +2108,9 @@
       "checkConstraints": {},
       "isRLSEnabled": false
     },
-    "relaycast.agents": {
+    "public.agents": {
       "name": "agents",
-      "schema": "relaycast",
+      "schema": "",
       "columns": {
         "rowid": {
           "name": "rowid",
@@ -2142,7 +2120,7 @@
           "identity": {
             "type": "always",
             "name": "agents_rowid_seq",
-            "schema": "relaycast",
+            "schema": "public",
             "increment": "1",
             "startWith": "1",
             "minValue": "1",
@@ -2388,7 +2366,7 @@
             }
           ],
           "isUnique": false,
-          "where": "\"relaycast\".\"agents\".\"status\" <> 'released'",
+          "where": "\"agents\".\"status\" <> 'released'",
           "concurrently": false,
           "method": "btree",
           "with": {}
@@ -2404,7 +2382,7 @@
             }
           ],
           "isUnique": false,
-          "where": "\"relaycast\".\"agents\".\"location_node_id\" IS NOT NULL",
+          "where": "\"agents\".\"location_node_id\" IS NOT NULL",
           "concurrently": false,
           "method": "btree",
           "with": {}
@@ -2432,7 +2410,7 @@
             }
           ],
           "isUnique": false,
-          "where": "\"relaycast\".\"agents\".\"location_type\" = 'via_node' AND \"relaycast\".\"agents\".\"location_node_id\" IS NOT NULL AND \"relaycast\".\"agents\".\"status\" NOT IN ('offline', 'released')",
+          "where": "\"agents\".\"location_type\" = 'via_node' AND \"agents\".\"location_node_id\" IS NOT NULL AND \"agents\".\"status\" NOT IN ('offline', 'released')",
           "concurrently": false,
           "method": "btree",
           "with": {}
@@ -2448,7 +2426,7 @@
             }
           ],
           "isUnique": false,
-          "where": "\"relaycast\".\"agents\".\"origin_node_id\" IS NOT NULL",
+          "where": "\"agents\".\"origin_node_id\" IS NOT NULL",
           "concurrently": false,
           "method": "btree",
           "with": {}
@@ -2494,7 +2472,7 @@
             }
           ],
           "isUnique": false,
-          "where": "\"relaycast\".\"agents\".\"status\" IN ('active', 'online')",
+          "where": "\"agents\".\"status\" IN ('active', 'online')",
           "concurrently": false,
           "method": "btree",
           "with": {}
@@ -2505,7 +2483,6 @@
           "name": "agents_workspace_id_workspaces_id_fk",
           "tableFrom": "agents",
           "tableTo": "workspaces",
-          "schemaTo": "relaycast",
           "columnsFrom": [
             "workspace_id"
           ],
@@ -2519,7 +2496,6 @@
           "name": "agents_location_node_id_nodes_id_fk",
           "tableFrom": "agents",
           "tableTo": "nodes",
-          "schemaTo": "relaycast",
           "columnsFrom": [
             "location_node_id"
           ],
@@ -2533,7 +2509,6 @@
           "name": "agents_origin_node_id_nodes_id_fk",
           "tableFrom": "agents",
           "tableTo": "nodes",
-          "schemaTo": "relaycast",
           "columnsFrom": [
             "origin_node_id"
           ],
@@ -2566,9 +2541,9 @@
       "checkConstraints": {},
       "isRLSEnabled": false
     },
-    "relaycast.certifications": {
+    "public.certifications": {
       "name": "certifications",
-      "schema": "relaycast",
+      "schema": "",
       "columns": {
         "rowid": {
           "name": "rowid",
@@ -2578,7 +2553,7 @@
           "identity": {
             "type": "always",
             "name": "certifications_rowid_seq",
-            "schema": "relaycast",
+            "schema": "public",
             "increment": "1",
             "startWith": "1",
             "minValue": "1",
@@ -2767,7 +2742,6 @@
           "name": "certifications_workspace_id_workspaces_id_fk",
           "tableFrom": "certifications",
           "tableTo": "workspaces",
-          "schemaTo": "relaycast",
           "columnsFrom": [
             "workspace_id"
           ],
@@ -2784,9 +2758,9 @@
       "checkConstraints": {},
       "isRLSEnabled": false
     },
-    "relaycast.channel_members": {
+    "public.channel_members": {
       "name": "channel_members",
-      "schema": "relaycast",
+      "schema": "",
       "columns": {
         "rowid": {
           "name": "rowid",
@@ -2796,7 +2770,7 @@
           "identity": {
             "type": "always",
             "name": "channel_members_rowid_seq",
-            "schema": "relaycast",
+            "schema": "public",
             "increment": "1",
             "startWith": "1",
             "minValue": "1",
@@ -2882,7 +2856,6 @@
           "name": "channel_members_channel_id_channels_id_fk",
           "tableFrom": "channel_members",
           "tableTo": "channels",
-          "schemaTo": "relaycast",
           "columnsFrom": [
             "channel_id"
           ],
@@ -2896,7 +2869,6 @@
           "name": "channel_members_agent_id_agents_id_fk",
           "tableFrom": "channel_members",
           "tableTo": "agents",
-          "schemaTo": "relaycast",
           "columnsFrom": [
             "agent_id"
           ],
@@ -2921,9 +2893,9 @@
       "checkConstraints": {},
       "isRLSEnabled": false
     },
-    "relaycast.channels": {
+    "public.channels": {
       "name": "channels",
-      "schema": "relaycast",
+      "schema": "",
       "columns": {
         "rowid": {
           "name": "rowid",
@@ -2933,7 +2905,7 @@
           "identity": {
             "type": "always",
             "name": "channels_rowid_seq",
-            "schema": "relaycast",
+            "schema": "public",
             "increment": "1",
             "startWith": "1",
             "minValue": "1",
@@ -3074,7 +3046,6 @@
           "name": "channels_workspace_id_workspaces_id_fk",
           "tableFrom": "channels",
           "tableTo": "workspaces",
-          "schemaTo": "relaycast",
           "columnsFrom": [
             "workspace_id"
           ],
@@ -3088,7 +3059,6 @@
           "name": "channels_created_by_agents_id_fk",
           "tableFrom": "channels",
           "tableTo": "agents",
-          "schemaTo": "relaycast",
           "columnsFrom": [
             "created_by"
           ],
@@ -3105,9 +3075,9 @@
       "checkConstraints": {},
       "isRLSEnabled": false
     },
-    "relaycast.credential_upgrades": {
+    "public.credential_upgrades": {
       "name": "credential_upgrades",
-      "schema": "relaycast",
+      "schema": "",
       "columns": {
         "rowid": {
           "name": "rowid",
@@ -3117,7 +3087,7 @@
           "identity": {
             "type": "always",
             "name": "credential_upgrades_rowid_seq",
-            "schema": "relaycast",
+            "schema": "public",
             "increment": "1",
             "startWith": "1",
             "minValue": "1",
@@ -3213,7 +3183,6 @@
           "name": "credential_upgrades_workspace_id_workspaces_id_fk",
           "tableFrom": "credential_upgrades",
           "tableTo": "workspaces",
-          "schemaTo": "relaycast",
           "columnsFrom": [
             "workspace_id"
           ],
@@ -3230,9 +3199,9 @@
       "checkConstraints": {},
       "isRLSEnabled": false
     },
-    "relaycast.deliveries": {
+    "public.deliveries": {
       "name": "deliveries",
-      "schema": "relaycast",
+      "schema": "",
       "columns": {
         "rowid": {
           "name": "rowid",
@@ -3242,7 +3211,7 @@
           "identity": {
             "type": "always",
             "name": "deliveries_rowid_seq",
-            "schema": "relaycast",
+            "schema": "public",
             "increment": "1",
             "startWith": "1",
             "minValue": "1",
@@ -3481,7 +3450,7 @@
             }
           ],
           "isUnique": false,
-          "where": "\"relaycast\".\"deliveries\".\"location_node_id\" IS NOT NULL",
+          "where": "\"deliveries\".\"location_node_id\" IS NOT NULL",
           "concurrently": false,
           "method": "btree",
           "with": {}
@@ -3497,7 +3466,7 @@
             }
           ],
           "isUnique": false,
-          "where": "\"relaycast\".\"deliveries\".\"route_node_id\" IS NOT NULL",
+          "where": "\"deliveries\".\"route_node_id\" IS NOT NULL",
           "concurrently": false,
           "method": "btree",
           "with": {}
@@ -3513,7 +3482,7 @@
             }
           ],
           "isUnique": false,
-          "where": "\"relaycast\".\"deliveries\".\"status\" IN ('queued', 'delivered') AND \"relaycast\".\"deliveries\".\"location_node_id\" IS NOT NULL",
+          "where": "\"deliveries\".\"status\" IN ('queued', 'delivered') AND \"deliveries\".\"location_node_id\" IS NOT NULL",
           "concurrently": false,
           "method": "btree",
           "with": {}
@@ -3637,7 +3606,7 @@
             }
           ],
           "isUnique": false,
-          "where": "\"relaycast\".\"deliveries\".\"status\" IN ('queued', 'delivered')",
+          "where": "\"deliveries\".\"status\" IN ('queued', 'delivered')",
           "concurrently": false,
           "method": "btree",
           "with": {}
@@ -3665,7 +3634,7 @@
             }
           ],
           "isUnique": false,
-          "where": "\"relaycast\".\"deliveries\".\"status\" IN ('queued', 'delivered')",
+          "where": "\"deliveries\".\"status\" IN ('queued', 'delivered')",
           "concurrently": false,
           "method": "btree",
           "with": {}
@@ -3687,7 +3656,7 @@
             }
           ],
           "isUnique": false,
-          "where": "\"relaycast\".\"deliveries\".\"status\" IN ('acked', 'failed', 'dead_lettered')",
+          "where": "\"deliveries\".\"status\" IN ('acked', 'failed', 'dead_lettered')",
           "concurrently": false,
           "method": "btree",
           "with": {}
@@ -3721,7 +3690,7 @@
             }
           ],
           "isUnique": false,
-          "where": "\"relaycast\".\"deliveries\".\"status\" IN ('queued', 'delivered')",
+          "where": "\"deliveries\".\"status\" IN ('queued', 'delivered')",
           "concurrently": false,
           "method": "btree",
           "with": {}
@@ -3770,7 +3739,7 @@
             }
           ],
           "isUnique": false,
-          "where": "\"relaycast\".\"deliveries\".\"status\" IN ('queued', 'delivered') AND \"relaycast\".\"deliveries\".\"expires_at\" IS NOT NULL",
+          "where": "\"deliveries\".\"status\" IN ('queued', 'delivered') AND \"deliveries\".\"expires_at\" IS NOT NULL",
           "concurrently": false,
           "method": "btree",
           "with": {}
@@ -3804,7 +3773,7 @@
             }
           ],
           "isUnique": false,
-          "where": "\"relaycast\".\"deliveries\".\"next_attempt_at\" IS NOT NULL",
+          "where": "\"deliveries\".\"next_attempt_at\" IS NOT NULL",
           "concurrently": false,
           "method": "btree",
           "with": {}
@@ -3826,7 +3795,7 @@
             }
           ],
           "isUnique": false,
-          "where": "\"relaycast\".\"deliveries\".\"status\" = 'queued' AND \"relaycast\".\"deliveries\".\"route_node_kind\" IN ('http_push', 'ws', 'fleet_ws', 'direct_ws') AND \"relaycast\".\"deliveries\".\"next_attempt_at\" IS NULL",
+          "where": "\"deliveries\".\"status\" = 'queued' AND \"deliveries\".\"route_node_kind\" IN ('http_push', 'ws', 'fleet_ws', 'direct_ws') AND \"deliveries\".\"next_attempt_at\" IS NULL",
           "concurrently": false,
           "method": "btree",
           "with": {}
@@ -3854,7 +3823,7 @@
             }
           ],
           "isUnique": false,
-          "where": "\"relaycast\".\"deliveries\".\"status\" = 'queued' AND \"relaycast\".\"deliveries\".\"route_node_kind\" IN ('http_push', 'ws', 'fleet_ws', 'direct_ws') AND \"relaycast\".\"deliveries\".\"next_attempt_at\" IS NULL",
+          "where": "\"deliveries\".\"status\" = 'queued' AND \"deliveries\".\"route_node_kind\" IN ('http_push', 'ws', 'fleet_ws', 'direct_ws') AND \"deliveries\".\"next_attempt_at\" IS NULL",
           "concurrently": false,
           "method": "btree",
           "with": {}
@@ -3882,7 +3851,7 @@
             }
           ],
           "isUnique": false,
-          "where": "\"relaycast\".\"deliveries\".\"status\" = 'queued' AND \"relaycast\".\"deliveries\".\"route_node_kind\" IN ('http_push', 'ws', 'fleet_ws', 'direct_ws') AND \"relaycast\".\"deliveries\".\"next_attempt_at\" IS NOT NULL",
+          "where": "\"deliveries\".\"status\" = 'queued' AND \"deliveries\".\"route_node_kind\" IN ('http_push', 'ws', 'fleet_ws', 'direct_ws') AND \"deliveries\".\"next_attempt_at\" IS NOT NULL",
           "concurrently": false,
           "method": "btree",
           "with": {}
@@ -3916,7 +3885,7 @@
             }
           ],
           "isUnique": false,
-          "where": "\"relaycast\".\"deliveries\".\"status\" = 'queued' AND \"relaycast\".\"deliveries\".\"route_node_kind\" IN ('http_push', 'ws', 'fleet_ws', 'direct_ws') AND \"relaycast\".\"deliveries\".\"next_attempt_at\" IS NOT NULL",
+          "where": "\"deliveries\".\"status\" = 'queued' AND \"deliveries\".\"route_node_kind\" IN ('http_push', 'ws', 'fleet_ws', 'direct_ws') AND \"deliveries\".\"next_attempt_at\" IS NOT NULL",
           "concurrently": false,
           "method": "btree",
           "with": {}
@@ -3993,7 +3962,6 @@
           "name": "deliveries_workspace_id_workspaces_id_fk",
           "tableFrom": "deliveries",
           "tableTo": "workspaces",
-          "schemaTo": "relaycast",
           "columnsFrom": [
             "workspace_id"
           ],
@@ -4007,7 +3975,6 @@
           "name": "deliveries_message_id_messages_id_fk",
           "tableFrom": "deliveries",
           "tableTo": "messages",
-          "schemaTo": "relaycast",
           "columnsFrom": [
             "message_id"
           ],
@@ -4021,7 +3988,6 @@
           "name": "deliveries_agent_id_agents_id_fk",
           "tableFrom": "deliveries",
           "tableTo": "agents",
-          "schemaTo": "relaycast",
           "columnsFrom": [
             "agent_id"
           ],
@@ -4035,7 +4001,6 @@
           "name": "deliveries_location_node_id_nodes_id_fk",
           "tableFrom": "deliveries",
           "tableTo": "nodes",
-          "schemaTo": "relaycast",
           "columnsFrom": [
             "location_node_id"
           ],
@@ -4049,7 +4014,6 @@
           "name": "deliveries_route_node_id_nodes_id_fk",
           "tableFrom": "deliveries",
           "tableTo": "nodes",
-          "schemaTo": "relaycast",
           "columnsFrom": [
             "route_node_id"
           ],
@@ -4066,9 +4030,9 @@
       "checkConstraints": {},
       "isRLSEnabled": false
     },
-    "relaycast.direct_dm_idempotency": {
+    "public.direct_dm_idempotency": {
       "name": "direct_dm_idempotency",
-      "schema": "relaycast",
+      "schema": "",
       "columns": {
         "rowid": {
           "name": "rowid",
@@ -4078,7 +4042,7 @@
           "identity": {
             "type": "always",
             "name": "direct_dm_idempotency_rowid_seq",
-            "schema": "relaycast",
+            "schema": "public",
             "increment": "1",
             "startWith": "1",
             "minValue": "1",
@@ -4189,7 +4153,6 @@
           "name": "direct_dm_idempotency_workspace_id_workspaces_id_fk",
           "tableFrom": "direct_dm_idempotency",
           "tableTo": "workspaces",
-          "schemaTo": "relaycast",
           "columnsFrom": [
             "workspace_id"
           ],
@@ -4206,9 +4169,9 @@
       "checkConstraints": {},
       "isRLSEnabled": false
     },
-    "relaycast.directory_agents": {
+    "public.directory_agents": {
       "name": "directory_agents",
-      "schema": "relaycast",
+      "schema": "",
       "columns": {
         "rowid": {
           "name": "rowid",
@@ -4218,7 +4181,7 @@
           "identity": {
             "type": "always",
             "name": "directory_agents_rowid_seq",
-            "schema": "relaycast",
+            "schema": "public",
             "increment": "1",
             "startWith": "1",
             "minValue": "1",
@@ -4444,7 +4407,6 @@
           "name": "directory_agents_workspace_id_workspaces_id_fk",
           "tableFrom": "directory_agents",
           "tableTo": "workspaces",
-          "schemaTo": "relaycast",
           "columnsFrom": [
             "workspace_id"
           ],
@@ -4458,7 +4420,6 @@
           "name": "directory_agents_source_agent_id_agents_id_fk",
           "tableFrom": "directory_agents",
           "tableTo": "agents",
-          "schemaTo": "relaycast",
           "columnsFrom": [
             "source_agent_id"
           ],
@@ -4475,9 +4436,9 @@
       "checkConstraints": {},
       "isRLSEnabled": false
     },
-    "relaycast.directory_ratings": {
+    "public.directory_ratings": {
       "name": "directory_ratings",
-      "schema": "relaycast",
+      "schema": "",
       "columns": {
         "rowid": {
           "name": "rowid",
@@ -4487,7 +4448,7 @@
           "identity": {
             "type": "always",
             "name": "directory_ratings_rowid_seq",
-            "schema": "relaycast",
+            "schema": "public",
             "increment": "1",
             "startWith": "1",
             "minValue": "1",
@@ -4647,7 +4608,6 @@
           "name": "directory_ratings_workspace_id_workspaces_id_fk",
           "tableFrom": "directory_ratings",
           "tableTo": "workspaces",
-          "schemaTo": "relaycast",
           "columnsFrom": [
             "workspace_id"
           ],
@@ -4661,7 +4621,6 @@
           "name": "directory_ratings_directory_agent_id_directory_agents_id_fk",
           "tableFrom": "directory_ratings",
           "tableTo": "directory_agents",
-          "schemaTo": "relaycast",
           "columnsFrom": [
             "directory_agent_id"
           ],
@@ -4675,7 +4634,6 @@
           "name": "directory_ratings_rater_agent_id_agents_id_fk",
           "tableFrom": "directory_ratings",
           "tableTo": "agents",
-          "schemaTo": "relaycast",
           "columnsFrom": [
             "rater_agent_id"
           ],
@@ -4692,9 +4650,9 @@
       "checkConstraints": {},
       "isRLSEnabled": false
     },
-    "relaycast.directory_skills": {
+    "public.directory_skills": {
       "name": "directory_skills",
-      "schema": "relaycast",
+      "schema": "",
       "columns": {
         "rowid": {
           "name": "rowid",
@@ -4704,7 +4662,7 @@
           "identity": {
             "type": "always",
             "name": "directory_skills_rowid_seq",
-            "schema": "relaycast",
+            "schema": "public",
             "increment": "1",
             "startWith": "1",
             "minValue": "1",
@@ -4836,7 +4794,6 @@
           "name": "directory_skills_workspace_id_workspaces_id_fk",
           "tableFrom": "directory_skills",
           "tableTo": "workspaces",
-          "schemaTo": "relaycast",
           "columnsFrom": [
             "workspace_id"
           ],
@@ -4850,7 +4807,6 @@
           "name": "directory_skills_directory_agent_id_directory_agents_id_fk",
           "tableFrom": "directory_skills",
           "tableTo": "directory_agents",
-          "schemaTo": "relaycast",
           "columnsFrom": [
             "directory_agent_id"
           ],
@@ -4867,9 +4823,9 @@
       "checkConstraints": {},
       "isRLSEnabled": false
     },
-    "relaycast.dm_conversation_reservations": {
+    "public.dm_conversation_reservations": {
       "name": "dm_conversation_reservations",
-      "schema": "relaycast",
+      "schema": "",
       "columns": {
         "rowid": {
           "name": "rowid",
@@ -4879,7 +4835,7 @@
           "identity": {
             "type": "always",
             "name": "dm_conversation_reservations_rowid_seq",
-            "schema": "relaycast",
+            "schema": "public",
             "increment": "1",
             "startWith": "1",
             "minValue": "1",
@@ -4969,7 +4925,6 @@
           "name": "dm_conversation_reservations_workspace_id_workspaces_id_fk",
           "tableFrom": "dm_conversation_reservations",
           "tableTo": "workspaces",
-          "schemaTo": "relaycast",
           "columnsFrom": [
             "workspace_id"
           ],
@@ -4986,14 +4941,14 @@
       "checkConstraints": {
         "dm_conversation_reservations_sorted_pair_check": {
           "name": "dm_conversation_reservations_sorted_pair_check",
-          "value": "\"relaycast\".\"dm_conversation_reservations\".\"participant_one_id\" <= \"relaycast\".\"dm_conversation_reservations\".\"participant_two_id\""
+          "value": "\"dm_conversation_reservations\".\"participant_one_id\" <= \"dm_conversation_reservations\".\"participant_two_id\""
         }
       },
       "isRLSEnabled": false
     },
-    "relaycast.dm_conversations": {
+    "public.dm_conversations": {
       "name": "dm_conversations",
-      "schema": "relaycast",
+      "schema": "",
       "columns": {
         "rowid": {
           "name": "rowid",
@@ -5003,7 +4958,7 @@
           "identity": {
             "type": "always",
             "name": "dm_conversations_rowid_seq",
-            "schema": "relaycast",
+            "schema": "public",
             "increment": "1",
             "startWith": "1",
             "minValue": "1",
@@ -5103,7 +5058,6 @@
           "name": "dm_conversations_workspace_id_workspaces_id_fk",
           "tableFrom": "dm_conversations",
           "tableTo": "workspaces",
-          "schemaTo": "relaycast",
           "columnsFrom": [
             "workspace_id"
           ],
@@ -5117,7 +5071,6 @@
           "name": "dm_conversations_channel_id_channels_id_fk",
           "tableFrom": "dm_conversations",
           "tableTo": "channels",
-          "schemaTo": "relaycast",
           "columnsFrom": [
             "channel_id"
           ],
@@ -5134,9 +5087,9 @@
       "checkConstraints": {},
       "isRLSEnabled": false
     },
-    "relaycast.dm_participants": {
+    "public.dm_participants": {
       "name": "dm_participants",
-      "schema": "relaycast",
+      "schema": "",
       "columns": {
         "rowid": {
           "name": "rowid",
@@ -5146,7 +5099,7 @@
           "identity": {
             "type": "always",
             "name": "dm_participants_rowid_seq",
-            "schema": "relaycast",
+            "schema": "public",
             "increment": "1",
             "startWith": "1",
             "minValue": "1",
@@ -5224,7 +5177,6 @@
           "name": "dm_participants_conversation_id_dm_conversations_id_fk",
           "tableFrom": "dm_participants",
           "tableTo": "dm_conversations",
-          "schemaTo": "relaycast",
           "columnsFrom": [
             "conversation_id"
           ],
@@ -5238,7 +5190,6 @@
           "name": "dm_participants_agent_id_agents_id_fk",
           "tableFrom": "dm_participants",
           "tableTo": "agents",
-          "schemaTo": "relaycast",
           "columnsFrom": [
             "agent_id"
           ],
@@ -5263,9 +5214,9 @@
       "checkConstraints": {},
       "isRLSEnabled": false
     },
-    "relaycast.event_subscriptions": {
+    "public.event_subscriptions": {
       "name": "event_subscriptions",
-      "schema": "relaycast",
+      "schema": "",
       "columns": {
         "rowid": {
           "name": "rowid",
@@ -5275,7 +5226,7 @@
           "identity": {
             "type": "always",
             "name": "event_subscriptions_rowid_seq",
-            "schema": "relaycast",
+            "schema": "public",
             "increment": "1",
             "startWith": "1",
             "minValue": "1",
@@ -5385,7 +5336,6 @@
           "name": "event_subscriptions_workspace_id_workspaces_id_fk",
           "tableFrom": "event_subscriptions",
           "tableTo": "workspaces",
-          "schemaTo": "relaycast",
           "columnsFrom": [
             "workspace_id"
           ],
@@ -5402,9 +5352,9 @@
       "checkConstraints": {},
       "isRLSEnabled": false
     },
-    "relaycast.file_cleanup_queue": {
+    "public.file_cleanup_queue": {
       "name": "file_cleanup_queue",
-      "schema": "relaycast",
+      "schema": "",
       "columns": {
         "rowid": {
           "name": "rowid",
@@ -5414,7 +5364,7 @@
           "identity": {
             "type": "always",
             "name": "file_cleanup_queue_rowid_seq",
-            "schema": "relaycast",
+            "schema": "public",
             "increment": "1",
             "startWith": "1",
             "minValue": "1",
@@ -5508,9 +5458,9 @@
       "checkConstraints": {},
       "isRLSEnabled": false
     },
-    "relaycast.files": {
+    "public.files": {
       "name": "files",
-      "schema": "relaycast",
+      "schema": "",
       "columns": {
         "rowid": {
           "name": "rowid",
@@ -5520,7 +5470,7 @@
           "identity": {
             "type": "always",
             "name": "files_rowid_seq",
-            "schema": "relaycast",
+            "schema": "public",
             "increment": "1",
             "startWith": "1",
             "minValue": "1",
@@ -5650,7 +5600,6 @@
           "name": "files_workspace_id_workspaces_id_fk",
           "tableFrom": "files",
           "tableTo": "workspaces",
-          "schemaTo": "relaycast",
           "columnsFrom": [
             "workspace_id"
           ],
@@ -5664,7 +5613,6 @@
           "name": "files_uploaded_by_agents_id_fk",
           "tableFrom": "files",
           "tableTo": "agents",
-          "schemaTo": "relaycast",
           "columnsFrom": [
             "uploaded_by"
           ],
@@ -5681,9 +5629,9 @@
       "checkConstraints": {},
       "isRLSEnabled": false
     },
-    "relaycast.maintenance_cursors": {
+    "public.maintenance_cursors": {
       "name": "maintenance_cursors",
-      "schema": "relaycast",
+      "schema": "",
       "columns": {
         "rowid": {
           "name": "rowid",
@@ -5693,7 +5641,7 @@
           "identity": {
             "type": "always",
             "name": "maintenance_cursors_rowid_seq",
-            "schema": "relaycast",
+            "schema": "public",
             "increment": "1",
             "startWith": "1",
             "minValue": "1",
@@ -5739,9 +5687,9 @@
       "checkConstraints": {},
       "isRLSEnabled": false
     },
-    "relaycast.message_attachments": {
+    "public.message_attachments": {
       "name": "message_attachments",
-      "schema": "relaycast",
+      "schema": "",
       "columns": {
         "rowid": {
           "name": "rowid",
@@ -5751,7 +5699,7 @@
           "identity": {
             "type": "always",
             "name": "message_attachments_rowid_seq",
-            "schema": "relaycast",
+            "schema": "public",
             "increment": "1",
             "startWith": "1",
             "minValue": "1",
@@ -5817,7 +5765,6 @@
           "name": "message_attachments_message_id_messages_id_fk",
           "tableFrom": "message_attachments",
           "tableTo": "messages",
-          "schemaTo": "relaycast",
           "columnsFrom": [
             "message_id"
           ],
@@ -5831,7 +5778,6 @@
           "name": "message_attachments_file_id_files_id_fk",
           "tableFrom": "message_attachments",
           "tableTo": "files",
-          "schemaTo": "relaycast",
           "columnsFrom": [
             "file_id"
           ],
@@ -5856,9 +5802,9 @@
       "checkConstraints": {},
       "isRLSEnabled": false
     },
-    "relaycast.message_logs": {
+    "public.message_logs": {
       "name": "message_logs",
-      "schema": "relaycast",
+      "schema": "",
       "columns": {
         "rowid": {
           "name": "rowid",
@@ -5868,7 +5814,7 @@
           "identity": {
             "type": "always",
             "name": "message_logs_rowid_seq",
-            "schema": "relaycast",
+            "schema": "public",
             "increment": "1",
             "startWith": "1",
             "minValue": "1",
@@ -6109,7 +6055,6 @@
           "name": "message_logs_workspace_id_workspaces_id_fk",
           "tableFrom": "message_logs",
           "tableTo": "workspaces",
-          "schemaTo": "relaycast",
           "columnsFrom": [
             "workspace_id"
           ],
@@ -6123,7 +6068,6 @@
           "name": "message_logs_message_id_messages_id_fk",
           "tableFrom": "message_logs",
           "tableTo": "messages",
-          "schemaTo": "relaycast",
           "columnsFrom": [
             "message_id"
           ],
@@ -6137,7 +6081,6 @@
           "name": "message_logs_channel_id_channels_id_fk",
           "tableFrom": "message_logs",
           "tableTo": "channels",
-          "schemaTo": "relaycast",
           "columnsFrom": [
             "channel_id"
           ],
@@ -6151,7 +6094,6 @@
           "name": "message_logs_agent_id_agents_id_fk",
           "tableFrom": "message_logs",
           "tableTo": "agents",
-          "schemaTo": "relaycast",
           "columnsFrom": [
             "agent_id"
           ],
@@ -6168,9 +6110,9 @@
       "checkConstraints": {},
       "isRLSEnabled": false
     },
-    "relaycast.message_sessions": {
+    "public.message_sessions": {
       "name": "message_sessions",
-      "schema": "relaycast",
+      "schema": "",
       "columns": {
         "rowid": {
           "name": "rowid",
@@ -6180,7 +6122,7 @@
           "identity": {
             "type": "always",
             "name": "message_sessions_rowid_seq",
-            "schema": "relaycast",
+            "schema": "public",
             "increment": "1",
             "startWith": "1",
             "minValue": "1",
@@ -6264,7 +6206,6 @@
           "name": "message_sessions_workspace_id_workspaces_id_fk",
           "tableFrom": "message_sessions",
           "tableTo": "workspaces",
-          "schemaTo": "relaycast",
           "columnsFrom": [
             "workspace_id"
           ],
@@ -6289,9 +6230,9 @@
       "checkConstraints": {},
       "isRLSEnabled": false
     },
-    "relaycast.messages": {
+    "public.messages": {
       "name": "messages",
-      "schema": "relaycast",
+      "schema": "",
       "columns": {
         "rowid": {
           "name": "rowid",
@@ -6301,7 +6242,7 @@
           "identity": {
             "type": "always",
             "name": "messages_rowid_seq",
-            "schema": "relaycast",
+            "schema": "public",
             "increment": "1",
             "startWith": "1",
             "minValue": "1",
@@ -6567,7 +6508,6 @@
           "name": "messages_workspace_id_workspaces_id_fk",
           "tableFrom": "messages",
           "tableTo": "workspaces",
-          "schemaTo": "relaycast",
           "columnsFrom": [
             "workspace_id"
           ],
@@ -6581,7 +6521,6 @@
           "name": "messages_channel_id_channels_id_fk",
           "tableFrom": "messages",
           "tableTo": "channels",
-          "schemaTo": "relaycast",
           "columnsFrom": [
             "channel_id"
           ],
@@ -6595,7 +6534,6 @@
           "name": "messages_agent_id_agents_id_fk",
           "tableFrom": "messages",
           "tableTo": "agents",
-          "schemaTo": "relaycast",
           "columnsFrom": [
             "agent_id"
           ],
@@ -6609,7 +6547,6 @@
           "name": "messages_thread_id_messages_id_fk",
           "tableFrom": "messages",
           "tableTo": "messages",
-          "schemaTo": "relaycast",
           "columnsFrom": [
             "thread_id"
           ],
@@ -6626,9 +6563,9 @@
       "checkConstraints": {},
       "isRLSEnabled": false
     },
-    "relaycast.node_providers": {
+    "public.node_providers": {
       "name": "node_providers",
-      "schema": "relaycast",
+      "schema": "",
       "columns": {
         "rowid": {
           "name": "rowid",
@@ -6638,7 +6575,7 @@
           "identity": {
             "type": "always",
             "name": "node_providers_rowid_seq",
-            "schema": "relaycast",
+            "schema": "public",
             "increment": "1",
             "startWith": "1",
             "minValue": "1",
@@ -6866,7 +6803,6 @@
           "name": "node_providers_workspace_id_workspaces_id_fk",
           "tableFrom": "node_providers",
           "tableTo": "workspaces",
-          "schemaTo": "relaycast",
           "columnsFrom": [
             "workspace_id"
           ],
@@ -6880,7 +6816,6 @@
           "name": "node_providers_node_id_nodes_id_fk",
           "tableFrom": "node_providers",
           "tableTo": "nodes",
-          "schemaTo": "relaycast",
           "columnsFrom": [
             "node_id"
           ],
@@ -6897,9 +6832,9 @@
       "checkConstraints": {},
       "isRLSEnabled": false
     },
-    "relaycast.nodes": {
+    "public.nodes": {
       "name": "nodes",
-      "schema": "relaycast",
+      "schema": "",
       "columns": {
         "rowid": {
           "name": "rowid",
@@ -6909,7 +6844,7 @@
           "identity": {
             "type": "always",
             "name": "nodes_rowid_seq",
-            "schema": "relaycast",
+            "schema": "public",
             "increment": "1",
             "startWith": "1",
             "minValue": "1",
@@ -7303,7 +7238,7 @@
             }
           ],
           "isUnique": false,
-          "where": "\"relaycast\".\"nodes\".\"status\" = 'online'",
+          "where": "\"nodes\".\"status\" = 'online'",
           "concurrently": false,
           "method": "btree",
           "with": {}
@@ -7325,7 +7260,7 @@
             }
           ],
           "isUnique": false,
-          "where": "\"relaycast\".\"nodes\".\"kind\" = 'http_push' OR (\"relaycast\".\"nodes\".\"kind\" IN ('ws', 'fleet_ws', 'direct_ws') AND \"relaycast\".\"nodes\".\"status\" <> 'offline')",
+          "where": "\"nodes\".\"kind\" = 'http_push' OR (\"nodes\".\"kind\" IN ('ws', 'fleet_ws', 'direct_ws') AND \"nodes\".\"status\" <> 'offline')",
           "concurrently": false,
           "method": "btree",
           "with": {}
@@ -7336,7 +7271,6 @@
           "name": "nodes_workspace_id_workspaces_id_fk",
           "tableFrom": "nodes",
           "tableTo": "workspaces",
-          "schemaTo": "relaycast",
           "columnsFrom": [
             "workspace_id"
           ],
@@ -7369,9 +7303,9 @@
       "checkConstraints": {},
       "isRLSEnabled": false
     },
-    "relaycast.observer_tokens": {
+    "public.observer_tokens": {
       "name": "observer_tokens",
-      "schema": "relaycast",
+      "schema": "",
       "columns": {
         "rowid": {
           "name": "rowid",
@@ -7381,7 +7315,7 @@
           "identity": {
             "type": "always",
             "name": "observer_tokens_rowid_seq",
-            "schema": "relaycast",
+            "schema": "public",
             "increment": "1",
             "startWith": "1",
             "minValue": "1",
@@ -7580,7 +7514,6 @@
           "name": "observer_tokens_workspace_id_workspaces_id_fk",
           "tableFrom": "observer_tokens",
           "tableTo": "workspaces",
-          "schemaTo": "relaycast",
           "columnsFrom": [
             "workspace_id"
           ],
@@ -7597,9 +7530,9 @@
       "checkConstraints": {},
       "isRLSEnabled": false
     },
-    "relaycast.pending_events": {
+    "public.pending_events": {
       "name": "pending_events",
-      "schema": "relaycast",
+      "schema": "",
       "columns": {
         "rowid": {
           "name": "rowid",
@@ -7609,7 +7542,7 @@
           "identity": {
             "type": "always",
             "name": "pending_events_rowid_seq",
-            "schema": "relaycast",
+            "schema": "public",
             "increment": "1",
             "startWith": "1",
             "minValue": "1",
@@ -7782,7 +7715,6 @@
           "name": "pending_events_workspace_id_workspaces_id_fk",
           "tableFrom": "pending_events",
           "tableTo": "workspaces",
-          "schemaTo": "relaycast",
           "columnsFrom": [
             "workspace_id"
           ],
@@ -7799,9 +7731,9 @@
       "checkConstraints": {},
       "isRLSEnabled": false
     },
-    "relaycast.reactions": {
+    "public.reactions": {
       "name": "reactions",
-      "schema": "relaycast",
+      "schema": "",
       "columns": {
         "rowid": {
           "name": "rowid",
@@ -7811,7 +7743,7 @@
           "identity": {
             "type": "always",
             "name": "reactions_rowid_seq",
-            "schema": "relaycast",
+            "schema": "public",
             "increment": "1",
             "startWith": "1",
             "minValue": "1",
@@ -7931,7 +7863,6 @@
           "name": "reactions_message_id_messages_id_fk",
           "tableFrom": "reactions",
           "tableTo": "messages",
-          "schemaTo": "relaycast",
           "columnsFrom": [
             "message_id"
           ],
@@ -7945,7 +7876,6 @@
           "name": "reactions_agent_id_agents_id_fk",
           "tableFrom": "reactions",
           "tableTo": "agents",
-          "schemaTo": "relaycast",
           "columnsFrom": [
             "agent_id"
           ],
@@ -7962,9 +7892,9 @@
       "checkConstraints": {},
       "isRLSEnabled": false
     },
-    "relaycast.read_receipts": {
+    "public.read_receipts": {
       "name": "read_receipts",
-      "schema": "relaycast",
+      "schema": "",
       "columns": {
         "rowid": {
           "name": "rowid",
@@ -7974,7 +7904,7 @@
           "identity": {
             "type": "always",
             "name": "read_receipts_rowid_seq",
-            "schema": "relaycast",
+            "schema": "public",
             "increment": "1",
             "startWith": "1",
             "minValue": "1",
@@ -8067,7 +7997,6 @@
           "name": "read_receipts_message_id_messages_id_fk",
           "tableFrom": "read_receipts",
           "tableTo": "messages",
-          "schemaTo": "relaycast",
           "columnsFrom": [
             "message_id"
           ],
@@ -8081,7 +8010,6 @@
           "name": "read_receipts_agent_id_agents_id_fk",
           "tableFrom": "read_receipts",
           "tableTo": "agents",
-          "schemaTo": "relaycast",
           "columnsFrom": [
             "agent_id"
           ],
@@ -8106,9 +8034,9 @@
       "checkConstraints": {},
       "isRLSEnabled": false
     },
-    "relaycast.routing_configs": {
+    "public.routing_configs": {
       "name": "routing_configs",
-      "schema": "relaycast",
+      "schema": "",
       "columns": {
         "rowid": {
           "name": "rowid",
@@ -8118,7 +8046,7 @@
           "identity": {
             "type": "always",
             "name": "routing_configs_rowid_seq",
-            "schema": "relaycast",
+            "schema": "public",
             "increment": "1",
             "startWith": "1",
             "minValue": "1",
@@ -8199,7 +8127,6 @@
           "name": "routing_configs_workspace_id_workspaces_id_fk",
           "tableFrom": "routing_configs",
           "tableTo": "workspaces",
-          "schemaTo": "relaycast",
           "columnsFrom": [
             "workspace_id"
           ],
@@ -8216,9 +8143,9 @@
       "checkConstraints": {},
       "isRLSEnabled": false
     },
-    "relaycast.routing_failures": {
+    "public.routing_failures": {
       "name": "routing_failures",
-      "schema": "relaycast",
+      "schema": "",
       "columns": {
         "rowid": {
           "name": "rowid",
@@ -8228,7 +8155,7 @@
           "identity": {
             "type": "always",
             "name": "routing_failures_rowid_seq",
-            "schema": "relaycast",
+            "schema": "public",
             "increment": "1",
             "startWith": "1",
             "minValue": "1",
@@ -8381,7 +8308,6 @@
           "name": "routing_failures_workspace_id_workspaces_id_fk",
           "tableFrom": "routing_failures",
           "tableTo": "workspaces",
-          "schemaTo": "relaycast",
           "columnsFrom": [
             "workspace_id"
           ],
@@ -8395,7 +8321,6 @@
           "name": "routing_failures_agent_id_agents_id_fk",
           "tableFrom": "routing_failures",
           "tableTo": "agents",
-          "schemaTo": "relaycast",
           "columnsFrom": [
             "agent_id"
           ],
@@ -8420,9 +8345,9 @@
       "checkConstraints": {},
       "isRLSEnabled": false
     },
-    "relaycast.session_events": {
+    "public.session_events": {
       "name": "session_events",
-      "schema": "relaycast",
+      "schema": "",
       "columns": {
         "rowid": {
           "name": "rowid",
@@ -8432,7 +8357,7 @@
           "identity": {
             "type": "always",
             "name": "session_events_rowid_seq",
-            "schema": "relaycast",
+            "schema": "public",
             "increment": "1",
             "startWith": "1",
             "minValue": "1",
@@ -8651,7 +8576,6 @@
           "name": "session_events_workspace_id_workspaces_id_fk",
           "tableFrom": "session_events",
           "tableTo": "workspaces",
-          "schemaTo": "relaycast",
           "columnsFrom": [
             "workspace_id"
           ],
@@ -8665,7 +8589,6 @@
           "name": "session_events_agent_id_agents_id_fk",
           "tableFrom": "session_events",
           "tableTo": "agents",
-          "schemaTo": "relaycast",
           "columnsFrom": [
             "agent_id"
           ],
@@ -8682,9 +8605,9 @@
       "checkConstraints": {},
       "isRLSEnabled": false
     },
-    "relaycast.triggers": {
+    "public.triggers": {
       "name": "triggers",
-      "schema": "relaycast",
+      "schema": "",
       "columns": {
         "rowid": {
           "name": "rowid",
@@ -8694,7 +8617,7 @@
           "identity": {
             "type": "always",
             "name": "triggers_rowid_seq",
-            "schema": "relaycast",
+            "schema": "public",
             "increment": "1",
             "startWith": "1",
             "minValue": "1",
@@ -8845,7 +8768,6 @@
           "name": "triggers_workspace_id_workspaces_id_fk",
           "tableFrom": "triggers",
           "tableTo": "workspaces",
-          "schemaTo": "relaycast",
           "columnsFrom": [
             "workspace_id"
           ],
@@ -8862,9 +8784,9 @@
       "checkConstraints": {},
       "isRLSEnabled": false
     },
-    "relaycast.usage_records": {
+    "public.usage_records": {
       "name": "usage_records",
-      "schema": "relaycast",
+      "schema": "",
       "columns": {
         "rowid": {
           "name": "rowid",
@@ -8874,7 +8796,7 @@
           "identity": {
             "type": "always",
             "name": "usage_records_rowid_seq",
-            "schema": "relaycast",
+            "schema": "public",
             "increment": "1",
             "startWith": "1",
             "minValue": "1",
@@ -8993,7 +8915,6 @@
           "name": "usage_records_workspace_id_workspaces_id_fk",
           "tableFrom": "usage_records",
           "tableTo": "workspaces",
-          "schemaTo": "relaycast",
           "columnsFrom": [
             "workspace_id"
           ],
@@ -9010,9 +8931,9 @@
       "checkConstraints": {},
       "isRLSEnabled": false
     },
-    "relaycast.webhook_deliveries": {
+    "public.webhook_deliveries": {
       "name": "webhook_deliveries",
-      "schema": "relaycast",
+      "schema": "",
       "columns": {
         "rowid": {
           "name": "rowid",
@@ -9022,7 +8943,7 @@
           "identity": {
             "type": "always",
             "name": "webhook_deliveries_rowid_seq",
-            "schema": "relaycast",
+            "schema": "public",
             "increment": "1",
             "startWith": "1",
             "minValue": "1",
@@ -9181,7 +9102,6 @@
           "name": "webhook_deliveries_event_id_pending_events_id_fk",
           "tableFrom": "webhook_deliveries",
           "tableTo": "pending_events",
-          "schemaTo": "relaycast",
           "columnsFrom": [
             "event_id"
           ],
@@ -9195,7 +9115,6 @@
           "name": "webhook_deliveries_subscription_id_event_subscriptions_id_fk",
           "tableFrom": "webhook_deliveries",
           "tableTo": "event_subscriptions",
-          "schemaTo": "relaycast",
           "columnsFrom": [
             "subscription_id"
           ],
@@ -9212,9 +9131,9 @@
       "checkConstraints": {},
       "isRLSEnabled": false
     },
-    "relaycast.webhooks": {
+    "public.webhooks": {
       "name": "webhooks",
-      "schema": "relaycast",
+      "schema": "",
       "columns": {
         "rowid": {
           "name": "rowid",
@@ -9224,7 +9143,7 @@
           "identity": {
             "type": "always",
             "name": "webhooks_rowid_seq",
-            "schema": "relaycast",
+            "schema": "public",
             "increment": "1",
             "startWith": "1",
             "minValue": "1",
@@ -9372,7 +9291,6 @@
           "name": "webhooks_workspace_id_workspaces_id_fk",
           "tableFrom": "webhooks",
           "tableTo": "workspaces",
-          "schemaTo": "relaycast",
           "columnsFrom": [
             "workspace_id"
           ],
@@ -9386,7 +9304,6 @@
           "name": "webhooks_channel_id_channels_id_fk",
           "tableFrom": "webhooks",
           "tableTo": "channels",
-          "schemaTo": "relaycast",
           "columnsFrom": [
             "channel_id"
           ],
@@ -9400,7 +9317,6 @@
           "name": "webhooks_created_by_agents_id_fk",
           "tableFrom": "webhooks",
           "tableTo": "agents",
-          "schemaTo": "relaycast",
           "columnsFrom": [
             "created_by"
           ],
@@ -9417,9 +9333,9 @@
       "checkConstraints": {},
       "isRLSEnabled": false
     },
-    "relaycast.workspace_create_idempotency": {
+    "public.workspace_create_idempotency": {
       "name": "workspace_create_idempotency",
-      "schema": "relaycast",
+      "schema": "",
       "columns": {
         "rowid": {
           "name": "rowid",
@@ -9429,7 +9345,7 @@
           "identity": {
             "type": "always",
             "name": "workspace_create_idempotency_rowid_seq",
-            "schema": "relaycast",
+            "schema": "public",
             "increment": "1",
             "startWith": "1",
             "minValue": "1",
@@ -9530,9 +9446,9 @@
       "checkConstraints": {},
       "isRLSEnabled": false
     },
-    "relaycast.workspace_events": {
+    "public.workspace_events": {
       "name": "workspace_events",
-      "schema": "relaycast",
+      "schema": "",
       "columns": {
         "rowid": {
           "name": "rowid",
@@ -9542,7 +9458,7 @@
           "identity": {
             "type": "always",
             "name": "workspace_events_rowid_seq",
-            "schema": "relaycast",
+            "schema": "public",
             "increment": "1",
             "startWith": "1",
             "minValue": "1",
@@ -9669,14 +9585,14 @@
       "checkConstraints": {
         "workspace_events_seq_positive_check": {
           "name": "workspace_events_seq_positive_check",
-          "value": "\"relaycast\".\"workspace_events\".\"seq\" > 0"
+          "value": "\"workspace_events\".\"seq\" > 0"
         }
       },
       "isRLSEnabled": false
     },
-    "relaycast.workspaces": {
+    "public.workspaces": {
       "name": "workspaces",
-      "schema": "relaycast",
+      "schema": "",
       "columns": {
         "rowid": {
           "name": "rowid",
@@ -9686,7 +9602,7 @@
           "identity": {
             "type": "always",
             "name": "workspaces_rowid_seq",
-            "schema": "relaycast",
+            "schema": "public",
             "increment": "1",
             "startWith": "1",
             "minValue": "1",
@@ -9880,16 +9796,14 @@
       "checkConstraints": {
         "workspaces_usage_classification_source_check": {
           "name": "workspaces_usage_classification_source_check",
-          "value": "(\n        (\"relaycast\".\"workspaces\".\"usage_classification\" = 'unknown' AND \"relaycast\".\"workspaces\".\"classification_source\" = 'unclassified')\n        OR (\n          \"relaycast\".\"workspaces\".\"usage_classification\" IN ('internal', 'external')\n          AND \"relaycast\".\"workspaces\".\"classification_source\" IN ('creator', 'operator')\n        )\n      )"
+          "value": "(\n        (\"workspaces\".\"usage_classification\" = 'unknown' AND \"workspaces\".\"classification_source\" = 'unclassified')\n        OR (\n          \"workspaces\".\"usage_classification\" IN ('internal', 'external')\n          AND \"workspaces\".\"classification_source\" IN ('creator', 'operator')\n        )\n      )"
         }
       },
       "isRLSEnabled": false
     }
   },
   "enums": {},
-  "schemas": {
-    "relaycast": "relaycast"
-  },
+  "schemas": {},
   "sequences": {},
   "roles": {},
   "policies": {},

@@ -67,10 +67,10 @@ describe('PostgreSQL engine handle (no database)', () => {
       expect(ports.hasTransactionCapability(db)).toBe(true);
       expect(db.engineDialect).toBe('pg');
       const { sql } = db.select({ id: tables.workspaces.id }).from(tables.workspaces).toSQL();
-      expect(sql).toBe('select "id" from "relaycast"."workspaces"');
+      expect(sql).toBe('select "id" from "workspaces"');
       const other = tables.alias(tables.workspaces, 'other_workspace');
       expect(db.select({ id: other.id }).from(other).toSQL().sql).toBe(
-        'select "id" from "relaycast"."workspaces" "other_workspace"',
+        'select "id" from "workspaces" "other_workspace"',
       );
     } finally {
       await pool.end();

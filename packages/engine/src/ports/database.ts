@@ -210,7 +210,7 @@ export async function runAtomicWrites(
 export type DatabaseConstraintKind = 'mailbox_capacity' | 'workspace_delivery_capacity' | 'a2a_registration_changed' | 'address_changed' | 'node_capacity';
 
 /** The schema every PostgreSQL engine table lives in (db/schema.pg.ts). */
-const PG_ENGINE_SCHEMA = 'relaycast';
+const PG_ENGINE_SCHEMA = 'public';
 
 /**
  * PostgreSQL NOT NULL sentinels: SQLSTATE 23502 carries the violated

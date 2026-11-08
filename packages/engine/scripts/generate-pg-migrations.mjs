@@ -3,8 +3,8 @@
  * Generate PostgreSQL migrations from src/db/schema.pg.ts with drizzle-kit,
  * then post-process the files drizzle-kit wrote:
  *
- * - remove `CREATE SCHEMA "relaycast"`: the platform pre-creates the schema
- *   (owned by relaycast_owner), and the owner role cannot create schemas;
+ * - remove any `CREATE SCHEMA` drizzle-kit emits: tables live in `public`, the
+ *   default schema the platform hands to relaycast_owner;
  * - fail if any migration contains a forbidden statement (FORBIDDEN below):
  *   schema/role DDL, GRANT/REVOKE and DROP/REASSIGN OWNED belong to the
  *   platform bootstrap; transaction control breaks the migrator's
@@ -39,7 +39,7 @@ const engineRoot = join(dirname(fileURLToPath(import.meta.url)), '..');
 const migrationsDir = join(engineRoot, 'src/db/migrations-pg');
 const require = createRequire(import.meta.url);
 
-const CREATE_SCHEMA = /^CREATE SCHEMA(?: IF NOT EXISTS)? "?relaycast"?;\s*(?:--> statement-breakpoint\s*)?/gim;
+const CREATE_SCHEMA = /^CREATE SCHEMA(?: IF NOT EXISTS)? "?public"?;\s*(?:--> statement-breakpoint\s*)?/gim;
 
 /** Same list as FORBIDDEN_MIGRATION_PATTERNS in src/adapters/postgres/migrate.ts. */
 export const FORBIDDEN = [
