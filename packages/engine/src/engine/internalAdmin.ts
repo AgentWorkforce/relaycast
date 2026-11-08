@@ -136,7 +136,7 @@ function isUniqueConstraintError(err: unknown): boolean {
   while (cause && typeof cause === 'object' && !seen.has(cause)) {
     seen.add(cause);
     const e = cause as { code?: string; message?: string; cause?: unknown };
-    if (e.code === 'SQLITE_CONSTRAINT_UNIQUE' || e.code === 'SQLITE_CONSTRAINT_PRIMARYKEY') return true;
+    if (e.code === 'SQLITE_CONSTRAINT_UNIQUE' || e.code === 'SQLITE_CONSTRAINT_PRIMARYKEY' || e.code === '23505') return true;
     if (typeof e.message === 'string' && e.message.toLowerCase().includes('unique constraint failed')) return true;
     cause = e.cause;
   }

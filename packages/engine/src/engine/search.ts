@@ -1,6 +1,7 @@
 import type { EngineDb } from '../ports/database.js';
 import type { MessageSearchOptions, SearchIndex } from '../ports/search.js';
 import { SqliteSearchIndex } from '../adapters/sqlite/search.js';
+import { PostgresSearchIndex, isPostgresEngineDb } from '../adapters/postgres/search.js';
 
 /** Preserve the existing direct-call API while hosts can supply a search adapter. */
 export async function searchMessages(
@@ -10,7 +11,8 @@ export async function searchMessages(
   searchIndex?: SearchIndex,
 ) {
   const limit = Math.min(Math.max(opts.limit || 20, 1), 100);
-  const results = await (searchIndex ?? new SqliteSearchIndex(db)).searchMessages({ ...opts, limit, workspaceId });
+  const index = searchIndex ?? (isPostgresEngineDb(db) ? new PostgresSearchIndex(db) : new SqliteSearchIndex(db));
+  const results = await index.searchMessages({ ...opts, limit, workspaceId });
   // Storage scoping is mandatory, but a buggy adapter must not expose rows from
   // another workspace through ordinary tokens or observer-token filtering.
   if (results.some((result) => result.workspace_id !== workspaceId)) {

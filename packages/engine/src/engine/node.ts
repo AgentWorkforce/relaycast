@@ -1215,7 +1215,7 @@ export async function claimNodeOffline(
   expected: { lastHeartbeatAt: Date | null; livenessRevision: number },
 ): Promise<{ name: string; claimAt: Date; claimRevision: number } | undefined> {
   const claimAt = new Date();
-  const nextRevision = sql<number>`MAX(
+  const nextRevision = sql<number>`${sql.raw(sqlx.dialectOf(db) === 'pg' ? 'GREATEST' : 'MAX')}(
     ${nodes.livenessRevision},
     COALESCE((
       SELECT MAX(np.liveness_revision)
@@ -2820,9 +2820,9 @@ export async function recoverAgentViaNode(
     try {
       const now = new Date().toISOString();
       const fleetMetadata = sqlx.jsonObject(tx, sql`
-        'node_id', ${nodeId},
-        'invocation_id', ${message.invocation_id ?? null},
-        'registered_at', ${now}
+        'node_id', ${sqlx.textParam(tx, nodeId)},
+        'invocation_id', ${sqlx.textParam(tx, message.invocation_id ?? null)},
+        'registered_at', ${sqlx.textParam(tx, now)}
       `);
       const [result] = await tx
         .update(agents)
@@ -3519,7 +3519,11 @@ export interface ListNodesHistoryPage {
  * to match primitive capabilities exactly as before.
  */
 function capabilityMatchCondition(db: object, capability: string) {
-  return sql`EXISTS (SELECT 1 FROM ${sqlx.jsonEach(db, sql`CASE WHEN ${sqlx.jsonValid(db, nodes.capabilities)} THEN ${nodes.capabilities} ELSE '[]' END`, { alias: ' AS cap', elements: 'text' })}
+  // jsonb_array_elements refuses a scalar; json_each yields it as one row.
+  const list = sqlx.dialectOf(db) === 'pg'
+    ? sql`CASE WHEN jsonb_typeof(${nodes.capabilities}) = 'array' THEN ${nodes.capabilities} ELSE jsonb_build_array(${nodes.capabilities}) END`
+    : sql`CASE WHEN ${sqlx.jsonValid(db, nodes.capabilities)} THEN ${nodes.capabilities} ELSE '[]' END`;
+  return sql`EXISTS (SELECT 1 FROM ${sqlx.jsonEach(db, list, { alias: ' AS cap', elements: 'text' })}
     WHERE cap.value = ${capability}
        OR (${sqlx.jsonValid(db, sql.raw('cap.value'))} AND ${sqlx.jsonGet(db, sql.raw('cap.value'), '$.name')} = ${capability}))`;
 }

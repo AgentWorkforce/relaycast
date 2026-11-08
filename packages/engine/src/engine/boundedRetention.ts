@@ -61,7 +61,7 @@ function key(row: Candidate, table: Table): (string | number)[] {
 function expired(row: Candidate, table: Table, defaults: Required<RetentionDefaults>, nowMs: number): boolean {
   if (!row.eligible) return false;
   if (!table.setting || !table.fallback) return true;
-  const settings = row.retention ? JSON.parse(row.retention) as WorkspaceRetentionSettings : {};
+  const settings = row.retention ? sqlx.parseJsonColumn(row.retention, {}) as WorkspaceRetentionSettings : {};
   const override = settings[table.setting];
   const ttl = override === undefined ? defaults[table.fallback] : override;
   if (ttl == null || !Number.isFinite(ttl) || ttl <= 0) return false;

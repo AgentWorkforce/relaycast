@@ -4,9 +4,8 @@
  * FTS5 virtual tables (`directory_agents_fts`, `directory_skills_fts`,
  * `messages_mention_fts`), `MATCH`, `bm25()` and the rowid joins onto them
  * exist only in the SQLite schema. Engine code builds these statements here
- * rather than inline; every function throws `UnsupportedOnPostgresError`
- * (`unsupported_on_postgres`) on a PostgreSQL handle. The PostgreSQL
- * equivalents (tsvector + GIN) belong to the search port.
+ * rather than inline. On PostgreSQL the same statements use the tsvector
+ * mirror tables of the same names (see `pgTsQuery`).
  *
  * Statement text is kept byte-for-byte as it was written inline in the
  * engine, so SQLite behaviour is unchanged. bm25 ranks are ascending-is-better.
@@ -14,11 +13,36 @@
 import { sql, type SQL } from 'drizzle-orm';
 import * as sqlx from '../../db/sqlx.js';
 
+/**
+ * `buildFtsQuery` output as `to_tsquery('simple', ...)` text: terms ANDed,
+ * "quoted phrases" adjacent, matching FTS5's implicit AND. Tokens are quoted
+ * tsquery lexemes, so nothing in the input is operator syntax.
+ */
+export function pgTsQuery(ftsQuery: string): SQL {
+  const quote = (token: string): string => `'${token.replace(/['\\]/g, '')}'`;
+  const parts = [...ftsQuery.matchAll(/"([^"]*)"|(\S+)/g)].flatMap((match) => {
+    const words = (match[1] ?? match[2] ?? '').replace(/"/g, '').split(/\s+/).filter(Boolean);
+    return words.length === 0 ? [] : [words.length === 1 ? quote(words[0]) : `(${words.map(quote).join(' <-> ')})`];
+  });
+  return sql`to_tsquery('simple', ${parts.join(' & ')})`;
+}
+
+const pgRank = (document: string, ftsQuery: string): SQL =>
+  sql`-ts_rank(${sql.raw(document)}, ${pgTsQuery(ftsQuery)})`;
+
 // --- directory search (engine/directory.ts) ---------------------------------
 
 /** Per-row bm25 ranks of directory agents matching `ftsQuery` in a workspace. */
 export function directoryAgentFtsRanks(db: sqlx.DialectSource, ftsQuery: string, workspaceId: string): SQL {
-  sqlx.requireSqlite(db, 'directory agent full-text search');
+  if (sqlx.dialectOf(db) === 'pg') {
+    return sql`
+        SELECT da.id AS directory_agent_id, ${pgRank('directory_agents_fts.document', ftsQuery)} AS rank
+        FROM directory_agents_fts
+        JOIN directory_agents da ON da.rowid = directory_agents_fts.rowid
+        WHERE directory_agents_fts.document @@ ${pgTsQuery(ftsQuery)}
+          AND da.workspace_id = ${workspaceId}
+      `;
+  }
   return sql`
         SELECT da.id AS directory_agent_id, bm25(directory_agents_fts) AS rank
         FROM directory_agents_fts
@@ -30,7 +54,16 @@ export function directoryAgentFtsRanks(db: sqlx.DialectSource, ftsQuery: string,
 
 /** Per-row bm25 ranks of directory skills matching `ftsQuery`, keyed by their directory agent. */
 export function directorySkillFtsRanks(db: sqlx.DialectSource, ftsQuery: string, workspaceId: string): SQL {
-  sqlx.requireSqlite(db, 'directory skill full-text search');
+  if (sqlx.dialectOf(db) === 'pg') {
+    return sql`
+        SELECT ds.directory_agent_id AS directory_agent_id, ${pgRank('directory_skills_fts.document', ftsQuery)} AS rank
+        FROM directory_skills_fts
+        JOIN directory_skills ds ON ds.rowid = directory_skills_fts.rowid
+        JOIN directory_agents da ON da.id = ds.directory_agent_id
+        WHERE directory_skills_fts.document @@ ${pgTsQuery(ftsQuery)}
+          AND da.workspace_id = ${workspaceId}
+      `;
+  }
   return sql`
         SELECT ds.directory_agent_id AS directory_agent_id, bm25(directory_skills_fts) AS rank
         FROM directory_skills_fts
@@ -52,7 +85,14 @@ export function skillSearchFtsFragments(
   db: sqlx.DialectSource,
   ftsQuery: string,
 ): { rank: SQL; join: SQL; match: SQL; order: SQL } {
-  sqlx.requireSqlite(db, 'skill full-text search');
+  if (sqlx.dialectOf(db) === 'pg') {
+    return {
+      rank: pgRank('directory_skills_fts.document', ftsQuery),
+      join: sql`INNER JOIN directory_skills_fts ON directory_skills_fts.rowid = ds.rowid`,
+      match: sql`AND directory_skills_fts.document @@ ${pgTsQuery(ftsQuery)}`,
+      order: sql`${pgRank('directory_skills_fts.document', ftsQuery)} ASC,`,
+    };
+  }
   return {
     rank: sql`bm25(directory_skills_fts)`,
     join: sql`INNER JOIN directory_skills_fts ON directory_skills_fts.rowid = ds.rowid`,
@@ -63,7 +103,16 @@ export function skillSearchFtsFragments(
 
 /** Per-row bm25 ranks of skills matching `ftsQuery`, for routing candidates. */
 export function routingSkillFtsRanks(db: sqlx.DialectSource, ftsQuery: string, workspaceId: string): SQL {
-  sqlx.requireSqlite(db, 'routing skill full-text search');
+  if (sqlx.dialectOf(db) === 'pg') {
+    return sql`
+      SELECT ds.id AS skill_id, ${pgRank('directory_skills_fts.document', ftsQuery)} AS rank
+      FROM directory_skills_fts
+      JOIN directory_skills ds ON ds.rowid = directory_skills_fts.rowid
+      JOIN directory_agents da ON da.id = ds.directory_agent_id
+      WHERE directory_skills_fts.document @@ ${pgTsQuery(ftsQuery)}
+        AND da.workspace_id = ${workspaceId}
+    `;
+  }
   return sql`
       SELECT ds.id AS skill_id, bm25(directory_skills_fts) AS rank
       FROM directory_skills_fts
@@ -76,7 +125,15 @@ export function routingSkillFtsRanks(db: sqlx.DialectSource, ftsQuery: string, w
 
 /** Per-row bm25 ranks of directory agents matching `ftsQuery`, for routing candidates. */
 export function routingAgentFtsRanks(db: sqlx.DialectSource, ftsQuery: string, workspaceId: string): SQL {
-  sqlx.requireSqlite(db, 'routing agent full-text search');
+  if (sqlx.dialectOf(db) === 'pg') {
+    return sql`
+      SELECT da.id AS directory_agent_id, ${pgRank('directory_agents_fts.document', ftsQuery)} AS rank
+      FROM directory_agents_fts
+      JOIN directory_agents da ON da.rowid = directory_agents_fts.rowid
+      WHERE directory_agents_fts.document @@ ${pgTsQuery(ftsQuery)}
+        AND da.workspace_id = ${workspaceId}
+    `;
+  }
   return sql`
       SELECT da.id AS directory_agent_id, bm25(directory_agents_fts) AS rank
       FROM directory_agents_fts
@@ -123,7 +180,8 @@ export function mentionFtsCandidateFilter(
   workspaceId: string,
   tokens: string[],
 ): SQL | null {
-  sqlx.requireSqlite(db, 'mention full-text search');
+  // PostgreSQL keeps the workspace-scoped scan; the FTS filter is an optimization.
+  if (sqlx.dialectOf(db) === 'pg') return null;
   const mentionMatch = mentionFtsMatch(workspaceId, tokens);
   if (mentionMatch === null) return null;
   return sql`messages.rowid IN (SELECT rowid FROM messages_mention_fts WHERE messages_mention_fts MATCH ${sql.raw(`'${mentionMatch}'`)})`;

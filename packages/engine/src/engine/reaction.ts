@@ -10,6 +10,7 @@ function isUniqueConstraintViolation(err: unknown): boolean {
   return (
     candidate.code === 'SQLITE_CONSTRAINT'
     || candidate.code === 'SQLITE_CONSTRAINT_UNIQUE'
+    || candidate.code === '23505'
     || (candidate.message?.includes('UNIQUE constraint failed') ?? false)
   );
 }

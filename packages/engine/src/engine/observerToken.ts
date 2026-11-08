@@ -167,6 +167,7 @@ export function isObserverTokenNameConflict(err: unknown): boolean {
     );
     const isGenericUniqueViolation = (
       candidate.code === 'SQLITE_CONSTRAINT_UNIQUE'
+      || candidate.code === '23505'
       || lowerMessage.includes('unique constraint failed')
       || (candidate.code === 'SQLITE_CONSTRAINT' && lowerMessage.includes('unique'))
     );

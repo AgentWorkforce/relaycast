@@ -12,7 +12,18 @@ const calls: Record<string, (db: object | 'sqlite' | 'pg') => unknown> = {
   mentionFtsCandidateFilter: (db) => fts.mentionFtsCandidateFilter(db, 'ws1', ['alice']),
   mentionFtsBackfillPage: (db) => fts.mentionFtsBackfillPage(db, 0, 10, 5),
   mentionFtsBackfillInsert: (db) => fts.mentionFtsBackfillInsert(db, 0, 10),
+  pgTsQuery: () => fts.pgTsQuery('q'),
 };
+
+/** The FTS statements with a PostgreSQL form; the backfill helpers stay SQLite-only. */
+const PG_FORMS = new Set([
+  'directoryAgentFtsRanks',
+  'directorySkillFtsRanks',
+  'skillSearchFtsFragments',
+  'routingSkillFtsRanks',
+  'routingAgentFtsRanks',
+  'mentionFtsCandidateFilter',
+]);
 
 describe('adapters/sqlite/fts', () => {
   it('covers every export', () => {
@@ -20,8 +31,13 @@ describe('adapters/sqlite/fts', () => {
   });
 
   for (const [name, call] of Object.entries(calls)) {
-    it(`${name} throws unsupported_on_postgres on pg`, () => {
+    if (name === 'pgTsQuery') continue;
+    it(`${name} on pg ${PG_FORMS.has(name) ? 'builds its PostgreSQL form' : 'throws unsupported_on_postgres'}`, () => {
       for (const db of ['pg', { engineDialect: 'pg' }] as const) {
+        if (PG_FORMS.has(name)) {
+          expect(() => call(db)).not.toThrow();
+          continue;
+        }
         let error: unknown;
         try { call(db); } catch (e) { error = e; }
         expect(error).toBeInstanceOf(UnsupportedOnPostgresError);
