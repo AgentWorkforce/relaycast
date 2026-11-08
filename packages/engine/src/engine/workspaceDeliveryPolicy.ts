@@ -4,6 +4,7 @@ import { z } from 'zod';
 import { and, count, eq, or, sql, type SQL, type SQLWrapper } from 'drizzle-orm';
 import { deliveries, workspaces } from '../db/tables.js';
 import type { EngineDb } from '../ports/database.js';
+import * as sqlx from '../db/sqlx.js';
 
 /**
  * Server-owned workspace delivery-growth policy.
@@ -97,7 +98,7 @@ export async function currentWorkspaceDepth(db: EngineDb, workspaceId: string): 
     .where(and(
       eq(deliveries.workspaceId, workspaceId),
       or(eq(deliveries.status, 'queued'), eq(deliveries.status, 'delivered')),
-      sql`(${deliveries.expiresAt} IS NULL OR ${deliveries.expiresAt} > unixepoch())`,
+      sql`(${deliveries.expiresAt} IS NULL OR ${deliveries.expiresAt} > ${sqlx.now(db)})`,
     ));
   return Number(rows[0]?.depth ?? 0);
 }
@@ -121,7 +122,7 @@ export function workspaceActiveDepthSql(workspaceId: string): SQL<number> {
     SELECT COUNT(*) FROM deliveries d_ws
     WHERE d_ws.workspace_id = ${workspaceId}
       AND d_ws.status IN ('queued', 'delivered')
-      AND (d_ws.expires_at IS NULL OR d_ws.expires_at > unixepoch())
+      AND (d_ws.expires_at IS NULL OR d_ws.expires_at > ${sqlx.now(sqlx.schemaDialect())})
   )`;
 }
 

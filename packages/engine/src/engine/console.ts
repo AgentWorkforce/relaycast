@@ -401,7 +401,7 @@ export async function getAgentStats(
     FROM message_logs ml
     INNER JOIN agents a ON a.id = ml.agent_id
     WHERE ml.workspace_id = ${workspaceId}
-      AND ml.created_at >= unixepoch() - ${windowDays * 24 * 60 * 60}
+      AND ml.created_at >= ${sqlx.now(db)} - ${windowDays * 24 * 60 * 60}
     GROUP BY ml.agent_id, a.name
     ORDER BY message_count DESC, last_message_at DESC
     LIMIT ${clampLimit(limit)}
@@ -438,14 +438,14 @@ export async function getCostStats(
       ml.agent_id AS agent_id,
       a.name AS agent_name,
       COUNT(*) AS message_count,
-      COALESCE(SUM(CAST(json_extract(ml.metadata, '$._cost.total_usd') AS REAL)), 0) AS total_cost_usd,
-      COALESCE(SUM(CAST(json_extract(ml.metadata, '$._cost.prompt_tokens') AS INTEGER)), 0) AS prompt_tokens,
-      COALESCE(SUM(CAST(json_extract(ml.metadata, '$._cost.completion_tokens') AS INTEGER)), 0) AS completion_tokens,
-      COALESCE(SUM(CAST(json_extract(ml.metadata, '$._cost.total_tokens') AS INTEGER)), 0) AS total_tokens
+      COALESCE(SUM(${sqlx.castReal(db, sqlx.jsonGet(db, sql.raw('ml.metadata'), '$._cost.total_usd'))}), 0) AS total_cost_usd,
+      COALESCE(SUM(${sqlx.castInt(db, sqlx.jsonGet(db, sql.raw('ml.metadata'), '$._cost.prompt_tokens'))}), 0) AS prompt_tokens,
+      COALESCE(SUM(${sqlx.castInt(db, sqlx.jsonGet(db, sql.raw('ml.metadata'), '$._cost.completion_tokens'))}), 0) AS completion_tokens,
+      COALESCE(SUM(${sqlx.castInt(db, sqlx.jsonGet(db, sql.raw('ml.metadata'), '$._cost.total_tokens'))}), 0) AS total_tokens
     FROM message_logs ml
     INNER JOIN agents a ON a.id = ml.agent_id
     WHERE ml.workspace_id = ${workspaceId}
-      AND ml.created_at >= unixepoch() - ${windowDays * 24 * 60 * 60}
+      AND ml.created_at >= ${sqlx.now(db)} - ${windowDays * 24 * 60 * 60}
     GROUP BY ml.agent_id, a.name
     HAVING total_cost_usd > 0
         OR prompt_tokens > 0

@@ -15,6 +15,7 @@ import { runAtomicWrites, type AtomicWrite } from '../ports/database.js';
 import { AGENT_RECOVERY_PROOF_HASH_PATTERN } from '@relaycast/types';
 import { WEBHOOK_AGENT_NAME } from './messageMetadata.js';
 import { issueCredential } from '../auth/credentials.js';
+import * as sqlx from '../db/sqlx.js';
 
 export { AGENT_RECOVERY_PROOF_HASH_PATTERN } from '@relaycast/types';
 
@@ -593,7 +594,7 @@ export async function getAgentByName(db: Db, workspaceId: string, name: string) 
         eq(deliveries.workspaceId, workspaceId),
         eq(deliveries.agentId, agent.id),
         sql`${deliveries.status} IN ('queued', 'delivered')`,
-        sql`(${deliveries.expiresAt} IS NULL OR ${deliveries.expiresAt} > unixepoch())`,
+        sql`(${deliveries.expiresAt} IS NULL OR ${deliveries.expiresAt} > ${sqlx.now(db)})`,
       ))
       .orderBy(deliveries.createdAt, deliveries.id)
       .limit(50),

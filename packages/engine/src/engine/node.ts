@@ -70,6 +70,7 @@ import type { InvocationCompletionDeps, NodeOfflineReason } from './invocationCo
 import { ackDeliveriesUpToSeq, deliverPendingToNode, type DeliveryReplayDeps } from './delivery.js';
 import { notifySenderDeliveryReceipts } from './deliveryReceipts.js';
 import { issueCredential } from '../auth/credentials.js';
+import * as sqlx from '../db/sqlx.js';
 
 type Db = ReturnType<typeof getDb>;
 type NodeRow = typeof nodes.$inferSelect;
@@ -1705,7 +1706,7 @@ function reserveNodeAgentSlotStatement(
       ? and(
         eq(actionInvocations.dispatchedNodeId, node.id),
         eq(actionInvocations.dispatchedProvider, claim.providerName),
-        sql`json_extract(${actionInvocations.input}, '$.name') = ${claim.agentName}`,
+        sql`${sqlx.jsonGet(db, actionInvocations.input, '$.name')} = ${claim.agentName}`,
       )
       : sql`0`;
   const ownsSpawnReservation = claim
@@ -1721,7 +1722,7 @@ function reserveNodeAgentSlotStatement(
             ${actionInvocations.actionName} = 'spawn'
             OR ${actionInvocations.actionName} LIKE 'spawn:%'
           )
-          AND json_extract(${actionInvocations.input}, '$.name') = ${claim.agentName}
+          AND ${sqlx.jsonGet(db, actionInvocations.input, '$.name')} = ${claim.agentName}
       )`
     : sql`0`;
   return db
@@ -1792,12 +1793,12 @@ function canceledSpawnTombstoneQuery(
       eq(actionInvocations.id, registration.invocationId),
       eq(actionInvocations.dispatchedNodeId, registration.nodeId),
       providerCorrelation,
-      sql`json_extract(${actionInvocations.input}, '$.name') = ${registration.agentName}`,
+      sql`${sqlx.jsonGet(db, actionInvocations.input, '$.name')} = ${registration.agentName}`,
     )
     : and(
       eq(actionInvocations.dispatchedNodeId, registration.nodeId),
       providerCorrelation,
-      sql`json_extract(${actionInvocations.input}, '$.name') = ${registration.agentName}`,
+      sql`${sqlx.jsonGet(db, actionInvocations.input, '$.name')} = ${registration.agentName}`,
     );
   return db
     .select({ id: actionInvocations.id })
@@ -3271,7 +3272,7 @@ export async function reconcileInventory(
               eq(nodeProviders.workspaceId, workspaceId), eq(nodeProviders.nodeId, nodeId),
               eq(nodeProviders.name, 'broker'), eq(nodeProviders.id, proof.brokerId),
               eq(nodeProviders.livenessRevision, proof.brokerRevision),
-              sql`unixepoch() * 1000 < ${proof.expiresAt}`,
+              sql`${sqlx.now(db)} * 1000 < ${proof.expiresAt}`,
             )));
           }
           const [updated] = await db
@@ -3346,7 +3347,7 @@ export async function reconcileInventory(
         name: sql`${agents.name}`.mapWith(agents.name),
         metadata: sql`${agents.metadata}`.mapWith(agents.metadata),
       })
-      .from(sql`${agents} INDEXED BY idx_agents_location_node_fk`)
+      .from(sql`${agents} ${sqlx.indexedBy(db, 'idx_agents_location_node_fk')}`)
       .where(and(
         eq(agents.workspaceId, workspaceId),
         eq(agents.locationType, 'via_node'),

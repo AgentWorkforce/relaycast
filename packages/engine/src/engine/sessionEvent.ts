@@ -6,6 +6,7 @@ import { sha256Hex } from '../lib/crypto.js';
 import { codedError } from '../lib/httpError.js';
 import { runAtomicWrites } from '../ports/database.js';
 import { RELEASED_AGENT_STATUS } from './agent.js';
+import * as sqlx from '../db/sqlx.js';
 
 type Db = ReturnType<typeof getDb>;
 
@@ -300,7 +301,7 @@ export async function applyStatusEventEffect(
       ))
       .returning({ id: agents.id }),
     tx.update(sessionEvents)
-      .set({ statusAppliedAt: sql`(unixepoch())` })
+      .set({ statusAppliedAt: sql`(${sqlx.now(db)})` })
       .where(and(
         eq(sessionEvents.id, eventId),
         eq(sessionEvents.workspaceId, workspaceId),

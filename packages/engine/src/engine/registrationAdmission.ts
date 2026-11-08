@@ -5,6 +5,7 @@ import type { Workspace } from '../ports/auth.js';
 import { agents, nodes, workspaces } from '../db/tables.js';
 import { AdmissionDeniedError } from '../lib/admissionError.js';
 import { WEBHOOK_AGENT_NAME } from './messageMetadata.js';
+import * as sqlx from '../db/sqlx.js';
 
 /**
  * How many of `action`'s kind the workspace currently has registered — the
@@ -36,7 +37,7 @@ export async function countRegistrations(
         eq(nodes.workspaceId, workspaceId),
         // GLOB, not LIKE: in LIKE `_` is a wildcard, so `nodeXdirectX…` would
         // slip out of the count while passing the literal reserved-prefix check.
-        not(and(eq(nodes.role, 'direct'), sql`${nodes.id} GLOB 'node_direct_*'`)!),
+        not(and(eq(nodes.role, 'direct'), sqlx.startsWith(db, nodes.id, 'node_direct_'))!),
       ))
     : await db
       .select({ count })

@@ -28,6 +28,7 @@ import { DEFAULT_PROVIDER_NAME, capacityProviderName, claimOrphanedGlobalAliases
 import { AGENT_TOKEN_HASH_PATTERN } from '@relaycast/types';
 import { createTaskState, expireTaskInvocation, expireTaskInvocations, taskExecution } from './taskInvocation.js';
 import { withEngineOperation } from '../lib/engineDiagnostics.js';
+import * as sqlx from '../db/sqlx.js';
 
 type Db = ReturnType<typeof getDb>;
 type ActionRow = typeof actions.$inferSelect;
@@ -2704,7 +2705,7 @@ async function dispatchNodeAttempt(
   const attemptFields = opts.skipIncrementAttempts
     ? {}
     : {
-      attemptedNodeIds: sql`json_insert(COALESCE(${actionInvocations.attemptedNodeIds}, '[]'), '$[#]', ${nodeId})`,
+      attemptedNodeIds: sqlx.jsonAppend(db, sql`COALESCE(${actionInvocations.attemptedNodeIds}, '[]')`, sql`${nodeId}`, 'text'),
       dispatchAttempts: sql`COALESCE(${actionInvocations.dispatchAttempts}, 0) + 1`,
     };
   const [updated] = await db
@@ -2845,7 +2846,7 @@ async function claimRegisteredActionHandoff(
   const attemptFields = args.skipIncrementAttempts
     ? {}
     : {
-      attemptedNodeIds: sql`json_insert(COALESCE(${actionInvocations.attemptedNodeIds}, '[]'), '$[#]', ${args.nodeId})`,
+      attemptedNodeIds: sqlx.jsonAppend(db, sql`COALESCE(${actionInvocations.attemptedNodeIds}, '[]')`, sql`${args.nodeId}`, 'text'),
       dispatchAttempts: sql`COALESCE(${actionInvocations.dispatchAttempts}, 0) + 1`,
     };
   const [claimed] = await db

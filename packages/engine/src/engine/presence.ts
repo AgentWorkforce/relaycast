@@ -6,6 +6,7 @@ import type { PresenceTracker } from '../ports/presence.js';
 import { RELEASED_AGENT_STATUS } from './agent.js';
 import { isProviderLive } from './nodeProvider.js';
 import { isNodeLive, NODE_LIVENESS_TTL_MS } from './placement.js';
+import * as sqlx from '../db/sqlx.js';
 
 type Db = ReturnType<typeof getDb>;
 
@@ -44,8 +45,8 @@ export function nodeHostedPresenceQuery(db: Db, workspaceId: string, now: number
       providerHandlersLive: nodeProviders.handlersLive,
       providerLastHeartbeatAt: nodeProviders.lastHeartbeatAt,
     })
-    .from(sql`${nodes} INDEXED BY idx_nodes_status_heartbeat`)
-    .crossJoin(sql`${agentNodeBindings} INDEXED BY idx_agent_node_bindings_node`)
+    .from(sql`${nodes} ${sqlx.indexedBy(db, 'idx_nodes_status_heartbeat')}`)
+    .crossJoin(sql`${agentNodeBindings} ${sqlx.indexedBy(db, 'idx_agent_node_bindings_node')}`)
     .crossJoin(agents)
     .leftJoin(nodeProviders, and(
       eq(nodeProviders.workspaceId, workspaceId),

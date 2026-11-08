@@ -6,6 +6,7 @@ import { runAtomicWrites } from '../ports/database.js';
 import { credentialTagger, mintCredential } from '../auth/credentials.js';
 import { sha256Hex } from '../lib/crypto.js';
 import { codedError } from '../lib/httpError.js';
+import * as sqlx from '../db/sqlx.js';
 
 /** How long an upgraded legacy credential keeps working, unless configured: 30 days. */
 export const DEFAULT_LEGACY_CREDENTIAL_GRACE_SECONDS = 30 * 24 * 60 * 60;
@@ -56,7 +57,7 @@ function graceRecordAfterSwap(
       workspaceId: sql<string>`${row.workspaceId}`.as('workspace_id'),
       arHash: sql<string>`${row.arHash}`.as('ar_hash'),
       sealedCredential: sql<string>`${row.sealedCredential}`.as('sealed_credential'),
-      createdAt: sql<Date>`unixepoch()`.as('created_at'),
+      createdAt: sql<Date>`${sqlx.now(w)}`.as('created_at'),
       expiresAt: sql<Date>`${Math.floor(row.expiresAt.getTime() / 1000)}`.as('expires_at'),
     })
       .from(table)

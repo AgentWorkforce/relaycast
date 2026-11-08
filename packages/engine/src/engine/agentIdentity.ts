@@ -8,6 +8,7 @@ import { generateId } from './snowflake.js';
 import { AGENT_TOKEN_GRACE_MS } from './tokenRotate.js';
 import { RELEASED_AGENT_STATUS } from './agent.js';
 import { issueCredential } from '../auth/credentials.js';
+import * as sqlx from '../db/sqlx.js';
 
 type Db = ReturnType<typeof getDb>;
 
@@ -64,7 +65,7 @@ function auditInsertAfterTokenChange(
         sessionRef: sql<string | null>`${row.sessionRef ?? null}`.as('session_ref'),
         nodeId: sql<string | null>`${row.nodeId ?? null}`.as('node_id'),
         originActor: sql<string>`${row.originActor}`.as('origin_actor'),
-        createdAt: sql<Date>`unixepoch()`.as('created_at'),
+        createdAt: sql<Date>`${sqlx.now(writeDb)}`.as('created_at'),
       })
       .from(agents)
       .where(and(targetPredicate(target), eq(agents.tokenHash, tokenHash))),

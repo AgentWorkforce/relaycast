@@ -12,6 +12,7 @@ import {
   atOrAfterSnowflake,
   resolveEffectiveMessageRetention,
 } from './retention.js';
+import * as sqlx from '../db/sqlx.js';
 
 type Db = ReturnType<typeof getDb>;
 
@@ -68,8 +69,8 @@ export function buildMessageSessionWrite(
     .onConflictDoUpdate({
       target: [messageSessions.workspaceId, messageSessions.sessionRef],
       set: {
-        firstMessageAt: sql`MIN(${messageSessions.firstMessageAt}, excluded.first_message_at)`,
-        lastMessageAt: sql`MAX(${messageSessions.lastMessageAt}, excluded.last_message_at)`,
+        firstMessageAt: sqlx.least(db, messageSessions.firstMessageAt, sql`excluded.first_message_at`),
+        lastMessageAt: sqlx.greatest(db, messageSessions.lastMessageAt, sql`excluded.last_message_at`),
       },
     });
 }

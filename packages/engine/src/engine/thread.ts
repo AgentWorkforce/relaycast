@@ -22,6 +22,7 @@ import {
   SENDER_ADDRESS_METADATA_KEY,
   senderAddressField,
 } from './address.js';
+import * as sqlx from '../db/sqlx.js';
 
 type Db = ReturnType<typeof getDb>;
 
@@ -247,7 +248,7 @@ export async function getThread(
     })
     // SQLite can otherwise prefer the workspace/id index and scan unrelated
     // history. This existing index seeks the thread and supports id pagination.
-    .from(sql`${messages} INDEXED BY idx_messages_thread`)
+    .from(sql`${messages} ${sqlx.indexedBy(db, 'idx_messages_thread')}`)
     .leftJoin(agents, eq(messages.agentId, agents.id))
     .where(and(...conditions))
     .orderBy(sql`${messages.id} ASC`)
