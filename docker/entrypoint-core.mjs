@@ -7,6 +7,8 @@ const HELP = `relaycast container — run a self-hosted Relaycast server
 
 Usage:
   docker run <image> --base-url <https-origin> [--db <path>] [--port <n>] [--env <name>]
+  docker run <image> migrate      Apply PostgreSQL migrations (owner identity)
+  docker run <image> verify-db    Check PostgreSQL runtime identity and migrations
 
 Options:
   --base-url <url>   Required public HTTPS origin (http on loopback/private
@@ -17,6 +19,8 @@ Options:
   -h, --help         Show this help
 
 Environment:
+  RELAYCAST_DATABASE_URL(_FILE)         Selects PostgreSQL (with RELAYCAST_DATABASE_CA_FILE or
+                                        NODE_EXTRA_CA_CERTS); --db is then ignored
   RELAYCAST_WORKSPACE_BOOTSTRAP_SECRET(_FILE)  Stable secret for anonymous keyed workspace retries
   RELAYCAST_WORKSPACE_BOOTSTRAP_PROOF_REQUIRED  Set true to require bootstrap-secret proof for anonymous keyed creates
   RELAYCAST_INTERNAL_SECRET(_FILE)      Enable the /internal admin API for a trusted control plane
@@ -656,6 +660,16 @@ export function installPublicAuthorityMarker(server, baseUrl) {
   });
 }
 
+async function runPostgresCommand(command) {
+  const cli = await import('@relaycast/engine/adapters/postgres');
+  process.exitCode = await (command === 'migrate' ? cli.runMigrateCommand() : cli.runVerifyDbCommand());
+}
+
+/** True when any RELAYCAST_DATABASE_* variable selects the PostgreSQL backend. */
+function postgresRequested(env) {
+  return Object.keys(env).some((name) => name.startsWith('RELAYCAST_DATABASE_') && (env[name] ?? '').trim() !== '');
+}
+
 async function launchPinnedEngine(args) {
   const options = parseEngineOptions(args, process.env);
   if (
@@ -689,8 +703,7 @@ async function launchPinnedEngine(args) {
         }
       : undefined;
 
-  const running = engine.startServer({
-    dbPath: options.db,
+  const serverOptions = {
     port: options.port,
     baseUrl: options.baseUrl,
     config: containerEngineConfig({
@@ -698,11 +711,18 @@ async function launchPinnedEngine(args) {
       RELAYCAST_ENV: options.environment,
     }, mailbox, engine),
     ...(eventQueue ? { eventQueue } : {}),
-  });
+  };
+  const usePostgres = postgresRequested(process.env);
+  const running = usePostgres
+    ? await engine.startPostgresServer({
+        ...serverOptions,
+        log: (line) => process.stdout.write(`${line}\n`),
+      })
+    : engine.startServer({ ...serverOptions, dbPath: options.db });
 
   installPublicAuthorityMarker(running.server, options.baseUrl);
   process.stdout.write(
-    `Relaycast self-host listening for ${options.baseUrl} (db: ${options.db})\n`,
+    `Relaycast self-host listening for ${options.baseUrl} (db: ${usePostgres ? 'postgres' : options.db})\n`,
   );
 
   await new Promise((resolve) => {
@@ -727,6 +747,10 @@ export async function main(argv = process.argv.slice(2)) {
     process.stdout.write(HELP);
     return;
   }
+  if (argv[0] === 'migrate' || argv[0] === 'verify-db') {
+    await runPostgresCommand(argv[0]);
+    return;
+  }
 
   let args;
   try {
@@ -749,7 +773,13 @@ export async function main(argv = process.argv.slice(2)) {
       process.exitCode = CONFIG_EXIT_CODE;
     } else {
       process.stderr.write(`relaycast container failed to start: ${message}\n`);
-      process.exitCode = 1;
+      // The engine's start error classes, by name: they load with the engine.
+      process.exitCode =
+        error instanceof Error && error.name === 'ConfigError'
+          ? CONFIG_EXIT_CODE
+          : error instanceof Error && error.name === 'PostgresIdentityError'
+            ? 65
+            : 1;
     }
   }
 }

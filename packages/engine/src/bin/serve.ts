@@ -1,8 +1,8 @@
 #!/usr/bin/env node
-import { startServer } from '../entrypoints/node.js';
+import { startPostgresServer, startServer } from '../entrypoints/node.js';
 import { credentialConfigFromEnv } from '../config/credentialEnv.js';
 import { ConfigError, secretFromEnv } from './secretEnv.js';
-import { postgresServeRefusal } from './postgresServeGuard.js';
+import { postgresServeRequested } from './postgresServeGuard.js';
 import { engineVersion } from './version.js';
 import { MIN_INTERNAL_SECRET_LENGTH } from '../engine/internalAdmin.js';
 
@@ -39,18 +39,21 @@ Environment:
                                     ISO-8601 date sent as Sunset on legacy-authenticated responses
   A directly set variable wins over its _FILE variant.
 
-PostgreSQL (migrate / verify-db only; the server itself still uses SQLite and
-exits 64 if any RELAYCAST_DATABASE_* variable is set):
+PostgreSQL (any RELAYCAST_DATABASE_* variable selects it; the server then
+verifies the runtime role and migrations before listening and never touches
+SQLite, and migrate / verify-db use the same variables):
   RELAYCAST_DATABASE_URL(_FILE)     postgres://user:password@host:port/database
                                     (only sslmode=verify-full may appear in the query)
   RELAYCAST_DATABASE_CA_FILE        PEM CA bundle; TLS is always verify-full
-  RELAYCAST_DATABASE_SCHEMA         Engine schema (default relaycast)
+                                    (NODE_EXTRA_CA_CERTS is the fallback)
+  RELAYCAST_DATABASE_SCHEMA         Engine schema (default public)
   RELAYCAST_DATABASE_OWNER_ROLE     Role migrate must run as (default relaycast_owner)
   RELAYCAST_DATABASE_RUNTIME_ROLE   Role verify-db must run as (default relaycast_runtime)
   RELAYCAST_DATABASE_POOL_MAX       Optional pool size (1-100)
   RELAYCAST_DATABASE_STATEMENT_TIMEOUT_MS
                                     Optional statement timeout
-  Exit codes: 0 ok, 64 configuration refused, 65 identity refused, 1 failure.
+  Exit codes: 0 ok, 64 configuration refused, 65 identity refused, 1 failure
+  (the server uses the same codes when it refuses to start).
 
 After start, create a workspace:
   curl -XPOST http://localhost:<port>/v1/workspaces -H 'content-type: application/json' -d '{"name":"my-team"}'
@@ -88,6 +91,8 @@ function parseArgs(argv: string[], env: NodeJS.ProcessEnv): ServeArgs {
 
 /** Exit code for a configuration the server refuses to run with (EX_USAGE). */
 const CONFIG_EXIT_CODE = 64;
+/** Exit code for a database identity the server refuses (EX_DATAERR). */
+const IDENTITY_EXIT_CODE = 65;
 
 async function main(): Promise<void> {
   const command = process.argv[2];
@@ -104,12 +109,6 @@ async function main(): Promise<void> {
   }
   if (opts.version) {
     process.stdout.write(`${engineVersion()}\n`);
-    return;
-  }
-  const postgresRefusal = postgresServeRefusal(process.env);
-  if (postgresRefusal) {
-    process.stderr.write(`relaycast-engine: ${postgresRefusal}\n`);
-    process.exitCode = CONFIG_EXIT_CODE;
     return;
   }
   if (!Number.isFinite(opts.port) || opts.port <= 0) {
@@ -159,8 +158,7 @@ async function main(): Promise<void> {
 
   const credentials = credentialConfigFromEnv(process.env);
 
-  const running = startServer({
-    dbPath: opts.db,
+  const serverOptions = {
     port: opts.port,
     baseUrl,
     config: {
@@ -175,9 +173,13 @@ async function main(): Promise<void> {
       ...(Object.keys(mailbox).length > 0 ? { mailbox } : {}),
     },
     ...(eventQueue ? { eventQueue } : {}),
-  });
+  };
+  const usePostgres = postgresServeRequested(process.env);
+  const running = usePostgres
+    ? await startPostgresServer({ ...serverOptions, log: (line) => process.stdout.write(`${line}\n`) })
+    : startServer({ ...serverOptions, dbPath: opts.db });
 
-  process.stdout.write(`Relaycast self-host listening on ${baseUrl} (db: ${opts.db})\n`);
+  process.stdout.write(`Relaycast self-host listening on ${baseUrl} (db: ${usePostgres ? 'postgres' : opts.db})\n`);
   process.stdout.write(
     `Create a workspace:\n  curl -XPOST ${baseUrl}/v1/workspaces -H 'content-type: application/json' -d '{"name":"my-team"}'\n`,
   );
@@ -194,5 +196,12 @@ async function main(): Promise<void> {
 
 main().catch((err) => {
   process.stderr.write(`relaycast-engine failed to start: ${err instanceof Error ? err.message : String(err)}\n`);
-  process.exit(err instanceof ConfigError ? CONFIG_EXIT_CODE : 1);
+  // By name: the postgres adapter loads lazily.
+  process.exit(
+    err instanceof ConfigError
+      ? CONFIG_EXIT_CODE
+      : err instanceof Error && err.name === 'PostgresIdentityError'
+        ? IDENTITY_EXIT_CODE
+        : 1,
+  );
 });
