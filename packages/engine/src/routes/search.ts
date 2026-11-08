@@ -47,7 +47,7 @@ searchRoutes.get(
         limit,
         before,
         after,
-      });
+      }, c.get('engine').search);
       const visibleResults = await filterObserverSearchResults(
         db,
         workspace.id,
