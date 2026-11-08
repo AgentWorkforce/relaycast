@@ -5,7 +5,7 @@ import { join } from 'node:path';
 import { eq } from 'drizzle-orm';
 import type { FleetActionInvokeMessage, FleetActionAcceptMessage, FleetActionResultMessage } from '@relaycast/types';
 import { makeNodeStack, createWorkspace, registerAgent, FakeSocket, type TestStack } from './harness.js';
-import { actionInvocations } from '../../db/schema.js';
+import { actionInvocations } from '../../db/tables.js';
 import { getSqliteDb } from '../../adapters/node/database.js';
 import { acceptTaskInvocation, completeTaskInvocation } from '../../engine/taskInvocation.js';
 import { getInvocation, rescheduleNodeInvocation, rescheduleInvocationsForLostNode, sweepTimedOutInvocations } from '../../engine/action.js';

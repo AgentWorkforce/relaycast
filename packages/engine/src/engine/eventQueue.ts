@@ -1,6 +1,6 @@
 import { and, asc, eq, gte, inArray, lt, lte, sql } from 'drizzle-orm';
 import type { getDb } from '../db/index.js';
-import { pendingEvents } from '../db/schema.js';
+import { pendingEvents } from '../db/tables.js';
 import { generateId } from './snowflake.js';
 
 type Db = ReturnType<typeof getDb>;

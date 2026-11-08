@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { eq } from 'drizzle-orm';
-import { files } from '../../db/schema.js';
+import { files } from '../../db/tables.js';
 import { isContainedStorageKey, signFileToken, verifyFileToken } from '../../lib/fileTokens.js';
 import { createWorkspace, makeNodeStack, registerAgent } from './harness.js';
 

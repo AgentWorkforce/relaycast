@@ -5,7 +5,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { eq } from 'drizzle-orm';
 import { getSqliteDb, runMigrations, type SqliteDbHandle } from '../database.js';
 import { runAtomicWrites } from '../../../ports/database.js';
-import { pendingEvents, workspaces } from '../../../db/schema.js';
+import { pendingEvents, workspaces } from '../../../db/tables.js';
 
 let seq = 0;
 const handles: SqliteDbHandle[] = [];

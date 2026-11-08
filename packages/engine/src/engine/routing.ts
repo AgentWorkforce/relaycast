@@ -1,9 +1,11 @@
 import { and, eq, sql } from 'drizzle-orm';
 import type { getDb } from '../db/index.js';
-import { agents, routingConfigs, routingFailures } from '../db/schema.js';
+import { agents, routingConfigs, routingFailures } from '../db/tables.js';
 import { buildFtsQuery } from './searchQuery.js';
 import { codedError } from '../lib/httpError.js';
 import { toIso } from '../lib/serialize.js';
+import * as sqlx from '../db/sqlx.js';
+import * as sqliteFts from '../adapters/sqlite/fts.js';
 
 type Db = ReturnType<typeof getDb>;
 
@@ -230,27 +232,28 @@ export async function searchSkills(
 ) {
   const limit = Math.min(Math.max(opts.limit || 20, 1), 100);
   const ftsQuery = opts.q ? buildFtsQuery(opts.q) : null;
-  const rows = await db.all<{
+  const fts = ftsQuery ? sqliteFts.skillSearchFtsFragments(db, ftsQuery) : null;
+  const rows = await sqlx.all<{
     agent_name: string;
     skill_name: string;
     skill_description: string | null;
     skill_tags: string;
     rank: number | null;
-  }>(sql`
+  }>(db, sql`
     SELECT
       a.name AS agent_name,
       ds.name AS skill_name,
       ds.description AS skill_description,
       ds.tags AS skill_tags,
-      ${ftsQuery ? sql`bm25(directory_skills_fts)` : sql`NULL`} AS rank
+      ${fts ? fts.rank : sql`NULL`} AS rank
     FROM directory_skills ds
     INNER JOIN directory_agents da ON da.id = ds.directory_agent_id
     INNER JOIN agents a ON a.id = da.source_agent_id
-    ${ftsQuery ? sql`INNER JOIN directory_skills_fts ON directory_skills_fts.rowid = ds.rowid` : sql``}
+    ${fts ? fts.join : sql``}
     WHERE da.workspace_id = ${workspaceId}
       AND da.status = 'active'
-      ${ftsQuery ? sql`AND directory_skills_fts MATCH ${ftsQuery}` : sql``}
-    ORDER BY ${ftsQuery ? sql`bm25(directory_skills_fts) ASC,` : sql``} a.name ASC, ds.position ASC
+      ${fts ? fts.match : sql``}
+    ORDER BY ${fts ? fts.order : sql``} a.name ASC, ds.position ASC
     LIMIT ${limit}
   `);
 
@@ -387,27 +390,14 @@ export async function routeBySkill(
   // Guard the FTS MATCH: buildFtsQuery can yield '' after sanitization, and an
   // empty MATCH throws an fts5 syntax error — skip the rank queries in that case.
   const [skillFtsRaw, agentFtsRaw, baseRows] = await Promise.all([
-    ftsQuery ? db.all<{ skill_id: string; rank: number }>(sql`
-      SELECT ds.id AS skill_id, bm25(directory_skills_fts) AS rank
-      FROM directory_skills_fts
-      JOIN directory_skills ds ON ds.rowid = directory_skills_fts.rowid
-      JOIN directory_agents da ON da.id = ds.directory_agent_id
-      WHERE directory_skills_fts MATCH ${ftsQuery}
-        AND da.workspace_id = ${workspaceId}
-    `) : Promise.resolve([] as { skill_id: string; rank: number }[]),
-    ftsQuery ? db.all<{ directory_agent_id: string; rank: number }>(sql`
-      SELECT da.id AS directory_agent_id, bm25(directory_agents_fts) AS rank
-      FROM directory_agents_fts
-      JOIN directory_agents da ON da.rowid = directory_agents_fts.rowid
-      WHERE directory_agents_fts MATCH ${ftsQuery}
-        AND da.workspace_id = ${workspaceId}
-    `) : Promise.resolve([] as { directory_agent_id: string; rank: number }[]),
-    db.all<Omit<CandidateRow, 'skill_rank' | 'agent_rank'> & { directory_agent_id: string; skill_id: string }>(sql`
+    ftsQuery ? sqlx.all<{ skill_id: string; rank: number }>(db, sqliteFts.routingSkillFtsRanks(db, ftsQuery, workspaceId)) : Promise.resolve([] as { skill_id: string; rank: number }[]),
+    ftsQuery ? sqlx.all<{ directory_agent_id: string; rank: number }>(db, sqliteFts.routingAgentFtsRanks(db, ftsQuery, workspaceId)) : Promise.resolve([] as { directory_agent_id: string; rank: number }[]),
+    sqlx.all<Omit<CandidateRow, 'skill_rank' | 'agent_rank'> & { directory_agent_id: string; skill_id: string }>(db, sql`
       SELECT
         a.id AS agent_id,
         a.name AS agent_name,
         a.status AS agent_status,
-        unixepoch(a.last_seen) AS agent_last_seen,
+        ${sqlx.epochOf(db, sql.raw('a.last_seen'))} AS agent_last_seen,
         da.status AS directory_status,
         da.id AS directory_agent_id,
         ds.id AS skill_id,
@@ -420,7 +410,7 @@ export async function routeBySkill(
         rf.consecutive_failures AS consecutive_failures,
         rf.total_failures AS total_failures,
         rf.total_successes AS total_successes,
-        unixepoch(rf.circuit_open_until) AS circuit_open_until
+        ${sqlx.epochOf(db, sql.raw('rf.circuit_open_until'))} AS circuit_open_until
       FROM directory_agents da
       INNER JOIN directory_skills ds ON ds.directory_agent_id = da.id
       INNER JOIN agents a ON a.id = da.source_agent_id

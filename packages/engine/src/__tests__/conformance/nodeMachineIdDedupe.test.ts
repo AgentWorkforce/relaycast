@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { eq } from 'drizzle-orm';
 import { makeNodeStack, createWorkspace, FakeSocket, type TestStack } from './harness.js';
-import { nodes } from '../../db/schema.js';
+import { nodes } from '../../db/tables.js';
 import { isNodeLive, isReusableForMachineMatch } from '../../engine/placement.js';
 import { sha256Hex } from '../../lib/crypto.js';
 

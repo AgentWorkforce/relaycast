@@ -27,7 +27,7 @@ import {
   pendingEvents,
   sessionEvents,
   workspaceEvents,
-} from '../db/schema.js';
+} from '../db/tables.js';
 import { postMessage } from '../engine/message.js';
 import { sendDm } from '../engine/dm.js';
 import { createGroupDm, postGroupMessage } from '../engine/groupDm.js';
@@ -40,6 +40,7 @@ import {
   recordSessionEventWithIdempotency,
 } from '../engine/sessionEvent.js';
 import type { EngineDb, TransactionCapability } from '../ports/database.js';
+import { requireTransactionCapability } from '../ports/database.js';
 
 /**
  * Atomicity of multi-statement write paths.
@@ -76,7 +77,7 @@ describe('atomic write paths', () => {
       expect(joinRes.status).toBeLessThan(300);
     }
 
-    const db = stack.runtime.handle.db as unknown as EngineDb;
+    const db = stack.runtime.handle.db;
     const [channel] = await db
       .select({ id: channels.id })
       .from(channels)
@@ -616,7 +617,7 @@ describe('atomic write paths', () => {
     async function seedAgent() {
       const ws = await createWorkspace(stack.app, 'status-atomicity-ws');
       const alice = await registerAgent(stack.app, ws.workspaceKey, 'alice');
-      const db = stack.runtime.handle.db as unknown as EngineDb;
+      const db = stack.runtime.handle.db;
       return { ws, alice, db };
     }
 
@@ -1024,7 +1025,7 @@ describe('atomic write paths', () => {
       const [first, second] = await Promise.all([postEvent(), postEvent()]);
       expect([first.status, second.status]).toEqual([201, 201]);
 
-      const db = stack.runtime.handle.db as unknown as EngineDb;
+      const db = stack.runtime.handle.db;
       const [agentRow] = await db.select({ status: agents.status }).from(agents).where(eq(agents.id, runner.agentId));
       expect(agentRow!.status).toBe('waiting');
       expect(await db.select().from(sessionEvents).where(eq(sessionEvents.agentId, runner.agentId))).toHaveLength(1);
@@ -1040,8 +1041,8 @@ describe('atomic write paths', () => {
       });
       expect(subscription.status).toBe(201);
 
-      const db = stack.runtime.handle.db as unknown as EngineDb;
-      const handle = db as EngineDb & TransactionCapability;
+      const db = stack.runtime.handle.db;
+      const handle = requireTransactionCapability(db);
       const originalWithTransaction = handle.withTransaction.bind(db);
       let releaseFirstTransaction!: () => void;
       const firstTransactionDelayed = new Promise<void>((resolve) => { releaseFirstTransaction = resolve; });

@@ -4,7 +4,7 @@ import { and, eq } from 'drizzle-orm';
 import { createEngine } from '../../engine.js';
 import { createNodeRuntime, type NodeRuntime } from '../../adapters/node/index.js';
 import { createWorkspace, registerAgent } from '../../__tests__/conformance/harness.js';
-import { deliveries } from '../../db/schema.js';
+import { deliveries } from '../../db/tables.js';
 import type { KeyValueStore } from '../../ports/kv.js';
 import {
   deriveRelayfileInboundSecret,

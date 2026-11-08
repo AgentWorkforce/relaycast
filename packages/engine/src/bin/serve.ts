@@ -2,6 +2,7 @@
 import { startServer } from '../entrypoints/node.js';
 import { credentialConfigFromEnv } from '../config/credentialEnv.js';
 import { ConfigError, secretFromEnv } from './secretEnv.js';
+import { postgresServeRefusal } from './postgresServeGuard.js';
 import { engineVersion } from './version.js';
 import { MIN_INTERNAL_SECRET_LENGTH } from '../engine/internalAdmin.js';
 
@@ -9,6 +10,8 @@ const HELP = `relaycast-engine — run a self-hosted Relaycast server (Node + SQ
 
 Usage:
   relaycast-engine [--db <path>] [--port <n>] [--base-url <url>] [--env <name>]
+  relaycast-engine migrate      Apply PostgreSQL migrations (owner identity)
+  relaycast-engine verify-db    Check PostgreSQL runtime identity and migrations
 
 Options:
   --db <path>        SQLite database file (default: $RELAYCAST_DB_PATH or ./relaycast.db)
@@ -35,6 +38,19 @@ Environment:
   RELAYCAST_LEGACY_CREDENTIAL_SUNSET
                                     ISO-8601 date sent as Sunset on legacy-authenticated responses
   A directly set variable wins over its _FILE variant.
+
+PostgreSQL (migrate / verify-db only; the server itself still uses SQLite and
+exits 64 if any RELAYCAST_DATABASE_* variable is set):
+  RELAYCAST_DATABASE_URL(_FILE)     postgres://user:password@host:port/database
+                                    (only sslmode=verify-full may appear in the query)
+  RELAYCAST_DATABASE_CA_FILE        PEM CA bundle; TLS is always verify-full
+  RELAYCAST_DATABASE_SCHEMA         Engine schema (default relaycast)
+  RELAYCAST_DATABASE_OWNER_ROLE     Role migrate must run as (default relaycast_owner)
+  RELAYCAST_DATABASE_RUNTIME_ROLE   Role verify-db must run as (default relaycast_runtime)
+  RELAYCAST_DATABASE_POOL_MAX       Optional pool size (1-100)
+  RELAYCAST_DATABASE_STATEMENT_TIMEOUT_MS
+                                    Optional statement timeout
+  Exit codes: 0 ok, 64 configuration refused, 65 identity refused, 1 failure.
 
 After start, create a workspace:
   curl -XPOST http://localhost:<port>/v1/workspaces -H 'content-type: application/json' -d '{"name":"my-team"}'
@@ -74,6 +90,13 @@ function parseArgs(argv: string[], env: NodeJS.ProcessEnv): ServeArgs {
 const CONFIG_EXIT_CODE = 64;
 
 async function main(): Promise<void> {
+  const command = process.argv[2];
+  if (command === 'migrate' || command === 'verify-db') {
+    // Loaded lazily so the SQLite server path never imports pg.
+    const cli = await import('../adapters/postgres/cli.js');
+    process.exitCode = await (command === 'migrate' ? cli.runMigrateCommand() : cli.runVerifyDbCommand());
+    return;
+  }
   const opts = parseArgs(process.argv.slice(2), process.env);
   if (opts.help) {
     process.stdout.write(HELP);
@@ -81,6 +104,12 @@ async function main(): Promise<void> {
   }
   if (opts.version) {
     process.stdout.write(`${engineVersion()}\n`);
+    return;
+  }
+  const postgresRefusal = postgresServeRefusal(process.env);
+  if (postgresRefusal) {
+    process.stderr.write(`relaycast-engine: ${postgresRefusal}\n`);
+    process.exitCode = CONFIG_EXIT_CODE;
     return;
   }
   if (!Number.isFinite(opts.port) || opts.port <= 0) {

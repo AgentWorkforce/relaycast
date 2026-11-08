@@ -1,5 +1,5 @@
 import { eq, isNull, type SQL } from 'drizzle-orm';
-import { actionInvocations } from '../db/schema.js';
+import { actionInvocations } from '../db/tables.js';
 
 /** Status a pre-send claim observed on the invocation row. */
 export type InvocationClaimStatus = 'pending' | 'dispatched' | 'invoked';

@@ -1,7 +1,7 @@
 import { and, eq } from 'drizzle-orm';
 import { z } from 'zod';
 import type { getDb } from '../db/index.js';
-import { certifications } from '../db/schema.js';
+import { certifications } from '../db/tables.js';
 import { randomUuid } from '../lib/crypto.js';
 
 type Db = ReturnType<typeof getDb>;

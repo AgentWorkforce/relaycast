@@ -13,7 +13,7 @@ import {
   readReceipts,
   workspaces,
   type WorkspaceRetentionSettings,
-} from '../../db/schema.js';
+} from '../../db/tables.js';
 import { pruneExpired } from '../retention.js';
 import { snowflakeIdLowerBound } from '../snowflake.js';
 import { buildDirectDeliveryWrite } from '../deliveryWrites.js';

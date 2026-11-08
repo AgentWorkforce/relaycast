@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { registerNode } from '../../engine/node.js';
 import { DEFAULT_PROVIDER_NAME } from '../../engine/nodeProvider.js';
 import type { EngineDb } from '../../ports/database.js';
+import { requireTransactionCapability } from '../../ports/database.js';
 import { createWorkspace, FakeSocket, makeNodeStack, type TestStack } from './harness.js';
 
 // `cloud:*` tags are written by the control plane at enrollment and are the
@@ -185,7 +186,7 @@ describe('fleet node server-owned cloud:* tags', () => {
     // re-enroll in exactly that window: after the read, before the write
     // transaction opens. A merge computed from the earlier read would put
     // `sbx_ledger_1` back; the in-statement merge must keep `sbx_ledger_2`.
-    const db = stack.runtime.deps.db as EngineDb & { withTransaction: <T>(fn: (tx: EngineDb) => Promise<T>) => Promise<T> };
+    const db = requireTransactionCapability(stack.runtime.deps.db);
     let reEnrolledMidRegister = false;
     const racingDb = new Proxy(db, {
       get(target, prop) {

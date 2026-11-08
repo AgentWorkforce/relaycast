@@ -11,7 +11,7 @@ import {
   contextUpdatesOfType,
   type TestStack,
 } from './harness.js';
-import { agents, deliveries, messages, nodeProviders } from '../../db/schema.js';
+import { agents, deliveries, messages, nodeProviders } from '../../db/tables.js';
 import * as messageEngine from '../../engine/message.js';
 import * as deliveryEngine from '../../engine/delivery.js';
 import { ensureDirectNodeForAgent } from '../../engine/node.js';

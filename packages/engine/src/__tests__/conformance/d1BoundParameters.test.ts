@@ -9,7 +9,7 @@ import {
   registerAgent,
   type TestStack,
 } from './harness.js';
-import { agentNodeBindings, agents, deliveries } from '../../db/schema.js';
+import { agentNodeBindings, agents, deliveries } from '../../db/tables.js';
 
 /** More than one D1-safe IN-list chunk, so a single statement would exceed the cap. */
 const BULK_COUNT = 150;

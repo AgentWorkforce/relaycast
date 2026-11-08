@@ -1,8 +1,9 @@
 import { eq, and, sql } from 'drizzle-orm';
 import type { EngineDb } from '../../ports/database.js';
 import type { SearchIndex, MessageSearchQuery, MessageSearchResult } from '../../ports/search.js';
-import { agents, channels } from '../../db/schema.js';
+import { agents, channels } from '../../db/tables.js';
 import { buildFtsQuery } from '../../engine/searchQuery.js';
+import * as sqlx from '../../db/sqlx.js';
 
 /** Shared FTS5 implementation for the existing SQLite/D1/actor database handles. */
 export class SqliteSearchIndex implements SearchIndex {
@@ -41,7 +42,7 @@ export class SqliteSearchIndex implements SearchIndex {
     // Build the FTS5 query with parameterized SQL.
     // bm25() returns negative values where more negative = more relevant,
     // so ORDER BY rank ASC gives best results first.
-    const rows = await db.all<{
+    const rows = await sqlx.all<{
       workspace_id: string;
       id: string;
       channel_id: string;
@@ -53,7 +54,7 @@ export class SqliteSearchIndex implements SearchIndex {
       body: string;
       created_at: number;
       rank: number;
-    }>(sql`
+    }>(db, sql`
       SELECT m.workspace_id, m.id, m.channel_id, c.name AS channel_name, c.channel_type, dc.id AS conversation_id, m.agent_id, a.name AS agent_name, m.body, m.created_at,
              bm25(messages_fts) AS rank
       FROM messages_fts fts

@@ -10,7 +10,7 @@ import {
   authenticateUnexpired,
   isWorkspaceExpired,
 } from '../auth/workspaceExpiry.js';
-import { workspaces } from '../db/schema.js';
+import { workspaces } from '../db/tables.js';
 import {
   DEFAULT_LEGACY_CREDENTIAL_GRACE_SECONDS,
   upgradeLegacyCredential,
