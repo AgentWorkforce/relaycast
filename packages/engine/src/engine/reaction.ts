@@ -7,12 +7,23 @@ type Db = ReturnType<typeof getDb>;
 
 function isUniqueConstraintViolation(err: unknown): boolean {
   const candidate = err as { code?: string; message?: string };
-  return (
+  if (
     candidate.code === 'SQLITE_CONSTRAINT'
     || candidate.code === 'SQLITE_CONSTRAINT_UNIQUE'
-    || candidate.code === '23505'
     || (candidate.message?.includes('UNIQUE constraint failed') ?? false)
-  );
+  ) {
+    return true;
+  }
+  // PostgreSQL: drizzle wraps the driver error, so walk `.cause` for the SQLSTATE.
+  const seen = new Set<unknown>();
+  let current = err;
+  while (current && typeof current === 'object' && !seen.has(current)) {
+    seen.add(current);
+    const entry = current as { code?: string; cause?: unknown };
+    if (entry.code === '23505') return true;
+    current = entry.cause;
+  }
+  return false;
 }
 
 export async function addReaction(
