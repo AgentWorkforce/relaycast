@@ -3,7 +3,7 @@ import { and, eq } from 'drizzle-orm';
 import { createWorkspace, makeNodeStack, registerAgent, type TestStack } from './harness.js';
 import * as a2aEngine from '../../engine/a2a.js';
 import * as agentEngine from '../../engine/agent.js';
-import { a2aAgents, agents } from '../../db/schema.js';
+import { a2aAgents, agents } from '../../db/tables.js';
 
 describe('legacy agent identity claim', () => {
   let stack: TestStack;

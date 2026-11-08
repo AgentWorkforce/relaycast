@@ -7,7 +7,7 @@ import {
 import {
   actionInvocations, agentNodeBindings, agents, channelMembers, deliveries,
   dmParticipants, nodes,
-} from '../../db/schema.js';
+} from '../../db/tables.js';
 import { completeNodeInvocation, dispatchAgentRelease } from '../../engine/action.js';
 import { deleteAgent } from '../../engine/agent.js';
 import { sha256Hex } from '../../lib/crypto.js';

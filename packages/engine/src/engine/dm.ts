@@ -19,7 +19,7 @@ import {
   nodes,
   directDmIdempotency,
   deliveries,
-} from '../db/schema.js';
+} from '../db/tables.js';
 import { sha256Hex } from '../lib/crypto.js';
 import { runAtomicWrites, databaseConstraintKind, type AtomicWrite } from '../ports/database.js';
 import { generateId } from './snowflake.js';

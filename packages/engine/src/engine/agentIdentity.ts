@@ -1,6 +1,6 @@
 import { and, eq, ne, sql } from 'drizzle-orm';
 import type { getDb } from '../db/index.js';
-import { agentIdentityAudit, agentRecoveryCredentials, agents } from '../db/schema.js';
+import { agentIdentityAudit, agentRecoveryCredentials, agents } from '../db/tables.js';
 import { randomHex, sha256Hex } from '../lib/crypto.js';
 import { codedError } from '../lib/httpError.js';
 import { runAtomicWrites } from '../ports/database.js';

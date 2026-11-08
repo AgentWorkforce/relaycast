@@ -1,5 +1,5 @@
 import { and, eq, or, sql, lte, inArray, asc } from 'drizzle-orm';
-import { a2aAgents, a2aEgress, a2aInbound, directDmIdempotency, messages, agents } from '../db/schema.js';
+import { a2aAgents, a2aEgress, a2aInbound, directDmIdempotency, messages, agents } from '../db/tables.js';
 import { runAtomicWrites, type EngineDb } from '../ports/database.js';
 import { randomUuid } from '../lib/crypto.js';
 import { codedError } from '../lib/httpError.js';

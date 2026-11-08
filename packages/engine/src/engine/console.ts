@@ -1,6 +1,6 @@
 import { and, desc, eq, lt, gte, sql } from 'drizzle-orm';
 import type { getDb } from '../db/index.js';
-import { agents, channels, messageLogs } from '../db/schema.js';
+import { agents, channels, messageLogs } from '../db/tables.js';
 import type { AtomicWrite } from '../ports/database.js';
 import { generateId } from './snowflake.js';
 import * as sqlx from '../db/sqlx.js';

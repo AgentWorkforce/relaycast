@@ -1,4 +1,4 @@
-import { nodes } from '../db/schema.js';
+import { nodes } from '../db/tables.js';
 import { codedError } from '../lib/httpError.js';
 
 /**

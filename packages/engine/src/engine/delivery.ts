@@ -2,7 +2,7 @@ import { nodeLivenessAuthority } from './nodeLiveness.js';
 import { parseMessageMentions } from './mentions.js';
 import { eq, and, asc, exists, isNull, isNotNull, inArray, lt, ne, not, notInArray, lte, gt, sql, getTableColumns, type SQL } from 'drizzle-orm';
 import type { getDb } from '../db/index.js';
-import { deliveries, messages, agents, nodes, readReceipts, channelMembers, channels, dmConversations } from '../db/schema.js';
+import { deliveries, messages, agents, nodes, readReceipts, channelMembers, channels, dmConversations } from '../db/tables.js';
 import type { DeliveryStatus } from '@relaycast/types';
 import { runAtomicWrites, type AtomicWrite } from '../ports/database.js';
 import type { NodeConnectionRegistry } from '../ports/realtime.js';

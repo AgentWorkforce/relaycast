@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { eq } from 'drizzle-orm';
 import { createWorkspace, makeNodeStack, registerAgent, type TestStack } from './harness.js';
-import { deliveries, messages } from '../../db/schema.js';
+import { deliveries, messages } from '../../db/tables.js';
 
 /**
  * The workspace growth guard refuses a fanout by writing NULL into

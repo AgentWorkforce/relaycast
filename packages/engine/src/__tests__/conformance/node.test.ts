@@ -11,7 +11,7 @@ import {
   deliverFramesOfType,
   type TestStack,
 } from './harness.js';
-import { actionInvocations, actions, agentNodeBindings, agents, channelMembers, deliveries, nodeProviders, nodes } from '../../db/schema.js';
+import { actionInvocations, actions, agentNodeBindings, agents, channelMembers, deliveries, nodeProviders, nodes } from '../../db/tables.js';
 import { handleNodeControlMessage } from '../../node-control.js';
 import type { NodeConnectionRegistry } from '../../ports/realtime.js';
 import type { EngineDb, TransactionCapability } from '../../ports/database.js';

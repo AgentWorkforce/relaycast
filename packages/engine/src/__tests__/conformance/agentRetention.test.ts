@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { eq, sql } from 'drizzle-orm';
 import { SQLiteSyncDialect } from 'drizzle-orm/sqlite-core';
 import { attachDirectNodeSocket, createWorkspace, makeNodeStack, registerAgent, type TestStack } from './harness.js';
-import { actions, agents, agentNodeBindings, channels, files, messages, nodes, webhooks } from '../../db/schema.js';
+import { actions, agents, agentNodeBindings, channels, files, messages, nodes, webhooks } from '../../db/tables.js';
 import { retainAgents } from '../../engine/agentRetention.js';
 
 const now = new Date('2026-09-08T12:00:00Z');

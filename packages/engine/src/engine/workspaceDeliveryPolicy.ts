@@ -2,7 +2,7 @@ import type { WorkspaceDeliveryPolicy, WorkspaceDeliveryPolicyConfig } from '../
 export type { WorkspaceDeliveryPolicy, WorkspaceDeliveryPolicyConfig } from '../ports/workspaceDelivery.js';
 import { z } from 'zod';
 import { and, count, eq, or, sql, type SQL, type SQLWrapper } from 'drizzle-orm';
-import { deliveries, workspaces } from '../db/schema.js';
+import { deliveries, workspaces } from '../db/tables.js';
 import type { EngineDb } from '../ports/database.js';
 
 /**

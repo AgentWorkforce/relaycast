@@ -1,6 +1,6 @@
 import { nodeLivenessAuthority, inspectNodeLiveness, filterAsync, snapshotOnline } from './nodeLiveness.js';
 import { and, eq, ne, sql } from 'drizzle-orm';
-import { agentNodeBindings, agents, nodeProviders, nodes } from '../db/schema.js';
+import { agentNodeBindings, agents, nodeProviders, nodes } from '../db/tables.js';
 import type { getDb } from '../db/index.js';
 import type { PresenceTracker } from '../ports/presence.js';
 import { RELEASED_AGENT_STATUS } from './agent.js';

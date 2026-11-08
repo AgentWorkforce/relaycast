@@ -2,7 +2,7 @@ import { eq, sql, type Column, type SQL } from 'drizzle-orm';
 import { pruneBounded } from './boundedRetention.js';
 import type { EffectiveMessageRetention } from '@relaycast/types';
 import type { getDb } from '../db/index.js';
-import { workspaces } from '../db/schema.js';
+import { workspaces } from '../db/tables.js';
 import { snowflakeIdLowerBound } from './snowflake.js';
 import { pruneRowidPages, type RetentionCursorStore } from './rowidRetention.js';
 

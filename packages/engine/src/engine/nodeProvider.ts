@@ -1,7 +1,7 @@
 import { and, eq, notInArray, sql, type SQL } from 'drizzle-orm';
 import type { FleetCapability, FleetCapabilityKind } from '@relaycast/types';
 import type { getDb } from '../db/index.js';
-import { actions, nodeProviders, nodes } from '../db/schema.js';
+import { actions, nodeProviders, nodes } from '../db/tables.js';
 import { generateId } from './snowflake.js';
 import { codedError } from '../lib/httpError.js';
 import { NODE_LIVENESS_TTL_MS } from './placement.js';

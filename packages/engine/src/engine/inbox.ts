@@ -7,7 +7,7 @@ import {
   dmConversations,
   agents,
   dmParticipants,
-} from '../db/schema.js';
+} from '../db/tables.js';
 import { queryInChunks } from '../lib/queryChunks.js';
 import { parseMessageMentions } from './mentions.js';
 import { reportEngineProgress, withEngineOperation } from '../lib/engineDiagnostics.js';

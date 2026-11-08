@@ -8,7 +8,7 @@ import {
   dmParticipants,
   nodeProviders,
   nodes,
-} from '../db/schema.js';
+} from '../db/tables.js';
 import type { AtomicWrite, EngineDb } from '../ports/database.js';
 import { NODE_LIVENESS_TTL_MS } from './placement.js';
 import {

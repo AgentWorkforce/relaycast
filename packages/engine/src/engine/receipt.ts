@@ -9,7 +9,7 @@ import {
   deliveries,
   dmConversations,
   dmParticipants,
-} from '../db/schema.js';
+} from '../db/tables.js';
 import { runAtomicWrites } from '../ports/database.js';
 
 type Db = ReturnType<typeof getDb>;

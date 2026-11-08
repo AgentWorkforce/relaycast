@@ -2,7 +2,7 @@ import { and, eq, sql } from 'drizzle-orm';
 import { z } from 'zod';
 import { transformForClient } from './wsTransform.js';
 import { enqueueEvent } from './eventQueue.js';
-import { actionInvocations, nodes } from '../db/schema.js';
+import { actionInvocations, nodes } from '../db/tables.js';
 import type { EngineDb } from '../ports/database.js';
 import type { EngineDeps } from '../ports/index.js';
 import { sendNodeDeliveriesToAgents } from './nodeDeliver.js';

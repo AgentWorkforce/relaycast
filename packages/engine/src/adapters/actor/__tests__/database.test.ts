@@ -5,7 +5,7 @@ import { sql } from 'drizzle-orm';
 import { createActorEngineDb } from '../database.js';
 import { ACTOR_MIGRATIONS_TABLE, actorMigrationsCurrent, applyActorMigrations } from '../migrations.js';
 import { FakeActorDatabase } from './fakeActor.js';
-import { channels, messages, workspaces } from '../../../db/schema.js';
+import { channels, messages, workspaces } from '../../../db/tables.js';
 import { desc, eq } from 'drizzle-orm';
 import { appendWorkspaceEventBatch } from '../../../engine/workspaceEvents.js';
 

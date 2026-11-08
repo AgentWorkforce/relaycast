@@ -22,7 +22,7 @@ import {
   parseFleetBrokerToRelaycastMessage,
 } from '@relaycast/types';
 import type { getDb } from '../db/index.js';
-import { actionInvocations, actions, agents, agentNodeBindings, channelMembers, channels, nodeProviders, nodes, workspaces } from '../db/schema.js';
+import { actionInvocations, actions, agents, agentNodeBindings, channelMembers, channels, nodeProviders, nodes, workspaces } from '../db/tables.js';
 import { isWorkspaceExpired, WORKSPACE_EXPIRED_CODE, WORKSPACE_EXPIRED_MESSAGE } from '../auth/workspaceExpiry.js';
 import { randomHex, sha256Hex } from '../lib/crypto.js';
 import { codedError } from '../lib/httpError.js';

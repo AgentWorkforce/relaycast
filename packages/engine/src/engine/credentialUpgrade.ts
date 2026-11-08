@@ -1,6 +1,6 @@
 import { and, eq, gt, notExists, sql, type Column } from 'drizzle-orm';
 import { isArWorkspaceId, type CredentialKind } from '@relaycast/types';
-import { agents, credentialUpgrades, nodes, observerTokens, webhooks, workspaces } from '../db/schema.js';
+import { agents, credentialUpgrades, nodes, observerTokens, webhooks, workspaces } from '../db/tables.js';
 import type { EngineDb } from '../ports/database.js';
 import { runAtomicWrites } from '../ports/database.js';
 import { credentialTagger, mintCredential } from '../auth/credentials.js';

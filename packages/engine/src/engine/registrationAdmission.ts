@@ -2,7 +2,7 @@ import { and, eq, ne, not, sql } from 'drizzle-orm';
 import type { EngineDb } from '../ports/database.js';
 import type { AdmissionHooks, RegistrationAdmissionAction } from '../ports/admission.js';
 import type { Workspace } from '../ports/auth.js';
-import { agents, nodes, workspaces } from '../db/schema.js';
+import { agents, nodes, workspaces } from '../db/tables.js';
 import { AdmissionDeniedError } from '../lib/admissionError.js';
 import { WEBHOOK_AGENT_NAME } from './messageMetadata.js';
 

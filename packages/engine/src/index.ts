@@ -82,6 +82,11 @@ export type { Db } from './db/index.js';
 export * as schema from './db/schema.js';
 // Every adapter must brand its drizzle SQLite handle (the cloud D1 adapter included).
 export { brandSqliteEngineDb } from './adapters/sqlite-handle.js';
+// Binds engine table references (db/tables.ts) to a dialect, once per process.
+// brandSqliteEngineDb already binds 'sqlite'; an adapter that does not brand
+// through it (the cloud D1 adapter included) must call bindSchema itself before
+// the engine touches any table.
+export { bindSchema, currentSchemaDialect } from './db/tables.js';
 
 // Webhook delivery + scheduled-task helpers adapters wire to their queue/cron.
 export { deliverEvent } from './engine/eventDelivery.js';

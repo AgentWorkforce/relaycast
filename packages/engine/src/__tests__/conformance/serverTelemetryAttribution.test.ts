@@ -3,7 +3,7 @@ import { createEngine } from '../../engine.js';
 import { hashToken } from '../../auth/index.js';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { eq } from 'drizzle-orm';
-import { workspaces } from '../../db/schema.js';
+import { workspaces } from '../../db/tables.js';
 import type { TelemetryEvent } from '../../ports/telemetry.js';
 import { createWorkspace, makeNodeStack, type TestStack } from './harness.js';
 

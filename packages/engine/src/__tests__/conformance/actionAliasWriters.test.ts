@@ -4,7 +4,7 @@ import { makeNodeStack, createWorkspace, registerAgent, FakeSocket, type TestSta
 import { deleteAction, registerAction } from '../../engine/action.js';
 import { deregisterProvider, heartbeatNode } from '../../engine/node.js';
 import { drizzle } from 'drizzle-orm/better-sqlite3';
-import * as schema from '../../db/schema.js';
+import * as schema from '../../db/tables.js';
 import type { EngineDb } from '../../ports/database.js';
 
 /**

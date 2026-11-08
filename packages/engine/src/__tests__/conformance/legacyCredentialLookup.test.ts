@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import { eq } from 'drizzle-orm';
-import { agents, nodes, observerTokens, workspaces } from '../../db/schema.js';
+import { agents, nodes, observerTokens, workspaces } from '../../db/tables.js';
 import { SqliteApiKeyAuthProvider, WORKSPACE_EXPIRED_CODE } from '../../auth/index.js';
 import type { AuthRequire } from '../../ports/auth.js';
 import { createWorkspace, makeNodeStack, registerAgent, type TestStack } from './harness.js';

@@ -1,6 +1,6 @@
 import { and, asc, eq, gt, sql } from 'drizzle-orm';
 import type { SQL } from 'drizzle-orm';
-import { workspaceEvents } from '../db/schema.js';
+import { workspaceEvents } from '../db/tables.js';
 import type { EngineDb } from '../ports/database.js';
 import * as sqlx from '../db/sqlx.js';
 

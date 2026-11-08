@@ -8,7 +8,7 @@ import {
   registerAgent,
   type TestStack,
 } from './harness.js';
-import { agents, nodeProviders, nodes } from '../../db/schema.js';
+import { agents, nodeProviders, nodes } from '../../db/tables.js';
 import { NODE_LIVENESS_TTL_MS } from '../../engine/placement.js';
 import { AGENT_LIVENESS_TTL_MS } from '../../engine/agent.js';
 

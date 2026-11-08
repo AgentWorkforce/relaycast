@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { channelMembers, channels } from '../../db/schema.js';
+import { channelMembers, channels } from '../../db/tables.js';
 import { generateId } from '../../engine/snowflake.js';
 import { deleteAgent } from '../../engine/agent.js';
 import { createChannel, getChannel, joinChannel, inviteAgent, leaveChannel, ensureAgentSubscriptionChannel } from '../../engine/channel.js';

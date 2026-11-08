@@ -2,7 +2,7 @@ import { nodeLivenessAuthority, inspectNodeLiveness, inspectNodesLiveness, inval
 import type { NodeLivenessSnapshot } from '../ports/nodeLiveness.js';
 import { eq, and, exists, gt, lt, ne, sql, inArray, type SQL } from 'drizzle-orm';
 import type { getDb } from '../db/index.js';
-import { agents, agentNodeBindings, agentRecoveryCredentials, channels, channelMembers, dmParticipants, deliveries, nodes } from '../db/schema.js';
+import { agents, agentNodeBindings, agentRecoveryCredentials, channels, channelMembers, dmParticipants, deliveries, nodes } from '../db/tables.js';
 import { randomHex, sha256Hex } from '../lib/crypto.js';
 import { generateId } from './snowflake.js';
 import { invalidateChannelCache } from './cache.js';

@@ -1,7 +1,7 @@
 import { eq, and, sql } from 'drizzle-orm';
 import type { EngineDb } from '../../ports/database.js';
 import type { SearchIndex, MessageSearchQuery, MessageSearchResult } from '../../ports/search.js';
-import { agents, channels } from '../../db/schema.js';
+import { agents, channels } from '../../db/tables.js';
 import { buildFtsQuery } from '../../engine/searchQuery.js';
 
 /** Shared FTS5 implementation for the existing SQLite/D1/actor database handles. */

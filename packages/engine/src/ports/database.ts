@@ -3,7 +3,7 @@ import { inheritCredentials } from '../auth/credentials.js';
 import { WorkspaceDeliveryCapacityError } from '../engine/workspaceDeliveryPolicy.js';
 import type { SQLWrapper } from 'drizzle-orm';
 import type { BaseSQLiteDatabase } from 'drizzle-orm/sqlite-core';
-import type * as schema from '../db/schema.js';
+import type * as schema from '../db/tables.js';
 
 /**
  * Driver-agnostic Drizzle handle used by every engine module.

@@ -3,7 +3,7 @@ import { brandSqliteEngineDb } from '../../adapters/sqlite-handle.js';
 import { drizzle } from 'drizzle-orm/better-sqlite3';
 import { eq } from 'drizzle-orm';
 import { getSqliteDb, runMigrations, type SqliteDbHandle } from '../../adapters/node/database.js';
-import * as schema from '../../db/schema.js';
+import * as schema from '../../db/tables.js';
 import type { EngineDb } from '../../ports/database.js';
 import type { NodeConnectionRegistry } from '../../ports/realtime.js';
 import { claimNodeOffline, markNodeOffline, settleNodeOffline } from '../node.js';

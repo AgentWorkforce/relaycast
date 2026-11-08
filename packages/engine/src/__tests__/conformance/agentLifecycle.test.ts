@@ -1,7 +1,7 @@
 import { invokeWithConcurrentReplay } from './invocationReplay.js';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { and, eq } from 'drizzle-orm';
-import { actionInvocations, agentNodeBindings, agents, channelMembers, deliveries, nodeProviders, nodes, pendingEvents, workspaceEvents } from '../../db/schema.js';
+import { actionInvocations, agentNodeBindings, agents, channelMembers, deliveries, nodeProviders, nodes, pendingEvents, workspaceEvents } from '../../db/tables.js';
 import { AGENT_LIVENESS_TTL_MS, sweepStaleAgents } from '../../engine/agent.js';
 import { bindAgentToNode } from '../../engine/node.js';
 import { NODE_LIVENESS_TTL_MS } from '../../engine/placement.js';

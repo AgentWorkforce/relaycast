@@ -11,7 +11,7 @@ import {
   deliverFramesOfType,
   type TestStack,
 } from './harness.js';
-import { agentNodeBindings, agents, deliveries, nodes } from '../../db/schema.js';
+import { agentNodeBindings, agents, deliveries, nodes } from '../../db/tables.js';
 import { sweepDueHttpPushDeliveries } from '../../routes/deliveryRouting.js';
 
 describe('node delivery contracts', () => {

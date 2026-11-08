@@ -1,7 +1,7 @@
 import { invalidateDirectPresence, nodeLive, nodeReady, providerLive } from './nodeLiveness.js';
 import { and, asc, eq, inArray, isNotNull, isNull, like, lt, lte, or, sql } from 'drizzle-orm';
 import type { getDb } from '../db/index.js';
-import { actions, actionInvocations, agents, agentNodeBindings, channelMembers, dmParticipants, nodes } from '../db/schema.js';
+import { actions, actionInvocations, agents, agentNodeBindings, channelMembers, dmParticipants, nodes } from '../db/tables.js';
 import { waitForPendingInvocationRetry } from './invocationRetry.js';
 import { generateId } from './snowflake.js';
 import {

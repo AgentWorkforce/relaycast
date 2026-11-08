@@ -1,6 +1,6 @@
 import { eq, and, ne, desc, isNull, sql } from 'drizzle-orm';
 import type { getDb } from '../db/index.js';
-import { agents, sessionEvents } from '../db/schema.js';
+import { agents, sessionEvents } from '../db/tables.js';
 import { generateId } from './snowflake.js';
 import { sha256Hex } from '../lib/crypto.js';
 import { codedError } from '../lib/httpError.js';

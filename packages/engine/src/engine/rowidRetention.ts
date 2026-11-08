@@ -1,7 +1,7 @@
 import { sql } from 'drizzle-orm';
 import { z } from 'zod';
 import type { EngineDb } from '../ports/database.js';
-import type { WorkspaceRetentionSettings } from '../db/schema.js';
+import type { WorkspaceRetentionSettings } from '../db/tables.js';
 import type { PruneOptions, PruneResult, RetentionDefaults } from './retention.js';
 import { snowflakeIdLowerBound } from './snowflake.js';
 import * as sqlx from '../db/sqlx.js';

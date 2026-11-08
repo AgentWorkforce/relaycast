@@ -2,7 +2,7 @@ import { eq } from 'drizzle-orm';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { makeNodeStack, type TestStack } from '../../__tests__/conformance/harness.js';
-import { channels, workspaceCreateIdempotency, workspaces } from '../../db/schema.js';
+import { channels, workspaceCreateIdempotency, workspaces } from '../../db/tables.js';
 import { sha256Hex } from '../../lib/crypto.js';
 import { configureCredentials } from '../../auth/credentials.js';
 import { createCredentialTagSigner } from '../../auth/credentialTags.js';

@@ -19,7 +19,7 @@ import {
   agentNodeBindings,
   agents,
   observerTokens,
-} from '../../db/schema.js';
+} from '../../db/tables.js';
 import { handleNodeControlMessage, handleProviderDisconnect, IMPLICIT_DIRECT_NODE_ID_PREFIX, markNodeOffline } from '../../engine/node.js';
 import { agentLivenessRefresh, RELEASED_AGENT_STATUS } from '../../engine/agent.js';
 import { serializeNodeOp } from '../../engine/nodeLock.js';

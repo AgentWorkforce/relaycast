@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { eq } from 'drizzle-orm';
 import { configureEngineDiagnostics } from '../../lib/engineDiagnostics.js';
 import type { EngineProgressSample } from '../../ports/diagnostics.js';
-import { messages, workspaceCreateIdempotency, workspaceEvents, workspaces } from '../../db/schema.js';
+import { messages, workspaceCreateIdempotency, workspaceEvents, workspaces } from '../../db/tables.js';
 import { reapExpiredWorkspaces } from '../../engine/workspace.js';
 import { handleNodeControlMessage } from '../../node-control.js';
 import {

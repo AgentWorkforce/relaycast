@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { brandSqliteEngineDb } from '../../adapters/sqlite-handle.js';
 import { drizzle } from 'drizzle-orm/better-sqlite3';
-import * as schema from '../../db/schema.js';
+import * as schema from '../../db/tables.js';
 import { makeNodeStack, createWorkspace, registerAgent, FakeSocket, type TestStack } from './harness.js';
 import { handleNodeControlMessage, type WorkspaceDeadlineHolder } from '../../node-control.js';
 import { bindAgentToNode, deregisterAgentViaNode, settleNodeOffline, unbindAgentFromNode } from '../../engine/node.js';

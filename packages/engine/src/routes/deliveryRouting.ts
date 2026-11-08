@@ -8,7 +8,7 @@ import type {
   DeliveryFanoutRecord,
   DeliveryRejectionRecord,
 } from '../engine/deliveryWrites.js';
-import { agents, agentNodeBindings, deliveries as deliveryRows, nodes } from '../db/schema.js';
+import { agents, agentNodeBindings, deliveries as deliveryRows, nodes } from '../db/tables.js';
 import { buildHttpPushHeaders, postHttpPush, resolveHttpPushProxy } from '../engine/httpPushDispatch.js';
 import { isSafeExternalUrl } from '../lib/ssrf.js';
 import { settlePool } from '../lib/settlePool.js';

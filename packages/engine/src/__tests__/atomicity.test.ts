@@ -27,7 +27,7 @@ import {
   pendingEvents,
   sessionEvents,
   workspaceEvents,
-} from '../db/schema.js';
+} from '../db/tables.js';
 import { postMessage } from '../engine/message.js';
 import { sendDm } from '../engine/dm.js';
 import { createGroupDm, postGroupMessage } from '../engine/groupDm.js';

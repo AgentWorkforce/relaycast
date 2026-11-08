@@ -1,6 +1,6 @@
 import { and, asc, desc, eq, inArray, sql } from 'drizzle-orm';
 import type { getDb } from '../db/index.js';
-import { agents, directoryAgents, directoryRatings, directorySkills } from '../db/schema.js';
+import { agents, directoryAgents, directoryRatings, directorySkills } from '../db/tables.js';
 import { buildFtsQuery } from './searchQuery.js';
 import { generateId } from './snowflake.js';
 import { codedError } from '../lib/httpError.js';

@@ -24,6 +24,7 @@ export default defineConfig({
       ? ['src/__tests__/conformance/agentRetentionCli.test.ts', 'src/db/__tests__/compactMigrations.test.ts']
       : [],
     environment: 'node',
+    setupFiles: ['src/__tests__/setup/bindSchema.ts'],
     // vitest's module runner is slower under Bun; the heavier conformance
     // fixtures need more headroom there.
     testTimeout: isBun ? 60_000 : 20_000,

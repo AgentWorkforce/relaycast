@@ -1,6 +1,6 @@
 import { and, eq, sql } from 'drizzle-orm';
 import type { getDb } from '../db/index.js';
-import { agents, routingConfigs, routingFailures } from '../db/schema.js';
+import { agents, routingConfigs, routingFailures } from '../db/tables.js';
 import { buildFtsQuery } from './searchQuery.js';
 import { codedError } from '../lib/httpError.js';
 import { toIso } from '../lib/serialize.js';

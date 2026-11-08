@@ -1,7 +1,7 @@
 import { eq, and, sql, inArray, ne } from 'drizzle-orm';
 import { z } from 'zod';
 import type { getDb } from '../db/index.js';
-import { channels, channelMembers, agents } from '../db/schema.js';
+import { channels, channelMembers, agents } from '../db/tables.js';
 import { generateId } from './snowflake.js';
 import { getCachedChannel, setCachedChannel, invalidateChannelCache } from './cache.js';
 import { codedError } from '../lib/httpError.js';

@@ -2,7 +2,7 @@ import { and, asc, eq, sql } from 'drizzle-orm';
 import { z } from 'zod';
 import type { EffectiveMessageRetention, SessionMessagesResult } from '@relaycast/types';
 import type { getDb } from '../db/index.js';
-import { agents, channels, dmConversations, messageSessions, messages } from '../db/schema.js';
+import { agents, channels, dmConversations, messageSessions, messages } from '../db/tables.js';
 import type { AtomicWrite } from '../ports/database.js';
 import { codedError } from '../lib/httpError.js';
 import { senderAddressField } from './address.js';

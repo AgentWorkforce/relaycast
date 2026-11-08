@@ -1,6 +1,6 @@
 import { and, eq, inArray, isNotNull, sql } from 'drizzle-orm';
 import { FleetTaskContextSchema, type FleetActionAcceptMessage, type FleetActionResultMessage } from '@relaycast/types';
-import { actionInvocations, type TaskInvocationState } from '../db/schema.js';
+import { actionInvocations, type TaskInvocationState } from '../db/tables.js';
 import type { EngineDb } from '../ports/database.js';
 import { codedError } from '../lib/httpError.js';
 
