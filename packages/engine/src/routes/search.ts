@@ -54,11 +54,18 @@ searchRoutes.get(
         getObserverTokenFromContext(c),
         results,
       );
-      const responseResults = visibleResults.map(({
-        agent_id: _agentId,
-        channel_type: _channelType,
-        ...result
-      }) => result);
+      // Adapters may carry additional internal metadata. Only publish the
+      // established response fields, after observer visibility filtering.
+      const responseResults = visibleResults.map((result) => ({
+        id: result.id,
+        channel_id: result.channel_id,
+        channel_name: result.channel_name,
+        conversation_id: result.conversation_id,
+        agent_name: result.agent_name,
+        text: result.text,
+        created_at: result.created_at,
+        relevance_score: result.relevance_score,
+      }));
 
       emitServerEvent(c, workspace.id, 'search.executed', {
         query_length: q.trim().length,

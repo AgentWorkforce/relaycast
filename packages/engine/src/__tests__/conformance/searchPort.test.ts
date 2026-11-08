@@ -66,10 +66,11 @@ describe('message search adapter boundary', () => {
     const workspace = await createWorkspace(stack.app, 'search-port-observer');
     const alice = await registerAgent(stack.app, workspace.workspaceKey, 'alice');
     const bob = await registerAgent(stack.app, workspace.workspaceKey, 'bob');
-    const makeResult = (id: string, channel: string, agentId: string): MessageSearchResult => ({
+    const makeResult = (id: string, channel: string, agentId: string): MessageSearchResult & { internal_notes: string } => ({
       id, channel_id: `channel-${channel}`, channel_name: channel, channel_type: 0,
       conversation_id: null, agent_id: agentId, agent_name: agentId === alice.agentId ? 'alice' : 'bob',
       text: id, created_at: '2026-11-07T00:00:00.000Z', relevance_score: -1,
+      internal_notes: 'must-not-leak',
     });
     const searchMessages = vi.fn(async (_query: MessageSearchQuery) => [
       makeResult('visible-result', 'general', alice.agentId),
@@ -92,6 +93,11 @@ describe('message search adapter boundary', () => {
     expect(body.data.map(row => row.id)).toEqual(['visible-result']);
     expect(body.data[0]).not.toHaveProperty('agent_id');
     expect(body.data[0]).not.toHaveProperty('channel_type');
+    expect(body.data[0]).not.toHaveProperty('internal_notes');
+    expect(Object.keys(body.data[0]).sort()).toEqual([
+      'id', 'channel_id', 'channel_name', 'conversation_id', 'agent_name', 'text', 'created_at', 'relevance_score',
+    ].sort());
+    expect(JSON.stringify(body)).not.toContain('must-not-leak');
     expect(JSON.stringify(body)).not.toContain('hidden-channel-result');
     expect(JSON.stringify(body)).not.toContain('hidden-agent-result');
   });
