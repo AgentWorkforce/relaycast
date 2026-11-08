@@ -2,6 +2,7 @@ import { and, asc, eq, gt, sql } from 'drizzle-orm';
 import type { SQL } from 'drizzle-orm';
 import { workspaceEvents } from '../db/schema.js';
 import type { EngineDb } from '../ports/database.js';
+import * as sqlx from '../db/sqlx.js';
 
 /** Default page size for {@link listWorkspaceEvents}. */
 export const WORKSPACE_EVENT_LIST_DEFAULT_LIMIT = 200;
@@ -105,7 +106,7 @@ export async function appendWorkspaceEventBatch(
       // the existing (workspace_id, seq) key once per distinct workspace instead.
       // Materialize before inserting so every event uses the same base even if
       // SQLite would otherwise inline the CTE and observe this batch's inserts.
-      const rows = await db.all<{ workspace_id: string; seq: number }>(sql`
+      const rows = await sqlx.all<{ workspace_id: string; seq: number }>(db, sql`
         WITH
           input_events(global_ord, workspace_id, type, channel_id, payload) AS (VALUES ${values}),
           ranked AS (
@@ -270,7 +271,7 @@ export async function appendAndPublishWorkspaceEventWhen(
 ): Promise<boolean> {
   let seq: number;
   try {
-    const rows = await deps.db.all<{ seq: number }>(sql`
+    const rows = await sqlx.all<{ seq: number }>(deps.db, sql`
       INSERT INTO workspace_events (workspace_id, seq, type, channel_id, payload)
       SELECT
         ${workspaceId},

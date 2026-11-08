@@ -2,6 +2,7 @@ import { sql } from 'drizzle-orm';
 import type { Db } from '../db/index.js';
 import { reportEngineProgress } from '../lib/engineDiagnostics.js';
 import { D1_SAFE_IN_QUERY_CHUNK_SIZE } from '../lib/queryChunks.js';
+import * as sqlx from '../db/sqlx.js';
 
 /**
  * Bounded deletion of one workspace's bulk rows, ahead of the final
@@ -149,7 +150,7 @@ export async function exceedsAtomicDeleteSize(
 ): Promise<boolean> {
   let seen = 0;
   const count = async (query: ReturnType<typeof sql>) => {
-    const [row] = await db.all<{ n: number }>(sql`SELECT count(*) AS n FROM (${query})`);
+    const [row] = await sqlx.all<{ n: number }>(db, sql`SELECT count(*) AS n FROM (${query})`);
     seen += Number(row?.n ?? 0);
     return seen > maxRows;
   };
@@ -215,7 +216,7 @@ export async function drainWorkspaceRows(
   const run = async (table: string, rowids: ReturnType<typeof sql>): Promise<number | null> => {
     if (spent()) return null;
     const started = now();
-    const deleted = await db.all(sql`DELETE FROM ${sql.raw(table)} WHERE rowid IN (${rowids}) RETURNING 1`);
+    const deleted = await sqlx.all(db, sql`DELETE FROM ${sql.raw(table)} WHERE rowid IN (${rowids}) RETURNING 1`);
     const elapsed = now() - started;
     rows += deleted.length;
     if (deleted.length > 0) {
@@ -236,7 +237,7 @@ export async function drainWorkspaceRows(
       let deleted: number | null;
       let pageSize: number;
       if (step.children) {
-        const ids = (await db.all<{ id: string }>(pageSql(step, workspaceId, 'id'))).map(row => row.id);
+        const ids = (await sqlx.all<{ id: string }>(db, pageSql(step, workspaceId, 'id'))).map(row => row.id);
         pageSize = ids.length;
         if (ids.length === 0) break;
         const page = sql.join(ids.map(id => sql`${id}`), sql`, `);

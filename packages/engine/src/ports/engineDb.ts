@@ -18,7 +18,7 @@
  * build a drizzle database for their dialect and present it as an
  * `EngineDatabase` (that construction is the only place the two meet; it lives
  * under `adapters/`). Raw SQL goes through `db/sqlx.ts`, which dispatches on the
- * `dialect` brand instead of calling `run`/`all` (SQLite-only) directly.
+ * `engineDialect` brand instead of calling `run`/`all` (SQLite-only) directly.
  */
 import type { Column, ColumnsSelection, Placeholder, Query, SQL, SQLWrapper, Subquery, Table } from 'drizzle-orm';
 import type { MakeColumnConfig } from 'drizzle-orm/column-builder';
@@ -135,25 +135,30 @@ export interface EngineQueryBuilder {
 export type EngineInsertValue<T extends Table> = { [K in keyof T['$inferInsert']]: T['$inferInsert'][K] | SQL | Placeholder };
 export type EngineUpdateSet<T extends Table> = { [K in keyof T['$inferInsert']]?: T['$inferInsert'][K] | SQL | Column | undefined };
 
-/** A write statement; `TReturning` is the row type once `.returning()` was called. */
-export interface EngineWrite<T extends Table, TReturning = undefined>
-  extends PromiseLike<TReturning extends undefined ? unknown : TReturning[]>, SQLWrapper {
-  returning(): EngineWrite<T, T['$inferSelect']>;
-  returning<TFields extends EngineSelectedFieldsFlat>(fields: TFields): EngineWrite<T, SelectResultFields<TFields>>;
+/** An executable write statement; awaiting it yields `unknown` (driver run result). */
+export interface EngineWrite extends PromiseLike<unknown>, SQLWrapper {
   toSQL(): Query;
 }
 
-export interface EngineInsert<T extends Table, TReturning = undefined> extends EngineWrite<T, TReturning> {
-  returning(): EngineInsert<T, T['$inferSelect']>;
-  returning<TFields extends EngineSelectedFieldsFlat>(fields: TFields): EngineInsert<T, SelectResultFields<TFields>>;
-  onConflictDoNothing(config?: { target?: Column | Column[]; where?: SQL }): this;
+/** A write statement after `.returning(...)`; awaiting it yields the returned rows. */
+export interface EngineReturningWrite<TRow> extends PromiseLike<TRow[]>, SQLWrapper {
+  toSQL(): Query;
+}
+
+interface Returning<T extends Table> {
+  returning(): EngineReturningWrite<T['$inferSelect']>;
+  returning<TFields extends EngineSelectedFieldsFlat>(fields: TFields): EngineReturningWrite<SelectResultFields<TFields>>;
+}
+
+export interface EngineInsert<T extends Table> extends EngineWrite, Returning<T> {
+  onConflictDoNothing(config?: { target?: Column | Column[]; where?: SQL }): EngineInsert<T>;
   onConflictDoUpdate(config: {
     target: Column | Column[];
     set: EngineUpdateSet<T>;
     targetWhere?: SQL;
     setWhere?: SQL;
     where?: SQL;
-  }): this;
+  }): EngineInsert<T>;
 }
 
 type InsertSelectSource<T extends Table> =
@@ -166,25 +171,27 @@ export interface EngineInsertBuilder<T extends Table> {
   select(query: InsertSelectSource<T> | ((qb: EngineQueryBuilder) => InsertSelectSource<T>)): EngineInsert<T>;
 }
 
-export interface EngineUpdate<T extends Table, TReturning = undefined> extends EngineWrite<T, TReturning> {
-  where(where: SQL | undefined): this;
-  returning(): EngineUpdate<T, T['$inferSelect']>;
-  returning<TFields extends EngineSelectedFieldsFlat>(fields: TFields): EngineUpdate<T, SelectResultFields<TFields>>;
+export interface EngineUpdate<T extends Table> extends EngineWrite, Returning<T> {
+  where(where: SQL | undefined): EngineUpdate<T>;
 }
 
 export interface EngineUpdateBuilder<T extends Table> {
   set(values: EngineUpdateSet<T>): EngineUpdate<T>;
 }
 
-export interface EngineDelete<T extends Table, TReturning = undefined> extends EngineWrite<T, TReturning> {
-  where(where: SQL | undefined): this;
-  returning(): EngineDelete<T, T['$inferSelect']>;
-  returning<TFields extends EngineSelectedFieldsFlat>(fields: TFields): EngineDelete<T, SelectResultFields<TFields>>;
+export interface EngineDelete<T extends Table> extends EngineWrite, Returning<T> {
+  where(where: SQL | undefined): EngineDelete<T>;
 }
 
-/** The query-builder surface of a database handle, independent of dialect. */
+/**
+ * The query-builder surface of a database handle, independent of dialect.
+ *
+ * The brand is `engineDialect`, not `dialect`: drizzle's database objects
+ * already own a `dialect` property (their SQL dialect object, read by every
+ * builder), so it must not be shadowed.
+ */
 export interface EngineDatabase extends EngineQueryBuilder {
-  readonly dialect: EngineDialect;
+  readonly engineDialect: EngineDialect;
   insert<T extends Table>(table: T): EngineInsertBuilder<T>;
   update<T extends Table>(table: T): EngineUpdateBuilder<T>;
   delete<T extends Table>(table: T): EngineDelete<T>;

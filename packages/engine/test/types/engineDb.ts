@@ -9,9 +9,10 @@
  * 2. For concrete queries the neutral row types equal what drizzle's own
  *    SQLite and PG builders infer.
  * 3. Spike record: drizzle's database classes are NOT structurally assignable
- *    to `EngineDatabase` (deferred dialect-bound conditionals in join/from
- *    signatures), and a `BaseSQLiteDatabase | PgDatabase` union is not
- *    callable. The `@ts-expect-error` lines fail the typecheck if that ever
+ *    to `EngineDatabase` even when branded (PG: `from()` takes a conditional
+ *    parameter type no neutral generic signature can match; SQLite: builders
+ *    omit methods once used and bind joins to `SQLiteTable`), and a
+ *    `BaseSQLiteDatabase | PgDatabase` union is not callable. The `@ts-expect-error` lines fail the typecheck if that ever
  *    changes, at which point adapters can drop their construction cast.
  */
 import { eq, sql } from 'drizzle-orm';
@@ -125,10 +126,10 @@ export async function agreesWithDrizzle(): Promise<void> {
 }
 
 // --- 3. spike record: why adapters construct the handle explicitly ---------
-// @ts-expect-error BaseSQLiteDatabase's join/from signatures use deferred SQLiteTable conditionals
-export const sqliteAssignable: EngineDatabase = sqliteDb as typeof sqliteDb & { readonly dialect: 'sqlite' };
-// @ts-expect-error PgDatabase's from() takes a conditional parameter; joins are PgTable-bound
-export const pgAssignable: EngineDatabase = pgDb as typeof pgDb & { readonly dialect: 'pg' };
+// @ts-expect-error SQLite builders drop methods once used (`Omit<SQLiteSelectBase, 'where'>`) and bind joins to SQLiteTable
+export const sqliteAssignable: EngineDatabase = sqliteDb as typeof sqliteDb & { readonly engineDialect: 'sqlite' };
+// @ts-expect-error PgDatabase's from() takes a conditional parameter type (TableLikeHasEmptySelection<TFrom>)
+export const pgAssignable: EngineDatabase = pgDb as typeof pgDb & { readonly engineDialect: 'pg' };
 
 declare const unionDb: typeof sqliteDb | typeof pgDb;
 // @ts-expect-error a union of the two database classes is not callable (TS2349)

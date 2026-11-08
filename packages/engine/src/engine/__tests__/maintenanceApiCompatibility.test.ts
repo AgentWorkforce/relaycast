@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { brandSqliteEngineDb } from '../../adapters/sqlite-handle.js';
 import { drizzle } from 'drizzle-orm/better-sqlite3';
 import { getSqliteDb, runMigrations, type SqliteDbHandle } from '../../adapters/node/database.js';
 import * as schema from '../../db/schema.js';
@@ -24,10 +25,10 @@ function fixture() {
     INSERT INTO channels(id, workspace_id, name) VALUES ('channel', 'ws', 'general');
   `);
   const queries: Array<{ sql: string; params: unknown[] }> = [];
-  const db = drizzle(handle.sqlite, {
+  const db = brandSqliteEngineDb(drizzle(handle.sqlite, {
     schema,
     logger: { logQuery: (sql, params) => queries.push({ sql, params }) },
-  }) as unknown as EngineDb;
+  })) as unknown as EngineDb;
   let state: RowidRetentionState | undefined;
   const cursorStore: RetentionCursorStore = {
     load: vi.fn(async () => structuredClone(state)),

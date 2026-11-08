@@ -1,5 +1,6 @@
 import { sql, type SQL } from 'drizzle-orm';
 import { z } from 'zod';
+import * as sqlx from '../db/sqlx.js';
 
 export interface AgentRetentionDb {
   all<T>(query: SQL): PromiseLike<T[]>;
@@ -81,19 +82,19 @@ export async function retainAgents(
   }
   // Resuming may make the boundary older, never newer than the requested window.
   const cutoff = cursor?.cutoff ?? currentCutoff;
-  const indexes = await db.all<{ name: string }>(sql`SELECT name FROM sqlite_master
+  const indexes = await sqlx.all<{ name: string }>(db, sql`SELECT name FROM sqlite_master
     WHERE type = 'index' AND name IN (${sql.join(requiredIndexes.map(name => sql`${name}`), sql`, `)})`);
   const indexesReady = indexes.length === requiredIndexes.length;
   if (options.delete && !indexesReady) {
     throw new Error('Agent retention requires migration 0053_agent_retention_indexes.sql before deletion');
   }
-  const [high] = cursor ? [] : await db.all<{ id: string }>(sql`
+  const [high] = cursor ? [] : await sqlx.all<{ id: string }>(db, sql`
     SELECT id FROM agents WHERE workspace_id = ${workspaceId} ORDER BY id DESC LIMIT 1`);
   const through = cursor?.through ?? high?.id ?? '';
   const after = cursor?.after ?? '';
   // LIMIT applies before the correlated ownership/history probes. Protected
   // pages advance too; retained rows cannot pin maintenance to the first page.
-  const rows = await db.all<Candidate>(sql`
+  const rows = await sqlx.all<Candidate>(db, sql`
     WITH page AS MATERIALIZED (
       SELECT id, name, status, last_seen, created_at, location_type,
         location_node_id, origin_node_id, metadata FROM agents
@@ -107,7 +108,7 @@ export async function retainAgents(
     // capability fallback, or gap between the final safety check and deletion.
     // Bind the bounded ID list once: 100 individual IDs plus safety predicates
     // would exceed hosted D1's 100-parameter limit.
-    deleted = await db.all<{ id: string }>(sql`
+    deleted = await sqlx.all<{ id: string }>(db, sql`
       DELETE FROM agents AS a
       WHERE a.workspace_id = ${workspaceId}
         AND a.id IN (SELECT value FROM json_each(${JSON.stringify(eligible.map(row => row.id))}))

@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it } from 'vitest';
+import { brandSqliteEngineDb } from '../../adapters/sqlite-handle.js';
 import { drizzle } from 'drizzle-orm/better-sqlite3';
 import { getSqliteDb, runMigrations, type SqliteDbHandle } from '../../adapters/node/database.js';
 import * as schema from '../../db/schema.js';
@@ -32,7 +33,7 @@ function fixture() {
   sqlite.exec(`INSERT INTO messages(id,workspace_id,channel_id,agent_id,body,thread_id)
     VALUES ('reply-foreign','other','other-channel','other-agent','foreign','parent')`);
   const queries: { sql: string; params: unknown[] }[] = [];
-  const db = drizzle(sqlite, { schema, logger: { logQuery: (sql, params) => queries.push({ sql, params }) } }) as unknown as EngineDb;
+  const db = brandSqliteEngineDb(drizzle(sqlite, { schema, logger: { logQuery: (sql, params) => queries.push({ sql, params }) } })) as unknown as EngineDb;
   return { sqlite, db, queries };
 }
 

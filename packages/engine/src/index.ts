@@ -80,6 +80,8 @@ export {
 export { getDb, healthCheck as dbHealthCheck } from './db/index.js';
 export type { Db } from './db/index.js';
 export * as schema from './db/schema.js';
+// Every adapter must brand its drizzle SQLite handle (the cloud D1 adapter included).
+export { brandSqliteEngineDb } from './adapters/sqlite-handle.js';
 
 // Webhook delivery + scheduled-task helpers adapters wire to their queue/cron.
 export { deliverEvent } from './engine/eventDelivery.js';

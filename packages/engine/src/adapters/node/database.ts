@@ -4,6 +4,7 @@ import { planMigrations } from '../../db/migrationPlan.js';
 import { sqliteDriver, type SqliteConnection } from './sqlite-driver.js';
 import { loadMigrationSource } from './migration-source.js';
 import type { EngineDb, TransactionCapability } from '../../ports/database.js';
+import { brandSqliteEngineDb } from '../sqlite-handle.js';
 
 /**
  * The engine handle specialized to better-sqlite3's synchronous run-result,
@@ -34,7 +35,7 @@ export interface SqliteDbHandle {
 export function getSqliteDb(path: string): SqliteDbHandle {
   const sqlite = sqliteDriver.open(path);
   configureSqlite(sqlite, { enableWal: true });
-  const db = sqliteDriver.drizzle(sqlite) as NodeEngineDb;
+  const db = brandSqliteEngineDb(sqliteDriver.drizzle(sqlite) as NodeEngineDb);
 
   // `:memory:` databases are connection-local: a transaction and a raw write
   // share the same connection, so there is no cross-connection lock contention
@@ -153,7 +154,7 @@ function withFileWriteGate(db: NodeEngineDb, path: string): NodeEngineDb {
       const txSqlite = sqliteDriver.open(path);
       try {
         configureSqlite(txSqlite);
-        const txDb = sqliteDriver.drizzle(txSqlite) as EngineDb;
+        const txDb = brandSqliteEngineDb(sqliteDriver.drizzle(txSqlite) as EngineDb);
         txSqlite.exec('BEGIN IMMEDIATE');
         try {
           const result = await fn(txDb);

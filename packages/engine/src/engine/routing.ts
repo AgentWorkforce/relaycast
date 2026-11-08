@@ -4,6 +4,7 @@ import { agents, routingConfigs, routingFailures } from '../db/schema.js';
 import { buildFtsQuery } from './searchQuery.js';
 import { codedError } from '../lib/httpError.js';
 import { toIso } from '../lib/serialize.js';
+import * as sqlx from '../db/sqlx.js';
 
 type Db = ReturnType<typeof getDb>;
 
@@ -230,13 +231,13 @@ export async function searchSkills(
 ) {
   const limit = Math.min(Math.max(opts.limit || 20, 1), 100);
   const ftsQuery = opts.q ? buildFtsQuery(opts.q) : null;
-  const rows = await db.all<{
+  const rows = await sqlx.all<{
     agent_name: string;
     skill_name: string;
     skill_description: string | null;
     skill_tags: string;
     rank: number | null;
-  }>(sql`
+  }>(db, sql`
     SELECT
       a.name AS agent_name,
       ds.name AS skill_name,
@@ -387,7 +388,7 @@ export async function routeBySkill(
   // Guard the FTS MATCH: buildFtsQuery can yield '' after sanitization, and an
   // empty MATCH throws an fts5 syntax error — skip the rank queries in that case.
   const [skillFtsRaw, agentFtsRaw, baseRows] = await Promise.all([
-    ftsQuery ? db.all<{ skill_id: string; rank: number }>(sql`
+    ftsQuery ? sqlx.all<{ skill_id: string; rank: number }>(db, sql`
       SELECT ds.id AS skill_id, bm25(directory_skills_fts) AS rank
       FROM directory_skills_fts
       JOIN directory_skills ds ON ds.rowid = directory_skills_fts.rowid
@@ -395,7 +396,7 @@ export async function routeBySkill(
       WHERE directory_skills_fts MATCH ${ftsQuery}
         AND da.workspace_id = ${workspaceId}
     `) : Promise.resolve([] as { skill_id: string; rank: number }[]),
-    ftsQuery ? db.all<{ directory_agent_id: string; rank: number }>(sql`
+    ftsQuery ? sqlx.all<{ directory_agent_id: string; rank: number }>(db, sql`
       SELECT da.id AS directory_agent_id, bm25(directory_agents_fts) AS rank
       FROM directory_agents_fts
       JOIN directory_agents da ON da.rowid = directory_agents_fts.rowid

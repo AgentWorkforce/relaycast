@@ -3,6 +3,7 @@ import type { getDb } from '../db/index.js';
 import { agents, channels, messageLogs } from '../db/schema.js';
 import type { AtomicWrite } from '../ports/database.js';
 import { generateId } from './snowflake.js';
+import * as sqlx from '../db/sqlx.js';
 
 type Db = ReturnType<typeof getDb>;
 
@@ -380,7 +381,7 @@ export async function getAgentStats(
   windowDays = 7,
   limit = 20,
 ) {
-  const rows = await db.all<{
+  const rows = await sqlx.all<{
     agent_id: string;
     agent_name: string;
     message_count: number;
@@ -388,7 +389,7 @@ export async function getAgentStats(
     dm_count: number;
     avg_latency_ms: number;
     last_message_at: number;
-  }>(sql`
+  }>(db, sql`
     SELECT
       ml.agent_id AS agent_id,
       a.name AS agent_name,
@@ -424,7 +425,7 @@ export async function getCostStats(
   workspaceId: string,
   windowDays = 7,
 ) {
-  const rows = await db.all<{
+  const rows = await sqlx.all<{
     agent_id: string;
     agent_name: string;
     message_count: number;
@@ -432,7 +433,7 @@ export async function getCostStats(
     prompt_tokens: number;
     completion_tokens: number;
     total_tokens: number;
-  }>(sql`
+  }>(db, sql`
     SELECT
       ml.agent_id AS agent_id,
       a.name AS agent_name,

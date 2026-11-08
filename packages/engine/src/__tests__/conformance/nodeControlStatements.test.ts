@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { brandSqliteEngineDb } from '../../adapters/sqlite-handle.js';
 import { drizzle } from 'drizzle-orm/better-sqlite3';
 import * as schema from '../../db/schema.js';
 import { makeNodeStack, createWorkspace, registerAgent, FakeSocket, type TestStack } from './harness.js';
@@ -54,9 +55,9 @@ describe('node control D1 statements per frame', () => {
       if (!sql.startsWith('EXPLAIN')) statements.push(label(sql));
       return prepare(sql);
     }) as typeof sqlite.prepare;
-    const db = drizzle(sqlite, { schema, logger: { logQuery: (sql, params) => {
+    const db = brandSqliteEngineDb(drizzle(sqlite, { schema, logger: { logQuery: (sql, params) => {
       raw.push({ sql, params });
-    } } }) as unknown as EngineDb;
+    } } })) as unknown as EngineDb;
     return {
       db,
       raw,

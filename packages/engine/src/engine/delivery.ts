@@ -25,6 +25,7 @@ import { withEngineOperation } from '../lib/engineDiagnostics.js';
 import { advanceDmParticipantReadCursor } from './receipt.js';
 import { notifySenderDeliveryReceipts } from './deliveryReceipts.js';
 import type { EventDispatchEngine } from './eventDispatch.js';
+import * as sqlx from '../db/sqlx.js';
 
 type Db = ReturnType<typeof getDb>;
 
@@ -550,7 +551,7 @@ export async function markDeliveriesDelivered(
   // status UPDATE chooses a workspace/status index and scans retained history.
   for (let offset = 0; offset < ids.length; offset += 50) {
     const page = ids.slice(offset, offset + 50);
-    const updated = await db.all<{ id: string }>(sql`
+    const updated = await sqlx.all<{ id: string }>(db, sql`
       UPDATE deliveries INDEXED BY idx_deliveries_id_lookup
       SET status = 'delivered', next_attempt_at = NULL, last_dispatch_error = NULL,
           delivered_at = ${now}, updated_at = ${now}

@@ -1,6 +1,7 @@
 import { sql } from 'drizzle-orm';
 import type { getDb } from '../db/index.js';
 import { isSafeExternalUrl } from '../lib/ssrf.js';
+import * as sqlx from '../db/sqlx.js';
 
 type Db = ReturnType<typeof getDb>;
 
@@ -43,7 +44,7 @@ async function pingExternalAgent(externalUrl: string): Promise<boolean> {
 }
 
 async function listActiveA2aAgents(db: Db): Promise<ActiveA2aAgentRow[]> {
-  const rows = await db.all<ActiveA2aAgentRow>(sql`
+  const rows = await sqlx.all<ActiveA2aAgentRow>(db, sql`
     SELECT id, workspace_id, relay_agent_id, external_url, health_failures
     FROM a2a_agents
     WHERE status = 'active'
@@ -58,7 +59,7 @@ async function updateA2aAgentHealth(
   status: 'active' | 'suspended',
   healthFailures: number,
 ): Promise<void> {
-  await db.run(sql`
+  await sqlx.run(db, sql`
     UPDATE a2a_agents
     SET status = ${status}, health_failures = ${healthFailures}, last_health = unixepoch(), updated_at = unixepoch()
     WHERE id = ${agentId}

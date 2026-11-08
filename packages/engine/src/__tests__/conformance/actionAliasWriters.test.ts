@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { brandSqliteEngineDb } from '../../adapters/sqlite-handle.js';
 import { makeNodeStack, createWorkspace, registerAgent, FakeSocket, type TestStack } from './harness.js';
 import { deleteAction, registerAction } from '../../engine/action.js';
 import { deregisterProvider, heartbeatNode } from '../../engine/node.js';
@@ -118,7 +119,7 @@ describe('action alias writers', () => {
     const etl: Cap = { name: 'etl', kind: 'action', global: true };
     const a = await provide(ws.workspaceId, 'node_a', [etl], 'py');
     // A handle without transactions, like D1: a failed write is not rolled back.
-    const d1Like = drizzle(stack.runtime.handle.sqlite, { schema }) as unknown as EngineDb;
+    const d1Like = brandSqliteEngineDb(drizzle(stack.runtime.handle.sqlite, { schema })) as unknown as EngineDb;
     const beat = () => heartbeatNode(d1Like, ws.workspaceId, 'node_b', 'py', {
       type: 'node.heartbeat', load: 0, active_agents: 0, handlers_live: true, capabilities: [etl], max_agents: 4,
     });
@@ -142,7 +143,7 @@ describe('action alias writers', () => {
 
     // node_a drops `global` on etl, then claims sync, which node_b owns. The
     // pass fails without rollback, as on D1, after the etl demotion committed.
-    const d1Like = drizzle(stack.runtime.handle.sqlite, { schema }) as unknown as EngineDb;
+    const d1Like = brandSqliteEngineDb(drizzle(stack.runtime.handle.sqlite, { schema })) as unknown as EngineDb;
     await expect(heartbeatNode(d1Like, ws.workspaceId, 'node_a', 'py', {
       type: 'node.heartbeat', load: 0, active_agents: 0, handlers_live: true, max_agents: 4,
       capabilities: [{ name: 'etl', kind: 'action', global: false }, { name: 'sync', kind: 'action', global: true }],
@@ -170,7 +171,7 @@ describe('action alias writers', () => {
 
     // Without rollback (D1), an order-dependent pass would demote, hand the
     // alias to node_b, then fail reclaiming it.
-    const d1Like = drizzle(stack.runtime.handle.sqlite, { schema }) as unknown as EngineDb;
+    const d1Like = brandSqliteEngineDb(drizzle(stack.runtime.handle.sqlite, { schema })) as unknown as EngineDb;
     await heartbeatNode(d1Like, ws.workspaceId, 'node_a', 'py', {
       type: 'node.heartbeat', load: 0, active_agents: 0, handlers_live: true, max_agents: 4,
       capabilities: [{ name: 'etl', kind: 'action', global: false }, { name: 'sync', kind: 'action' }, { name: 'etl', kind: 'action', global: true }],

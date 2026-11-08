@@ -1,6 +1,7 @@
 import { drizzle } from 'drizzle-orm/sqlite-proxy';
 import * as schema from '../../db/schema.js';
 import type { EngineDb, TransactionCapability } from '../../ports/database.js';
+import { brandSqliteEngineDb } from '../sqlite-handle.js';
 
 /** A value SQLite can bind or return through a durable actor's database. */
 export type SqliteValue = string | number | bigint | Uint8Array | null;
@@ -112,6 +113,7 @@ export function createActorEngineDb(
     },
     { schema },
   ) as unknown as ActorEngineDb;
+  brandSqliteEngineDb(db);
   db.withTransaction = <T>(fn: (tx: EngineDb) => Promise<T>): Promise<T> => {
     options.onGroupStart?.();
     return sql.transaction(() => fn(db)).catch((error: unknown) => {
