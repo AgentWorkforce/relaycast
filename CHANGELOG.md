@@ -16,7 +16,11 @@ This project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 Packages without a separate changelog are covered by the cross-package notes below.
 
-## [Unreleased - Patch]
+## [Unreleased - Minor]
+
+### Added
+
+- Hosts can supply a message-search backend through the optional `search` engine dependency (`SearchIndex`); without it, existing SQLite search behavior is unchanged. Configured backend errors propagate without falling back to SQLite.
 
 ### Fixed
 
