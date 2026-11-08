@@ -9,5 +9,6 @@ export async function searchMessages(
   opts: MessageSearchOptions,
   searchIndex?: SearchIndex,
 ) {
-  return (searchIndex ?? new SqliteSearchIndex(db)).searchMessages({ ...opts, workspaceId });
+  const limit = Math.min(Math.max(opts.limit || 20, 1), 100);
+  return (searchIndex ?? new SqliteSearchIndex(db)).searchMessages({ ...opts, limit, workspaceId });
 }

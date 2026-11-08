@@ -10,6 +10,8 @@ export interface MessageSearchOptions {
 
 export interface MessageSearchQuery extends MessageSearchOptions {
   workspaceId: string;
+  /** Engine-normalized result cap: defaults to 20, bounded to 1–100. */
+  limit: number;
 }
 
 /** Internal result includes visibility metadata which the HTTP route filters before returning. */
@@ -23,6 +25,9 @@ export interface MessageSearchResult {
   agent_name: string;
   text: string;
   created_at: string;
+  /** Lower is more relevant; results are ordered best first. SQLite exposes raw
+   * negative bm25 values. Magnitudes are backend-specific and cannot be compared
+   * across backends; adapters must retain the lower-is-better direction. */
   relevance_score: number;
 }
 

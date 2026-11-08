@@ -11,7 +11,7 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Added
 
-- Hosts can provide a message-search adapter while existing SQLite-backed deployments retain their default search behavior.
+- Hosts can supply a message-search backend through the optional `search` engine dependency (`SearchIndex`); without it, existing SQLite search behavior is unchanged. Configured backend errors propagate without falling back to SQLite.
 
 ### Fixed
 

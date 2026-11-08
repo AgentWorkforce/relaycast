@@ -49,6 +49,19 @@ describe('message search adapter boundary', () => {
     });
   });
 
+  it.each([['', 20], ['&limit=500', 100], ['&limit=1', 1]])(
+    'normalizes the shared adapter result limit for %s', async (suffix, limit) => {
+      const workspace = await createWorkspace(stack.app, 'search-port-limit');
+      const searchMessages = vi.fn(async (_query: MessageSearchQuery) => []);
+      const app = createEngine({ ...stack.runtime.deps, search: { searchMessages } });
+      const response = await app.request('/v1/search?q=needle' + suffix, {
+        headers: { authorization: `Bearer ${workspace.workspaceKey}` },
+      });
+      expect(response.status).toBe(200);
+      expect(searchMessages).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ limit }));
+    },
+  );
+
   it('filters mixed adapter results for restricted observers and removes internal fields', async () => {
     const workspace = await createWorkspace(stack.app, 'search-port-observer');
     const alice = await registerAgent(stack.app, workspace.workspaceKey, 'alice');
