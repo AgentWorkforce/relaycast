@@ -39,10 +39,12 @@ Restores source peer/dev flag values and absence while preserving refreshed vers
 **Files changed:** 4
 
 
-Validation commands (run from the repository root):
+Historical evidence for product commit `de4f3886260a2bfa251ebe36000b8886143754d8`, based on `a14e189ef7a4cf02baba6b094e7c7231c1c4b179`. The later prevalidated-release trajectory supersedes this implementation. Validation commands ran from that product checkout before commit:
 - node --test --test-name-pattern='restores source metadata|restores peer and dev' scripts/release-workflow-contract.test.mjs — 2 passed.
 - node --test scripts/npm-dist-tag.test.mjs scripts/refresh-docker-lock.test.mjs — 21 passed.
 - node --check scripts/restore-release-lock-metadata.mjs and git diff --check — passed.
 - npm run test:release — attempted; Windows path/newline assertions failed and Git fixtures stalled, so the run was stopped. This is not a full-suite pass.
 
 Separate artifact replay: build-output artifact13610451059 from run42461576035 was downloaded without reading CI logs. A disposable fixture applied the fixed restoration to its lockfile, restored26flags, and compared it byte-for-byte with the original validator expectedRootLock transformation for12.9.0. The existing assertLockDiffIsReleaseOnly also accepted it. The committed nested-esbuild regression exercises the same dev-flag loss; no machine-local script is required to run that regression. No release/remote tag was created during replay.
+
+Independent reviews of this historical implementation were recorded by `review_final_contract` and `review_relay_fix` on PR640 revision `9eabbf14ebd1689b6d9fc50bb1f92cad8b4bd5f4` (implementation unchanged from `de4f388`): https://github.com/AgentWorkforce/relaycast/pull/640#pullrequestreview-5818532189 and https://github.com/AgentWorkforce/relaycast/pull/640#pullrequestreview-5818533096.
