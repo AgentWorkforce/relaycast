@@ -74,12 +74,14 @@ jobs:
       new_version: ${{ steps.bump.outputs.new_version }}
       is_prerelease: ${{ steps.bump.outputs.is_prerelease }}
       effective_tag: ${{ steps.bump.outputs.effective_tag }}
-      release_date: ${{ steps.bump.outputs.release_date }}
+      release_date: ${{ steps.prepare.outputs.release_date }}
+      prepared_record_sha256: ${{ steps.prepare.outputs.record_sha256 }}
 
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
         with:
+          fetch-depth: 0
           token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Setup Node.js
@@ -90,9 +92,8 @@ jobs:
           cache-dependency-path: package-lock.json
           registry-url: "https://registry.npmjs.org"
 
-      # The publish job below already runs on npm 11. Use it here too so the
-      # lockfile-less reinstall after the version bump resolves with the same
-      # npm that publishes, instead of Node 22's bundled npm 10.
+      # Pin build/install and publish to the same npm version. Release version
+      # changes use the source lock graph rather than a fresh dependency solve.
       - name: Setup npm
         run: npm install -g npm@11.19.1
 
@@ -121,9 +122,10 @@ jobs:
             NEW_VERSION="$CUSTOM_VERSION"
             echo "Setting version to custom value: $NEW_VERSION"
           else
-            # Use npm version on types to compute the new version
+            # Compute the new version without rewriting the source lockfile
+            # or running lifecycle hooks; workspace metadata is projected below.
             cd packages/types
-            npm version "$VERSION_TYPE" --no-git-tag-version --preid=beta
+            npm version "$VERSION_TYPE" --no-git-tag-version --package-lock=false --ignore-scripts --preid=beta
             NEW_VERSION=$(node -p "require('./package.json').version")
             cd ../..
             echo "Bumped version: $VERSION_TYPE -> $NEW_VERSION"
@@ -193,12 +195,10 @@ jobs:
               console.log('CLI_VERSION -> ' + version);
             }
 
-            // Self-host container version sources. docker/package-lock.json
-            // is only given a placeholder version-field bump here: it pins
-            // the *published* npm registry artifact (resolved URL + integrity
-            // hash), which does not exist yet at this point in the release.
-            // create-release replaces this placeholder with a real refresh
-            // once publish-packages has actually published this version.
+            // Self-host container version sources. The lockfile gets a
+            // placeholder bump until packing supplies exact tarball integrities.
+            // Candidate preparation projects those immutable bytes before any
+            // package is published; it does not query the registry.
             const dockerfilePath = 'Dockerfile';
             const dockerfile = fs.readFileSync(dockerfilePath, 'utf8');
             const updatedDockerfile = dockerfile.replace(
@@ -232,7 +232,7 @@ jobs:
               dockerLock.packages['node_modules/@relaycast/engine'].version = version;
             }
             fs.writeFileSync(dockerLockPath, JSON.stringify(dockerLock, null, 2) + '\n');
-            console.log('docker/package-lock.json version fields -> ' + version + ' (placeholder; refreshed for real in create-release)');
+            console.log('docker/package-lock.json version fields -> ' + version + ' (placeholder; projected from packed provenance before publishing)');
 
             const runbookPath = 'RUNBOOK.md';
             let runbook = fs.readFileSync(runbookPath, 'utf8');
@@ -253,15 +253,8 @@ jobs:
             console.log('RUNBOOK.md engine-version anchors -> ' + version);
           NODE
 
-      - name: Refresh lockfile after version bump
-        # Preserve the resolved dependency graph and update only the workspace
-        # metadata. Re-resolving from an empty lockfile can trip npm/arborist's
-        # `edgesOut` failure after every workspace version changes at once. npm
-        # may also rewrite peer/dev markers on optional platform packages; restore
-        # those source-tree facts so the release commit stays version-only.
-        run: |
-          npm install --package-lock-only --ignore-scripts
-          node scripts/restore-release-lock-metadata.mjs
+      - name: Project release lockfile without dependency resolution
+        run: node scripts/project-release-lock.mjs --version "${{ steps.bump.outputs.new_version }}"
 
       - name: Validate release version, changelog, and generated-source parity
         env:
@@ -278,9 +271,6 @@ jobs:
         run: npx turbo test
         env:
           DO_NOT_TRACK: "1"
-
-      - name: Validate release lock metadata before packing
-        run: node scripts/restore-release-lock-metadata.mjs --check
 
       # Publish the exact bytes produced by this immutable source checkout.
       # The manifest is also used by resumed matrix jobs and the release tag
@@ -331,6 +321,18 @@ jobs:
             }, null, 2) + '\n');
           NODE
 
+      - name: Prepare and validate release candidate
+        id: prepare
+        run: |
+          node scripts/prepared-release.mjs prepare \
+            --manifest release-provenance.json \
+            --version "${{ steps.bump.outputs.new_version }}" \
+            --dist-tag "${{ steps.bump.outputs.effective_tag }}" \
+            --date "${{ steps.bump.outputs.release_date }}" \
+            --bundle prepared-release.bundle \
+            --record prepared-release.json \
+            --github-output "$GITHUB_OUTPUT"
+
       - name: Upload build artifacts
         uses: actions/upload-artifact@v4
         with:
@@ -348,6 +350,8 @@ jobs:
             RUNBOOK.md
             release-provenance.json
             release-artifacts/
+            prepared-release.bundle
+            prepared-release.json
           retention-days: 1
 
   # Publish all packages in parallel
@@ -574,7 +578,7 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
         with:
-          fetch-depth: 0
+          fetch-depth: 1
           token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Download build artifacts
@@ -600,170 +604,26 @@ jobs:
             --version "${{ needs.build.outputs.new_version }}" \
             --dist-tag "${{ needs.build.outputs.effective_tag }}"
 
-      # A retry can cross a UTC date boundary. Validate an already-created
-      # annotated tag before touching changelogs, then restore its exact
-      # release commit/tree so the retry cannot regenerate a date-sensitive
-      # release tree or compare it against the pre-release checkout.
-      - name: Reuse an existing release tag before cutting changelogs
+      # Import the exact candidate validated before publication. The record
+      # digest comes from a job output, independently of the artifact files.
+      - name: Restore validated release candidate
         run: |
-          NEW_VERSION="${{ needs.build.outputs.new_version }}"
-          TAG="v${NEW_VERSION}"
-          SOURCE_COMMIT="$(node -e 'const p=require("./release-provenance.json"); process.stdout.write(p.sourceCommit)')"
-          SOURCE_TREE="$(node -e 'const p=require("./release-provenance.json"); process.stdout.write(p.sourceTree)')"
-          DIST_TAG="$(node -e 'const p=require("./release-provenance.json"); process.stdout.write(p.distTag)')"
-          PROVENANCE_DIGEST="$(node scripts/release-provenance.mjs digest --manifest release-provenance.json)"
-          git fetch --tags origin
-          if git show-ref --verify --quiet "refs/tags/${TAG}"; then
-            node scripts/validate-release-tag.mjs \
-              --tag "$TAG" \
-              --source-commit "$SOURCE_COMMIT" \
-              --source-tree "$SOURCE_TREE" \
-              --version "$NEW_VERSION" \
-              --dist-tag "$DIST_TAG" \
-              --provenance-digest "$PROVENANCE_DIGEST" \
-              --provenance-manifest release-provenance.json \
-              --print-release-date > "$RUNNER_TEMP/relaycast-release-date"
-            echo "RELEASE_DATE=$(cat \"$RUNNER_TEMP/relaycast-release-date\")" >> "$GITHUB_ENV"
-            echo "${TAG} metadata is valid; reusing its exact release commit/tree"
-            git reset --hard "${TAG}^{commit}"
-            echo "REUSE_EXISTING_RELEASE_TAG=true" >> "$GITHUB_ENV"
-          fi
+          node scripts/prepared-release.mjs restore \
+            --manifest release-provenance.json \
+            --version "${{ needs.build.outputs.new_version }}" \
+            --dist-tag "${{ needs.build.outputs.effective_tag }}" \
+            --bundle prepared-release.bundle \
+            --record prepared-release.json \
+            --expected-record-sha256 "${{ needs.build.outputs.prepared_record_sha256 }}" \
+            --github-env "$GITHUB_ENV"
 
-      # Move the curated [Unreleased] entries under the version being released
-      # and restore a bare [Unreleased], so a published version always has a
-      # heading. Prereleases are left pending.
-      - name: Cut changelogs
-        run: |
-          if [ "${REUSE_EXISTING_RELEASE_TAG:-false}" = "true" ]; then
-            echo "existing release tag restored; leaving its changelog tree unchanged"
-          else
-            node scripts/cut-changelog.mjs --version "${{ needs.build.outputs.new_version }}" --date "${{ needs.build.outputs.release_date }}"
-          fi
-
-      # docker/package-lock.json only got a placeholder version-field bump in
-      # the build job (the published artifact it needs to resolve against
-      # did not exist yet). verify-publish has now confirmed every package,
-      # including @relaycast/engine, is live at this version, so refresh it
-      # for real before this becomes the tagged, committed state.
-      - name: Refresh self-host image lockfile
-        working-directory: docker
-        run: |
-          if [ "${REUSE_EXISTING_RELEASE_TAG:-false}" = "true" ]; then
-            echo "existing release tag restored; leaving its lockfile tree unchanged"
-          else
-            # Do not run npm update here: it can refresh unrelated semver
-            # ranges (for example zod), producing a release tree that fails
-            # exact validation despite correct package artifacts. Project the
-            # immutable provenance entries into the lockfile instead.
-            node "$GITHUB_WORKSPACE/scripts/refresh-docker-lock.mjs" \
-              --manifest "$GITHUB_WORKSPACE/release-provenance.json" \
-              --version "${{ needs.build.outputs.new_version }}"
-          fi
-
-      - name: Re-validate release contract with the refreshed lockfile
-        run: node scripts/check-release-contract.mjs --version "${{ needs.build.outputs.new_version }}"
-
-      - name: Commit and tag
+      - name: Publish prepared tag and reconcile main
         run: |
           git config user.name "GitHub Actions"
           git config user.email "actions@github.com"
-
           NEW_VERSION="${{ needs.build.outputs.new_version }}"
-
-          git add package.json package-lock.json packages/*/package.json
-          git add packages/sdk-typescript/src/version.ts packages/cli/src/version.ts
-          git add Dockerfile docker/package.json docker/package-lock.json RUNBOOK.md
-          git add CHANGELOG.md packages/*/CHANGELOG.md
-          if ! git diff --staged --quiet; then
-            git commit -m "chore(release): v${NEW_VERSION}"
-          fi
-
-          # Tag and push the tag immediately, before any attempt below to
-          # reconcile with a possibly-moved main: the tag must point at
-          # exactly the tree that was built, tested, published, and verified
-          # above — never at a tree later altered by rebasing this release
-          # commit onto a moved main, which would tag different code than
-          # what was actually tested and published. A tag is
-          # content-addressed and does not need to be a fast-forward of
-          # anything, so this is always safe to do first.
-          SOURCE_COMMIT="$(node -e 'const p=require("./release-provenance.json"); process.stdout.write(p.sourceCommit)')"
-          SOURCE_TREE="$(node -e 'const p=require("./release-provenance.json"); process.stdout.write(p.sourceTree)')"
-          DIST_TAG="$(node -e 'const p=require("./release-provenance.json"); process.stdout.write(p.distTag)')"
-          RELEASE_DATE="${RELEASE_DATE:-${{ needs.build.outputs.release_date }}}"
-          PROVENANCE_DIGEST="$(node scripts/release-provenance.mjs digest --manifest release-provenance.json)"
           TAG="v${NEW_VERSION}"
-          CREATED_LOCAL_TAG=false
-          TAG_MESSAGE_FILE="$(mktemp)"
-          cat > "$TAG_MESSAGE_FILE" <<EOF
-          Release v${NEW_VERSION}
-
-          Relaycast-NPM-Dist-Tag: ${DIST_TAG}
-          Relaycast-Source-Commit: ${SOURCE_COMMIT}
-          Relaycast-Source-Tree: ${SOURCE_TREE}
-          Relaycast-Release-Date: ${RELEASE_DATE}
-          Relaycast-Package-Provenance-SHA256: ${PROVENANCE_DIGEST}
-          EOF
-          git fetch --tags origin
-          if git show-ref --verify --quiet "refs/tags/${TAG}"; then
-            if [ "$(git cat-file -t "refs/tags/${TAG}")" != "tag" ]; then
-              echo "::error::${TAG} is lightweight; refusing to reuse it"
-              exit 1
-            fi
-            if [ "$(git rev-parse "$(printf '%s^{tree}' "$TAG")")" != "$(git rev-parse "$(printf '%s^{tree}' HEAD)")" ]; then
-              echo "::error::${TAG} points at a different release tree"
-              exit 1
-            fi
-            if [ "$(git for-each-ref --format='%(contents:subject)' "refs/tags/${TAG}")" != "Release v${NEW_VERSION}" ]; then
-              echo "::error::${TAG} has unexpected release metadata"
-              exit 1
-            fi
-            TAG_CONTENT="$(git cat-file tag "${TAG}")"
-            if ! grep -Fqx "Relaycast-NPM-Dist-Tag: ${DIST_TAG}" <<<"$TAG_CONTENT"; then
-              echo "::error::${TAG} npm dist-tag metadata does not match"
-              exit 1
-            fi
-            if ! grep -Fqx "Relaycast-Source-Commit: ${SOURCE_COMMIT}" <<<"$TAG_CONTENT"; then
-              echo "::error::${TAG} source commit metadata does not match"
-              exit 1
-            fi
-            if ! grep -Fqx "Relaycast-Source-Tree: ${SOURCE_TREE}" <<<"$TAG_CONTENT"; then
-              echo "::error::${TAG} source tree metadata does not match"
-              exit 1
-            fi
-            if ! grep -Fqx "Relaycast-Package-Provenance-SHA256: ${PROVENANCE_DIGEST}" <<<"$TAG_CONTENT"; then
-              echo "::error::${TAG} package provenance does not match"
-              exit 1
-            fi
-            echo "${TAG} is the matching annotated release tag; reusing it safely"
-            # A re-run creates the same release tree but a different commit
-            # timestamp. Reuse the already-tagged commit so main and the
-            # GitHub Release continue to point at one stable release identity.
-            git reset --hard "${TAG}^{commit}"
-          else
-            git tag -a "${TAG}" -F "$TAG_MESSAGE_FILE"
-            CREATED_LOCAL_TAG=true
-          fi
-
-          # The local tag is the first object that binds the release tree to
-          # the provenance digest. Validate the exact same release transform
-          # used on retry before any remote ref can be created. If this run
-          # created a bad local tag, remove it; never delete a fetched tag.
-          if ! node scripts/validate-release-tag.mjs \
-            --tag "$TAG" \
-            --source-commit "$SOURCE_COMMIT" \
-            --source-tree "$SOURCE_TREE" \
-            --version "$NEW_VERSION" \
-            --dist-tag "$DIST_TAG" \
-            --provenance-digest "$PROVENANCE_DIGEST" \
-            --provenance-manifest release-provenance.json; then
-            if [ "$CREATED_LOCAL_TAG" = "true" ]; then
-              git tag -d "$TAG"
-            fi
-            echo "::error::${TAG} failed exact local validation; no remote tag was pushed"
-            exit 1
-          fi
           git push origin "${TAG}"
-
           # Best-effort: land the same, already-tagged release commit on
           # main too. main can advance during the (multi-minute)
           # build/publish/verify sequence — e.g. a concurrent PR merge — so

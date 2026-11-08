@@ -403,32 +403,59 @@ describe("publish workflow safety contract", () => {
         validation > migrationImmutability &&
         publishJob > validation,
     );
-    assert.match(
-      jobBlock("create-release"),
-      /Re-validate release contract with the refreshed lockfile[\s\S]*check-release-contract\.mjs --version/,
+    const preparation = workflow.indexOf(
+      "node scripts/prepared-release.mjs prepare",
     );
-    for (const job of ["publish-packages", "verify-publish", "create-release"]) {
+    assert.ok(
+      preparation > validation && preparation < publishJob,
+      "the exact candidate must be prepared and validated before publication",
+    );
+    for (const job of [
+      "publish-packages",
+      "verify-publish",
+      "create-release",
+    ]) {
       assert.match(jobBlock(job), /release-provenance\.mjs release/);
-      assert.match(jobBlock(job), /--dist-tag "\$\{\{ needs\.build\.outputs\.effective_tag \}\}"/);
+      assert.match(
+        jobBlock(job),
+        /--dist-tag "\$\{\{ needs\.build\.outputs\.effective_tag \}\}"/,
+      );
     }
   });
 
-  it("carries generated source constants into the release commit", () => {
-    for (const file of [
-      "packages/sdk-typescript/src/version.ts",
-      "packages/cli/src/version.ts",
+  it("carries versioned source constants through the prepared candidate artifact", () => {
+    const build = jobBlock("build");
+    const preparation = build.indexOf(
+      "node scripts/prepared-release.mjs prepare",
+    );
+    assert.ok(preparation !== -1, "candidate preparation not found");
+    for (const [directory, variable, constant] of [
+      ["sdk-typescript", "sdkVersionPath", "SDK_VERSION"],
+      ["cli", "cliVersionPath", "CLI_VERSION"],
     ]) {
       assert.match(
-        workflow,
-        new RegExp(`path: \\|[\\s\\S]*?${file.replace(/\//g, "\\/")}`),
-        `${file} must be uploaded with build artifacts`,
+        build.slice(0, preparation),
+        new RegExp(
+          `path\\.join\\(packagesDir, '${directory}', 'src', 'version\\.ts'\\)`,
+        ),
+        `${directory}/src/version.ts must be versioned before the candidate is prepared`,
       );
       assert.match(
-        workflow,
-        new RegExp(`git add [^\\n]*${file.replace(/\//g, "\\/")}`),
-        `${file} must be staged in the release commit`,
+        build.slice(0, preparation),
+        new RegExp(
+          `writeFileSync\\(${variable}, 'export const ${constant} = '`,
+        ),
       );
     }
+    assert.match(
+      build.slice(preparation),
+      /path: \|[\s\S]*prepared-release\.bundle/,
+    );
+    assert.match(
+      build.slice(preparation),
+      /path: \|[\s\S]*prepared-release\.json/,
+    );
+    assert.match(jobBlock("create-release"), /prepared-release\.mjs restore/);
   });
 
   it("bumps the Docker lock root engine pin on the placeholder path", () => {
@@ -549,36 +576,59 @@ describe("publish workflow safety contract", () => {
     assert.match(verify, /dist\.integrity/);
   });
 
-  it("refreshes the Docker engine lock entry instead of trusting its placeholder version", () => {
-    const createRelease = jobBlock("create-release");
-    const refreshStart = createRelease.indexOf("- name: Refresh self-host image lockfile");
-    const validateStart = createRelease.indexOf(
-      "- name: Re-validate release contract with the refreshed lockfile",
-      refreshStart,
-    );
-    assert.ok(refreshStart !== -1, "Docker lock refresh step not found");
-    assert.ok(validateStart > refreshStart, "release validation must follow Docker lock refresh");
-
-    const refresh = createRelease.slice(refreshStart, validateStart);
-    assert.match(refresh, /working-directory: docker/);
-    assert.match(refresh, /refresh-docker-lock\.mjs/);
-    assert.doesNotMatch(refresh, /npm (?:install|update) --package-lock-only/);
-  });
-
-  it("restores source metadata after npm refreshes and checks it before packing", () => {
+  it("prepares the exact release candidate once after packing without a second build", () => {
     const build = jobBlock("build");
-    const refresh = build.indexOf("npm install --package-lock-only --ignore-scripts");
-    const restore = build.indexOf("restore-release-lock-metadata.mjs", refresh);
-    const validate = build.indexOf("Validate release version, changelog, and generated-source parity");
-    assert.ok(refresh !== -1, "workspace lock refresh not found");
-    assert.ok(restore > refresh, "metadata restore must follow npm's lock refresh");
-    assert.ok(validate > restore, "release validation must follow metadata restoration");
-    const check = build.indexOf("node scripts/restore-release-lock-metadata.mjs --check");
-    assert.ok(check > build.indexOf("run: npx turbo test"), "metadata check must follow build and tests");
-    assert.ok(check < build.indexOf("- name: Pack packages"), "metadata check must precede packing");
+    const pack = build.indexOf("- name: Pack packages");
+    const prepare = build.indexOf("node scripts/prepared-release.mjs prepare");
+    assert.ok(
+      pack !== -1 && prepare > pack,
+      "candidate preparation must follow packing",
+    );
+    const upload = build.indexOf("- name: Upload build artifacts");
+    assert.ok(upload > prepare, "only a validated candidate may be uploaded");
+    assert.doesNotMatch(build.slice(prepare, upload), /continue-on-error/);
+    assert.equal((build.match(/prepared-release\.mjs prepare/g) ?? []).length, 1);
+    assert.equal((build.match(/run: npx turbo build/g) ?? []).length, 1);
+    assert.equal((build.match(/run: npx turbo test/g) ?? []).length, 1);
+    assert.equal((build.match(/- name: Pack packages/g) ?? []).length, 1);
+    assert.match(build, /fetch-depth: 0/);
+    assert.doesNotMatch(
+      build.slice(prepare),
+      /npm (?:ci|install|pack|view)|npx turbo (?:build|test)/,
+    );
+    assert.match(
+      build,
+      /prepared_record_sha256:.*steps\.prepare\.outputs\.record_sha256/,
+    );
+    assert.match(build, /release_date:.*steps\.prepare\.outputs\.release_date/);
   });
 
-  it("restores peer and dev metadata at their source JSON positions", () => {
+  it("keeps preparation integration fixtures in CI without adding release latency", () => {
+    const ciWorkflow = readFileSync(new URL("../.github/workflows/ci.yml", import.meta.url), "utf8");
+    assert.match(ciWorkflow, /npm run test:release-preparation\b/);
+    assert.doesNotMatch(workflow, /npm run test:release-preparation\b/);
+  });
+
+  it("projects source workspace versions without resolving or restoring dependency metadata", () => {
+    const build = jobBlock("build");
+    const versioning = build.indexOf("- name: Version all packages");
+    const project = build.indexOf("node scripts/project-release-lock.mjs");
+    const validate = build.indexOf("Validate release version, changelog, and generated-source parity");
+    const reinstall = build.indexOf("- name: Clean reinstall after version bump");
+    assert.ok(versioning !== -1 && project > versioning, "lock projection must follow workspace version edits");
+    assert.ok(validate > project, "parity validation must follow lock projection");
+    assert.ok(reinstall > validate, "clean install must use the validated projected lockfile");
+    assert.doesNotMatch(workflow, /npm (?:install|update)[^\n]*--package-lock-only/);
+    assert.doesNotMatch(workflow, /restore-release-lock-metadata\.mjs/);
+    assert.match(build.slice(project, validate), /--version/);
+    const npmVersion = build.match(/^\s*npm version[^\n]+/m)?.[0];
+    assert.ok(npmVersion, "workspace version computation not found");
+    assert.match(npmVersion, /--package-lock=false/);
+    assert.match(npmVersion, /--ignore-scripts/);
+  });
+
+
+  it("restores peer metadata at its source JSON position", () => {
     const root = mkdtempSync(path.join(tmpdir(), "relaycast-release-lock-metadata-"));
     try {
       const sourceLock = {
@@ -591,15 +641,6 @@ describe("publish workflow safety contract", () => {
             engines: { node: ">=22" },
             funding: { url: "https://example.test" },
           },
-          "node_modules/tsx/node_modules/@esbuild/linux-x64": {
-            version: "0.28.0",
-            dev: true,
-            optional: true,
-            resolved: "https://registry.example.test/esbuild.tgz",
-            integrity: "sha512-fixture",
-          },
-          "node_modules/false-markers": { version: "1.0.0", peer: false, dev: false },
-          "node_modules/absent-markers": { version: "1.0.0" },
         },
       };
       writeFileSync(path.join(root, "package-lock.json"), `${JSON.stringify(sourceLock, null, 2)}\n`);
@@ -612,22 +653,7 @@ describe("publish workflow safety contract", () => {
       const refreshedLock = structuredClone(sourceLock);
       refreshedLock.packages["packages/example"].version = "1.1.0";
       delete refreshedLock.packages["packages/example"].peer;
-      delete refreshedLock.packages["node_modules/tsx/node_modules/@esbuild/linux-x64"].dev;
-      refreshedLock.packages["node_modules/false-markers"].peer = true;
-      refreshedLock.packages["node_modules/false-markers"].dev = true;
-      refreshedLock.packages["node_modules/absent-markers"].peer = true;
-      refreshedLock.packages["node_modules/absent-markers"].dev = true;
       writeFileSync(path.join(root, "package-lock.json"), `${JSON.stringify(refreshedLock, null, 2)}\n`);
-
-      const beforeCheck = readFileSync(path.join(root, "package-lock.json"), "utf8");
-      const rejected = spawnSync(process.execPath, [restoreReleaseLockMetadata, "--check"], {
-        cwd: root,
-        encoding: "utf8",
-      });
-      assert.equal(rejected.status, 1, rejected.stderr);
-      assert.match(rejected.stderr, /Release lock metadata differs from source/);
-      assert.match(rejected.stderr, /@esbuild\/linux-x64\.dev/);
-      assert.equal(readFileSync(path.join(root, "package-lock.json"), "utf8"), beforeCheck);
 
       const restored = spawnSync(process.execPath, [restoreReleaseLockMetadata], {
         cwd: root,
@@ -641,12 +667,6 @@ describe("publish workflow safety contract", () => {
         readFileSync(path.join(root, "package-lock.json"), "utf8"),
         `${JSON.stringify(expectedLock, null, 2)}\n`,
       );
-      const accepted = spawnSync(process.execPath, [restoreReleaseLockMetadata, "--check"], {
-        cwd: root,
-        encoding: "utf8",
-      });
-      assert.equal(accepted.status, 0, accepted.stderr);
-      assert.equal(readFileSync(path.join(root, "package-lock.json"), "utf8"), `${JSON.stringify(expectedLock, null, 2)}\n`);
     } finally {
       removeTemporaryDirectory(root);
     }
@@ -667,63 +687,54 @@ describe("publish workflow safety contract", () => {
       tagPush < mainMerge,
       "the tag must be pushed before any attempt to reconcile the release commit with main",
     );
-    assert.match(createRelease, /git reset --hard "\$\{TAG\}\^\{commit\}"/);
+    assert.match(createRelease, /prepared-release\.mjs restore/);
     assert.match(createRelease, /git checkout --theirs/);
   });
 
-  it("validates a newly-created local tag before any remote tag push", () => {
+  it("restores the validated candidate before any remote tag push", () => {
     const createRelease = jobBlock("create-release");
-    const tagCreation = createRelease.indexOf('git tag -a "${TAG}"');
-    const exactValidation = createRelease.indexOf(
-      "if ! node scripts/validate-release-tag.mjs",
-      tagCreation,
+    const restore = createRelease.indexOf(
+      "node scripts/prepared-release.mjs restore",
     );
     const tagPush = createRelease.indexOf('git push origin "${TAG}"');
-    assert.ok(tagCreation !== -1, "local annotated tag creation not found");
-    assert.ok(exactValidation > tagCreation, "exact validation must follow local tag creation");
-    assert.ok(tagPush > exactValidation, "remote tag push must follow exact validation");
-    assert.doesNotMatch(
-      createRelease.slice(tagCreation, exactValidation),
-      /git push origin/,
+    const mainMerge = createRelease.indexOf("git merge --no-edit origin/main");
+    assert.ok(restore !== -1, "prepared candidate restore not found");
+    assert.ok(
+      tagPush > restore,
+      "remote tag push must follow prepared candidate verification",
     );
-    const validationBlock = createRelease.slice(exactValidation, tagPush);
-    assert.match(validationBlock, /--provenance-manifest release-provenance\.json/);
-    assert.match(validationBlock, /git tag -d "\$TAG"/);
-    assert.match(validationBlock, /no remote tag was pushed/);
-  });
-
-  it("validates and restores an existing tag before a cross-day changelog cut", () => {
-    const createRelease = jobBlock("create-release");
-    const reuse = createRelease.indexOf("Reuse an existing release tag before cutting changelogs");
-    const cut = createRelease.indexOf("Cut changelogs");
-    assert.ok(reuse !== -1, "pre-cut tag reuse step not found");
-    assert.ok(cut !== -1 && reuse < cut, "tag reuse must precede the date-sensitive changelog cut");
-    const reuseBlock = createRelease.slice(reuse, cut);
-    assert.match(reuseBlock, /validate-release-tag\.mjs/);
-    assert.match(reuseBlock, /--provenance-manifest release-provenance\.json/);
-    assert.doesNotMatch(reuseBlock, /--release-date/);
-    assert.doesNotMatch(reuseBlock, /--engine-integrity/);
-    assert.match(reuseBlock, /git reset --hard "\$\{TAG\}\^\{commit\}"/);
-    assert.match(reuseBlock, /REUSE_EXISTING_RELEASE_TAG=true/);
-    assert.match(
-      createRelease.slice(cut),
-      /existing release tag restored; leaving its changelog tree unchanged/,
-    );
-    assert.match(
-      createRelease.slice(cut),
-      /existing release tag restored; leaving its lockfile tree unchanged/,
-    );
-    assert.match(
-      reuseBlock,
-      /--print-release-date\s*> \"\$RUNNER_TEMP\/relaycast-release-date\"[\s\S]*RELEASE_DATE=\$\(cat \\\"\$RUNNER_TEMP\/relaycast-release-date\\\"\)/,
-      "tag reuse must export the validated annotated date for later steps",
+    assert.ok(
+      mainMerge > tagPush,
+      "main reconciliation must follow the exact prepared tag push",
     );
     assert.match(
       createRelease,
-      /RELEASE_DATE=\"\$\{RELEASE_DATE:-\$\{\{ needs\.build\.outputs\.release_date \}\}\}\"/,
-      "new tags may fall back to the build date",
+      /--expected-record-sha256 "\$\{\{ needs\.build\.outputs\.prepared_record_sha256 \}\}"/,
     );
-    assert.match(createRelease, /Relaycast-Release-Date: \$\{RELEASE_DATE\}/);
+    assert.match(createRelease, /--github-env "\$GITHUB_ENV"/);
+    assert.match(createRelease, /fetch-depth: 1/);
+    assert.doesNotMatch(
+      createRelease,
+      /git tag -a|validate-release-tag\.mjs|refresh-docker-lock\.mjs/,
+    );
+  });
+
+  it("does not regenerate or repack the candidate after publication", () => {
+    const createRelease = jobBlock("create-release");
+    const tagPush = createRelease.indexOf('git push origin "${TAG}"');
+    assert.ok(tagPush !== -1, "tag push not found");
+    // A later changelog recut is allowed only for best-effort main merge
+    // reconciliation; it must never alter the release tag or candidate.
+    const beforeTagPush = createRelease.slice(0, tagPush);
+    assert.doesNotMatch(
+      beforeTagPush,
+      /cut-changelog\.mjs|refresh-docker-lock\.mjs|npm (?:install|ci|pack|view)|npx turbo (?:build|test)/,
+    );
+    assert.doesNotMatch(
+      createRelease,
+      /prepared-release\.mjs prepare|git tag -a/,
+    );
+    assert.match(jobBlock("publish-packages"), /needs: build/);
   });
 
   it("preserves an annotated tag date across a validation retry after midnight", () => {

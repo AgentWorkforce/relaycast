@@ -25,7 +25,7 @@ Packages without a separate changelog are covered by the cross-package notes bel
 
 ### Fixed
 
-- npm releases preserve source lockfile `dev` and `peer` flags and check for metadata drift before publishing, preventing package publication from succeeding while release-tag validation rejects the lockfile.
+- Prevent lockfile drift from leaving published npm packages without a matching release tag and engine binaries.
 - Channel and thread realtime events retain arbitrary rich blocks across engine workspace frames and TypeScript node deliveries; DM transports preserve blocks when present.
 - Relayfile callbacks deliver events for embedded and internal path wildcards, including per-issue Linear files and Jira comment paths.
 - Relayfile deletion notifications reach subscribed agents, including typed provider removals without a record snapshot.
