@@ -1,5 +1,4 @@
-import { and, eq, gt, notExists, sql } from 'drizzle-orm';
-import type { SQLiteColumn, SQLiteTable } from 'drizzle-orm/sqlite-core';
+import { and, eq, gt, notExists, sql, type Column } from 'drizzle-orm';
 import { isArWorkspaceId, type CredentialKind } from '@relaycast/types';
 import { agents, credentialUpgrades, nodes, observerTokens, webhooks, workspaces } from '../db/schema.js';
 import type { EngineDb } from '../ports/database.js';
@@ -23,6 +22,9 @@ const PRINCIPALS = {
   webhook: { table: webhooks, id: webhooks.id, hash: webhooks.tokenHash },
 } as const;
 
+/** Principal tables whose credential hash can be upgraded. */
+type CredentialTable = typeof agents | typeof nodes | typeof observerTokens | typeof webhooks | typeof workspaces;
+
 /**
  * The grace record, inserted only when the principal now holds `arHash` (the
  * swap earlier in the same group matched) and no record for the legacy hash
@@ -30,9 +32,9 @@ const PRINCIPALS = {
  */
 function graceRecordAfterSwap(
   w: EngineDb,
-  table: SQLiteTable,
-  idColumn: SQLiteColumn,
-  hashColumn: SQLiteColumn,
+  table: CredentialTable,
+  idColumn: Column,
+  hashColumn: Column,
   row: {
     legacyHash: string;
     kind: CredentialKind;

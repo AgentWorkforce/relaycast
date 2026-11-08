@@ -1,7 +1,7 @@
 import { configureNodeLiveness, nodeLivenessAuthority } from './nodeLiveness.js';
 import { inheritCredentials } from '../auth/credentials.js';
 import { WorkspaceDeliveryCapacityError } from '../engine/workspaceDeliveryPolicy.js';
-import type { BatchItem } from 'drizzle-orm/batch';
+import type { SQLWrapper } from 'drizzle-orm';
 import type { BaseSQLiteDatabase } from 'drizzle-orm/sqlite-core';
 import type * as schema from '../db/schema.js';
 
@@ -68,9 +68,12 @@ export interface TransactionCapability {
  * A built-but-unexecuted Drizzle write statement.
  *
  * Drizzle query builders are lazy: constructing one issues no SQL until it is
- * awaited (it is a thenable) or handed to a D1-style `batch()`.
+ * awaited (it is a thenable) or handed to a D1-style `batch()`. Typed
+ * structurally (a thenable SQL wrapper) rather than as drizzle's
+ * `BatchItem<'sqlite'>`, so builders of any dialect qualify; a D1 handle's
+ * `batch()` receives the same builder objects at runtime.
  */
-export type AtomicWrite = BatchItem<'sqlite'> & PromiseLike<unknown>;
+export type AtomicWrite = SQLWrapper & PromiseLike<unknown>;
 
 /**
  * Build the full write list from the handle that will execute it.

@@ -1,6 +1,5 @@
-import { eq, sql, type SQL } from 'drizzle-orm';
+import { eq, sql, type Column, type SQL } from 'drizzle-orm';
 import { pruneBounded } from './boundedRetention.js';
-import type { SQLiteColumn } from 'drizzle-orm/sqlite-core';
 import type { EffectiveMessageRetention } from '@relaycast/types';
 import type { getDb } from '../db/index.js';
 import { workspaces } from '../db/schema.js';
@@ -138,13 +137,13 @@ export async function resolveEffectiveMessageRetention(
 }
 
 /** Numeric `column >= snowflakeIdLowerBound(cutoff)` for decimal TEXT ids. */
-export function atOrAfterSnowflake(column: SQLiteColumn, cutoffMs: number): SQL {
+export function atOrAfterSnowflake(column: Column, cutoffMs: number): SQL {
   const bound = snowflakeIdLowerBound(cutoffMs);
   return sql`(length(${column}), ${column}) >= (${bound.length}, ${bound})`;
 }
 
 /** Numeric `column > cursor` for decimal TEXT snowflake ids. */
-export function afterSnowflake(column: SQLiteColumn, cursor: string): SQL {
+export function afterSnowflake(column: Column, cursor: string): SQL {
   return sql`(length(${column}), ${column}) > (${cursor.length}, ${cursor})`;
 }
 
