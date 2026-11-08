@@ -21,9 +21,9 @@ import * as sqlx from '../db/sqlx.js';
 export async function withSeqLock<T>(
   db: EngineDb,
   target: sqlx.SeqLockTarget | readonly sqlx.SeqLockTarget[],
-  fn: (db: EngineDb) => Promise<T>,
+  fn: (db: EngineDb) => PromiseLike<T>,
 ): Promise<T> {
-  if (sqlx.isNoopLock(db)) return fn(db);
+  if (sqlx.isNoopLock(db)) return await fn(db);
   const targets = Array.isArray(target) ? target as readonly sqlx.SeqLockTarget[] : [target as sqlx.SeqLockTarget];
   const locked = async (tx: EngineDb) => {
     for (const each of targets) await sqlx.run(tx, sqlx.lockSeq(tx, each));

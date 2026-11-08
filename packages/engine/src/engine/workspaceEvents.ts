@@ -3,6 +3,7 @@ import type { SQL } from 'drizzle-orm';
 import { workspaceEvents } from '../db/tables.js';
 import type { EngineDb } from '../ports/database.js';
 import * as sqlx from '../db/sqlx.js';
+import { withSeqLock } from './seqLock.js';
 
 /** Default page size for {@link listWorkspaceEvents}. */
 export const WORKSPACE_EVENT_LIST_DEFAULT_LIMIT = 200;
@@ -42,7 +43,19 @@ function nextSeqSql(workspaceId: string) {
   )`;
 }
 
-/** Build a strict append for callers that atomically admit the event with a mutation. */
+/**
+ * The sequence lock that serializes `nextSeqSql` for one workspace on
+ * PostgreSQL (a no-op on SQLite, whose writers are already serialized).
+ */
+function workspaceSeqLock(workspaceId: string): sqlx.SeqLockTarget {
+  return { kind: 'workspace_event', workspaceId };
+}
+
+/**
+ * Build a strict append for callers that atomically admit the event with a mutation.
+ * On PostgreSQL wrap it in `seqLockedWrite(db, { kind: 'workspace_event', workspaceId }, ...)`
+ * so the per-workspace sequence lock is taken in the same transaction.
+ */
 export function buildWorkspaceEventWrite(db: EngineDb, workspaceId: string, input: WorkspaceEventInput) {
   return db.insert(workspaceEvents).values({
     workspaceId, seq: nextSeqSql(workspaceId), type: input.type,
@@ -67,7 +80,7 @@ export async function appendWorkspaceEvent(
   input: WorkspaceEventInput,
 ): Promise<number | null> {
   try {
-    const [row] = await buildWorkspaceEventWrite(db, workspaceId, input);
+    const [row] = await withSeqLock(db, workspaceSeqLock(workspaceId), (tx) => buildWorkspaceEventWrite(tx, workspaceId, input));
     return row?.seq ?? null;
   } catch (err) {
     console.warn('[workspace.events] append failed', {
@@ -106,7 +119,8 @@ export async function appendWorkspaceEventBatch(
       // the existing (workspace_id, seq) key once per distinct workspace instead.
       // Materialize before inserting so every event uses the same base even if
       // SQLite would otherwise inline the CTE and observe this batch's inserts.
-      const rows = await sqlx.all<{ workspace_id: string; seq: number }>(db, sql`
+      const locks = [...new Set(batch.map((event) => event.workspaceId))].sort().map(workspaceSeqLock);
+      const rows = await withSeqLock(db, locks, (tx) => sqlx.all<{ workspace_id: string; seq: number }>(tx, sql`
         WITH
           input_events(global_ord, workspace_id, type, channel_id, payload) AS (VALUES ${values}),
           ranked AS (
@@ -141,7 +155,7 @@ export async function appendWorkspaceEventBatch(
         INNER JOIN bases ON bases.workspace_id = ranked.workspace_id
         ORDER BY ranked.global_ord
         RETURNING workspace_id, seq
-      `);
+      `));
       if ((rows ?? []).length !== batch.length) {
         throw new Error(`expected ${batch.length} appended events, received ${(rows ?? []).length}`);
       }
@@ -271,7 +285,7 @@ export async function appendAndPublishWorkspaceEventWhen(
 ): Promise<boolean> {
   let seq: number;
   try {
-    const rows = await sqlx.all<{ seq: number }>(deps.db, sql`
+    const rows = await withSeqLock(deps.db, workspaceSeqLock(workspaceId), (tx) => sqlx.all<{ seq: number }>(tx, sql`
       INSERT INTO workspace_events (workspace_id, seq, type, channel_id, payload)
       SELECT
         ${workspaceId},
@@ -281,7 +295,7 @@ export async function appendAndPublishWorkspaceEventWhen(
         ${JSON.stringify(input.payload)}
       WHERE ${predicate}
       RETURNING seq
-    `);
+    `));
     const row = rows?.[0];
     if (!row) return false;
     seq = row.seq;
