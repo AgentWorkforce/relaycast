@@ -106,7 +106,7 @@ describe('PostgreSQL SQLSTATE decoding', () => {
         }
         for (const pk of config.primaryKeys) expected[serverName(pk.getName())] = [config.name, pk.columns.map((c) => c.name)];
         for (const unique of config.uniqueConstraints) {
-          expected[serverName(unique.getName())] = [config.name, unique.columns.map((c) => c.name)];
+          expected[serverName(unique.getName() ?? "")] = [config.name, unique.columns.map((c) => c.name)];
         }
         for (const index of config.indexes) {
           if (!index.config.unique) continue;

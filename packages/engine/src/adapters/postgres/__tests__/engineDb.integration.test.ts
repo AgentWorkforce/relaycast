@@ -7,6 +7,7 @@
 import { sql } from "drizzle-orm";
 import type pg from "pg";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
+import type { EngineDb } from "../../../ports/database.js";
 import { loadPostgresConfig, type PostgresMode } from "../config.js";
 import { loadBundledPostgresMigrations, runPostgresMigrations } from "../migrate.js";
 import { openPostgresPool } from "../pool.js";
@@ -32,8 +33,8 @@ async function freshModules() {
 }
 
 /** The settled rejection of `promise` (fails the test if it resolves). */
-async function rejection(promise: Promise<unknown>): Promise<unknown> {
-  return promise.then(
+async function rejection(promise: PromiseLike<unknown>): Promise<unknown> {
+  return Promise.resolve(promise).then(
     () => expect.fail("expected a rejection"),
     (err: unknown) => err,
   );
@@ -96,7 +97,8 @@ describe.skipIf(!enabled)("PostgreSQL engine handle (integration)", { timeout: 1
     const rows = await db.select({ id: m.t.workspaces.id, name: m.t.workspaces.name }).from(m.t.workspaces);
     expect(rows).toEqual([{ id: "ws_a", name: "A" }]);
 
-    const [{ n }] = await db.select({ n: sql<number>`count(*)` }).from(m.t.workspaces);
+    const neutral: EngineDb = db;
+    const [{ n }] = await neutral.select({ n: sql<number>`count(*)` }).from(m.t.workspaces);
     expect(n).toBe(1);
   });
 
