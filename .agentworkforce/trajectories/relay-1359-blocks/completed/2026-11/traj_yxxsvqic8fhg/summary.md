@@ -3,9 +3,9 @@
 Summary: Preserve arbitrary block payloads through engine workspace frames, SDK node transforms and shared realtime schemas. WebSocket-only opaque casing preserves custom keys while existing HTTP and outgoing actionId behavior stays unchanged. DM transforms retain blocks only when supplied; no DM send/storage feature is added. Two independent final reviews passed.
 
 Validation in this Relaycast checkout:
-- npm --prefix packages/sdk-typescript test:531 passed, including strict workspace typecheck.
-- npm --prefix packages/types test:281 passed.
-- npm --prefix packages/engine exec vitest run src/engine/__tests__/wsTransform.test.ts:43 passed.
+- npm --prefix packages/sdk-typescript test — 531 passed, including strict workspace typecheck.
+- npm --prefix packages/types test — 281 passed.
+- npm --prefix packages/engine exec vitest run src/engine/__tests__/wsTransform.test.ts — 43 passed.
 - SDK and engine builds and SDK/types/engine lint: passed.
 - Native database-backed engine tests were attempted but could not execute because better-sqlite3 has no local Windows ARM64 / Node24 addon. This is not a full engine-suite pass.
 
