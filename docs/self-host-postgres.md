@@ -406,7 +406,7 @@ database.
 ## Not yet supported
 
 - More than one replica. Realtime, presence and rate limits are in-process.
-- `RELAYCAST_MESSAGE_TTL_DAYS` (rowid retention refuses PostgreSQL): leave unset.
+- Retention pruning (`RELAYCAST_MESSAGE_TTL_DAYS`, workspace retention) is not exercised by the PostgreSQL test suite; leave it unset for now.
 - The standalone (bun-compiled) binary does not embed `migrations-pg`.
 - Chart wiring of the migration Job and its barrier. No rolling-upgrade or
   rollback safety is claimed.
