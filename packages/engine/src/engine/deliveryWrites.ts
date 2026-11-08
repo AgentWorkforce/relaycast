@@ -10,6 +10,8 @@ import {
   nodes,
 } from '../db/tables.js';
 import type { AtomicWrite, EngineDb } from '../ports/database.js';
+import * as sqlx from '../db/sqlx.js';
+import { seqLockedWrite } from './seqLock.js';
 import { NODE_LIVENESS_TTL_MS } from './placement.js';
 import {
   workspaceActiveDepthSql,
@@ -84,6 +86,7 @@ function channelMuteDeliveryFilter(mentionHandles: readonly string[]) {
  * neither re-evaluates recipient membership after sequence triggers run.
  */
 function deliveryAdmissionSelect(
+  db: EngineDb,
   workspaceId: string,
   policy: WorkspaceDeliveryPolicy | undefined,
   audience: DeliveryAudience,
@@ -100,7 +103,7 @@ function deliveryAdmissionSelect(
       capacity_admission AS MATERIALIZED (
         SELECT (${workspaceActiveDepthSql(workspaceId)} + (SELECT COUNT(*) FROM capacity_candidates)) <= ${limit} AS allowed
       )
-      SELECT ${values} FROM capacity_candidates CROSS JOIN capacity_admission WHERE 1`;
+      SELECT ${values} FROM capacity_candidates CROSS JOIN capacity_admission WHERE ${sqlx.bool(db, true)}`;
   };
 }
 
@@ -108,31 +111,31 @@ function ttlSeconds(ttlMs: number): number {
   return Math.max(1, Math.ceil(ttlMs / 1000));
 }
 
-function nextDeliverySeqSql() {
+function nextDeliverySeqSql(db: EngineDb) {
   // deliverySeq is normally >= deliveryAckSeq. Including the cursor keeps a
   // future/stale cumulative ACK from making the next allocation replay-hidden.
-  return sql<number>`MAX(${agents.deliverySeq}, ${agents.deliveryAckSeq}) + 1`;
+  return sql<number>`${sqlx.greatest(db, agents.deliverySeq, agents.deliveryAckSeq)} + 1`;
 }
 
 /** Test live mailbox depth with indexed branches capped at the admission limit. */
-function belowDepthCapSql(workspaceId: string, agentId: unknown, depthCap: number) {
+function belowDepthCapSql(db: EngineDb, workspaceId: string, agentId: unknown, depthCap: number) {
   // Expired-but-not-yet-swept rows are not active mailbox depth: TTL expiry is
   // only swept lazily (GET /deliveries, /inbox, node replay), so an idle/offline
   // recipient would otherwise keep rejecting new sends as `depth_cap` long after
   // its queued rows should have dead-lettered. Exclude expired rows from the count.
   return sql`(
     SELECT COUNT(*) FROM (
-      SELECT 1 FROM deliveries d INDEXED BY idx_deliveries_agent_active_expiry
+      SELECT 1 FROM deliveries d ${sqlx.indexedBy(db, 'idx_deliveries_agent_active_expiry')}
       WHERE d.workspace_id = ${workspaceId}
         AND d.agent_id = ${agentId}
         AND d.status IN ('queued', 'delivered')
         AND d.expires_at IS NULL
       UNION ALL
-      SELECT 1 FROM deliveries d INDEXED BY idx_deliveries_agent_active_expiry
+      SELECT 1 FROM deliveries d ${sqlx.indexedBy(db, 'idx_deliveries_agent_active_expiry')}
       WHERE d.workspace_id = ${workspaceId}
         AND d.agent_id = ${agentId}
         AND d.status IN ('queued', 'delivered')
-        AND d.expires_at > unixepoch()
+        AND d.expires_at > ${sqlx.now(db)}
       LIMIT ${depthCap}
     )
   ) < ${depthCap}`;
@@ -159,19 +162,19 @@ function notLongOfflineSql(db: EngineDb, offlineExcludeMs: number, leases: reado
 }
 
 function longOfflineSql(db: EngineDb, offlineExcludeMs: number, leases: readonly AuthorityRecipientLease[] = []): SQL<number> {
-  if (offlineExcludeMs === 0) return sql<number>`0`;
+  if (offlineExcludeMs === 0) return sqlx.bool<number>(db, false);
   const cutoffSeconds = Math.floor(offlineExcludeMs / 1000);
   const nodeLivenessSeconds = Math.ceil(NODE_LIVENESS_TTL_MS / 1000);
   return sql<number>`(${agents.status} IN ('offline', 'active', 'online')
-    AND ${agents.lastSeen} < (unixepoch() - ${cutoffSeconds})
+    AND ${agents.lastSeen} < (${sqlx.now(db)} - ${cutoffSeconds})
     AND NOT (
       COALESCE(${nodes.kind}, '') = 'http_push'
-      OR ${authorityRecipientSql(leases)}
+      OR ${authorityRecipientSql(db, leases)}
       OR (${nodeLivenessAuthority(db) ? 0 : 1} = 1 AND
         COALESCE(${nodes.status}, 'offline') <> 'offline'
         AND ${nodes.lastHeartbeatAt} IS NOT NULL
-        AND ${nodes.lastHeartbeatAt} >= (unixepoch() - ${nodeLivenessSeconds})
-        AND ${nodes.lastHeartbeatAt} <= unixepoch()
+        AND ${nodes.lastHeartbeatAt} >= (${sqlx.now(db)} - ${nodeLivenessSeconds})
+        AND ${nodes.lastHeartbeatAt} <= ${sqlx.now(db)}
         AND (
           COALESCE(${nodes.role}, '') = 'direct'
           OR EXISTS (
@@ -181,8 +184,8 @@ function longOfflineSql(db: EngineDb, offlineExcludeMs: number, leases: readonly
               AND ${nodeProviders.name} = ${agents.providerName}
               AND ${nodeProviders.status} = 'online'
               AND ${nodeProviders.lastHeartbeatAt} IS NOT NULL
-              AND ${nodeProviders.lastHeartbeatAt} >= (unixepoch() - ${nodeLivenessSeconds})
-              AND ${nodeProviders.lastHeartbeatAt} <= unixepoch()
+              AND ${nodeProviders.lastHeartbeatAt} >= (${sqlx.now(db)} - ${nodeLivenessSeconds})
+              AND ${nodeProviders.lastHeartbeatAt} <= ${sqlx.now(db)}
           )
         )
       )
@@ -241,12 +244,12 @@ export function buildChannelDeliveryWrite(
   const workspaceId = guardedWorkspaceIdSql({
     workspaceId: input.workspaceId,
     perRecipientOk: input.rejectOnOverflow
-      ? belowDepthCapSql(input.workspaceId, channelMembers.agentId, input.depthCap)
+      ? belowDepthCapSql(db, input.workspaceId, channelMembers.agentId, input.depthCap)
       : undefined,
   });
-  const guardedSelect = deliveryAdmissionSelect(input.workspaceId, input.workspacePolicy, input.audience ?? 'broadcast');
+  const guardedSelect = deliveryAdmissionSelect(db, input.workspaceId, input.workspacePolicy, input.audience ?? 'broadcast');
   const status = sql<string>`${'queued'}`;
-  return db
+  const write = db
     .insert(deliveries)
     .select((qb) =>
       guardedSelect(qb
@@ -266,7 +269,7 @@ export function buildChannelDeliveryWrite(
           // Migration 0029 installs an AFTER INSERT trigger that advances the
           // same agent row to this value. Allocation and high-water advancement
           // therefore happen in one SQLite statement on every adapter.
-          seq: nextDeliverySeqSql(),
+          seq: nextDeliverySeqSql(db),
           locationType: sql<string>`CASE WHEN ${agentNodeBindings.nodeId} IS NOT NULL THEN 'via_node' ELSE ${agents.locationType} END`,
           locationNodeId: sql<string | null>`COALESCE(${agentNodeBindings.nodeId}, ${agents.locationNodeId})`,
           routeNodeId: sql<string | null>`COALESCE(${agentNodeBindings.nodeId}, ${agents.locationNodeId})`,
@@ -276,7 +279,7 @@ export function buildChannelDeliveryWrite(
           dispatchAttempts: sql<number>`0`,
           nextAttemptAt: sql<null>`null`,
           lastDispatchError: sql<null>`null`,
-          expiresAt: sql`(unixepoch() + ${ttlSeconds(input.ttlMs)})`,
+          expiresAt: sql`(${sqlx.now(db)} + ${ttlSeconds(input.ttlMs)})`,
           deliveredAt: sql<null>`null`,
           ackedAt: sql<null>`null`,
           deadLetteredAt: sql<null>`null`,
@@ -284,7 +287,7 @@ export function buildChannelDeliveryWrite(
           availableAt: sql<null>`null`,
           error: sql<null>`null`,
           idempotencyKey: sql<null>`null`,
-          createdAt: sql`(unixepoch())`,
+          createdAt: sql`(${sqlx.now(db)})`,
           updatedAt: sql<null>`null`,
         })
         .from(channelMembers)
@@ -307,11 +310,14 @@ export function buildChannelDeliveryWrite(
             ne(channelMembers.agentId, input.senderAgentId),
             newDeliveryIdentitySql(input.messageId, channelMembers.agentId),
             notLongOfflineSql(db, input.offlineExcludeMs, input.authorityLeases),
-            input.rejectOnOverflow ? undefined : belowDepthCapSql(input.workspaceId, channelMembers.agentId, input.depthCap),
+            input.rejectOnOverflow ? undefined : belowDepthCapSql(db, input.workspaceId, channelMembers.agentId, input.depthCap),
           ),
         )),
     )
     .onConflictDoNothing();
+  // Allocates seq per recipient (MAX + 1): serialize on PostgreSQL by locking
+  // the recipient agent rows in id order; the write itself on SQLite.
+  return seqLockedWrite(db, { kind: 'delivery', workspaceId: input.workspaceId, agentIds: sql`SELECT ${channelMembers.agentId} FROM ${channelMembers} WHERE ${channelMembers.channelId} = ${input.channelId}` }, write);
 }
 
 export function buildGroupDmDeliveryWrite(
@@ -334,9 +340,9 @@ export function buildGroupDmDeliveryWrite(
   },
 ): AtomicWrite {
   const workspaceId = guardedWorkspaceIdSql({ workspaceId: input.workspaceId });
-  const guardedSelect = deliveryAdmissionSelect(input.workspaceId, input.workspacePolicy, 'targeted');
+  const guardedSelect = deliveryAdmissionSelect(db, input.workspaceId, input.workspacePolicy, 'targeted');
   const status = sql<string>`${'queued'}`;
-  return db
+  const write = db
     .insert(deliveries)
     .select((qb) =>
       guardedSelect(qb
@@ -350,7 +356,7 @@ export function buildGroupDmDeliveryWrite(
           priority: sql<string>`${'normal'}`,
           deadline: sql<null>`null`,
           status,
-          seq: nextDeliverySeqSql(),
+          seq: nextDeliverySeqSql(db),
           locationType: sql<string>`CASE WHEN ${agentNodeBindings.nodeId} IS NOT NULL THEN 'via_node' ELSE ${agents.locationType} END`,
           locationNodeId: sql<string | null>`COALESCE(${agentNodeBindings.nodeId}, ${agents.locationNodeId})`,
           routeNodeId: sql<string | null>`COALESCE(${agentNodeBindings.nodeId}, ${agents.locationNodeId})`,
@@ -360,7 +366,7 @@ export function buildGroupDmDeliveryWrite(
           dispatchAttempts: sql<number>`0`,
           nextAttemptAt: sql<null>`null`,
           lastDispatchError: sql<null>`null`,
-          expiresAt: sql`(unixepoch() + ${ttlSeconds(input.ttlMs)})`,
+          expiresAt: sql`(${sqlx.now(db)} + ${ttlSeconds(input.ttlMs)})`,
           deliveredAt: sql<null>`null`,
           ackedAt: sql<null>`null`,
           deadLetteredAt: sql<null>`null`,
@@ -368,7 +374,7 @@ export function buildGroupDmDeliveryWrite(
           availableAt: sql<null>`null`,
           error: sql<null>`null`,
           idempotencyKey: sql<null>`null`,
-          createdAt: sql`(unixepoch())`,
+          createdAt: sql`(${sqlx.now(db)})`,
           updatedAt: sql<null>`null`,
         })
         .from(dmParticipants)
@@ -391,11 +397,14 @@ export function buildGroupDmDeliveryWrite(
             ne(dmParticipants.agentId, input.senderAgentId),
             newDeliveryIdentitySql(input.messageId, dmParticipants.agentId),
             input.excludeLongOffline === false ? undefined : notLongOfflineSql(db, input.offlineExcludeMs, input.authorityLeases),
-            belowDepthCapSql(input.workspaceId, dmParticipants.agentId, input.depthCap),
+            belowDepthCapSql(db, input.workspaceId, dmParticipants.agentId, input.depthCap),
           ),
         )),
     )
     .onConflictDoNothing();
+  // Allocates seq per recipient (MAX + 1): serialize on PostgreSQL by locking
+  // the recipient agent rows in id order; the write itself on SQLite.
+  return seqLockedWrite(db, { kind: 'delivery', workspaceId: input.workspaceId, agentIds: sql`SELECT ${dmParticipants.agentId} FROM ${dmParticipants} WHERE ${dmParticipants.conversationId} = ${input.conversationId} AND ${dmParticipants.leftAt} IS NULL` }, write);
 }
 
 export function buildDirectDeliveryWrite(
@@ -414,9 +423,9 @@ export function buildDirectDeliveryWrite(
   },
 ): AtomicWrite {
   const workspaceId = guardedWorkspaceIdSql({ workspaceId: input.workspaceId });
-  const guardedSelect = deliveryAdmissionSelect(input.workspaceId, input.workspacePolicy, 'targeted');
+  const guardedSelect = deliveryAdmissionSelect(db, input.workspaceId, input.workspacePolicy, 'targeted');
   const status = sql<string>`${'queued'}`;
-  return db
+  const write = db
     .insert(deliveries)
     .select((qb) =>
       guardedSelect(qb
@@ -430,7 +439,7 @@ export function buildDirectDeliveryWrite(
           priority: sql<string>`${'normal'}`,
           deadline: sql<null>`null`,
           status,
-          seq: nextDeliverySeqSql(),
+          seq: nextDeliverySeqSql(db),
           locationType: sql<string>`CASE WHEN ${agentNodeBindings.nodeId} IS NOT NULL THEN 'via_node' ELSE ${agents.locationType} END`,
           locationNodeId: sql<string | null>`COALESCE(${agentNodeBindings.nodeId}, ${agents.locationNodeId})`,
           routeNodeId: sql<string | null>`COALESCE(${agentNodeBindings.nodeId}, ${agents.locationNodeId})`,
@@ -440,7 +449,7 @@ export function buildDirectDeliveryWrite(
           dispatchAttempts: sql<number>`0`,
           nextAttemptAt: sql<null>`null`,
           lastDispatchError: sql<null>`null`,
-          expiresAt: sql`(unixepoch() + ${ttlSeconds(input.ttlMs)})`,
+          expiresAt: sql`(${sqlx.now(db)} + ${ttlSeconds(input.ttlMs)})`,
           deliveredAt: sql<null>`null`,
           ackedAt: sql<null>`null`,
           deadLetteredAt: sql<null>`null`,
@@ -448,7 +457,7 @@ export function buildDirectDeliveryWrite(
           availableAt: sql<null>`null`,
           error: sql<null>`null`,
           idempotencyKey: sql<null>`null`,
-          createdAt: sql`(unixepoch())`,
+          createdAt: sql`(${sqlx.now(db)})`,
           updatedAt: sql<null>`null`,
         })
         .from(agents)
@@ -467,10 +476,13 @@ export function buildDirectDeliveryWrite(
           eq(agents.id, input.agentId),
         eq(agents.workspaceId, input.workspaceId),
         newDeliveryIdentitySql(input.messageId, agents.id),
-          belowDepthCapSql(input.workspaceId, agents.id, input.depthCap),
+          belowDepthCapSql(db, input.workspaceId, agents.id, input.depthCap),
         ))),
     )
     .onConflictDoNothing();
+  // Allocates seq per recipient (MAX + 1): serialize on PostgreSQL by locking
+  // the recipient agent rows in id order; the write itself on SQLite.
+  return seqLockedWrite(db, { kind: 'delivery', workspaceId: input.workspaceId, agentIds: [input.agentId] }, write);
 }
 
 export async function fetchDeliveryFanoutRecords(
@@ -610,7 +622,7 @@ export async function fetchGroupDeliveryOutcomes(
       .select({
         agentId: dmParticipants.agentId,
         agentName: agents.name,
-        offline: input.excludeLongOffline === false ? sql<number>`0` : longOfflineSql(db, input.offlineExcludeMs, input.authorityLeases),
+        offline: input.excludeLongOffline === false ? sqlx.bool<number>(db, false) : longOfflineSql(db, input.offlineExcludeMs, input.authorityLeases),
       })
       .from(dmParticipants)
       .innerJoin(agents, eq(dmParticipants.agentId, agents.id))
@@ -676,15 +688,16 @@ const UNKNOWN_AUDIENCE_VALIDITY_MS = 5_000;
 type AuthorityFanoutAudience =
   | { channelId: string; conversationId?: never }
   | { conversationId: string; channelId?: never };
-function authorityRecipientSql(leases: readonly AuthorityRecipientLease[]): SQL {
-  if (!leases.length) return sql`0`;
+function authorityRecipientSql(db: EngineDb, leases: readonly AuthorityRecipientLease[]): SQL {
+  if (!leases.length) return sqlx.bool(db, false);
   // Bind one JSON argument instead of exceeding SQLite's variable limit on
   // large audiences. Membership/location checks still execute atomically.
-  return sql`EXISTS (SELECT 1 FROM json_each(${JSON.stringify(leases)}) AS lease
-    WHERE json_extract(lease.value, '$.agentId') = ${agents.id}
-      AND json_extract(lease.value, '$.nodeId') = ${agents.locationNodeId}
-      AND json_extract(lease.value, '$.providerName') = ${agents.providerName}
-      AND unixepoch() * 1000 + 999 < json_extract(lease.value, '$.expiresAt'))`;
+  const lease = sql.raw('lease.value');
+  return sql`EXISTS (SELECT 1 FROM ${sqlx.jsonEach(db, JSON.stringify(leases), { alias: ' AS lease', elements: 'json' })}
+    WHERE ${sqlx.jsonGet(db, lease, '$.agentId')} = ${agents.id}
+      AND ${sqlx.jsonGet(db, lease, '$.nodeId')} = ${agents.locationNodeId}
+      AND ${sqlx.jsonGet(db, lease, '$.providerName')} = ${agents.providerName}
+      AND ${sqlx.now(db)} * 1000 + 999 < ${sqlx.jsonGetNum(db, lease, '$.expiresAt')})`;
 }
 export async function prepareAuthorityFanout(db: EngineDb, workspaceId: string, audience: AuthorityFanoutAudience): Promise<AuthorityRecipientLease[]> {
   if (!nodeLivenessAuthority(db)) return [];

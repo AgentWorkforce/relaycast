@@ -8,6 +8,7 @@ import type { EngineDeps } from '../ports/index.js';
 import { sendNodeDeliveriesToAgents } from './nodeDeliver.js';
 import { appendAndPublishWorkspaceEvent, appendAndPublishWorkspaceEventWhen } from './workspaceEvents.js';
 import { ephemeralEventFetch } from '../ports/index.js';
+import * as sqlx from '../db/sqlx.js';
 
 export type InvocationCompletionDeps = Pick<EngineDeps, 'db' | 'realtime' | 'webhookQueue' | 'nodeConnections' | 'config'>;
 
@@ -261,11 +262,11 @@ export async function emitNodeStatusEffects(
           AND ${nodes.status} = 'offline'
           AND ${nodes.livenessRevision} = ${input.claimRevision}
           AND COALESCE((
-            SELECT we.type FROM workspace_events AS we INDEXED BY idx_workspace_events_created
+            SELECT we.type FROM workspace_events AS we ${sqlx.indexedBy(deps.db, 'idx_workspace_events_created')}
             WHERE we.workspace_id = ${workspaceId}
               AND we.created_at >= ${nodes.lastHeartbeatAt}
               AND we.type IN ('node.status.online', 'node.status.offline')
-              AND json_extract(we.payload, '$.node_id') = ${input.nodeId}
+              AND ${sqlx.jsonGet(deps.db, sql.raw('we.payload'), '$.node_id')} = ${input.nodeId}
             ORDER BY we.seq DESC
             LIMIT 1
           ), '') <> 'node.status.offline'

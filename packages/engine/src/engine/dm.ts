@@ -1,3 +1,4 @@
+import * as sqlx from '../db/sqlx.js';
 import { z } from 'zod';
 import { eq, and, sql, lt, lte, gt, isNull, inArray, desc } from 'drizzle-orm';
 import type { DmMessage } from '@relaycast/types';
@@ -38,6 +39,7 @@ import {
 import { A2A_EGRESS_RETRY_WINDOW_MS, dispatchA2aEgress, expireA2aEgressForReuse } from './a2aEgress.js';
 import { buildDmReceivedEventData } from './deliveryWire.js';
 import { buildWorkspaceEventWrite } from './workspaceEvents.js';
+import { seqLockedWrite } from './seqLock.js';
 import { transformForClient } from './wsTransform.js';
 import { codedError } from '../lib/httpError.js';
 import {
@@ -831,18 +833,19 @@ export async function sendDm(
       // batch, so a durable replay repeats the original `delivery` even after
       // the row is settled or pruned; a mailbox-rejected send (no row) stamps
       // `null`. `json()` keeps the subquery result an object, not a string.
-      const receipt = sql`json((SELECT json_object(
+      const receiptObject = sqlx.jsonObject(writeDb, sql`
         'id', ${deliveries.id}, 'agentId', ${deliveries.agentId}, 'status', ${deliveries.status},
-        'expiresAt', strftime('%Y-%m-%dT%H:%M:%fZ', ${deliveries.expiresAt}, 'unixepoch')
-      ) FROM ${deliveries} WHERE ${deliveries.id} = ${deliveryId}))`;
+        'expiresAt', ${sqlx.isoFromEpoch(writeDb, deliveries.expiresAt, 'iso-ms')}
+      `);
+      const receipt = sqlx.json(writeDb, sql`(SELECT ${receiptObject} FROM ${deliveries} WHERE ${deliveries.id} = ${deliveryId})`);
       if (directClaimId) {
         writes.push(writeDb.update(directDmIdempotency)
-          .set({ response: sql`json_set(${directDmIdempotency.response}, '$._delivery', ${receipt})` })
+          .set({ response: sqlx.jsonSet(writeDb, directDmIdempotency.response, '$._delivery', receipt, 'json') })
           .where(eq(directDmIdempotency.id, directClaimId)));
       }
       if (egressId) {
         writes.push(writeDb.update(a2aEgressContext)
-          .set({ response: sql`json_set(${a2aEgressContext.response}, '$._delivery', ${receipt})` })
+          .set({ response: sqlx.jsonSet(writeDb, a2aEgressContext.response, '$._delivery', receipt, 'json') })
           .where(eq(a2aEgressContext.id, egressId)));
       }
     }
@@ -858,7 +861,11 @@ export async function sendDm(
       }));
     }
     if (notificationsDurable) {
-      writes.push(buildWorkspaceEventWrite(writeDb, workspaceId, { type: 'dm.received', payload: workspacePayload }));
+      writes.push(seqLockedWrite(
+        writeDb,
+        { kind: 'workspace_event', workspaceId },
+        buildWorkspaceEventWrite(writeDb, workspaceId, { type: 'dm.received', payload: workspacePayload }),
+      ));
     }
     return writes;
   }, { requireAtomic: Boolean(workspacePolicy || a2aTarget || options.receivedA2aAgentId || inboundId || directClaimId) });
@@ -939,7 +946,7 @@ export async function listConversations(
   // Conversation ids are deterministic hashes, while created_at only has
   // second precision. SQLite's insertion rowid supplies the chronological
   // tiebreaker for conversations created within the same second.
-  const insertionOrder = sql<number>`${dmConversations}.rowid`;
+  const insertionOrder = sqlx.rowid(db, dmConversations);
   const conversationQuery = db
     .select({
       id: dmConversations.id,

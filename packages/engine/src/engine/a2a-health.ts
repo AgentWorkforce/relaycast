@@ -61,7 +61,7 @@ async function updateA2aAgentHealth(
 ): Promise<void> {
   await sqlx.run(db, sql`
     UPDATE a2a_agents
-    SET status = ${status}, health_failures = ${healthFailures}, last_health = unixepoch(), updated_at = unixepoch()
+    SET status = ${status}, health_failures = ${healthFailures}, last_health = ${sqlx.now(db)}, updated_at = ${sqlx.now(db)}
     WHERE id = ${agentId}
   `);
 }

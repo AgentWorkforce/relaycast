@@ -1,3 +1,6 @@
+/* eslint-disable no-restricted-syntax -- SQLite-only recovery mode: it pages by
+   the implicit SQLite rowid with NOT INDEXED scans, and pruneRowidPages
+   rejects a Postgres handle with sqlx.requireSqlite before any SQL runs. */
 import { sql } from 'drizzle-orm';
 import { z } from 'zod';
 import type { EngineDb } from '../ports/database.js';
@@ -135,6 +138,7 @@ export async function pruneRowidPages(
   db: EngineDb,
   opts: PruneOptions & { cursorStore: RetentionCursorStore },
 ): Promise<PruneResult> {
+  sqlx.requireSqlite(db, 'rowid retention (cursorStore)', 'it pages by the implicit SQLite rowid; use the indexed retention path');
   const nowMs = (opts.now ?? new Date()).getTime();
   if (!Number.isFinite(nowMs)) throw new Error('Invalid retention clock');
   const limit = bounded(opts.batchLimit, ROWID_PAGE_LIMIT, ROWID_PAGE_LIMIT);

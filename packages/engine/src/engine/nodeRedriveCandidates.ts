@@ -44,7 +44,7 @@ export async function readNodeRedriveCandidates(
     cursor = {};
     const [last] = await sqlx.all<Candidate>(db, sql`
       SELECT id, created_at, next_attempt_at, expires_at
-      FROM deliveries INDEXED BY ${sql.raw(index)}
+      FROM deliveries ${sqlx.indexedBy(db, index)}
       WHERE ${sql.join(conditions, sql` AND `)}
       ORDER BY ${sql.raw(keys.map(k => k + ' DESC').join(', '))} LIMIT 1
     `);
@@ -58,7 +58,7 @@ export async function readNodeRedriveCandidates(
   }
   const page = await sqlx.all<Candidate>(db, sql`
     SELECT id, created_at, next_attempt_at, expires_at
-    FROM deliveries INDEXED BY ${sql.raw(index)}
+    FROM deliveries ${sqlx.indexedBy(db, index)}
     WHERE ${sql.join(conditions, sql` AND `)}
     ORDER BY ${sql.raw(keys.join(', '))} LIMIT ${opts.limit}
   `);

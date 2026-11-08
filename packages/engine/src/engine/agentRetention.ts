@@ -39,23 +39,23 @@ const requiredIndexes = [
  * Keep this expression identical in preview and DELETE. The latter evaluates it
  * inside the write statement, after any concurrent heartbeat/register/bind.
  */
-function reason(cutoff: number, indexesReady: boolean): SQL {
+function reason(db: object, cutoff: number, indexesReady: boolean): SQL {
   return sql`CASE
     WHEN a.status NOT IN ('offline', 'released') OR a.status IS NULL THEN 'not_offline'
-    WHEN typeof(a.last_seen) != 'integer' OR a.last_seen < 0 OR a.last_seen >= ${cutoff}
-      OR typeof(a.created_at) != 'integer' OR a.created_at < 0 OR a.created_at >= ${cutoff}
+    WHEN ${sqlx.isNotInteger(db, sql.raw('a.last_seen'))} OR a.last_seen < 0 OR a.last_seen >= ${cutoff}
+      OR ${sqlx.isNotInteger(db, sql.raw('a.created_at'))} OR a.created_at < 0 OR a.created_at >= ${cutoff}
       THEN 'recent_or_unknown'
-    WHEN a.location_type IS NOT 'self_connected'
+    WHEN ${sqlx.isDistinct(db, sql.raw('a.location_type'), sql.raw("'self_connected'"))}
       OR a.location_node_id IS NOT NULL OR a.origin_node_id IS NOT NULL
       OR EXISTS (SELECT 1 FROM agent_node_bindings b WHERE b.agent_id = a.id)
       OR EXISTS (SELECT 1 FROM nodes n WHERE n.id = 'node_direct_' || a.id)
       OR EXISTS (SELECT 1 FROM actions h WHERE h.handler_agent_id = a.id)
       THEN 'ownership_protected'
-    WHEN a.metadata IS NOT NULL AND NOT json_valid(a.metadata) THEN 'ownership_protected'
-    WHEN json_type(COALESCE(a.metadata, '{}')) IS NOT 'object'
-      OR json_type(a.metadata, '$.fleet') IS NOT NULL
-      OR json_type(a.metadata, '$.broker') IS NOT NULL
-      OR json_type(a.metadata, '$.node_id') IS NOT NULL
+    WHEN a.metadata IS NOT NULL AND NOT ${sqlx.jsonValid(db, sql.raw('a.metadata'))} THEN 'ownership_protected'
+    WHEN ${sqlx.isDistinct(db, sqlx.jsonType(db, sql.raw("COALESCE(a.metadata, '{}')")), sql.raw("'object'"))}
+      OR ${sqlx.jsonType(db, sql.raw('a.metadata'), '$.fleet')} IS NOT NULL
+      OR ${sqlx.jsonType(db, sql.raw('a.metadata'), '$.broker')} IS NOT NULL
+      OR ${sqlx.jsonType(db, sql.raw('a.metadata'), '$.node_id')} IS NOT NULL
       THEN 'ownership_protected'
     WHEN ${indexesReady ? 1 : 0} = 0 THEN 'history_unverified'
     WHEN EXISTS (SELECT 1 FROM messages h WHERE h.agent_id = a.id)
@@ -82,8 +82,7 @@ export async function retainAgents(
   }
   // Resuming may make the boundary older, never newer than the requested window.
   const cutoff = cursor?.cutoff ?? currentCutoff;
-  const indexes = await sqlx.all<{ name: string }>(db, sql`SELECT name FROM sqlite_master
-    WHERE type = 'index' AND name IN (${sql.join(requiredIndexes.map(name => sql`${name}`), sql`, `)})`);
+  const indexes = await sqlx.all<{ name: string }>(db, sqlx.indexExists(db, requiredIndexes));
   const indexesReady = indexes.length === requiredIndexes.length;
   if (options.delete && !indexesReady) {
     throw new Error('Agent retention requires migration 0053_agent_retention_indexes.sql before deletion');
@@ -100,7 +99,7 @@ export async function retainAgents(
         location_node_id, origin_node_id, metadata FROM agents
       WHERE workspace_id = ${workspaceId} AND id > ${after} AND id <= ${through}
       ORDER BY id LIMIT ${options.limit}
-    ) SELECT id, name, last_seen, ${reason(cutoff, indexesReady)} AS reason FROM page a ORDER BY id`);
+    ) SELECT id, name, last_seen, ${reason(db, cutoff, indexesReady)} AS reason FROM page a ORDER BY id`);
   const eligible = rows.filter(row => row.reason === 'eligible');
   let deleted: { id: string }[] = [];
   if (options.delete && eligible.length) {
@@ -111,8 +110,8 @@ export async function retainAgents(
     deleted = await sqlx.all<{ id: string }>(db, sql`
       DELETE FROM agents AS a
       WHERE a.workspace_id = ${workspaceId}
-        AND a.id IN (SELECT value FROM json_each(${JSON.stringify(eligible.map(row => row.id))}))
-        AND ${reason(cutoff, indexesReady)} = 'eligible'
+        AND ${sqlx.inJsonArray(db, sql.raw('a.id'), eligible.map(row => row.id))}
+        AND ${reason(db, cutoff, indexesReady)} = 'eligible'
       RETURNING id`);
   }
   const counts: Record<Reason, number> = {

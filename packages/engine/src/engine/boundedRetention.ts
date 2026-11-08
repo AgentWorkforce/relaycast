@@ -105,9 +105,10 @@ export async function pruneBounded(db: EngineDb, opts: PruneOptions): Promise<Pr
   // This avoids walking millions of recent rows that no policy can expire.
   const ttlTables = tables.filter(table => table.setting);
   const [minimums] = await sqlx.all<Record<string, number | null>>(db, sql`SELECT
-    ${sql.join(ttlTables.map(table => sql.raw(
-      `MIN(CASE WHEN json_extract(retention, '$.${table.setting}') > 0 THEN json_extract(retention, '$.${table.setting}') END) AS "${table.result}"`,
-    )), sql`, `)} FROM workspaces`);
+    ${sql.join(ttlTables.map(table => {
+      const ttl = sqlx.jsonGetNum(db, sql.raw('retention'), `$.${table.setting}`);
+      return sql`MIN(CASE WHEN ${ttl} > 0 THEN ${ttl} END) AS ${sql.raw(`"${table.result}"`)}`;
+    }), sql`, `)} FROM workspaces`);
   if (!Number.isFinite(nowMs) && [
     ...Object.values(defaults), ...Object.values(minimums ?? {}),
   ].some(ttl => typeof ttl === 'number' && Number.isFinite(ttl) && ttl > 0)) {
@@ -143,7 +144,7 @@ export async function pruneBounded(db: EngineDb, opts: PruneOptions): Promise<Pr
     // this fence the cursor might never wrap to retained rows that later age out.
     if (!state.highs[table.name]) {
       const [last] = await sqlx.all<Candidate>(db, sql`SELECT ${columns}
-        FROM ${sql.raw(table.name)} INDEXED BY ${sql.raw(table.index)}
+        FROM ${sql.raw(table.name)} ${sqlx.indexedBy(db, table.index)}
         ${table.predicate ? sql`WHERE ${sql.raw(table.predicate)}` : sql``}
         ORDER BY ${sql.raw(table.keys.map(k => k + ' DESC').join(', '))} LIMIT 1`);
       if (last) state.highs[table.name] = key(last, table);
@@ -171,7 +172,7 @@ export async function pruneBounded(db: EngineDb, opts: PruneOptions): Promise<Pr
     const page = await sqlx.all<Candidate>(db, sql`
       WITH page AS MATERIALIZED (
         SELECT ${columns}
-        FROM ${sql.raw(table.name)} INDEXED BY ${sql.raw(table.index)}
+        FROM ${sql.raw(table.name)} ${sqlx.indexedBy(db, table.index)}
         ${predicates.length ? sql`WHERE ${sql.join(predicates, sql` AND `)}` : sql``}
         ORDER BY ${sql.raw(table.keys.join(', '))} LIMIT ${limit}
       )

@@ -5,6 +5,7 @@ import { buildFtsQuery } from './searchQuery.js';
 import { generateId } from './snowflake.js';
 import { codedError } from '../lib/httpError.js';
 import * as sqlx from '../db/sqlx.js';
+import * as sqliteFts from '../adapters/sqlite/fts.js';
 
 type Db = ReturnType<typeof getDb>;
 
@@ -553,21 +554,8 @@ export async function searchDirectory(
 
   if (ftsQuery) {
     const [agentMatches, skillMatches] = await Promise.all([
-      sqlx.all<{ directory_agent_id: string; rank: number }>(db, sql`
-        SELECT da.id AS directory_agent_id, bm25(directory_agents_fts) AS rank
-        FROM directory_agents_fts
-        JOIN directory_agents da ON da.rowid = directory_agents_fts.rowid
-        WHERE directory_agents_fts MATCH ${ftsQuery}
-          AND da.workspace_id = ${workspaceId}
-      `),
-      sqlx.all<{ directory_agent_id: string; rank: number }>(db, sql`
-        SELECT ds.directory_agent_id AS directory_agent_id, bm25(directory_skills_fts) AS rank
-        FROM directory_skills_fts
-        JOIN directory_skills ds ON ds.rowid = directory_skills_fts.rowid
-        JOIN directory_agents da ON da.id = ds.directory_agent_id
-        WHERE directory_skills_fts MATCH ${ftsQuery}
-          AND da.workspace_id = ${workspaceId}
-      `),
+      sqlx.all<{ directory_agent_id: string; rank: number }>(db, sqliteFts.directoryAgentFtsRanks(db, ftsQuery, workspaceId)),
+      sqlx.all<{ directory_agent_id: string; rank: number }>(db, sqliteFts.directorySkillFtsRanks(db, ftsQuery, workspaceId)),
     ]);
     for (const m of agentMatches) {
       const cur = agentRankMap.get(m.directory_agent_id);

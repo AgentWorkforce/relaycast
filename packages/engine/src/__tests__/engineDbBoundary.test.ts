@@ -11,6 +11,12 @@ const SRC = fileURLToPath(new URL('..', import.meta.url));
 const SELF = relative(SRC, fileURLToPath(import.meta.url)).split(sep).join('/');
 const ALLOWED = (path: string) =>
   path === 'db/schema.ts' || path === 'db/tables.ts' || path.startsWith('adapters/') || path === SELF;
+// drizzle-orm/pg-core is for the Postgres schema, the binding, the dialect
+// helpers (sqlx renders and detects PG fragments), the adapters, and the
+// sqlx tests that compile PG text.
+const PG_CORE_ALLOWED = (path: string) =>
+  path === 'db/sqlx.ts' || path === 'db/schema.pg.ts' || path === 'db/tables.ts'
+  || path.startsWith('adapters/') || path === SELF || /^(?:db\/)?__tests__\/sqlx[^/]*\.test\.ts$/.test(path);
 
 function sources(dir: string): string[] {
   return readdirSync(dir, { withFileTypes: true }).flatMap((entry) => {
@@ -20,11 +26,11 @@ function sources(dir: string): string[] {
   });
 }
 
-function violations(pattern: RegExp): string[] {
+function violations(pattern: RegExp, allowed: (path: string) => boolean = ALLOWED): string[] {
   const found: string[] = [];
   for (const file of sources(SRC)) {
     const path = relative(SRC, file).split(sep).join('/');
-    if (ALLOWED(path)) continue;
+    if (allowed(path)) continue;
     readFileSync(file, 'utf8').split('\n').forEach((line, index) => {
       if (pattern.test(line)) found.push(`${path}:${index + 1}: ${line.trim()}`);
     });
@@ -39,6 +45,10 @@ describe('EngineDb boundary', () => {
 
   it('has no drizzle-orm/sqlite-core import outside the schema, binding and adapters', () => {
     expect(violations(/['"]drizzle-orm\/sqlite-core['"]/)).toEqual([]);
+  });
+
+  it('has no drizzle-orm/pg-core import outside sqlx, the PG schema, binding, adapters and sqlx tests', () => {
+    expect(violations(/['"]drizzle-orm\/pg-core['"]/, PG_CORE_ALLOWED)).toEqual([]);
   });
 
   it('scans the engine sources', () => {

@@ -5,7 +5,9 @@ import { generateId } from './snowflake.js';
 import { sha256Hex } from '../lib/crypto.js';
 import { codedError } from '../lib/httpError.js';
 import { runAtomicWrites } from '../ports/database.js';
+import { withSeqLock } from './seqLock.js';
 import { RELEASED_AGENT_STATUS } from './agent.js';
+import * as sqlx from '../db/sqlx.js';
 
 type Db = ReturnType<typeof getDb>;
 
@@ -90,7 +92,9 @@ export async function recordSessionEvent(
 
   // Sequence is assigned atomically via a scalar subquery — read and write in
   // one statement so concurrent inserts cannot race to the same value.
-  const [event] = await db
+  // On PostgreSQL the per-agent sequence lock serializes the MAX + 1 in the
+  // same transaction (sqlx.lockSeq); SQLite runs the insert unchanged.
+  const [event] = await withSeqLock(db, { kind: 'session_event', agentId }, (tx) => tx
     .insert(sessionEvents)
     .values({
       id,
@@ -100,7 +104,7 @@ export async function recordSessionEvent(
       payload: data.payload,
       sequence: sql<number>`(SELECT COALESCE(MAX(sequence), 0) + 1 FROM session_events WHERE agent_id = ${agentId})`,
     })
-    .returning();
+    .returning());
 
   return {
     event: toPublicEvent(event, agentId),
@@ -138,7 +142,7 @@ export async function recordSessionEventWithIdempotency(
   // The insert and the unique identity claim are one durable operation. A
   // conflict is followed by a scoped lookup so concurrent retries return the
   // winner's exact event rather than allocating a second sequence number.
-  const [created] = await db
+  const [created] = await withSeqLock(db, { kind: 'session_event', agentId }, (tx) => tx
     .insert(sessionEvents)
     .values({
       id,
@@ -151,7 +155,7 @@ export async function recordSessionEventWithIdempotency(
       sequence: sql<number>`(SELECT COALESCE(MAX(sequence), 0) + 1 FROM session_events WHERE agent_id = ${agentId})`,
     })
     .onConflictDoNothing()
-    .returning();
+    .returning());
 
   if (created) {
     return {
@@ -282,7 +286,7 @@ export async function applyStatusEventEffect(
             WHERE legacy_event.id = ${eventId}
               AND legacy_event.workspace_id = ${workspaceId}
               AND legacy_event.agent_id = ${agentId}
-              AND legacy_event.status_legacy_pending = 1
+              AND legacy_event.status_legacy_pending = ${sqlx.bool(db, true)}
           )
           OR (
             ${agents.status} <> ${status}
@@ -300,7 +304,7 @@ export async function applyStatusEventEffect(
       ))
       .returning({ id: agents.id }),
     tx.update(sessionEvents)
-      .set({ statusAppliedAt: sql`(unixepoch())` })
+      .set({ statusAppliedAt: sql`(${sqlx.now(db)})` })
       .where(and(
         eq(sessionEvents.id, eventId),
         eq(sessionEvents.workspaceId, workspaceId),
