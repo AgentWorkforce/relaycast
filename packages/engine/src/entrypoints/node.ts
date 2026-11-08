@@ -19,6 +19,8 @@ import {
   type EngineSocket,
   type InProcessPresenceOptions,
   type NodeRuntime,
+  type NodeRuntimeWithDb,
+  createNodeRuntimeWithDb,
 } from '../adapters/node/index.js';
 import {
   authenticateNodeWs,
@@ -96,6 +98,74 @@ export function startServer(options: StartServerOptions): RunningServer {
     eventQueue: options.eventQueue,
   });
 
+  return serveRuntime(runtime, options.port, baseUrl);
+}
+
+/** The parts of {@link StartServerOptions} a PostgreSQL server takes; there is no database path. */
+export type StartPostgresServerOptions = Omit<StartServerOptions, 'dbPath' | 'migrate'> & {
+  /** Environment holding `RELAYCAST_DATABASE_*`. Default: `process.env`. */
+  env?: NodeJS.ProcessEnv;
+  /** One line per configuration summary or idle-client error; never carries credentials. */
+  log?: (message: string) => void;
+};
+
+/** {@link RunningServer} over a PostgreSQL runtime, which has no SQLite handle. */
+export interface RunningPostgresServer {
+  server: ServerType;
+  runtime: NodeRuntimeWithDb;
+  stop(): Promise<void>;
+}
+
+/**
+ * Start the self-host server on PostgreSQL. The runtime role and migration
+ * ledger are verified on {@link openPostgresEngineDb} before the runtime exists
+ * or the port is listened on, so a wrong identity or unmigrated database never
+ * serves. Never touches SQLite, and takes no migration lock and runs no DDL.
+ * The caller maps a {@link ConfigError} to exit 64 and a `PostgresIdentityError`
+ * to exit 65; anything else is a failure.
+ *
+ * Loaded lazily so a SQLite server never imports pg.
+ */
+export async function startPostgresServer(options: StartPostgresServerOptions): Promise<RunningPostgresServer> {
+  const baseUrl = options.baseUrl ?? `http://localhost:${options.port}`;
+  assertInternalSecretStrength(options.config?.internalSecret);
+  const { describePostgresConfig, loadPostgresConfig, openPostgresEngineDb } = await import('../adapters/postgres/index.js');
+  const log = options.log ?? (() => {});
+  const config = loadPostgresConfig(options.env ?? process.env, 'runtime');
+  const safe = describePostgresConfig(config);
+  log(`postgres runtime: host=${safe.host} port=${safe.port} database=${safe.database} schema=${safe.schema} expected_role=${safe.expectedRole} ca_sha256=${safe.caSha256}`);
+  const handle = await openPostgresEngineDb(config, { log });
+  let runtime: NodeRuntimeWithDb;
+  try {
+    runtime = createNodeRuntimeWithDb(handle.db, {
+      baseUrl,
+      fileDir: options.fileDir,
+      fileSecret: options.fileSecret,
+      auth: options.auth,
+      admission: options.admission,
+      telemetry: options.telemetry,
+      config: options.config,
+      presence: options.presence,
+      eventQueue: options.eventQueue,
+    }, () => { void handle.close().catch(() => {}); });
+  } catch (err) {
+    await handle.close().catch(() => {});
+    throw err;
+  }
+  return serveRuntime(runtime, options.port, baseUrl);
+}
+
+/** Run `relaycast-engine migrate` or `verify-db` and return its exit code (for the container entrypoint). */
+export async function runPostgresCommand(command: 'migrate' | 'verify-db'): Promise<number> {
+  const cli = await import('../adapters/postgres/cli.js');
+  return command === 'migrate' ? cli.runMigrateCommand() : cli.runVerifyDbCommand();
+}
+
+function serveRuntime<R extends NodeRuntimeWithDb>(
+  runtime: R,
+  port: number,
+  baseUrl: string,
+): { server: ServerType; runtime: R; stop(): Promise<void> } {
   let engine: ReturnType<typeof createEngine>;
   try {
     engine = createEngine(runtime.deps);
@@ -111,7 +181,7 @@ export function startServer(options: StartServerOptions): RunningServer {
   app.route('/', engine);
   app.notFound((c) => jsonNotFound(c, 'not_found', 'Route not found'));
 
-  const server = serve({ fetch: app.fetch, port: options.port });
+  const server = serve({ fetch: app.fetch, port });
 
   // WebSocket upgrades (Node owns these at the socket level).
   const wss = new WebSocketServer({ noServer: true });

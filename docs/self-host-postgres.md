@@ -1,11 +1,9 @@
 # Self-hosting the engine on PostgreSQL (connection layer)
 
-Status: **connection, identity, TLS, schema and migrations only.** The engine
-query surface still runs on SQLite. The PostgreSQL serving path is not in this
-build: `relaycast-engine` (the server) exits `64` if any `RELAYCAST_DATABASE_*`
-variable is set, rather than silently serving from SQLite. Only the `migrate`
-and `verify-db` subcommands use PostgreSQL. This layer lets a platform
-provision and verify a PostgreSQL database ahead of the Postgres query backend.
+Status: the server serves from PostgreSQL when any `RELAYCAST_DATABASE_*`
+variable is set: it verifies the runtime identity and migration ledger before
+listening, and never touches SQLite. Single replica only; realtime, presence
+and rate limits are in-process, and files stay on local disk.
 
 ## What the platform provides
 
@@ -103,7 +101,7 @@ RELAYCAST_DATABASE_CA_FILE=/etc/relaycast/db-ca.pem \
 | 0 | Success. |
 | 64 | Configuration refused (bad or missing URL, CA, schema, roles, limits). No connection is attempted. |
 | 65 | Connected, but the identity is wrong. Every check is printed and each failing one is named (for example `FAIL not_superuser`). |
-| 1 | Connection failure, migration failure, or (for `verify-db`) a database that is not migrated for this image. |
+| 1 | Connection failure, migration failure, or a database that is not migrated for this image. |
 
 ### Identity checks
 
@@ -240,10 +238,8 @@ Helm does not order a Job and a Deployment in the same release, so Helm alone
 is not the barrier. The ordering has to come from rollout tooling that waits
 for the Job to complete before rolling the Deployment, or from an init step
 in the server pod that waits for the Job to complete; `verify-db` then gates
-the listener. Opening the listener only after verification passes is the
-designed behaviour of the PostgreSQL serving path; that path is not in this
-build yet (see [Not yet supported](#not-yet-supported)), so today run
-`verify-db` as a separate pre-start step.
+the listener. The server verifies identity and the ledger before it opens the listener
+and exits `64`/`65`/`1` otherwise, so a separate pre-start `verify-db` is optional.
 
 Behaviour when the compatibility floor rises while an older server is running:
 
@@ -313,10 +309,7 @@ add a new one.
 
 ## Engine handle (runtime verification)
 
-`openPostgresEngineDb` (`src/adapters/postgres/engineDb.ts`) builds the
-PostgreSQL engine handle. Today it is used only by the conformance pg mode
-below; the server does not call it yet (see [Not yet supported](#not-yet-supported)).
-Before it returns a handle it:
+`openPostgresEngineDb` (`src/adapters/postgres/engineDb.ts`) builds the PostgreSQL engine handle. The server calls it at startup, before the listener opens. Before it returns a handle it:
 
 1. refuses any config not loaded in runtime mode;
 2. runs the runtime [identity checks](#identity-checks) (the same checks as
@@ -410,16 +403,8 @@ database.
 
 ## Not yet supported
 
-- The server itself on PostgreSQL. The query surface, dialect helpers and
-  search are separate work. Until then the server refuses to start (exit
-  `64`) when any `RELAYCAST_DATABASE_*` variable is set.
-- `migrate` / `verify-db` through the container image. `docker/entrypoint-core.mjs`
-  launches the pinned engine without subcommand dispatch, so run them through
-  the `relaycast-engine` bin.
+- More than one replica. Realtime, presence and rate limits are in-process.
+- Retention pruning (`RELAYCAST_MESSAGE_TTL_DAYS`, workspace retention) is not exercised by the PostgreSQL test suite; leave it unset for now.
 - The standalone (bun-compiled) binary does not embed `migrations-pg`.
-- The server's own pre-listener `verify-db` call (designed behaviour of the
-  PostgreSQL serving path, which is not in this build). Until it lands, run
-  `verify-db` as a separate pre-start step, as described in
-  [Deploy ordering](#deploy-ordering).
 - Chart wiring of the migration Job and its barrier. No rolling-upgrade or
   rollback safety is claimed.

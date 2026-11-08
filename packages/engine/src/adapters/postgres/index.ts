@@ -1,7 +1,6 @@
 /**
- * PostgreSQL connection, identity, TLS and migration layer, and the verified
- * engine handle (engineDb.ts). The server still serves SQLite only; the
- * handle is used by the conformance harness's PostgreSQL mode.
+ * PostgreSQL connection, identity, TLS and migration layer, the migrate and
+ * verify-db commands, and the verified engine handle (engineDb.ts).
  */
 export {
   DEFAULT_OWNER_ROLE,

@@ -1,7 +1,7 @@
 /**
  * The real `relaycast-engine` server process, spawned from source (tsx like
  * the other spawn-based tests): with any RELAYCAST_DATABASE_* variable set it
- * must exit 64 before it opens the SQLite file or listens, and without one
+ * and no CA it must exit 64 before it opens the SQLite file or listens, and without one
  * the same command line serves from SQLite (the control).
  */
 import { spawn } from 'node:child_process';
@@ -21,7 +21,7 @@ const FAKE_URL = `postgres://u:${FAKE_PASSWORD}@127.0.0.1:1/app`;
 function cleanEnv(extra: NodeJS.ProcessEnv = {}): NodeJS.ProcessEnv {
   const env: NodeJS.ProcessEnv = {};
   for (const [name, value] of Object.entries(process.env)) {
-    if (!name.startsWith('RELAYCAST_') && name !== 'PORT') env[name] = value;
+    if (!name.startsWith('RELAYCAST_') && name !== 'PORT' && name !== 'NODE_EXTRA_CA_CERTS') env[name] = value;
   }
   return { ...env, ...extra };
 }
@@ -154,8 +154,6 @@ describe('relaycast-engine serve startup (spawned process)', { timeout: 90_000 }
     expect(signal).toBeNull();
     expect(code).toBe(64);
     expect(child.stderr()).toContain(variable);
-    expect(child.stderr()).toMatch(/relaycast-engine migrate/);
-    expect(child.stderr()).toMatch(/relaycast-engine verify-db/);
     expect(output).not.toContain(FAKE_PASSWORD);
     expect(output).not.toContain(FAKE_URL);
     // Refused before SQLite was opened: no database file, journal or tmp files.
@@ -166,13 +164,13 @@ describe('relaycast-engine serve startup (spawned process)', { timeout: 90_000 }
   }
 
   it('exits 64 with RELAYCAST_DATABASE_URL set, before creating the SQLite file or listening', async () => {
-    await expectRefused(cleanEnv({ RELAYCAST_DATABASE_URL: FAKE_URL }), 'RELAYCAST_DATABASE_URL');
+    await expectRefused(cleanEnv({ RELAYCAST_DATABASE_URL: FAKE_URL }), 'RELAYCAST_DATABASE_CA_FILE');
   });
 
   it('exits 64 with RELAYCAST_DATABASE_URL_FILE set, without echoing the file', async () => {
     const urlFile = join(secretDir, 'database-url');
     writeFileSync(urlFile, `${FAKE_URL}\n`, { mode: 0o600 });
-    await expectRefused(cleanEnv({ RELAYCAST_DATABASE_URL_FILE: urlFile }), 'RELAYCAST_DATABASE_URL_FILE');
+    await expectRefused(cleanEnv({ RELAYCAST_DATABASE_URL_FILE: urlFile }), 'RELAYCAST_DATABASE_CA_FILE');
   });
 
   it('control: without RELAYCAST_DATABASE_* the same command serves from SQLite', async () => {
