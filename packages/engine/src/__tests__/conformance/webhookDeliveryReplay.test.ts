@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { pendingEvents, webhookDeliveries } from '../../db/schema.js';
+import { pendingEvents, webhookDeliveries } from '../../db/tables.js';
 import { createWorkspace, makeNodeStack } from './harness.js';
 
 describe('webhook delivery health and replay', () => {

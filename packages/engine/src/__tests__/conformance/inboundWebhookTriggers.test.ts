@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { eq } from 'drizzle-orm';
-import { triggers, webhooks } from '../../db/schema.js';
+import { triggers, webhooks } from '../../db/tables.js';
 import { createTrigger } from '../../engine/trigger.js';
 import {
   createWorkspace,

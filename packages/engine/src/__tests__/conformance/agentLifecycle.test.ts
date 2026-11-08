@@ -1,7 +1,7 @@
 import { invokeWithConcurrentReplay } from './invocationReplay.js';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { and, eq } from 'drizzle-orm';
-import { actionInvocations, agentNodeBindings, agents, channelMembers, deliveries, nodeProviders, nodes, pendingEvents, workspaceEvents } from '../../db/schema.js';
+import { actionInvocations, agentNodeBindings, agents, channelMembers, deliveries, nodeProviders, nodes, pendingEvents, workspaceEvents } from '../../db/tables.js';
 import { AGENT_LIVENESS_TTL_MS, sweepStaleAgents } from '../../engine/agent.js';
 import { bindAgentToNode } from '../../engine/node.js';
 import { NODE_LIVENESS_TTL_MS } from '../../engine/placement.js';
@@ -2384,7 +2384,7 @@ describe('node agent binding adopts the agent location', () => {
       expect(await nodeSlots('node_owner')).toEqual({ activeAgents: 1, reservedAgents: 0 });
       await expireNode(ws.workspaceId, 'node_owner');
 
-      return { ws, target, db: stack.runtime.deps.db as unknown as EngineDb };
+      return { ws, target, db: stack.runtime.deps.db };
     }
 
     /** Everything the move touches, in one comparable value. */
@@ -2461,7 +2461,7 @@ describe('node agent binding adopts the agent location', () => {
 
     it('refuses the move on a handle that can neither roll back nor batch', async () => {
       const { ws, target, db } = await stagedMove('bare-handle');
-      const capability = (db as EngineDb & TransactionCapability).withTransaction;
+      const capability = (db as Partial<TransactionCapability>).withTransaction;
       stripTransactionCapability(db);
       const before = await snapshot(ws.workspaceId, target.agentId);
 
@@ -2472,7 +2472,7 @@ describe('node agent binding adopts the agent location', () => {
         .rejects.toThrow(/Atomic write capability required/);
       expect(await snapshot(ws.workspaceId, target.agentId)).toEqual(before);
 
-      (db as EngineDb & TransactionCapability).withTransaction = capability;
+      (db as Partial<TransactionCapability>).withTransaction = capability;
       await bindAgentToNode(db, ws.workspaceId, 'rescue-host', target.name);
       expect(await snapshot(ws.workspaceId, target.agentId)).toMatchObject({
         bindings: ['node_rescue'],

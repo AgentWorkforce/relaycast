@@ -10,7 +10,7 @@ import {
   type TestStack,
 } from './harness.js';
 import { sweepTimedOutInvocations } from '../../engine/action.js';
-import { actionInvocations, actions, agents } from '../../db/schema.js';
+import { actionInvocations, actions, agents } from '../../db/tables.js';
 
 // Issue #241: agent-published actions from an ephemeral publisher (register on
 // connect, re-register on every reconnect) must be able to re-assert their

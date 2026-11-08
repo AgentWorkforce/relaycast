@@ -1,8 +1,9 @@
 import { and, eq, inArray, isNotNull, sql } from 'drizzle-orm';
 import { FleetTaskContextSchema, type FleetActionAcceptMessage, type FleetActionResultMessage } from '@relaycast/types';
-import { actionInvocations, type TaskInvocationState } from '../db/schema.js';
+import { actionInvocations, type TaskInvocationState } from '../db/tables.js';
 import type { EngineDb } from '../ports/database.js';
 import { codedError } from '../lib/httpError.js';
+import * as sqlx from '../db/sqlx.js';
 
 type Invocation = typeof actionInvocations.$inferSelect;
 const liveStates = ['pending', 'dispatched', 'running'];
@@ -69,7 +70,7 @@ export async function expireTaskInvocation(db: EngineDb, row: Invocation): Promi
   }).where(and(
     eq(actionInvocations.id, row.id), eq(actionInvocations.workspaceId, row.workspaceId),
     inArray(actionInvocations.status, liveStates),
-    sql`json_extract(${actionInvocations.taskState}, '$.deadline') <= ${new Date().toISOString()}`,
+    sql`${sqlx.jsonGet(db, actionInvocations.taskState, '$.deadline')} <= ${new Date().toISOString()}`,
   )).returning();
   return updated ?? (await read(db, row.workspaceId, row.id))!;
 }
@@ -92,8 +93,8 @@ export async function acceptTaskInvocation(
     eq(actionInvocations.id, row.id), eq(actionInvocations.workspaceId, workspaceId),
     eq(actionInvocations.status, 'dispatched'), eq(actionInvocations.dispatchedNodeId, nodeId),
     eq(actionInvocations.dispatchedProvider, provider), eq(actionInvocations.dispatchAttempts, row.dispatchAttempts),
-    sql`json_extract(${actionInvocations.taskState}, '$.worker_generation') IS NULL`,
-    sql`json_extract(${actionInvocations.taskState}, '$.deadline') > ${new Date().toISOString()}`,
+    sql`${sqlx.jsonGet(db, actionInvocations.taskState, '$.worker_generation')} IS NULL`,
+    sql`${sqlx.jsonGet(db, actionInvocations.taskState, '$.deadline')} > ${new Date().toISOString()}`,
   )).returning();
   if (accepted) return { ...receipt(accepted), newly_accepted: true };
   row = owner(await read(db, workspaceId, row.id), nodeId, provider);
@@ -147,9 +148,9 @@ export async function completeTaskInvocation(
     eq(actionInvocations.id, row.id), eq(actionInvocations.workspaceId, workspaceId),
     eq(actionInvocations.status, 'running'), eq(actionInvocations.dispatchedNodeId, nodeId),
     eq(actionInvocations.dispatchedProvider, provider), eq(actionInvocations.dispatchAttempts, row.dispatchAttempts),
-    sql`json_extract(${actionInvocations.taskState}, '$.execution_id') = ${message.execution_id}`,
-    sql`json_extract(${actionInvocations.taskState}, '$.worker_generation') = ${message.worker_generation}`,
-    sql`json_extract(${actionInvocations.taskState}, '$.deadline') > ${new Date().toISOString()}`,
+    sql`${sqlx.jsonGet(db, actionInvocations.taskState, '$.execution_id')} = ${message.execution_id}`,
+    sql`${sqlx.jsonGetNum(db, actionInvocations.taskState, '$.worker_generation')} = ${message.worker_generation}`,
+    sql`${sqlx.jsonGet(db, actionInvocations.taskState, '$.deadline')} > ${new Date().toISOString()}`,
   )).returning();
   if (completed) return { receipt: receipt(completed), completed };
   row = owner(await read(db, workspaceId, row.id), nodeId, provider);
@@ -164,6 +165,6 @@ export async function expireTaskInvocations(db: EngineDb): Promise<void> {
     status: 'failed', error: 'task_deadline_exceeded', completedAt: new Date(),
   }).where(and(
     isNotNull(actionInvocations.taskState), inArray(actionInvocations.status, liveStates),
-    sql`json_extract(${actionInvocations.taskState}, '$.deadline') <= ${new Date().toISOString()}`,
+    sql`${sqlx.jsonGet(db, actionInvocations.taskState, '$.deadline')} <= ${new Date().toISOString()}`,
   ));
 }

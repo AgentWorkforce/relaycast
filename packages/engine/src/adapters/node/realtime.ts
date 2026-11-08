@@ -19,7 +19,7 @@ import {
   agentNodeBindings,
   agents,
   observerTokens,
-} from '../../db/schema.js';
+} from '../../db/tables.js';
 import { handleNodeControlMessage, handleProviderDisconnect, IMPLICIT_DIRECT_NODE_ID_PREFIX, markNodeOffline } from '../../engine/node.js';
 import { agentLivenessRefresh, RELEASED_AGENT_STATUS } from '../../engine/agent.js';
 import { serializeNodeOp } from '../../engine/nodeLock.js';
@@ -31,6 +31,7 @@ import type { InvocationCompletionDeps } from '../../engine/invocationCompletion
 import type { AdmissionHooks } from '../../ports/admission.js';
 import { createRegistrationAdmission } from '../../engine/registrationAdmission.js';
 import type { FleetRelaycastToBrokerMessage } from '@relaycast/types';
+import * as sqlx from '../../db/sqlx.js';
 
 /**
  * Transport-agnostic socket the adapter writes to. The Node entrypoint adapts a
@@ -378,10 +379,10 @@ export class InProcessRealtime implements RealtimeBus, ConnectionRegistry, NodeC
             ),
           ),
           ...(authorization.expectedTokenHash !== undefined
-            ? [sql`json_extract(${actionInvocations.input}, '$.expected_token_hash') = ${authorization.expectedTokenHash}`]
+            ? [sql`${sqlx.jsonGet(this.db, actionInvocations.input, '$.expected_token_hash')} = ${authorization.expectedTokenHash}`]
             : []),
           ...(authorization.expectedAgentId !== undefined
-            ? [sql`json_extract(${actionInvocations.input}, '$.expected_agent_id') = ${authorization.expectedAgentId}`]
+            ? [sql`${sqlx.jsonGet(this.db, actionInvocations.input, '$.expected_agent_id')} = ${authorization.expectedAgentId}`]
             : []),
         ));
       if (!authorized) {
@@ -455,7 +456,7 @@ export class InProcessRealtime implements RealtimeBus, ConnectionRegistry, NodeC
               AND ${actions.name} = ${authorization.actionName}
               AND ${actions.handlerNodeId} = ${nodeId}
               AND COALESCE(${actions.handlerProvider}, ${DEFAULT_PROVIDER_NAME}) = ${providerName}
-              AND ${actions.isActive} = 1
+              AND ${actions.isActive} = ${sqlx.bool(this.db, true)}
           )`,
         ))
         .returning({
@@ -519,7 +520,7 @@ export class InProcessRealtime implements RealtimeBus, ConnectionRegistry, NodeC
         providerAcceptedAttempt: acceptedAttempt,
         spawnReservedAt: authorization.reservationHeld ? new Date() : null,
         ...(authorization.recordAttempt ? {
-          attemptedNodeIds: sql`json_insert(COALESCE(${actionInvocations.attemptedNodeIds}, '[]'), '$[#]', ${nodeId})`,
+          attemptedNodeIds: sqlx.jsonAppend(this.db, sql`COALESCE(${actionInvocations.attemptedNodeIds}, '[]')`, sql`${nodeId}`, 'text'),
           dispatchAttempts: acceptedAttempt,
         } : {}),
       })
@@ -551,7 +552,7 @@ export class InProcessRealtime implements RealtimeBus, ConnectionRegistry, NodeC
             AND ${actions.name} = ${message.action}
             AND ${actions.handlerAgentId} = ${authorization.handlerAgentId}
             AND ${actions.handlerNodeId} IS NULL
-            AND ${actions.isActive} = 1
+            AND ${actions.isActive} = ${sqlx.bool(this.db, true)}
         )`,
       ))
       .returning({

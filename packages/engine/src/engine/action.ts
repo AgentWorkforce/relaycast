@@ -1,7 +1,7 @@
 import { invalidateDirectPresence, nodeLive, nodeReady, providerLive } from './nodeLiveness.js';
 import { and, asc, eq, inArray, isNotNull, isNull, like, lt, lte, or, sql } from 'drizzle-orm';
 import type { getDb } from '../db/index.js';
-import { actions, actionInvocations, agents, agentNodeBindings, channelMembers, dmParticipants, nodes } from '../db/schema.js';
+import { actions, actionInvocations, agents, agentNodeBindings, channelMembers, dmParticipants, nodes } from '../db/tables.js';
 import { waitForPendingInvocationRetry } from './invocationRetry.js';
 import { generateId } from './snowflake.js';
 import {
@@ -28,6 +28,7 @@ import { DEFAULT_PROVIDER_NAME, capacityProviderName, claimOrphanedGlobalAliases
 import { AGENT_TOKEN_HASH_PATTERN } from '@relaycast/types';
 import { createTaskState, expireTaskInvocation, expireTaskInvocations, taskExecution } from './taskInvocation.js';
 import { withEngineOperation } from '../lib/engineDiagnostics.js';
+import * as sqlx from '../db/sqlx.js';
 
 type Db = ReturnType<typeof getDb>;
 type ActionRow = typeof actions.$inferSelect;
@@ -1360,7 +1361,7 @@ async function dispatchRelease(args: {
           eq(actionInvocations.workspaceId, args.workspaceId),
           eq(actionInvocations.id, invocation.id),
           inArray(actionInvocations.status, OPEN_INVOCATION_STATUSES),
-          expectedTokenHash || expectedAgentId ? sql`NOT (${generationStillCurrent})` : sql`0`,
+          expectedTokenHash || expectedAgentId ? sql`NOT (${generationStillCurrent})` : sqlx.bool(writeDb, false),
         ))
         .returning({ id: actionInvocations.id }));
 
@@ -1468,13 +1469,13 @@ async function dispatchRelease(args: {
           tokenHash: releasedTokenHash,
           previousTokenHash: null,
           previousTokenExpiresAt: null,
-          metadata: sql`json_patch(COALESCE(${agents.metadata}, '{}'), ${JSON.stringify({
+          metadata: sqlx.jsonMerge(writeDb, sql`COALESCE(${agents.metadata}, '{}')`, sql`${JSON.stringify({
             release: {
               reason: typeof input.reason === 'string' ? input.reason : null,
               released_at: completedAt.toISOString(),
               previous_name: agent.name,
             },
-          })})`,
+          })}`),
         })
         .where(and(
           eq(agents.workspaceId, args.workspaceId),
@@ -2592,13 +2593,13 @@ async function completeReleaseNodeInvocation(
           locationType: 'self_connected',
           locationNodeId: null,
           lastSeen: completedAt,
-          metadata: sql`json_patch(COALESCE(${agents.metadata}, '{}'), ${JSON.stringify({
+          metadata: sqlx.jsonMerge(writeDb, sql`COALESCE(${agents.metadata}, '{}')`, sql`${JSON.stringify({
             release: {
               reason: typeof input.reason === 'string' ? input.reason : null,
               released_at: completedAt.toISOString(),
               previous_name: agent.name,
             },
-          })})`,
+          })}`),
         })
         .where(currentAgent));
     } else {
@@ -2704,7 +2705,7 @@ async function dispatchNodeAttempt(
   const attemptFields = opts.skipIncrementAttempts
     ? {}
     : {
-      attemptedNodeIds: sql`json_insert(COALESCE(${actionInvocations.attemptedNodeIds}, '[]'), '$[#]', ${nodeId})`,
+      attemptedNodeIds: sqlx.jsonAppend(db, sql`COALESCE(${actionInvocations.attemptedNodeIds}, '[]')`, sql`${nodeId}`, 'text'),
       dispatchAttempts: sql`COALESCE(${actionInvocations.dispatchAttempts}, 0) + 1`,
     };
   const [updated] = await db
@@ -2745,7 +2746,7 @@ async function dispatchNodeAttempt(
             AND ${actions.id} = ${opts.expectedAction.id}
         )`,
         ...(opts.targetActionId || opts.expectedAction.handlerAgentId ? [
-          registeredActionDispatchPredicate({
+          registeredActionDispatchPredicate(db, {
             workspaceId,
             nodeId,
             providerName: opts.providerName,
@@ -2799,7 +2800,7 @@ async function restoreUnsentSpawnClaim(
     ));
 }
 
-function registeredActionDispatchPredicate(args: {
+function registeredActionDispatchPredicate(db: object, args: {
   workspaceId: string;
   nodeId: string;
   providerName: string;
@@ -2816,7 +2817,7 @@ function registeredActionDispatchPredicate(args: {
     WHERE ${actions.workspaceId} = ${args.workspaceId}
       AND ${actions.id} = ${args.actionId}
       AND ${actions.name} = ${args.actionName}
-      AND ${actions.isActive} = 1
+      AND ${actions.isActive} = ${sqlx.bool(db, true)}
       ${handlerPredicate}
   )`;
 }
@@ -2845,7 +2846,7 @@ async function claimRegisteredActionHandoff(
   const attemptFields = args.skipIncrementAttempts
     ? {}
     : {
-      attemptedNodeIds: sql`json_insert(COALESCE(${actionInvocations.attemptedNodeIds}, '[]'), '$[#]', ${args.nodeId})`,
+      attemptedNodeIds: sqlx.jsonAppend(db, sql`COALESCE(${actionInvocations.attemptedNodeIds}, '[]')`, sql`${args.nodeId}`, 'text'),
       dispatchAttempts: sql`COALESCE(${actionInvocations.dispatchAttempts}, 0) + 1`,
     };
   const [claimed] = await db
@@ -2884,7 +2885,7 @@ async function claimRegisteredActionHandoff(
         WHERE ${actions.workspaceId} = ${args.workspaceId}
           AND ${actions.id} = ${args.expectedActionId}
       )`,
-      ...(args.targetActionId ? [registeredActionDispatchPredicate({
+      ...(args.targetActionId ? [registeredActionDispatchPredicate(db, {
         workspaceId: args.workspaceId,
         nodeId: args.nodeId,
         providerName: args.providerName,
@@ -2927,7 +2928,7 @@ async function bindInvocationToRegisteredNodeAction(
       isNull(actionInvocations.actionId),
       inArray(actionInvocations.status, OPEN_INVOCATION_STATUSES),
       eq(actionInvocations.dispatchAttempts, 0),
-      registeredActionDispatchPredicate(args),
+      registeredActionDispatchPredicate(db, args),
     ))
     .returning({ id: actionInvocations.id });
   return !!bound;

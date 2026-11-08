@@ -1,6 +1,6 @@
 import { and, eq } from 'drizzle-orm';
 import type { EngineDb } from './ports/index.js';
-import { agents } from './db/schema.js';
+import { agents } from './db/tables.js';
 import { deregisterAgentViaNode, directNodeIdForAgent } from './engine/node.js';
 import type { InvocationCompletionDeps } from './engine/invocationCompletion.js';
 

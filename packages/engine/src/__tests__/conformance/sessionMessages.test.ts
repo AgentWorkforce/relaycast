@@ -211,7 +211,7 @@ describe('session_ref message lookup and effective retention', () => {
   it('keeps a workspace readable when its boundary query fails', async () => {
     const { workspaceId } = await createWorkspace(stack.app, 'workspace-retention-failure');
     let selects = 0;
-    const failingRetentionDb = new Proxy(stack.runtime.handle.db as unknown as EngineDb, {
+    const failingRetentionDb = new Proxy(stack.runtime.handle.db, {
       get(target, property) {
         if (property === 'select') {
           return (...args: unknown[]) => {
@@ -238,7 +238,7 @@ describe('session_ref message lookup and effective retention', () => {
   });
 
   it('must-fire: reports a query failure as unknown, never retained', async () => {
-    const failingDb = new Proxy(stack.runtime.handle.db as unknown as EngineDb, {
+    const failingDb = new Proxy(stack.runtime.handle.db, {
       get(target, property) {
         if (property === 'select') {
           return () => {

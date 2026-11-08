@@ -1,7 +1,7 @@
 import { prepareAuthorityFanout } from './deliveryWrites.js';
 import { eq, and, sql, lt, gt } from 'drizzle-orm';
 import type { getDb } from '../db/index.js';
-import { messages, channels, agents, dmConversations, nodes } from '../db/schema.js';
+import { messages, channels, agents, dmConversations, nodes } from '../db/tables.js';
 import { runAtomicWrites, type AtomicWrite } from '../ports/database.js';
 import { generateId } from './snowflake.js';
 import {
@@ -22,6 +22,7 @@ import {
   SENDER_ADDRESS_METADATA_KEY,
   senderAddressField,
 } from './address.js';
+import * as sqlx from '../db/sqlx.js';
 
 type Db = ReturnType<typeof getDb>;
 
@@ -53,7 +54,7 @@ export async function postReply(
     .where(eq(dmConversations.channelId, parent.channelId));
 
   const [agent] = await db
-    .select({ name: agents.name, node: addressNodeSelection })
+    .select({ name: agents.name, node: addressNodeSelection() })
     .from(agents)
     .leftJoin(nodes, eq(nodes.id, agents.locationNodeId))
     .where(and(eq(agents.workspaceId, workspaceId), eq(agents.id, agentId)));
@@ -247,7 +248,7 @@ export async function getThread(
     })
     // SQLite can otherwise prefer the workspace/id index and scan unrelated
     // history. This existing index seeks the thread and supports id pagination.
-    .from(sql`${messages} INDEXED BY idx_messages_thread`)
+    .from(sql`${messages} ${sqlx.indexedBy(db, 'idx_messages_thread')}`)
     .leftJoin(agents, eq(messages.agentId, agents.id))
     .where(and(...conditions))
     .orderBy(sql`${messages.id} ASC`)

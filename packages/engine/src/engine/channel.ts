@@ -1,10 +1,11 @@
 import { eq, and, sql, inArray, ne } from 'drizzle-orm';
 import { z } from 'zod';
 import type { getDb } from '../db/index.js';
-import { channels, channelMembers, agents } from '../db/schema.js';
+import { channels, channelMembers, agents } from '../db/tables.js';
 import { generateId } from './snowflake.js';
 import { getCachedChannel, setCachedChannel, invalidateChannelCache } from './cache.js';
 import { codedError } from '../lib/httpError.js';
+import * as sqlx from '../db/sqlx.js';
 
 type Db = ReturnType<typeof getDb>;
 
@@ -39,7 +40,7 @@ export async function ensureAgentSubscriptionChannel(db: Db, workspaceId: string
 
   // Recheck the identity in the INSERT, serialized with tombstoning/removal.
   // A release between the lookup and this write must never rejoin a tombstone.
-  await db.run(sql`INSERT INTO channel_members (channel_id, agent_id, role)
+  await sqlx.run(db, sql`INSERT INTO channel_members (channel_id, agent_id, role)
     SELECT ${channel.id}, id, 'owner' FROM agents
     WHERE id = ${agent.id} AND name = ${agentName} AND status != 'released'
     ON CONFLICT DO NOTHING`);
@@ -310,7 +311,7 @@ export async function archiveChannel(db: Db, workspaceId: string, name: string) 
 
 async function insertLiveSubscriptionMember(db: Db, workspaceId: string, channelId: string, agentId: string) {
   // Serialize the liveness check with release's membership removal.
-  await db.run(sql`INSERT INTO channel_members (channel_id, agent_id, role)
+  await sqlx.run(db, sql`INSERT INTO channel_members (channel_id, agent_id, role)
     SELECT ${channelId}, id, 'member' FROM agents
     WHERE id = ${agentId} AND workspace_id = ${workspaceId} AND status != 'released'
     ON CONFLICT DO NOTHING`);
