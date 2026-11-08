@@ -5,7 +5,6 @@ import { compileSqliteQuery } from '../adapters/sqlite-handle.js';
 import * as sqlx from '../db/sqlx.js';
 import { pruneRowidPages } from '../engine/rowidRetention.js';
 import { pruneExpired } from '../engine/retention.js';
-import type { EngineDb } from '../ports/database.js';
 
 // Each SQLite expectation is the exact text the call site emitted before the
 // rewrite, taken from `git show db179582:packages/engine/src/<file>` (cited per
@@ -410,7 +409,7 @@ describe('rowid retention cursorStore on PostgreSQL', () => {
         touched.push(String(key));
         return undefined;
       },
-    }) as unknown as EngineDb;
+    }) as unknown as Parameters<typeof pruneRowidPages>[0];
     const cursorStore = {
       load: async () => { touched.push('load'); return undefined; },
       save: async () => { touched.push('save'); },
