@@ -565,17 +565,20 @@ describe("publish workflow safety contract", () => {
     assert.doesNotMatch(refresh, /npm (?:install|update) --package-lock-only/);
   });
 
-  it("restores source peer metadata after npm refreshes the release lockfile", () => {
+  it("restores source metadata after npm refreshes and checks it before packing", () => {
     const build = jobBlock("build");
     const refresh = build.indexOf("npm install --package-lock-only --ignore-scripts");
     const restore = build.indexOf("restore-release-lock-metadata.mjs", refresh);
     const validate = build.indexOf("Validate release version, changelog, and generated-source parity");
     assert.ok(refresh !== -1, "workspace lock refresh not found");
-    assert.ok(restore > refresh, "peer metadata restore must follow npm's lock refresh");
+    assert.ok(restore > refresh, "metadata restore must follow npm's lock refresh");
     assert.ok(validate > restore, "release validation must follow metadata restoration");
+    const check = build.indexOf("node scripts/restore-release-lock-metadata.mjs --check");
+    assert.ok(check > build.indexOf("run: npx turbo test"), "metadata check must follow build and tests");
+    assert.ok(check < build.indexOf("- name: Pack packages"), "metadata check must precede packing");
   });
 
-  it("restores peer metadata at its source JSON position", () => {
+  it("restores peer and dev metadata at their source JSON positions", () => {
     const root = mkdtempSync(path.join(tmpdir(), "relaycast-release-lock-metadata-"));
     try {
       const sourceLock = {
@@ -588,6 +591,15 @@ describe("publish workflow safety contract", () => {
             engines: { node: ">=22" },
             funding: { url: "https://example.test" },
           },
+          "node_modules/tsx/node_modules/@esbuild/linux-x64": {
+            version: "0.28.0",
+            dev: true,
+            optional: true,
+            resolved: "https://registry.example.test/esbuild.tgz",
+            integrity: "sha512-fixture",
+          },
+          "node_modules/false-markers": { version: "1.0.0", peer: false, dev: false },
+          "node_modules/absent-markers": { version: "1.0.0" },
         },
       };
       writeFileSync(path.join(root, "package-lock.json"), `${JSON.stringify(sourceLock, null, 2)}\n`);
@@ -600,7 +612,22 @@ describe("publish workflow safety contract", () => {
       const refreshedLock = structuredClone(sourceLock);
       refreshedLock.packages["packages/example"].version = "1.1.0";
       delete refreshedLock.packages["packages/example"].peer;
+      delete refreshedLock.packages["node_modules/tsx/node_modules/@esbuild/linux-x64"].dev;
+      refreshedLock.packages["node_modules/false-markers"].peer = true;
+      refreshedLock.packages["node_modules/false-markers"].dev = true;
+      refreshedLock.packages["node_modules/absent-markers"].peer = true;
+      refreshedLock.packages["node_modules/absent-markers"].dev = true;
       writeFileSync(path.join(root, "package-lock.json"), `${JSON.stringify(refreshedLock, null, 2)}\n`);
+
+      const beforeCheck = readFileSync(path.join(root, "package-lock.json"), "utf8");
+      const rejected = spawnSync(process.execPath, [restoreReleaseLockMetadata, "--check"], {
+        cwd: root,
+        encoding: "utf8",
+      });
+      assert.equal(rejected.status, 1, rejected.stderr);
+      assert.match(rejected.stderr, /Release lock metadata differs from source/);
+      assert.match(rejected.stderr, /@esbuild\/linux-x64\.dev/);
+      assert.equal(readFileSync(path.join(root, "package-lock.json"), "utf8"), beforeCheck);
 
       const restored = spawnSync(process.execPath, [restoreReleaseLockMetadata], {
         cwd: root,
@@ -614,6 +641,12 @@ describe("publish workflow safety contract", () => {
         readFileSync(path.join(root, "package-lock.json"), "utf8"),
         `${JSON.stringify(expectedLock, null, 2)}\n`,
       );
+      const accepted = spawnSync(process.execPath, [restoreReleaseLockMetadata, "--check"], {
+        cwd: root,
+        encoding: "utf8",
+      });
+      assert.equal(accepted.status, 0, accepted.stderr);
+      assert.equal(readFileSync(path.join(root, "package-lock.json"), "utf8"), `${JSON.stringify(expectedLock, null, 2)}\n`);
     } finally {
       removeTemporaryDirectory(root);
     }

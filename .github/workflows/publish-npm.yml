@@ -257,7 +257,7 @@ jobs:
         # Preserve the resolved dependency graph and update only the workspace
         # metadata. Re-resolving from an empty lockfile can trip npm/arborist's
         # `edgesOut` failure after every workspace version changes at once. npm
-        # may also rewrite peer markers on optional platform packages; restore
+        # may also rewrite peer/dev markers on optional platform packages; restore
         # those source-tree facts so the release commit stays version-only.
         run: |
           npm install --package-lock-only --ignore-scripts
@@ -278,6 +278,9 @@ jobs:
         run: npx turbo test
         env:
           DO_NOT_TRACK: "1"
+
+      - name: Validate release lock metadata before packing
+        run: node scripts/restore-release-lock-metadata.mjs --check
 
       # Publish the exact bytes produced by this immutable source checkout.
       # The manifest is also used by resumed matrix jobs and the release tag
