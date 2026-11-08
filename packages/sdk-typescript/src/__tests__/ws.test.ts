@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { RelayCast } from '../relay.js';
 import type { AgentExitedEvent, NodeStatusOfflineEvent, NodeStatusOnlineEvent } from '../types.js';
 import { WsClient } from '../ws.js';
+import { transformForClient } from '../../../engine/src/engine/wsTransform.js';
 
 class MockWebSocket {
   static readonly OPEN = 1;
@@ -124,12 +125,70 @@ describe('WsClient', () => {
     ws.simulateOpen();
     const blocks = [{ type: 'text', text: 'structured proof' }];
     ws.simulateMessage({
-      id: '550e8400-e29b-41d4-a716-446655440000', type: 'message.created', channel: 'general',
-      message: { id: 'm_blocks', agent_id: 'bot_1', agent_name: 'Bot', text: 'proof', attachments: [], blocks },
+      id: '550e8400-e29b-41d4-a716-446655440000',
+      type: 'message.created',
+      channel: 'general',
+      message: {
+        id: 'm_blocks',
+        agent_id: 'bot_1',
+        agent_name: 'Bot',
+        text: 'proof',
+        attachments: [],
+        blocks,
+      },
     });
-    expect(handler).toHaveBeenCalledWith(expect.objectContaining({
-      message: expect.objectContaining({ blocks }),
-    }));
+    expect(handler).toHaveBeenCalledWith(
+      expect.objectContaining({
+        message: expect.objectContaining({ blocks }),
+      }),
+    );
+    void client.disconnect();
+  });
+
+  it.each([
+    'message.created',
+    'message.updated',
+    'thread.reply',
+    'dm.received',
+    'group_dm.received',
+  ])('retains opaque blocks in server-produced %s frames', (type) => {
+    const client = new WsClient({ token: 'at_live_test' });
+    const handler = vi.fn();
+    client.on('*', handler);
+    client.connect();
+    const ws = MockWebSocket.instances[0]!;
+    ws.simulateOpen();
+    const blocks = [
+      { kind: 'test', payload: { signed_value: 'abc' } },
+      { type: 'text', text: 'known block', custom_field: { proof_id: 'p1' } },
+      null,
+      7,
+      false,
+      ['opaque_value'],
+    ];
+    const message = { id: 'm_opaque', agent_id: 'bot_1', agent_name: 'Bot', text: 'proof', blocks };
+    ws.simulateMessage(
+      transformForClient({
+        type,
+        workspace_id: 'ws_1',
+        timestamp: '2026-11-07T00:00:00Z',
+        data: {
+          ...message,
+          from_name: 'Bot',
+          channel_name: 'general',
+          thread_id: 'm_parent',
+          conversation_id: 'dm_1',
+          attachments: [],
+          ...(type === 'dm.received' || type === 'group_dm.received' ? { message } : {}),
+        },
+      }),
+    );
+    expect(handler).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type,
+        message: expect.objectContaining({ blocks }),
+      }),
+    );
     void client.disconnect();
   });
 

@@ -5,11 +5,13 @@ export type CamelCase<S extends string> =
     ? `${Head}${Capitalize<CamelCase<Tail>>}`
     : S;
 
-export type Camelize<T> =
+export type Camelize<T, OpaqueBlocks extends boolean = false> =
   T extends Primitive ? T :
-  T extends Array<infer U> ? Array<Camelize<U>> :
+  T extends Array<infer U> ? Array<Camelize<U, OpaqueBlocks>> :
   T extends object
-    ? { [K in keyof T as K extends string ? CamelCase<K> : K]: Camelize<T[K]> }
+    ? { [K in keyof T as K extends string ? CamelCase<K> : K]: OpaqueBlocks extends true
+      ? K extends 'blocks' ? T[K] : Camelize<T[K], OpaqueBlocks>
+      : Camelize<T[K], OpaqueBlocks> }
     : T;
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {
@@ -55,18 +57,25 @@ const VERBATIM_VALUE_KEYS = new Set([
   'metadata',
 ]);
 
-export function camelizeKeys<T>(value: T): Camelize<T> {
+export function camelizeKeys<T, OpaqueBlocks extends boolean = false>(
+  value: T,
+  options: { opaqueBlocks?: OpaqueBlocks } = {},
+): Camelize<T, OpaqueBlocks> {
   if (Array.isArray(value)) {
-    return value.map((item) => camelizeKeys(item)) as Camelize<T>;
+    return value.map((item) => camelizeKeys(item, options)) as Camelize<T, OpaqueBlocks>;
   }
   if (isPlainObject(value)) {
     const out: Record<string, unknown> = {};
     for (const [key, val] of Object.entries(value)) {
-      out[toCamelKey(key)] = VERBATIM_VALUE_KEYS.has(key) ? val : camelizeKeys(val);
+      // Realtime block documents are opaque. HTTP payload casing keeps its
+      // existing behavior unless the caller explicitly opts into this mode.
+      out[toCamelKey(key)] = (options.opaqueBlocks && key === 'blocks') || VERBATIM_VALUE_KEYS.has(key)
+        ? val
+        : camelizeKeys(val, options);
     }
-    return out as Camelize<T>;
+    return out as Camelize<T, OpaqueBlocks>;
   }
-  return value as Camelize<T>;
+  return value as Camelize<T, OpaqueBlocks>;
 }
 
 export function decamelizeKeys<T>(value: T): unknown {

@@ -11,7 +11,7 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Fixed
 
-- Message, thread, and direct-message WebSocket handlers retain rich blocks from node delivery payloads.
+- Message creation, updates, and thread WebSocket events retain arbitrary rich blocks. DM and group-DM handlers also preserve blocks when supplied by the server; DM send/storage support is unchanged.
 
 ## [12.8.0] - 2026-11-04
 

@@ -1,0 +1,49 @@
+import { expectTypeOf, it } from 'vitest';
+import { camelizeKeys, type Camelize } from '../casing.js';
+import type {
+  MessageBlock,
+  PostMessageRequest,
+  MessageCreatedEvent,
+  MessageUpdatedEvent,
+  ThreadReplyEvent,
+  DmReceivedEvent,
+  GroupDmReceivedEvent,
+} from '../types.js';
+
+it('keeps opaque block document keys in received types', () => {
+  type Blocks = { kind: string; signed_value: { proof_id: string } }[];
+  type Wire = { agent_id: string; message: { blocks: Blocks } };
+  expectTypeOf<Camelize<Wire, true>>().toEqualTypeOf<{
+    agentId: string;
+    message: { blocks: Blocks };
+  }>();
+  const received = camelizeKeys(
+    {
+      agent_id: 'a1',
+      message: { blocks: [{ kind: 'test', signed_value: { proof_id: 'p1' } }] },
+    },
+    { opaqueBlocks: true },
+  );
+  expectTypeOf(received.message.blocks[0]!.signed_value.proof_id).toEqualTypeOf<string>();
+});
+
+it('retains camelCase action fields in outgoing requests', () => {
+  const blocks: MessageBlock[] = [
+    {
+      type: 'actions',
+      elements: [{ type: 'button', text: 'Approve', actionId: 'approve' }],
+    },
+  ];
+  const request: PostMessageRequest = { text: 'Review', mode: 'wait', blocks };
+  expectTypeOf(request.blocks).toEqualTypeOf<MessageBlock[] | undefined>();
+});
+
+it('advertises realtime blocks as unvalidated wire data', () => {
+  type RealtimeEvent =
+    | MessageCreatedEvent
+    | MessageUpdatedEvent
+    | ThreadReplyEvent
+    | DmReceivedEvent
+    | GroupDmReceivedEvent;
+  expectTypeOf<RealtimeEvent['message']['blocks']>().toEqualTypeOf<unknown[] | null | undefined>();
+});

@@ -268,14 +268,14 @@ export class WsClient {
 
         const result = ServerEventSchema.safeParse(parsed);
         if (result.success) {
-          this.emit(result.data.type, camelizeKeys(result.data) as WsClientEvent);
+          this.emit(result.data.type, camelizeKeys(result.data, { opaqueBlocks: true }) as WsClientEvent);
         } else if (
           parsed !== null &&
           typeof parsed === 'object' &&
           typeof parsed.type === 'string'
         ) {
           // Forward unrecognized event types so wildcard listeners still fire
-          this.emit(parsed.type, camelizeKeys(parsed) as WsClientEvent);
+          this.emit(parsed.type, camelizeKeys(parsed, { opaqueBlocks: true }) as WsClientEvent);
         } else if (this.debug) {
           console.warn('[relaycast] Dropped WebSocket message: missing or invalid "type" field', parsed);
         }
@@ -505,11 +505,11 @@ export class WsClient {
     }
     const result = ServerEventSchema.safeParse(transformed);
     if (result.success) {
-      this.emit(result.data.type, camelizeKeys(result.data) as WsClientEvent);
+      this.emit(result.data.type, camelizeKeys(result.data, { opaqueBlocks: true }) as WsClientEvent);
       return;
     }
     if (typeof transformed.type === 'string') {
-      this.emit(transformed.type, camelizeKeys(transformed) as WsClientEvent);
+      this.emit(transformed.type, camelizeKeys(transformed, { opaqueBlocks: true }) as WsClientEvent);
     } else if (this.debug) {
       console.warn('[relaycast] Dropped node event: missing or invalid "type" field', transformed);
     }
