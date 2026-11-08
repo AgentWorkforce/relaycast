@@ -25,6 +25,7 @@ jobs:
           build: "true"
       - run: npm run test:engine:regression
       - run: npm run test:release
+      - run: npm run test:release-preparation
       - run: npx turbo lint
       - run: npm run check:pg-migrations -w @relaycast/engine
       - run: npx turbo test
