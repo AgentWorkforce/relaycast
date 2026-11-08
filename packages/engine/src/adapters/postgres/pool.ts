@@ -50,8 +50,8 @@ export function postgresPoolOptions(config: PostgresConfig): pg.PoolConfig {
     password: config.password,
     ssl: postgresTlsOptions(config),
     application_name: `relaycast-engine:${config.mode}`,
-    // Convenience only: every engine statement, migration and trigger body
-    // schema-qualifies its relations.
+    // Fixed at connect time: the engine schema is `public`, and only its owner
+    // can create in it. Trigger bodies still qualify their relations.
     options: `-c search_path=${config.schema}`,
     ...(config.statementTimeoutMs !== undefined
       ? { statement_timeout: config.statementTimeoutMs }

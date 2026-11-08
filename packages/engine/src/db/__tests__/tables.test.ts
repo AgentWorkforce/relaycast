@@ -57,8 +57,8 @@ describe('db/tables binding', () => {
       const bound = (t as unknown as Record<string, unknown>)[name];
       expect(bound, name).toBe((pgSchema as unknown as Record<string, unknown>)[name]);
       expect(is(bound, PgTable), name).toBe(true);
-      // Every query names "relaycast"."<table>": nothing depends on search_path.
-      expect(getTableConfig(bound as InstanceType<typeof PgTable>).schema, name).toBe('relaycast');
+      // Every table is in the default schema `public`, named via search_path.
+      expect(getTableConfig(bound as InstanceType<typeof PgTable>).schema, name).toBeUndefined();
     }
     const other = t.alias(t.workspaces, 'other_workspace');
     expect(is(other, PgTable)).toBe(true);

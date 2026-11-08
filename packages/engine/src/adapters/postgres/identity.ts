@@ -26,7 +26,7 @@ export interface VerifyIdentityOptions {
   /** The role this session must be (never taken from the connection URL). */
   expectedRole: string;
   mode: PostgresMode;
-  /** The engine schema (relaycast). */
+  /** The engine schema. */
   schema: string;
   /** Owner role name; runtime mode checks the session cannot reach it. Defaults to the schema owner. */
   ownerRole?: string;
@@ -300,7 +300,11 @@ export async function verifyIdentity(
        FROM pg_catalog.pg_namespace n WHERE n.nspname = 'public'`,
     )
   ).rows[0];
-  if (pub) {
+  if (schema === "public") {
+    // `public` is the engine schema here: the schema_create, no_schema_create
+    // and ledger checks below judge it, and DML in it is the whole point.
+    add("public_schema_locked", true, "not applicable: public is the engine schema");
+  } else if (pub) {
     addAll(
       "public_schema_locked",
       [

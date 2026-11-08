@@ -9,25 +9,27 @@ provision and verify a PostgreSQL database ahead of the Postgres query backend.
 
 ## What the platform provides
 
-The engine never creates schemas or roles and never grants on them. Before
-the first `migrate`, the platform (DBA, operator, Terraform) must create:
+Relaycast runs in its own database, in schema `public`. The engine never
+creates databases, schemas or roles and never grants on them. Before the first
+`migrate`, the platform (DBA, operator, Terraform) must create:
 
 ```sql
--- Run as a privileged role, once per database.
+-- Run as a privileged role, once, in the service's own database.
 CREATE ROLE relaycast_owner   LOGIN PASSWORD '...';   -- migration Job only
 CREATE ROLE relaycast_runtime LOGIN PASSWORD '...';   -- the server and verify-db
-CREATE SCHEMA relaycast AUTHORIZATION relaycast_owner;
-GRANT USAGE ON SCHEMA relaycast TO relaycast_runtime;
+ALTER SCHEMA public OWNER TO relaycast_owner;
+REVOKE CREATE ON SCHEMA public FROM PUBLIC;
+GRANT USAGE ON SCHEMA public TO relaycast_runtime;
 
 -- Runtime gets DML on everything the owner creates there, nothing more.
-ALTER DEFAULT PRIVILEGES FOR ROLE relaycast_owner IN SCHEMA relaycast
+ALTER DEFAULT PRIVILEGES FOR ROLE relaycast_owner IN SCHEMA public
   GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO relaycast_runtime;
-ALTER DEFAULT PRIVILEGES FOR ROLE relaycast_owner IN SCHEMA relaycast
+ALTER DEFAULT PRIVILEGES FOR ROLE relaycast_owner IN SCHEMA public
   GRANT SELECT, USAGE, UPDATE ON SEQUENCES TO relaycast_runtime;
 
--- Lock down the database and public.
+-- Lock down the database.
 REVOKE TEMP, CREATE ON DATABASE app FROM PUBLIC;
-REVOKE CREATE ON SCHEMA public FROM PUBLIC;
+GRANT TEMP ON DATABASE app TO relaycast_owner;
 ```
 
 Neither role may be SUPERUSER, CREATEROLE, CREATEDB, REPLICATION or
@@ -39,7 +41,7 @@ same database, or CREATE on the database. Only `relaycast_owner` may hold
 TEMP on the database, by a direct grant.
 
 The migration ledger is the one exception to the default privileges.
-`migrate` revokes everything on `relaycast._engine_migrations` and grants
+`migrate` revokes everything on `public._engine_migrations` and grants
 the runtime role SELECT only. Those are table-level grants on a table the
 owner just created, not grants on schemas or roles.
 
@@ -48,15 +50,15 @@ owner just created, not grants on schemas or roles.
 | Variable | Required | Meaning |
 | --- | --- | --- |
 | `RELAYCAST_DATABASE_URL` / `RELAYCAST_DATABASE_URL_FILE` | yes | `postgres://user:password@host:port/database`. One TCP host. The password is required: there is no `PGPASSWORD` or `.pgpass` fallback. The only accepted query parameter is `sslmode=verify-full`. |
-| `RELAYCAST_DATABASE_CA_FILE` | yes | PEM CA bundle that signs the server certificate. It must contain certificates only (no private key), with at least one `CA:TRUE`. |
-| `RELAYCAST_DATABASE_SCHEMA` | no | Must be `relaycast` (the default). The bundled migrations target only that schema. |
+| `RELAYCAST_DATABASE_CA_FILE` (or `NODE_EXTRA_CA_CERTS`) | yes | PEM CA bundle that signs the server certificate. `RELAYCAST_DATABASE_CA_FILE` wins when both are set. It must contain certificates only (no private key), with at least one `CA:TRUE`. |
+| `RELAYCAST_DATABASE_SCHEMA` | no | Must be `public` (the default). The bundled migrations target only that schema. |
 | `RELAYCAST_DATABASE_OWNER_ROLE` | no | Default `relaycast_owner`. |
 | `RELAYCAST_DATABASE_RUNTIME_ROLE` | no | Default `relaycast_runtime`. Must differ from the owner role. |
 | `RELAYCAST_DATABASE_POOL_MAX` | no | 1-100. Default is the node-postgres default (10). |
 | `RELAYCAST_DATABASE_STATEMENT_TIMEOUT_MS` | no | 0-86400000. Unset leaves the server default. |
 
 TLS is always on and always verify-full. The chain is verified against
-`RELAYCAST_DATABASE_CA_FILE` only, not the system store. The server name must
+that file only, not the system store. The server name must
 match the URL host; IP-literal hosts are checked against IP SANs. The minimum
 version is TLS 1.2. The configuration refuses these URL parameters by name:
 `sslmode` other than `verify-full`, `sslrootcert`, `sslcert`, `sslkey`,
@@ -162,7 +164,7 @@ The bundled files live in `@relaycast/engine`'s `dist/db/migrations-pg`:
    then finds nothing to do), and migrators for different schemas do not
    contend. The lock is released in a `finally`. If the connection breaks, it
    is discarded, and the server releases the lock when the session ends.
-3. In its own transaction, it creates `relaycast._engine_migrations` if it is
+3. In its own transaction, it creates `public._engine_migrations` if it is
    missing, confirms the owner role owns the ledger, sets the ledger grants
    (runtime: SELECT only), and validates the ledger.
 4. It applies each pending file in its own transaction. The file's DDL and its
@@ -257,6 +259,7 @@ upgrades or rollbacks are safe.
 
 ## Schema notes
 
+- All tables are in `public`; connections set `search_path=public`, and migrate/verify check the schema by OID, not by search_path.
 - Every table has `rowid bigint GENERATED ALWAYS AS IDENTITY` with a unique
   index, standing in for SQLite's implicit rowid, which the engine reads.
 - Timestamps stay epoch seconds (`bigint`). Unbounded integers are `bigint`
@@ -327,8 +330,8 @@ closes the pool and throws a typed error (`PostgresUnavailableError`,
 fallback. Error messages name the failed checks and never include the
 connection string or password.
 
-The handle binds the engine tables to `schema.pg.ts`, where every table is
-qualified with schema `relaycast`, so queries do not depend on `search_path`.
+The handle binds the engine tables to `schema.pg.ts`, whose tables are in the
+default schema `public` (connections set `search_path=public`).
 `withTransaction` runs on one pooled client from `BEGIN` to `COMMIT`/`ROLLBACK`.
 int8 values are parsed to JavaScript numbers and throw beyond
 `Number.MAX_SAFE_INTEGER`. That parser is installed on the process-global
@@ -337,7 +340,7 @@ int8 values are parsed to JavaScript numbers and throw beyond
 Database errors are decoded by SQLSTATE and constraint name, never by message
 text, except for the `agent_node_bindings` workspace trigger. That trigger
 raises `23000` with only a message, so its two exact messages are matched.
-Only constraints in schema `relaycast` are decoded:
+Only constraints in schema `public` are decoded:
 
 | SQLSTATE | Decoded as |
 | --- | --- |
@@ -358,7 +361,7 @@ RELAYCAST_PG_TEST_CA_FILE=/path/to/ca.crt \
 ```
 
 Without those variables the integration tests skip. **They drop every object
-the owner role owns in schema `relaycast`**, so point them only at a
+the owner role owns in schema `public`**, so point them only at a
 disposable database. See the header of
 `src/adapters/postgres/__tests__/postgres.integration.test.ts` for the
 refusal roles the fixture needs.
@@ -392,7 +395,7 @@ unreachable or the handle fails verification, the run fails. It never falls
 back to SQLite.
 
 - **Once per run, as the owner:** hold the fixture advisory lock, drop the
-  owner's objects in schema `relaycast`, then migrate with the product
+  owner's objects in schema `public`, then migrate with the product
   migrator. At the end it drops them again and releases the lock.
 - **Per test file:** open the runtime handle through `openPostgresEngineDb`,
   as the runtime role.

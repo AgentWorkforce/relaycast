@@ -14,7 +14,7 @@
  * overridden with RELAYCAST_PG_TEST_URL_ADMIN / _MEMBER / _CREATOR.
  *
  * WARNING: the tests drop every table, function, sequence and type that
- * relaycast_owner owns in schema relaycast. They never drop the schema and
+ * relaycast_owner owns in schema public. They never drop the schema and
  * never use DROP OWNED.
  */
 import {
@@ -632,7 +632,7 @@ describe.skipIf(!enabled)(
       );
       expect(io.lines.join("\n")).not.toContain(new URL(OWNER_URL!).password);
       expect(io.lines[0]).toMatch(
-        /^postgres owner: host=\S+ port=\d+ database=\S+ schema=relaycast expected_role=relaycast_owner ca_sha256=[0-9a-f]{64}$/,
+        /^postgres owner: host=\S+ port=\d+ database=\S+ schema=public expected_role=relaycast_owner ca_sha256=[0-9a-f]{64}$/,
       );
     });
 
@@ -976,7 +976,7 @@ describe.skipIf(!enabled)(
           ...files(),
           {
             name: `${String(G).padStart(4, "0")}_compat_probe.sql`,
-            sql: `-- min_compatible_generation: ${G}\nCREATE TABLE relaycast.compat_probe (id bigint PRIMARY KEY);`,
+            sql: `-- min_compatible_generation: ${G}\nCREATE TABLE public.compat_probe (id bigint PRIMARY KEY);`,
           },
         ]);
 
@@ -1018,7 +1018,7 @@ describe.skipIf(!enabled)(
           ...additive().map(({ name, sql }) => ({ name, sql })),
           {
             name: `${String(G + 1).padStart(4, "0")}_floor_raise.sql`,
-            sql: "ALTER TABLE relaycast.compat_probe ADD COLUMN note text;",
+            sql: "ALTER TABLE public.compat_probe ADD COLUMN note text;",
           },
         ]);
         await runPostgresMigrations(owner, {

@@ -31,7 +31,7 @@ export interface PostgresConfig {
 }
 
 /** The only schema the bundled migrations and schema.pg.ts target. */
-export const DEFAULT_SCHEMA = "relaycast";
+export const DEFAULT_SCHEMA = "public";
 export const DEFAULT_OWNER_ROLE = "relaycast_owner";
 export const DEFAULT_RUNTIME_ROLE = "relaycast_runtime";
 
@@ -264,10 +264,13 @@ export function loadPostgresConfig(
     );
   const url = parseDatabaseUrl(rawUrl);
 
-  const caFile = env.RELAYCAST_DATABASE_CA_FILE?.trim();
+  // NODE_EXTRA_CA_CERTS is how a platform that already mounts a CA for every
+  // Node service delivers it. Either way the file below is the only trust root.
+  const caFile =
+    env.RELAYCAST_DATABASE_CA_FILE?.trim() || env.NODE_EXTRA_CA_CERTS?.trim();
   if (!caFile)
     throw new ConfigError(
-      "RELAYCAST_DATABASE_CA_FILE is required (PEM CA bundle for verify-full TLS)",
+      "RELAYCAST_DATABASE_CA_FILE (or NODE_EXTRA_CA_CERTS) is required (PEM CA bundle for verify-full TLS)",
     );
   const { ca, caSha256 } = readCaFile(caFile);
 

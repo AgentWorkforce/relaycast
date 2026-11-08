@@ -8,9 +8,9 @@
  * `schema.ts` has a counterpart here with the same SQL name;
  * `schema.pg.test.ts` enforces that parity.
  *
- * All tables live in `pgSchema('relaycast')`. The platform creates that schema
- * and its owner/runtime roles; the generated migrations never emit
- * `CREATE SCHEMA` (scripts/generate-pg-migrations.mjs strips it).
+ * All tables are in the default schema `public` of the service's own database.
+ * The platform creates the database and owner/runtime roles; the generated migrations never emit
+ * schema or role DDL (scripts/generate-pg-migrations.mjs refuses it).
  *
  * Type mapping rules:
  *
@@ -61,7 +61,7 @@
  * insert and never written by the application.
  */
 import {
-  pgSchema,
+  pgTable,
   text,
   integer,
   bigint,
@@ -94,7 +94,6 @@ export type {
   WorkspaceRetentionSettings,
 } from './schema.js';
 
-export const relaycast = pgSchema('relaycast');
 
 /** Epoch seconds stored as bigint; `Date` in JS, like SQLite timestamp mode. */
 export const epochSeconds = customType<{ data: Date; driverData: number | string }>({
@@ -132,7 +131,7 @@ const rowid = () => bigint('rowid', { mode: 'number' }).generatedAlwaysAsIdentit
 // ============================================
 // Workspaces
 // ============================================
-export const workspaces = relaycast.table(
+export const workspaces = pgTable(
   'workspaces',
   {
     rowid: rowid(),
@@ -184,7 +183,7 @@ export const workspaces = relaycast.table(
  * The child API key is derived at replay time and is never persisted in
  * plaintext.
  */
-export const workspaceCreateIdempotency = relaycast.table(
+export const workspaceCreateIdempotency = pgTable(
   'workspace_create_idempotency',
   {
     rowid: rowid(),
@@ -210,7 +209,7 @@ export const workspaceCreateIdempotency = relaycast.table(
  * `arHash`. `sealedCredential` lets a retry with the legacy credential get the
  * same `ar_` credential back.
  */
-export const credentialUpgrades = relaycast.table(
+export const credentialUpgrades = pgTable(
   'credential_upgrades',
   {
     rowid: rowid(),
@@ -234,7 +233,7 @@ export const credentialUpgrades = relaycast.table(
 // ============================================
 // Agents
 // ============================================
-export const agents = relaycast.table(
+export const agents = pgTable(
   'agents',
   {
     rowid: rowid(),
@@ -317,7 +316,7 @@ export const agents = relaycast.table(
  * Raw recovery proofs are never stored; callers present the proof and the
  * engine compares its SHA-256 verifier.
  */
-export const agentRecoveryCredentials = relaycast.table(
+export const agentRecoveryCredentials = pgTable(
   'agent_recovery_credentials',
   {
     rowid: rowid(),
@@ -348,7 +347,7 @@ export const agentRecoveryCredentials = relaycast.table(
  * Append-only security record. There is intentionally no agent foreign key:
  * an identity audit must survive release/deletion and retention pruning.
  */
-export const agentIdentityAudit = relaycast.table(
+export const agentIdentityAudit = pgTable(
   'agent_identity_audit',
   {
     rowid: rowid(),
@@ -377,7 +376,7 @@ export const agentIdentityAudit = relaycast.table(
 // ============================================
 // Nodes
 // ============================================
-export const nodes = relaycast.table(
+export const nodes = pgTable(
   'nodes',
   {
     rowid: rowid(),
@@ -466,7 +465,7 @@ export const nodes = relaycast.table(
  * per-provider liveness/capacity/load columns are aggregated onto the `nodes`
  * row. Implicit direct nodes (per self-connected agent) do not use this table.
  */
-export const nodeProviders = relaycast.table(
+export const nodeProviders = pgTable(
   'node_providers',
   {
     rowid: rowid(),
@@ -505,7 +504,7 @@ export const nodeProviders = relaycast.table(
 // ============================================
 // Observer Tokens
 // ============================================
-export const observerTokens = relaycast.table(
+export const observerTokens = pgTable(
   'observer_tokens',
   {
     rowid: rowid(),
@@ -541,7 +540,7 @@ export const observerTokens = relaycast.table(
 // ============================================
 // Agent Node Bindings
 // ============================================
-export const agentNodeBindings = relaycast.table(
+export const agentNodeBindings = pgTable(
   'agent_node_bindings',
   {
     rowid: rowid(),
@@ -584,7 +583,7 @@ export const agentNodeBindings = relaycast.table(
 // ============================================
 // A2A Agents
 // ============================================
-export const a2aAgents = relaycast.table(
+export const a2aAgents = pgTable(
   'a2a_agents',
   {
     rowid: rowid(),
@@ -618,7 +617,7 @@ export const a2aAgents = relaycast.table(
 // ============================================
 // Directory Agents
 // ============================================
-export const directoryAgents = relaycast.table(
+export const directoryAgents = pgTable(
   'directory_agents',
   {
     rowid: rowid(),
@@ -655,7 +654,7 @@ export const directoryAgents = relaycast.table(
 // ============================================
 // Directory Skills
 // ============================================
-export const directorySkills = relaycast.table(
+export const directorySkills = pgTable(
   'directory_skills',
   {
     rowid: rowid(),
@@ -684,7 +683,7 @@ export const directorySkills = relaycast.table(
 // ============================================
 // Directory Ratings
 // ============================================
-export const directoryRatings = relaycast.table(
+export const directoryRatings = pgTable(
   'directory_ratings',
   {
     rowid: rowid(),
@@ -715,7 +714,7 @@ export const directoryRatings = relaycast.table(
 // ============================================
 // Smart Routing
 // ============================================
-export const routingConfigs = relaycast.table(
+export const routingConfigs = pgTable(
   'routing_configs',
   {
     rowid: rowid(),
@@ -733,7 +732,7 @@ export const routingConfigs = relaycast.table(
   ],
 );
 
-export const routingFailures = relaycast.table(
+export const routingFailures = pgTable(
   'routing_failures',
   {
     rowid: rowid(),
@@ -764,7 +763,7 @@ export const routingFailures = relaycast.table(
 // ============================================
 // Certifications
 // ============================================
-export const certifications = relaycast.table(
+export const certifications = pgTable(
   'certifications',
   {
     rowid: rowid(),
@@ -797,7 +796,7 @@ export const certifications = relaycast.table(
 // ============================================
 // Channels
 // ============================================
-export const channels = relaycast.table(
+export const channels = pgTable(
   'channels',
   {
     rowid: rowid(),
@@ -824,7 +823,7 @@ export const channels = relaycast.table(
 // ============================================
 // Channel Members
 // ============================================
-export const channelMembers = relaycast.table(
+export const channelMembers = pgTable(
   'channel_members',
   {
     rowid: rowid(),
@@ -849,7 +848,7 @@ export const channelMembers = relaycast.table(
 // ============================================
 // Messages
 // ============================================
-export const messages = relaycast.table(
+export const messages = pgTable(
   'messages',
   {
     rowid: rowid(),
@@ -907,7 +906,7 @@ export const messages = relaycast.table(
  * snapshot is retained for the 24-hour claim lifetime so a replay returns the
  * exact public receipt even if mutable message context changes meanwhile.
  */
-export const directDmIdempotency = relaycast.table(
+export const directDmIdempotency = pgTable(
   'direct_dm_idempotency',
   {
     rowid: rowid(),
@@ -931,7 +930,7 @@ export const directDmIdempotency = relaycast.table(
 // Message retention may remove every matching message; this ledger deliberately
 // survives that pruning so the resolver can report aged_out instead of guessing
 // that an empty live-message query means "no conversation".
-export const messageSessions = relaycast.table(
+export const messageSessions = pgTable(
   'message_sessions',
   {
     rowid: rowid(),
@@ -953,7 +952,7 @@ export const messageSessions = relaycast.table(
 // ============================================
 // Message Logs
 // ============================================
-export const messageLogs = relaycast.table(
+export const messageLogs = pgTable(
   'message_logs',
   {
     rowid: rowid(),
@@ -995,7 +994,7 @@ export const messageLogs = relaycast.table(
 // ============================================
 // Reactions
 // ============================================
-export const reactions = relaycast.table(
+export const reactions = pgTable(
   'reactions',
   {
     rowid: rowid(),
@@ -1024,7 +1023,7 @@ export const reactions = relaycast.table(
 // ============================================
 // DM Conversations
 // ============================================
-export const dmConversations = relaycast.table(
+export const dmConversations = pgTable(
   'dm_conversations',
   {
     rowid: rowid(),
@@ -1049,7 +1048,7 @@ export const dmConversations = relaycast.table(
 // ============================================
 // 1:1 DM Conversation Reservations
 // ============================================
-export const dmConversationReservations = relaycast.table(
+export const dmConversationReservations = pgTable(
   'dm_conversation_reservations',
   {
     rowid: rowid(),
@@ -1078,7 +1077,7 @@ export const dmConversationReservations = relaycast.table(
 // ============================================
 // DM Participants
 // ============================================
-export const dmParticipants = relaycast.table(
+export const dmParticipants = pgTable(
   'dm_participants',
   {
     rowid: rowid(),
@@ -1104,7 +1103,7 @@ export const dmParticipants = relaycast.table(
 // ============================================
 // Files
 // ============================================
-export const files = relaycast.table(
+export const files = pgTable(
   'files',
   {
     rowid: rowid(),
@@ -1142,7 +1141,7 @@ export const files = relaycast.table(
  * row must survive the workspace cascade until external storage confirms the
  * object is gone after every issued upload capability has expired.
  */
-export const fileCleanupQueue = relaycast.table(
+export const fileCleanupQueue = pgTable(
   'file_cleanup_queue',
   {
     rowid: rowid(),
@@ -1161,7 +1160,7 @@ export const fileCleanupQueue = relaycast.table(
 // ============================================
 // Message Attachments (junction table)
 // ============================================
-export const messageAttachments = relaycast.table(
+export const messageAttachments = pgTable(
   'message_attachments',
   {
     rowid: rowid(),
@@ -1183,7 +1182,7 @@ export const messageAttachments = relaycast.table(
 // ============================================
 // Read Receipts
 // ============================================
-export const readReceipts = relaycast.table(
+export const readReceipts = pgTable(
   'read_receipts',
   {
     rowid: rowid(),
@@ -1206,7 +1205,7 @@ export const readReceipts = relaycast.table(
 // ============================================
 // Usage Records
 // ============================================
-export const usageRecords = relaycast.table(
+export const usageRecords = pgTable(
   'usage_records',
   {
     rowid: rowid(),
@@ -1232,7 +1231,7 @@ export const usageRecords = relaycast.table(
 // ============================================
 // Inbound Webhooks
 // ============================================
-export const webhooks = relaycast.table(
+export const webhooks = pgTable(
   'webhooks',
   {
     rowid: rowid(),
@@ -1261,7 +1260,7 @@ export const webhooks = relaycast.table(
 // ============================================
 // Outbound Event Subscriptions
 // ============================================
-export const eventSubscriptions = relaycast.table(
+export const eventSubscriptions = pgTable(
   'event_subscriptions',
   {
     rowid: rowid(),
@@ -1290,7 +1289,7 @@ export const eventSubscriptions = relaycast.table(
 // ============================================
 // Actions (typed agent capabilities)
 // ============================================
-export const actions = relaycast.table(
+export const actions = pgTable(
   'actions',
   {
     rowid: rowid(),
@@ -1339,7 +1338,7 @@ export const actions = relaycast.table(
 // ============================================
 // Action Invocations (audit log)
 // ============================================
-export const actionInvocations = relaycast.table(
+export const actionInvocations = pgTable(
   'action_invocations',
   {
     rowid: rowid(),
@@ -1434,7 +1433,7 @@ export const actionInvocations = relaycast.table(
 // ============================================
 // Fleet Triggers
 // ============================================
-export const triggers = relaycast.table(
+export const triggers = pgTable(
   'triggers',
   {
     rowid: rowid(),
@@ -1462,7 +1461,7 @@ export const triggers = relaycast.table(
 // ============================================
 // Session Events (harness-emitted observations)
 // ============================================
-export const sessionEvents = relaycast.table(
+export const sessionEvents = pgTable(
   'session_events',
   {
     rowid: rowid(),
@@ -1506,7 +1505,7 @@ export const sessionEvents = relaycast.table(
 // ============================================
 // Deliveries (per-recipient message delivery tracking)
 // ============================================
-export const deliveries = relaycast.table(
+export const deliveries = pgTable(
   'deliveries',
   {
     rowid: rowid(),
@@ -1593,7 +1592,7 @@ export const deliveries = relaycast.table(
 // ============================================
 // Pending Events (durable event queue)
 // ============================================
-export const pendingEvents = relaycast.table(
+export const pendingEvents = pgTable(
   'pending_events',
   {
     rowid: rowid(),
@@ -1629,7 +1628,7 @@ export const pendingEvents = relaycast.table(
 // ============================================
 // Per-subscriber Webhook Deliveries
 // ============================================
-export const webhookDeliveries = relaycast.table(
+export const webhookDeliveries = pgTable(
   'webhook_deliveries',
   {
     rowid: rowid(),
@@ -1673,7 +1672,7 @@ export const webhookDeliveries = relaycast.table(
  * frame). No FK to `workspaces` by design: appends are best-effort and rows
  * are pruned by retention or explicitly removed with their workspace.
  */
-export const workspaceEvents = relaycast.table(
+export const workspaceEvents = pgTable(
   'workspace_events',
   {
     rowid: rowid(),
@@ -1695,14 +1694,14 @@ export const workspaceEvents = relaycast.table(
 );
 
 /** Durable scan positions; never used as delivery ACKs or event sequence authority. */
-export const maintenanceCursors = relaycast.table('maintenance_cursors', {
+export const maintenanceCursors = pgTable('maintenance_cursors', {
   rowid: rowid(),
   id: text('id').primaryKey().notNull(),
   cursor: text('cursor').notNull(),
 }, (table) => [uniqueIndex('maintenance_cursors_rowid_unique').on(table.rowid)]);
 
 /** Admission and transport state; inserted atomically with the guarded DM. */
-export const a2aEgress = relaycast.table('a2a_egress', {
+export const a2aEgress = pgTable('a2a_egress', {
   rowid: rowid(),
   id: text('id').primaryKey(),
   workspaceId: text('workspace_id').notNull().references(() => workspaces.id, { onDelete: 'cascade' }),
@@ -1722,7 +1721,7 @@ export const a2aEgress = relaycast.table('a2a_egress', {
 }, (table) => [uniqueIndex('a2a_egress_rowid_unique').on(table.rowid), index('idx_a2a_egress_workspace').on(table.workspaceId), index('idx_a2a_egress_due').on(table.status, table.leaseUntil), index('idx_a2a_egress_retention').on(table.createdAt, table.id)]);
 
 /** Public accepted response only; never transport authentication or mutable target state. */
-export const a2aEgressContext = relaycast.table('a2a_egress_context', {
+export const a2aEgressContext = pgTable('a2a_egress_context', {
   rowid: rowid(),
   id: text('id').primaryKey().notNull().references(() => a2aEgress.id, { onDelete: 'cascade' }),
   messageId: text('message_id').notNull().references(() => messages.id, { onDelete: 'cascade' }),
@@ -1731,7 +1730,7 @@ export const a2aEgressContext = relaycast.table('a2a_egress_context', {
 
 /** Durable inbound identity. Migration 0059 scrubs response before source deletion;
  * the nullable source FK leaves a content-free tombstone until indexed expiry. */
-export const a2aInbound = relaycast.table('a2a_inbound', {
+export const a2aInbound = pgTable('a2a_inbound', {
   rowid: rowid(),
   id: text('id').primaryKey().notNull(),
   workspaceId: text('workspace_id').notNull().references(() => workspaces.id, { onDelete: 'cascade' }),

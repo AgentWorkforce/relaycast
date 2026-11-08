@@ -28,7 +28,7 @@ describe('PostgreSQL SQLSTATE decoding', () => {
   describe('23502 not-null sentinels', () => {
     it.each(Object.entries(PG_NOT_NULL_SENTINELS))('%s -> %s', (key, kind) => {
       const [table, column] = key.split('.');
-      const err = pgError('23502', { schema: 'relaycast', table, column });
+      const err = pgError('23502', { schema: 'public', table, column });
       expect(databaseConstraintKind(err)).toBe(kind);
       expect(databaseConstraintKind(wrapped(err))).toBe(kind);
       expect(databaseConstraintKind(new Error('outer', { cause: wrapped(err) }))).toBe(kind);
@@ -41,17 +41,17 @@ describe('PostgreSQL SQLSTATE decoding', () => {
     });
 
     it('ignores other columns, the key guard, other schemas and missing fields', () => {
-      expect(databaseConstraintKind(pgError('23502', { schema: 'relaycast', table: 'messages', column: 'id' }))).toBeUndefined();
-      expect(databaseConstraintKind(pgError('23502', { schema: 'relaycast', table: 'channels', column: 'workspace_id' }))).toBeUndefined();
+      expect(databaseConstraintKind(pgError('23502', { schema: 'public', table: 'messages', column: 'id' }))).toBeUndefined();
+      expect(databaseConstraintKind(pgError('23502', { schema: 'public', table: 'channels', column: 'workspace_id' }))).toBeUndefined();
       expect(databaseConstraintKind(pgError('23502', { schema: 'control', table: 'nodes', column: 'active_agents' }))).toBeUndefined();
       expect(databaseConstraintKind(pgError('23502', { table: 'nodes', column: 'active_agents' }))).toBeUndefined();
-      expect(databaseConstraintKind(pgError('23502', { schema: 'relaycast', table: 'nodes' }))).toBeUndefined();
+      expect(databaseConstraintKind(pgError('23502', { schema: 'public', table: 'nodes' }))).toBeUndefined();
     });
 
     it('never reads the message: a PG error with SQLite-looking text decodes nothing', () => {
-      const err = pgError('23502', { schema: 'relaycast', table: 'messages', column: 'id' }, 'NOT NULL constraint failed: nodes.active_agents');
+      const err = pgError('23502', { schema: 'public', table: 'messages', column: 'id' }, 'NOT NULL constraint failed: nodes.active_agents');
       expect(databaseConstraintKind(err)).toBeUndefined();
-      expect(databaseConstraintKind(pgError('23514', { schema: 'relaycast' }, 'NOT NULL constraint failed: deliveries.status'))).toBeUndefined();
+      expect(databaseConstraintKind(pgError('23514', { schema: 'public' }, 'NOT NULL constraint failed: deliveries.status'))).toBeUndefined();
     });
 
     it('a trigger refusal is not an admission sentinel on either dialect', () => {
@@ -62,13 +62,13 @@ describe('PostgreSQL SQLSTATE decoding', () => {
 
   describe('23505 unique violations', () => {
     it('maps a constraint name to its table and columns', () => {
-      const err = pgError('23505', { schema: 'relaycast', table: 'observer_tokens', constraint: 'observer_tokens_workspace_name_unique' });
+      const err = pgError('23505', { schema: 'public', table: 'observer_tokens', constraint: 'observer_tokens_workspace_name_unique' });
       expect(databaseUniqueViolation(wrapped(err))).toEqual({
         table: 'observer_tokens',
         columns: ['workspace_id', 'name'],
         constraint: 'observer_tokens_workspace_name_unique',
       });
-      expect(databaseUniqueViolation(pgError('23505', { schema: 'relaycast', constraint: 'workspaces_pkey' }))).toEqual({
+      expect(databaseUniqueViolation(pgError('23505', { schema: 'public', constraint: 'workspaces_pkey' }))).toEqual({
         table: 'workspaces',
         columns: ['id'],
         constraint: 'workspaces_pkey',
@@ -76,11 +76,11 @@ describe('PostgreSQL SQLSTATE decoding', () => {
     });
 
     it('refuses unknown names, other schemas, other codes, and never reads the message', () => {
-      expect(databaseUniqueViolation(pgError('23505', { schema: 'relaycast', constraint: 'nope_unique' }))).toBeUndefined();
+      expect(databaseUniqueViolation(pgError('23505', { schema: 'public', constraint: 'nope_unique' }))).toBeUndefined();
       expect(databaseUniqueViolation(pgError('23505', { schema: 'control', constraint: 'workspaces_pkey' }))).toBeUndefined();
-      expect(databaseUniqueViolation(pgError('23503', { schema: 'relaycast', constraint: 'workspaces_pkey' }))).toBeUndefined();
+      expect(databaseUniqueViolation(pgError('23503', { schema: 'public', constraint: 'workspaces_pkey' }))).toBeUndefined();
       expect(
-        databaseUniqueViolation(pgError('23505', { schema: 'relaycast' }, 'UNIQUE constraint failed: workspaces.id')),
+        databaseUniqueViolation(pgError('23505', { schema: 'public' }, 'UNIQUE constraint failed: workspaces.id')),
       ).toBeUndefined();
     });
 

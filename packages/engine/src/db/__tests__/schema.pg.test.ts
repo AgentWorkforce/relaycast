@@ -81,7 +81,7 @@ const pgTables = new Map(
     .filter((v): v is PgTable => is(v, PgTable))
     .map((t) => {
       const config = getPgTableConfig(t);
-      expect(config.schema).toBe('relaycast');
+      expect(config.schema).toBeUndefined();
       return [config.name, shape(config)] as const;
     }),
 );

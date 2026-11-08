@@ -62,14 +62,14 @@ describe('sqlx.insertSelect on PostgreSQL', () => {
     const columns = pgColumns.filter((name) => name !== 'rowid');
     expect(columns).toHaveLength(29);
     expect(text).toBe(
-      `insert into "relaycast"."deliveries" (${columns.map((n) => `"${n}"`).join(', ')}) ` +
-        `select ${columns.map(() => 'null').join(', ')} from "relaycast"."agents" on conflict do nothing`,
+      `insert into "deliveries" (${columns.map((n) => `"${n}"`).join(', ')}) ` +
+        `select ${columns.map(() => 'null').join(', ')} from "agents" on conflict do nothing`,
     );
     expect(text).not.toMatch(/rowid/);
     // drizzle's own pg insert lists rowid; ours is exactly that minus "rowid".
     const drizzleOwn = pgDialect.sqlToQuery(pgDialect.buildInsertQuery({
       table: pgSchema.deliveries,
-      values: sql.raw(`select ${columns.map(() => 'null').join(', ')} from "relaycast"."agents"`),
+      values: sql.raw(`select ${columns.map(() => 'null').join(', ')} from "agents"`),
       select: true,
       onConflict: sql`do nothing`,
     } as never)).sql;
