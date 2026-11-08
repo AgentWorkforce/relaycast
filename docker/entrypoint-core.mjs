@@ -1,5 +1,6 @@
 import { readFileSync } from 'node:fs';
 import { isIP } from 'node:net';
+import { hostname as osHostname } from 'node:os';
 
 const CONFIG_EXIT_CODE = 64;
 
@@ -36,6 +37,14 @@ Environment:
                                         custom clusterDomain); needs ALLOW_INSECURE_BASE_URL
   RELAYCAST_INSECURE_BASE_URL_HOSTS     Exact private hosts (comma list, e.g. relaycast.relaycast
                                         for <svc>.<ns>); needs ALLOW_INSECURE_BASE_URL
+  RELAYCAST_TELEMETRY_COLLECTOR_URL      Opt in to analytics export: POST batches to this in-installation
+                                        collector (https, or http to localhost / *.svc / single-label host).
+                                        Unset: no analytics leave the process
+  RELAYCAST_TELEMETRY_COLLECTOR_TOKEN(_FILE)  Optional collector bearer token
+  RELAYCAST_TELEMETRY_DEPLOYMENT        Deployment label on exported events (default: hostname)
+  RELAYCAST_TELEMETRY_QUEUE_MAX         Most queued events before dropping (default 1000)
+  RELAYCAST_TELEMETRY_BATCH_MAX         Most events per POST (default 50)
+  RELAYCAST_TELEMETRY_FLUSH_MS          Longest wait before a partial batch is sent (default 2000)
   A directly set variable wins over its _FILE variant; an unreadable _FILE exits 64.
 `;
 
@@ -631,6 +640,73 @@ export function containerEngineConfig(env, mailbox, engine) {
   return { ...buildEngineConfig(env, mailbox), ...credentials };
 }
 
+/** Plaintext collector hosts: loopback, Kubernetes Services, single-label names. */
+function isPlaintextCollectorHost(hostname) {
+  const host = unbracket(hostname).replace(/\.$/, '').toLowerCase();
+  if (host === 'localhost' || host.endsWith('.localhost')) return true;
+  if (host === '127.0.0.1' || host === '::1') return true;
+  if (host.endsWith('.svc') || host.endsWith('.svc.cluster.local')) {
+    return isValidDnsHostname(host);
+  }
+  return !host.includes('.') && isValidDnsHostname(host) && !/^[0-9]+$/.test(host);
+}
+
+function telemetryPositiveInteger(env, name, fallback) {
+  const raw = env[name]?.trim();
+  if (!raw) return fallback;
+  const value = Number(raw);
+  if (!/^[0-9]+$/.test(raw) || !Number.isSafeInteger(value) || value <= 0) {
+    refusal('invalid_telemetry_config', `${name} must be a positive integer.`);
+  }
+  return value;
+}
+
+/**
+ * The opt-in analytics collector settings, or undefined when
+ * RELAYCAST_TELEMETRY_COLLECTOR_URL is unset (the default no-op sink then
+ * stays in place, unchanged). The URL must be https, or http to a loopback,
+ * `*.svc` / `*.svc.cluster.local` or single-label host, without credentials.
+ * The token is read from RELAYCAST_TELEMETRY_COLLECTOR_TOKEN(_FILE) and never
+ * logged. Throws a refusal (exit 64) on any malformed value.
+ */
+export function telemetryCollectorFromEnv(env = process.env, { hostname = osHostname } = {}) {
+  const rawUrl = env.RELAYCAST_TELEMETRY_COLLECTOR_URL?.trim();
+  if (!rawUrl) return undefined;
+  let url;
+  try {
+    url = new URL(rawUrl);
+  } catch {
+    refusal('invalid_telemetry_collector_url', 'RELAYCAST_TELEMETRY_COLLECTOR_URL must be a valid absolute URL.');
+  }
+  if (url.username || url.password) {
+    refusal(
+      'invalid_telemetry_collector_url',
+      'RELAYCAST_TELEMETRY_COLLECTOR_URL must not contain credentials; use RELAYCAST_TELEMETRY_COLLECTOR_TOKEN_FILE.',
+    );
+  }
+  if (
+    url.protocol !== 'https:' &&
+    !(url.protocol === 'http:' && isPlaintextCollectorHost(url.hostname))
+  ) {
+    refusal(
+      'invalid_telemetry_collector_url',
+      'RELAYCAST_TELEMETRY_COLLECTOR_URL must use https unless the host is localhost, 127.0.0.1, [::1], a *.svc / *.svc.cluster.local Service or a single-label hostname.',
+    );
+  }
+  const bearerToken = secretFromEnv(env, 'RELAYCAST_TELEMETRY_COLLECTOR_TOKEN');
+  const instance = hostname();
+  const deployment = env.RELAYCAST_TELEMETRY_DEPLOYMENT?.trim() || instance;
+  return {
+    url: url.toString(),
+    ...(bearerToken ? { bearerToken } : {}),
+    deployment,
+    instance,
+    queueMax: telemetryPositiveInteger(env, 'RELAYCAST_TELEMETRY_QUEUE_MAX', 1000),
+    batchMax: telemetryPositiveInteger(env, 'RELAYCAST_TELEMETRY_BATCH_MAX', 50),
+    flushIntervalMs: telemetryPositiveInteger(env, 'RELAYCAST_TELEMETRY_FLUSH_MS', 2000),
+  };
+}
+
 /**
  * The pinned Node adapter derives c.req.url from the local socket and ignores
  * X-Forwarded-Proto. A Cloudflare named tunnel terminates TLS before forwarding
@@ -666,7 +742,14 @@ async function launchPinnedEngine(args) {
     throw new Error('Invalid --port');
   }
 
+  const telemetryCollector = telemetryCollectorFromEnv(process.env);
   const engine = await import('@relaycast/engine/node');
+  if (telemetryCollector && typeof engine.createCollectorTelemetrySink !== 'function') {
+    refusal(
+      'unsupported_telemetry_collector',
+      'RELAYCAST_TELEMETRY_COLLECTOR_URL is set but the bundled @relaycast/engine has no collector telemetry support.',
+    );
+  }
 
   const mailboxTtlMs = optionalNumber(process.env.RELAYCAST_MAILBOX_TTL_MS);
   const mailboxDepthCap = optionalNumber(
@@ -698,6 +781,7 @@ async function launchPinnedEngine(args) {
       RELAYCAST_ENV: options.environment,
     }, mailbox, engine),
     ...(eventQueue ? { eventQueue } : {}),
+    ...(telemetryCollector ? { telemetryCollector } : {}),
   });
 
   installPublicAuthorityMarker(running.server, options.baseUrl);
@@ -729,6 +813,7 @@ export async function main(argv = process.argv.slice(2)) {
     args = validatedEngineArgs(argv);
     // Fail fast (exit 64) on secret/config problems before importing the engine.
     buildEngineConfig(process.env);
+    telemetryCollectorFromEnv(process.env);
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     process.stderr.write(`${message}\n`);

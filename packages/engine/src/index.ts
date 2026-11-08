@@ -65,6 +65,19 @@ export { createCredentialTagSigner, parseCredentialKeyring } from './auth/creden
 export type { CredentialKeyring, CredentialTagSigner, CredentialTagger } from './auth/credentialTags.js';
 export { NoopTelemetrySink } from './providers/noop-telemetry.js';
 export {
+  CollectorTelemetrySink,
+  createCollectorTelemetrySink,
+  COLLECTOR_TELEMETRY_DEFAULTS,
+  type CollectorTelemetrySinkOptions,
+} from './providers/collector-telemetry.js';
+export {
+  EXPORT_ENVELOPE_VERSION,
+  projectObservation,
+  projectException,
+  type ExportEvent,
+  type ExportIdentity,
+} from './telemetry/exportEnvelope.js';
+export {
   configureEngineDiagnostics,
   currentEngineOperation,
   engineOperationOf,

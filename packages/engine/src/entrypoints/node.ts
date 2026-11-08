@@ -19,6 +19,7 @@ import {
   type EngineSocket,
   type InProcessPresenceOptions,
   type NodeRuntime,
+  type NodeTelemetryCollectorOptions,
 } from '../adapters/node/index.js';
 import {
   authenticateNodeWs,
@@ -29,6 +30,8 @@ import {
 
 export { credentialConfigFromEnv, type CredentialEnvConfig } from '../config/credentialEnv.js';
 export { ConfigError } from '../bin/secretEnv.js';
+export { createCollectorTelemetrySink } from '../providers/collector-telemetry.js';
+export type { NodeTelemetryCollectorOptions } from '../adapters/node/index.js';
 
 export interface StartServerOptions {
   dbPath: string;
@@ -41,6 +44,8 @@ export interface StartServerOptions {
   auth?: AuthProvider;
   admission?: AdmissionHooks;
   telemetry?: TelemetrySink;
+  /** Opt-in self-host analytics collector; ignored when `telemetry` is set. */
+  telemetryCollector?: NodeTelemetryCollectorOptions;
   config?: EngineConfig;
   presence?: InProcessPresenceOptions;
   /** Durable webhook outbox + retention pruning tuning. */
@@ -91,6 +96,7 @@ export function startServer(options: StartServerOptions): RunningServer {
     auth: options.auth,
     admission: options.admission,
     telemetry: options.telemetry,
+    telemetryCollector: options.telemetryCollector,
     config: options.config,
     presence: options.presence,
     eventQueue: options.eventQueue,
@@ -182,9 +188,13 @@ export function startServer(options: StartServerOptions): RunningServer {
     async stop() {
       runtime.close();
       wss.close();
-      await new Promise<void>((resolve) => {
-        (server as unknown as { close: (cb: () => void) => void }).close(() => resolve());
-      });
+      await Promise.all([
+        new Promise<void>((resolve) => {
+          (server as unknown as { close: (cb: () => void) => void }).close(() => resolve());
+        }),
+        // Bounded by the collector's shutdown timeout; immediate without one.
+        runtime.closeTelemetry(),
+      ]);
     },
   };
 }

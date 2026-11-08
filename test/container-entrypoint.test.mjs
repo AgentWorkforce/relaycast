@@ -15,6 +15,7 @@ import {
   installPublicAuthorityMarker,
   isHelpRequest,
   isPrivateHostname,
+  telemetryCollectorFromEnv,
   validateBaseUrl,
   validatedEngineArgs,
 } from '../docker/entrypoint-core.mjs';
@@ -635,4 +636,65 @@ test('keeps plaintext private base URLs unmarked as TLS', () => {
     socket: { encrypted: false },
   });
   assert.equal(encrypted, false);
+});
+
+test('telemetry collector stays off without RELAYCAST_TELEMETRY_COLLECTOR_URL', () => {
+  assert.equal(telemetryCollectorFromEnv({}), undefined);
+  assert.equal(telemetryCollectorFromEnv({ RELAYCAST_TELEMETRY_COLLECTOR_URL: '  ', RELAYCAST_TELEMETRY_QUEUE_MAX: 'junk' }), undefined);
+});
+
+test('telemetry collector options come from the environment', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'relaycast-telemetry-'));
+  try {
+    const tokenFile = join(dir, 'token');
+    writeFileSync(tokenFile, 'collector-token\n');
+    const hostname = () => 'relaycast-0';
+    assert.deepEqual(
+      telemetryCollectorFromEnv({ RELAYCAST_TELEMETRY_COLLECTOR_URL: 'http://collector.analytics.svc:8080/v1/events' }, { hostname }),
+      { url: 'http://collector.analytics.svc:8080/v1/events', deployment: 'relaycast-0', instance: 'relaycast-0', queueMax: 1000, batchMax: 50, flushIntervalMs: 2000 },
+    );
+    assert.deepEqual(
+      telemetryCollectorFromEnv({
+        RELAYCAST_TELEMETRY_COLLECTOR_URL: 'https://collector.example.com/ingest',
+        RELAYCAST_TELEMETRY_COLLECTOR_TOKEN_FILE: tokenFile,
+        RELAYCAST_TELEMETRY_DEPLOYMENT: 'acme-prod',
+        RELAYCAST_TELEMETRY_QUEUE_MAX: '200',
+        RELAYCAST_TELEMETRY_BATCH_MAX: '20',
+        RELAYCAST_TELEMETRY_FLUSH_MS: '500',
+      }, { hostname }),
+      { url: 'https://collector.example.com/ingest', bearerToken: 'collector-token', deployment: 'acme-prod', instance: 'relaycast-0', queueMax: 200, batchMax: 20, flushIntervalMs: 500 },
+    );
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('telemetry collector refuses malformed values', () => {
+  const url = 'http://collector:8080/';
+  for (const [name, value] of [['RELAYCAST_TELEMETRY_QUEUE_MAX', '0'], ['RELAYCAST_TELEMETRY_BATCH_MAX', '1.5'], ['RELAYCAST_TELEMETRY_FLUSH_MS', 'soon']]) {
+    assert.throws(
+      () => telemetryCollectorFromEnv({ RELAYCAST_TELEMETRY_COLLECTOR_URL: url, [name]: value }),
+      (error) => error instanceof BaseUrlError && error.code === 'invalid_telemetry_config' && /refused to start/.test(error.message) && error.message.includes(name),
+    );
+  }
+  for (const bad of ['not a url', 'http://collector.example.com/', 'https://user:pw@collector.example.com/', 'ftp://collector/']) {
+    assert.throws(
+      () => telemetryCollectorFromEnv({ RELAYCAST_TELEMETRY_COLLECTOR_URL: bad }),
+      (error) => error instanceof BaseUrlError && error.code === 'invalid_telemetry_collector_url',
+      bad,
+    );
+  }
+  assert.throws(
+    () => telemetryCollectorFromEnv({ RELAYCAST_TELEMETRY_COLLECTOR_URL: url, RELAYCAST_TELEMETRY_COLLECTOR_TOKEN_FILE: '/nonexistent/relaycast-token' }),
+    (error) => error instanceof BaseUrlError && error.code === 'unreadable_secret_file',
+  );
+});
+
+test('a malformed telemetry setting exits 64 before engine handoff', () => {
+  const result = spawnSync(process.execPath, [entrypoint, ...acceptedArgs], {
+    encoding: 'utf8',
+    env: { ...process.env, RELAYCAST_TELEMETRY_COLLECTOR_URL: 'http://collector.example.com/' },
+  });
+  assert.equal(result.status, 64, result.stderr);
+  assert.match(result.stderr, /RELAYCAST_TELEMETRY_COLLECTOR_URL must use https/);
 });
