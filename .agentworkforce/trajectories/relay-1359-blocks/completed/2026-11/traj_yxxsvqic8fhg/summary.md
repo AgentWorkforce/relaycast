@@ -1,42 +1,17 @@
-# Trajectory: Preserve realtime blocks for Relay issue1359
+# Realtime blocks repair
 
-> **Status:** ✅ Completed
-> **Task:** [1359](https://github.com/AgentWorkforce/relay/issues/1359)
-> **Confidence:** 95%
-> **Started:** November 7, 2026 at 05:33 PM
-> **Completed:** November 7, 2026 at 05:33 PM
+Summary: Preserve arbitrary block payloads through engine workspace frames, SDK node transforms and shared realtime schemas. WebSocket-only opaque casing preserves custom keys while existing HTTP and outgoing actionId behavior stays unchanged. DM transforms retain blocks only when supplied; no DM send/storage feature is added. Two independent final reviews passed.
 
----
+Validation in this Relaycast checkout:
+- npm --prefix packages/sdk-typescript test:531 passed, including strict workspace typecheck.
+- npm --prefix packages/types test:281 passed.
+- npm --prefix packages/engine exec vitest run src/engine/__tests__/wsTransform.test.ts:43 passed.
+- SDK and engine builds and SDK/types/engine lint: passed.
+- Native database-backed engine tests were attempted but could not execute because better-sqlite3 has no local Windows ARM64 / Node24 addon. This is not a full engine-suite pass.
 
-## Summary
+Reproducible cross-repository check (separately run):
+- Source: https://github.com/AgentWorkforce/relay/blob/c3e517829fb9178481cf8ff1128817f78d57647c/scripts/verify-sdk-realtime-blocks.mjs
+- Build both SDKs, then from that Relay revision run node scripts/verify-sdk-realtime-blocks.mjs <relaycast-checkout>.
+- Verified against Relaycast implementation3af3b99:49KB blocks plus original arbitrary kind/payload object match Relay public listener and REST fixture readback. All HTTP and WebSocket I/O is mocked, not database or live-service evidence.
 
-Preserved realtime blocks for channel messages, updates, threads, DMs and group DMs. SDK521, shared types278, strict types, build and lint pass; independent companion review PASS; no release or production access.
-
-**Approach:** Standard approach
-
----
-
-## Key Decisions
-
-### Repair both websocket schema parsing and node delivery transforms
-
-- **Chose:** Repair both websocket schema parsing and node delivery transforms
-- **Reasoning:** Both paths independently drop blocks. Preserve absent/null/empty payloads and nested DM precedence. Cross-repo built SDK -> Relay adapter -> public listener parity passes for49KB blocks against fixture REST readback.
-
----
-
-## Chapters
-
-### 1. Work
-
-_Agent: default_
-
-- Repair both websocket schema parsing and node delivery transforms: Repair both websocket schema parsing and node delivery transforms
-
-Final validation evidence and scope:
-
-- In this Relaycast checkout: npm --prefix packages/sdk-typescript test (531 passed, includes strict workspace typecheck); npm --prefix packages/types test (281 passed); npm --prefix packages/engine exec vitest run src/engine/**tests**/wsTransform.test.ts (43 passed).
-- Build/lint checked by the implementation agent: npm --prefix packages/sdk-typescript run build; npm --prefix packages/engine run build; SDK, types and engine lint. Local prerequisite builds used tsc for packages/types and packages/a2a.
-- Native database-backed engine tests were attempted but unavailable: better-sqlite3 has no WindowsARM64/Node24 prebuilt addon locally. This is not an engine-suite pass.
-- Separately in the Relay checkout, the root ran node C:/Users/hello/AppData/Local/Temp/relay-1359-crossrepo.mjs using built SDKs and mocked fetch/WebSocket I/O. The original arbitrary kind/payload object and49KB blocks matched public Relay listener and REST readback. This was not a live-service or database integration test.
-- Exact implementation commit range and changed files are recorded in trajectory.json; the subsequent metadata-only commit records this evidence.
+No release, deployment or production access was performed. Exact implementation commits and files are recorded in trajectory.json; subsequent evidence-only commits record validation provenance.
