@@ -1,0 +1,101 @@
+{
+  "version": "1.0.0",
+  "id": "4e0ae64c-b10d-433b-a437-e0153d110169",
+  "timestamp": "2026-11-08T15:46:41.487Z",
+  "trajectory": "traj_jhjlvm0rzo7j",
+  "files": [
+    {
+      "path": ".github/workflows/publish-npm.yml",
+      "conversations": [
+        {
+          "contributor": {
+            "type": "ai"
+          },
+          "ranges": [
+            {
+              "start_line": 257,
+              "end_line": 263,
+              "revision": "de4f3886260a2bfa251ebe36000b8886143754d8"
+            },
+            {
+              "start_line": 279,
+              "end_line": 287,
+              "revision": "de4f3886260a2bfa251ebe36000b8886143754d8"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "path": "CHANGELOG.md",
+      "conversations": [
+        {
+          "contributor": {
+            "type": "ai"
+          },
+          "ranges": [
+            {
+              "start_line": 25,
+              "end_line": 31,
+              "revision": "de4f3886260a2bfa251ebe36000b8886143754d8"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "path": "scripts/release-workflow-contract.test.mjs",
+      "conversations": [
+        {
+          "contributor": {
+            "type": "ai"
+          },
+          "ranges": [
+            {
+              "start_line": 565,
+              "end_line": 584,
+              "revision": "de4f3886260a2bfa251ebe36000b8886143754d8"
+            },
+            {
+              "start_line": 591,
+              "end_line": 605,
+              "revision": "de4f3886260a2bfa251ebe36000b8886143754d8"
+            },
+            {
+              "start_line": 612,
+              "end_line": 634,
+              "revision": "de4f3886260a2bfa251ebe36000b8886143754d8"
+            },
+            {
+              "start_line": 641,
+              "end_line": 652,
+              "revision": "de4f3886260a2bfa251ebe36000b8886143754d8"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "path": "scripts/restore-release-lock-metadata.mjs",
+      "conversations": [
+        {
+          "contributor": {
+            "type": "ai"
+          },
+          "ranges": [
+            {
+              "start_line": 3,
+              "end_line": 34,
+              "revision": "de4f3886260a2bfa251ebe36000b8886143754d8"
+            },
+            {
+              "start_line": 45,
+              "end_line": 58,
+              "revision": "de4f3886260a2bfa251ebe36000b8886143754d8"
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}
