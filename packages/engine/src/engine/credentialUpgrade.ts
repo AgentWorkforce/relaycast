@@ -13,14 +13,17 @@ export const DEFAULT_LEGACY_CREDENTIAL_GRACE_SECONDS = 30 * 24 * 60 * 60;
 /** The longest grace period a deployment may configure: 10 years. */
 export const MAX_LEGACY_CREDENTIAL_GRACE_SECONDS = 10 * 365 * 24 * 60 * 60;
 
-/** The column each kind of principal keeps its credential hash in. */
-const PRINCIPALS = {
+/**
+ * The column each kind of principal keeps its credential hash in. Built per
+ * call because table bindings are resolved at runtime (db/tables.ts).
+ */
+const principals = () => ({
   workspace: { table: workspaces, id: workspaces.id, hash: workspaces.apiKeyHash },
   agent: { table: agents, id: agents.id, hash: agents.tokenHash },
   node: { table: nodes, id: nodes.id, hash: nodes.tokenHash },
   observer: { table: observerTokens, id: observerTokens.id, hash: observerTokens.tokenHash },
   webhook: { table: webhooks, id: webhooks.id, hash: webhooks.tokenHash },
-} as const;
+}) as const;
 
 /** Principal tables whose credential hash can be upgraded. */
 type CredentialTable = typeof agents | typeof nodes | typeof observerTokens | typeof webhooks | typeof workspaces;
@@ -105,7 +108,7 @@ export async function upgradedLegacyCredential(
     gt(credentialUpgrades.expiresAt, now),
   ));
   if (!row) return undefined;
-  const principal = PRINCIPALS[kind];
+  const principal = principals()[kind];
   const [current] = await db.select({ hash: principal.hash }).from(principal.table)
     .where(eq(principal.id, row.principalId));
   if (current?.hash !== row.arHash) return undefined;
@@ -187,7 +190,7 @@ export async function upgradeLegacyCredential(
     409,
   );
   const legacyHash = await sha256Hex(legacyToken);
-  const principal = PRINCIPALS[kind];
+  const principal = principals()[kind];
 
   /**
    * The upgrade that claimed this legacy credential, while the principal still

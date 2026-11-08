@@ -40,9 +40,13 @@ export type DeliveryReplayDeps = Pick<EventDispatchEngine, 'realtime' | 'nodeCon
 type DeliveryRow = typeof deliveries.$inferSelect;
 // SQL-wrapped columns retain Drizzle's timestamp/boolean decoders when FROM
 // includes an explicit SQLite INDEXED BY clause rather than a table object.
-const indexedDeliveryColumns = Object.fromEntries(
-  Object.entries(getTableColumns(deliveries)).map(([name, column]) => [name, sql`${column}`.mapWith(column)]),
-) as { [K in keyof DeliveryRow]: SQL<DeliveryRow[K]> };
+// Memoised on first use: table bindings are resolved at runtime (db/tables.ts).
+let indexedDeliveryColumnsCache: { [K in keyof DeliveryRow]: SQL<DeliveryRow[K]> } | undefined;
+function indexedDeliveryColumns(): { [K in keyof DeliveryRow]: SQL<DeliveryRow[K]> } {
+  return indexedDeliveryColumnsCache ??= Object.fromEntries(
+    Object.entries(getTableColumns(deliveries)).map(([name, column]) => [name, sql`${column}`.mapWith(column)]),
+  ) as { [K in keyof DeliveryRow]: SQL<DeliveryRow[K]> };
+}
 type DeliveryWithChannel = DeliveryRow & { channelId: string };
 type PendingDeliveryRow = {
   delivery: DeliveryRow;
@@ -792,7 +796,7 @@ export async function deadLetterUnreachableDeliveryBatch(
   // still active, and stalled the shared D1 for every tenant while it ran.
   const due = await db
     .select({
-      delivery: indexedDeliveryColumns,
+      delivery: indexedDeliveryColumns(),
       senderAgentId: messages.agentId,
       targetAgentName: agents.name,
     })
@@ -1009,7 +1013,7 @@ export async function fetchDueNodeDeliveryEvents(
 
   const fetchRows = (ids: string[]) => db
     .select({
-      delivery: indexedDeliveryColumns,
+      delivery: indexedDeliveryColumns(),
       recipientAgentName: agents.name,
       body: messages.body,
       blocks: messages.blocks,
@@ -1354,7 +1358,7 @@ async function replayPendingToNode(
       // Hydrate only this bounded ID page. Re-check ownership, ACK, expiry and
       // status here because each await can race a handoff or cumulative ACK.
       const rows = await db.select({
-        delivery: indexedDeliveryColumns,
+        delivery: indexedDeliveryColumns(),
         recipientAgentName: agents.name,
         recipientProviderName: agents.providerName,
         ackSeq: agents.deliveryAckSeq,

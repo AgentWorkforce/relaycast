@@ -654,7 +654,7 @@ export async function sendDm(
     ? await options.resolveWorkspaceDeliveryPolicy() : options.workspaceDeliveryPolicy;
 
   const recipientQuery = db
-    .select({ agent: agents, node: addressNodeSelection })
+    .select({ agent: agents, node: addressNodeSelection() })
     .from(agents)
     .leftJoin(nodes, eq(nodes.id, agents.locationNodeId));
   const [recipient] = options.address !== undefined
@@ -679,7 +679,7 @@ export async function sendDm(
   }
 
   const [fromAgent] = await db
-    .select({ name: agents.name, node: addressNodeSelection })
+    .select({ name: agents.name, node: addressNodeSelection() })
     .from(agents)
     .leftJoin(nodes, eq(nodes.id, agents.locationNodeId))
     .where(and(eq(agents.workspaceId, workspaceId), eq(agents.id, fromAgentId)));

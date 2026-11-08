@@ -526,7 +526,7 @@ export async function listAgents(
           ? sql<Record<string, unknown>>`'{}'`.mapWith(agents.metadata)
           : agents.metadata,
       },
-      node: addressNodeSelection,
+      node: addressNodeSelection(),
     })
     .from(agents)
     .leftJoin(nodes, eq(nodes.id, agents.locationNodeId))
@@ -555,7 +555,7 @@ export async function listAgents(
 
 export async function getAgentByName(db: Db, workspaceId: string, name: string) {
   const [row] = await db
-    .select({ agent: agents, node: addressNodeSelection })
+    .select({ agent: agents, node: addressNodeSelection() })
     .from(agents)
     .leftJoin(nodes, eq(nodes.id, agents.locationNodeId))
     .where(and(eq(agents.workspaceId, workspaceId), eq(agents.name, name)));
@@ -717,7 +717,7 @@ export async function updateAgentById(
 
   if (!updated) return null;
   const [node] = updated.locationNodeId
-    ? await db.select(addressNodeSelection).from(nodes).where(eq(nodes.id, updated.locationNodeId))
+    ? await db.select(addressNodeSelection()).from(nodes).where(eq(nodes.id, updated.locationNodeId))
     : [];
 
   return {
@@ -770,7 +770,7 @@ export async function claimLegacyAgentIdentity(
 
   if (!updated) return null;
   const [node] = updated.locationNodeId
-    ? await db.select(addressNodeSelection).from(nodes).where(eq(nodes.id, updated.locationNodeId))
+    ? await db.select(addressNodeSelection()).from(nodes).where(eq(nodes.id, updated.locationNodeId))
     : [];
 
   return {

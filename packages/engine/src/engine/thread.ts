@@ -53,7 +53,7 @@ export async function postReply(
     .where(eq(dmConversations.channelId, parent.channelId));
 
   const [agent] = await db
-    .select({ name: agents.name, node: addressNodeSelection })
+    .select({ name: agents.name, node: addressNodeSelection() })
     .from(agents)
     .leftJoin(nodes, eq(nodes.id, agents.locationNodeId))
     .where(and(eq(agents.workspaceId, workspaceId), eq(agents.id, agentId)));

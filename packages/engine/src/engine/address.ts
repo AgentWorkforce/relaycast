@@ -67,8 +67,13 @@ export function machineMatches(machine: string, node: AddressNode): boolean {
   return machine === node.name || machine === node.machineId;
 }
 
-/** Node columns needed to format or match an address; select them via a left join on the agent's location node. */
-export const addressNodeSelection = { name: nodes.name, role: nodes.role, machineId: nodes.machineId };
+/**
+ * Node columns needed to format or match an address; select them via a left join on the agent's location node.
+ * A function, not a module constant: table bindings are resolved per dialect at runtime (db/tables.ts).
+ */
+export function addressNodeSelection() {
+  return { name: nodes.name, role: nodes.role, machineId: nodes.machineId };
+}
 
 /** Reject an address with no `agent@machine` reading before any other work. */
 export function requireAgentAddress(address: string): AgentAddress[] {
