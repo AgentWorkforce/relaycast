@@ -253,6 +253,83 @@ describe('AgentClient WebSocket integration', () => {
     }));
   });
 
+  it.each(['message.created', 'message.updated', 'thread.reply', 'dm.received', 'group_dm.received'])(
+    'preserves rich blocks from %s node deliveries',
+    async (type) => {
+      const agent = createAgent();
+      const handler = vi.fn();
+      agent.on.any(handler);
+      agent.connect();
+      const ws = await nextSocket();
+      ws.simulateOpen();
+      const blocks = [{ type: 'text', text: 'proof-'.repeat(8192) }];
+      const message = {
+        id: 'm_blocks', agent_id: 'bot_1', agent_name: 'Bot', text: 'proof', blocks,
+      };
+      ws.simulateMessage({
+        v: 1, type: 'deliver', delivery_id: 'del_blocks', agent: 'worker', seq: 1,
+        payload: {
+          type,
+          data: {
+            ...message, from_name: 'Bot', channel_name: 'general', thread_id: 'm_parent',
+            conversation_id: 'dm_1', attachments: [],
+            ...(type === 'dm.received' || type === 'group_dm.received' ? { message } : {}),
+          },
+        },
+      });
+      expect(handler).toHaveBeenCalledWith(expect.objectContaining({
+        type, message: expect.objectContaining({ id: 'm_blocks', text: 'proof', blocks }),
+      }));
+      await agent.disconnect();
+    },
+  );
+
+  it.each(['dm.received', 'group_dm.received'])(
+    'preserves flat and nested blocks precedence for %s',
+    async (type) => {
+      const agent = createAgent();
+      const handler = vi.fn();
+      agent.on.any(handler);
+      agent.connect();
+      const ws = await nextSocket();
+      ws.simulateOpen();
+      const blocks = [{ type: 'text', text: 'flat proof' }];
+      for (const [seq, nested] of [undefined, [], null].entries()) {
+        ws.simulateMessage({
+          v: 1, type: 'deliver', delivery_id: 'del_flat_' + seq, agent: 'worker', seq: seq + 1,
+          payload: { type, data: {
+            id: 'm_flat_' + seq, conversation_id: 'dm_1', from_agent_id: 'bot_1',
+            from_name: 'Bot', text: 'proof', blocks,
+            ...(nested === undefined ? {} : { message: { blocks: nested } }),
+          } },
+        });
+        expect(handler).toHaveBeenCalledWith(expect.objectContaining({
+          type, message: expect.objectContaining({ blocks: nested === undefined ? blocks : nested }),
+        }));
+      }
+      await agent.disconnect();
+    },
+  );
+
+  it.each([{ blocks: undefined }, { blocks: null }, { blocks: [] }])('preserves absent and empty blocks ($blocks) on node messages', async ({ blocks }) => {
+    const agent = createAgent();
+    const handler = vi.fn();
+    agent.on.messageCreated(handler);
+    agent.connect();
+    const ws = await nextSocket();
+    ws.simulateOpen();
+    ws.simulateMessage({
+      v: 1, type: 'deliver', delivery_id: 'del_empty', agent: 'worker', seq: 1,
+      payload: { type: 'message.created', data: {
+        id: 'm_empty', channel_name: 'general', agent_id: 'bot_1', from_name: 'Bot',
+        text: 'plain', attachments: [], ...(blocks === undefined ? {} : { blocks }),
+      } },
+    });
+    expect(handler).toHaveBeenCalledTimes(1);
+    expect(handler.mock.calls[0]![0].message.blocks).toEqual(blocks);
+    await agent.disconnect();
+  });
+
   it('on.messageReacted fires with message.reacted event', async () => {
     const agent = createAgent();
     agent.connect();

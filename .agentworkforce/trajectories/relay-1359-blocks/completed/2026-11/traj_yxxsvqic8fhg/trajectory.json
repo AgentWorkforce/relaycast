@@ -1,0 +1,58 @@
+{
+  "id": "traj_yxxsvqic8fhg",
+  "version": 1,
+  "task": {
+    "title": "Preserve realtime blocks for Relay issue1359",
+    "source": {
+      "system": "github",
+      "id": "1359",
+      "url": "https://github.com/AgentWorkforce/relay/issues/1359"
+    }
+  },
+  "status": "completed",
+  "startedAt": "2026-11-08T01:33:54.229Z",
+  "completedAt": "2026-11-08T01:33:55.380Z",
+  "agents": [
+    {
+      "name": "default",
+      "role": "lead",
+      "joinedAt": "2026-11-08T01:33:54.959Z"
+    }
+  ],
+  "chapters": [
+    {
+      "id": "chap_4dop6av9eoj8",
+      "title": "Work",
+      "agentName": "default",
+      "startedAt": "2026-11-08T01:33:54.959Z",
+      "endedAt": "2026-11-08T01:33:55.380Z",
+      "events": [
+        {
+          "ts": 1794101634963,
+          "type": "decision",
+          "content": "Repair both websocket schema parsing and node delivery transforms: Repair both websocket schema parsing and node delivery transforms",
+          "raw": {
+            "question": "Repair both websocket schema parsing and node delivery transforms",
+            "chosen": "Repair both websocket schema parsing and node delivery transforms",
+            "alternatives": [],
+            "reasoning": "Both paths independently drop blocks. Preserve absent/null/empty payloads and nested DM precedence. Cross-repo built SDK -> Relay adapter -> public listener parity passes for49KB blocks against fixture REST readback."
+          },
+          "significance": "high"
+        }
+      ]
+    }
+  ],
+  "retrospective": {
+    "summary": "Preserved realtime blocks for channel messages, updates, threads, DMs and group DMs. SDK521, shared types278, strict types, build and lint pass; independent companion review PASS; no release or production access.",
+    "approach": "Standard approach",
+    "confidence": 0.95
+  },
+  "commits": [],
+  "filesChanged": [],
+  "projectId": "AgentWorkforce/relaycast",
+  "tags": [],
+  "_trace": {
+    "startRef": "ac38905aec759e5f4bdf7fe782dce60482d4ea1a",
+    "endRef": "ac38905aec759e5f4bdf7fe782dce60482d4ea1a"
+  }
+}

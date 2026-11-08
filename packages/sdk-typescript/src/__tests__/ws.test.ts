@@ -115,6 +115,24 @@ describe('WsClient', () => {
     );
   });
 
+  it('preserves rich blocks through workspace event schema parsing', () => {
+    const client = new WsClient({ token: 'at_live_test' });
+    const handler = vi.fn();
+    client.on('message.created', handler);
+    client.connect();
+    const ws = MockWebSocket.instances[0]!;
+    ws.simulateOpen();
+    const blocks = [{ type: 'text', text: 'structured proof' }];
+    ws.simulateMessage({
+      id: '550e8400-e29b-41d4-a716-446655440000', type: 'message.created', channel: 'general',
+      message: { id: 'm_blocks', agent_id: 'bot_1', agent_name: 'Bot', text: 'proof', attachments: [], blocks },
+    });
+    expect(handler).toHaveBeenCalledWith(expect.objectContaining({
+      message: expect.objectContaining({ blocks }),
+    }));
+    void client.disconnect();
+  });
+
   it('subscribe sends subscribe message', () => {
     const client = new WsClient({ token: 'at_live_test' });
     client.connect();

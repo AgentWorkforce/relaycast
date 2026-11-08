@@ -529,6 +529,7 @@ export class WsClient {
             agent_id: data.agent_id,
             agent_name: data.from_name,
             text: data.text,
+            ...(data.blocks !== undefined ? { blocks: data.blocks } : {}),
             attachments: Array.isArray(data.attachments) ? data.attachments : [],
             ...(typeof data.injection_mode === 'string' ? { injection_mode: data.injection_mode } : {}),
             ...(isRecord(data.metadata) ? { metadata: data.metadata } : {}),
@@ -545,6 +546,7 @@ export class WsClient {
             agent_id: data.agent_id,
             agent_name: data.from_name,
             text: data.text,
+            ...(data.blocks !== undefined ? { blocks: data.blocks } : {}),
           },
         };
       case 'message.updated':
@@ -556,6 +558,7 @@ export class WsClient {
             agent_id: data.agent_id,
             agent_name: data.from_name,
             text: data.text,
+            ...(data.blocks !== undefined ? { blocks: data.blocks } : {}),
           },
         };
       case 'message.reacted':
@@ -584,6 +587,9 @@ export class WsClient {
             agent_id: message.agent_id ?? data.from_agent_id ?? data.agent_id,
             agent_name: message.agent_name ?? data.from_name,
             text: message.text ?? data.text,
+            ...((message.blocks !== undefined || data.blocks !== undefined)
+              ? { blocks: message.blocks !== undefined ? message.blocks : data.blocks }
+              : {}),
             ...((message.injection_mode ?? data.injection_mode) ? { injection_mode: message.injection_mode ?? data.injection_mode } : {}),
             ...(attachments.length ? { attachments } : {}),
           },
