@@ -43,11 +43,32 @@ describe('db/tables binding', () => {
     expect(getTableName(t.alias(t.workspaces, 'other_workspace'))).toBe('other_workspace');
   });
 
-  it("fails closed for 'pg' until schema.pg exists, and stays unbound", async () => {
-    const { t, schema } = await freshTables();
-    expect(() => t.bindSchema('pg')).toThrow(/schema\.pg not available/);
-    expect(t.currentSchemaDialect()).toBeUndefined();
-    expect(() => t.agents.id).toThrow(/before bindSchema/);
+  it("binds every table to schema.pg.ts for 'pg', schema-qualified, idempotently", async () => {
+    const { t } = await freshTables();
+    const pgSchema = await import('../schema.pg.js');
+    const { getTableConfig, PgTable } = await import('drizzle-orm/pg-core');
+    t.bindSchema('pg');
+    t.bindSchema('pg');
+    expect(t.currentSchemaDialect()).toBe('pg');
+    const sqliteNames = Object.entries(sqliteSchema).filter(([, v]) => is(v, Table)).map(([k]) => k).sort();
+    const pgNames = Object.entries(pgSchema).filter(([, v]) => is(v, Table)).map(([k]) => k).sort();
+    expect(pgNames).toEqual(sqliteNames);
+    for (const name of pgNames) {
+      const bound = (t as unknown as Record<string, unknown>)[name];
+      expect(bound, name).toBe((pgSchema as unknown as Record<string, unknown>)[name]);
+      expect(is(bound, PgTable), name).toBe(true);
+      // Every query names "relaycast"."<table>": nothing depends on search_path.
+      expect(getTableConfig(bound as InstanceType<typeof PgTable>).schema, name).toBe('relaycast');
+    }
+    const other = t.alias(t.workspaces, 'other_workspace');
+    expect(is(other, PgTable)).toBe(true);
+    expect(getTableName(other)).toBe('other_workspace');
+  });
+
+  it('alias refuses a table from the other dialect', async () => {
+    const { t } = await freshTables();
+    t.bindSchema('pg');
+    expect(() => t.alias(sqliteSchema.workspaces, 'w')).toThrow(/not a PostgreSQL table/);
   });
 
   it('refuses to rebind a process to a different dialect', async () => {
@@ -55,6 +76,17 @@ describe('db/tables binding', () => {
     t.bindSchema('sqlite');
     expect(() => t.bindSchema('pg')).toThrow(/already bound to 'sqlite'/);
     expect(t.agents).toBe(schema.agents);
+  });
+
+  it("refuses to bind 'sqlite' after 'pg', leaving the pg tables bound", async () => {
+    const { t } = await freshTables();
+    const pgSchema = await import('../schema.pg.js');
+    t.bindSchema('pg');
+    expect(() => t.bindSchema('sqlite')).toThrow(/already bound to 'pg'/);
+    expect(t.currentSchemaDialect()).toBe('pg');
+    expect(t.agents).toBe(pgSchema.agents);
+    const { brandSqliteEngineDb } = await import('../../adapters/sqlite-handle.js');
+    expect(() => brandSqliteEngineDb(drizzle(new Database(':memory:')))).toThrow(/already bound to 'pg'/);
   });
 
   it('brandSqliteEngineDb binds sqlite in an unbound process', async () => {

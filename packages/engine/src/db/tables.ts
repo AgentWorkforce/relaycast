@@ -13,8 +13,11 @@
  * vitest `setupFiles`. The cloud D1 adapter (outside this package) must either
  * brand its handle or call `bindSchema('sqlite')` itself.
  */
-import { alias as sqliteAlias } from 'drizzle-orm/sqlite-core';
+import { getTableName, is, type Column, type ColumnDataType, type Table } from 'drizzle-orm';
+import { PgTable, alias as pgAlias } from 'drizzle-orm/pg-core';
+import { SQLiteTable, alias as sqliteAlias } from 'drizzle-orm/sqlite-core';
 import type { EngineDialect } from '../ports/engineDb.js';
+import * as pgSchema from './schema.pg.js';
 import * as sqliteSchema from './schema.js';
 
 export type {
@@ -72,8 +75,81 @@ type TableName =
   | 'a2aEgressContext'
   | 'a2aInbound';
 
-/** The table set a dialect schema module must provide. */
-export type EngineSchema = Pick<typeof sqliteSchema, TableName> & { alias: typeof sqliteAlias };
+/**
+ * A column re-homed onto drizzle's base `Column`: the engine-visible facts
+ * (SQL name, table name, JS data type, nullability, default/primary-key flags
+ * that drive insert-model inference, enum values) are kept from the SQLite
+ * declaration, which is the contract engine code was written against; the
+ * dialect-specific facts (`columnType`, `dataType`, `driverParam` and the
+ * `dialect` type tag) are widened. A SQLite or a PG column with the same
+ * engine-visible facts is assignable to it, so both schema modules bind below
+ * without a cast, and a PG declaration that drifts in data type, nullability
+ * or insert optionality fails this assignment at compile time.
+ */
+export type EngineColumn<C extends Column> = Column<{
+  name: C['_']['name'];
+  tableName: C['_']['tableName'];
+  dataType: ColumnDataType;
+  columnType: string;
+  data: C['_']['data'];
+  driverParam: unknown;
+  notNull: C['_']['notNull'];
+  hasDefault: C['_']['hasDefault'];
+  isPrimaryKey: C['_']['isPrimaryKey'];
+  isAutoincrement: C['_']['isAutoincrement'];
+  hasRuntimeDefault: C['_']['hasRuntimeDefault'];
+  enumValues: C['_']['enumValues'];
+  // Pinned so drizzle's insert-model inference treats defaulted/nullable
+  // columns as optional keys (it requires both to be exactly undefined).
+  // No engine-visible column is generated or an identity; the PG-only
+  // `rowid` identity is not part of this shape.
+  generated: undefined;
+  identity: undefined;
+}>;
+
+type EngineColumns<TColumns extends Record<string, Column>> = { [K in keyof TColumns]: EngineColumn<TColumns[K]> };
+
+/**
+ * A table on drizzle's base `Table` (dialect `string`, schema `string |
+ * undefined`) whose columns are {@link EngineColumn}s, plus the column
+ * properties drizzle's `*TableWithColumns` types expose. Extra columns a
+ * dialect adds (the PG `rowid` identity) are allowed: they are structurally
+ * extra, never required on insert (generated always), and invisible to
+ * engine code typed against this.
+ */
+export type EngineTable<T extends Table> = Table<{
+  name: T['_']['name'];
+  schema: string | undefined;
+  columns: EngineColumns<T['_']['columns']>;
+  dialect: string;
+}> &
+  EngineColumns<T['_']['columns']>;
+
+/**
+ * `alias(table, name)`: a renamed reference to a bound table, typed as the
+ * table itself so column refs keep their engine-visible types. Each binding
+ * supplies a wrapper around its dialect's own `alias` that checks the table
+ * class at runtime (a table from the other dialect is refused, never aliased).
+ */
+interface EngineAliasHolder {
+  alias<T extends Table, TAlias extends string>(table: T, alias: TAlias): T;
+}
+
+function sqliteEngineAlias<T extends Table, TAlias extends string>(table: T, name: TAlias): T {
+  if (!is(table, SQLiteTable)) throw new Error(`alias(): table "${getTableName(table)}" is not a SQLite table; this process is bound to 'sqlite'`);
+  // drizzle types the alias as a renamed table; engine code only reads its
+  // column refs, which have the same engine-visible shape as T's.
+  return sqliteAlias(table, name) as unknown as T;
+}
+
+function pgEngineAlias<T extends Table, TAlias extends string>(table: T, name: TAlias): T {
+  if (!is(table, PgTable)) throw new Error(`alias(): table "${getTableName(table)}" is not a PostgreSQL table; this process is bound to 'pg'`);
+  // Same reasoning as sqliteEngineAlias.
+  return pgAlias(table, name) as unknown as T;
+}
+
+/** The table set a dialect schema module must provide, typed dialect-neutrally. */
+export type EngineSchema = { [K in TableName]: EngineTable<(typeof sqliteSchema)[K]> } & EngineAliasHolder;
 
 function unbound<T>(name: string, target: object = {}): T {
   const fail = (): never => {
@@ -202,11 +278,11 @@ export function bindSchema(dialect: EngineDialect): void {
   }
   switch (dialect) {
     case 'sqlite':
-      assign({ ...sqliteSchema, alias: sqliteAlias });
+      assign({ ...sqliteSchema, alias: sqliteEngineAlias });
       break;
     case 'pg':
-      // TODO(#602 step 6): load the generated ./schema.pg.js (with pg-core's alias) and assign it here.
-      throw new Error("bindSchema('pg'): schema.pg not available in this build");
+      assign({ ...pgSchema, alias: pgEngineAlias });
+      break;
     default: {
       const unknown: never = dialect;
       throw new Error(`bindSchema: unsupported dialect ${JSON.stringify(unknown)}`);
