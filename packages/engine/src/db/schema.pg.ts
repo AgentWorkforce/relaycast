@@ -33,6 +33,21 @@
  *   the stored document is returned byte-for-byte (jsonb normalises key order
  *   and whitespace). Plain `text` columns holding JSON strings (for example
  *   `workspace_events.payload`) stay `text`.
+ * - Defaults: the column DEFAULTs of a fully migrated SQLite database, not
+ *   schema.ts's `.default()` values. drizzle only uses `.default()` when
+ *   generating migrations; inserts never apply it, and several SQLite
+ *   migrations changed defaults or rewrote rows without rebuilding the table,
+ *   so schema.ts and the migrated DDL disagree for agents.status,
+ *   deliveries.status, nodes.kind, nodes.delivery_adapter and
+ *   pending_events.max_attempts. schema.pg.test.ts compares defaults,
+ *   nullability and CHECK bodies with a migrated SQLite database.
+ * - CHECKs: every migrated SQLite CHECK is enforced. Domain checks Postgres
+ *   enforces natively are not repeated: `start_is_known IN (0, 1)` is a
+ *   `boolean NOT NULL` column here, and the workspaces usage/source domain
+ *   checks are implied by workspaces_usage_classification_source_check.
+ * - The workspaces.stripe_customer_id / stripe_subscription_id columns the
+ *   SQLite migrations still carry are absent from schema.ts and intentionally
+ *   absent here.
  * - `real` becomes `double precision`. schema.ts has no blob columns; any
  *   future blob maps to `bytea`.
  *
@@ -96,6 +111,20 @@ export const epochSeconds = customType<{ data: Date; driverData: number | string
 
 /** SQL default equivalent to SQLite `(unixepoch())`. */
 const epochNow = sql`floor(extract(epoch from statement_timestamp()))::bigint`;
+
+/**
+ * `id COLLATE "C"`: index expression for (length(id), id) orderings, so the
+ * Postgres index order matches SQLite's binary text order. Queries must use
+ * the same `id COLLATE "C"` to be served by the index.
+ */
+const idCollateC = (id: AnyPgColumn) => sql`${id} COLLATE "C"`;
+
+/**
+ * `(task_state ->> 'deadline') COLLATE "C"`: the ISO-8601 task deadline
+ * compared as binary text (chronological for toISOString() values). Queries
+ * must use exactly this expression to be served by the deadline indexes.
+ */
+const taskDeadlineC = (taskState: AnyPgColumn) => sql`((${taskState} ->> 'deadline') COLLATE "C")`;
 
 /** Explicit rowid column; see module header. */
 const rowid = () => bigint('rowid', { mode: 'number' }).generatedAlwaysAsIdentity().notNull();
@@ -220,7 +249,8 @@ export const agents = relaycast.table(
     // migration 0035 for the concurrency defect this closes (relay#1542).
     previousTokenHash: text('previous_token_hash'),
     previousTokenExpiresAt: epochSeconds('previous_token_expires_at'),
-    status: text('status').notNull().default('active'),
+    // Migrated SQLite default (0000), not schema.ts's; see "Defaults" above.
+    status: text('status').notNull().default('online'),
     handle: text('handle'),
     persona: text('persona'),
     metadata: jsonb('metadata').$type<Record<string, unknown>>().default({}),
@@ -371,9 +401,11 @@ export const nodes = relaycast.table(
     // capability scope. Set at enrollment when the caller supplies it, and by a
     // provider on register; null when neither reports one.
     machineId: text('machine_id'),
-    kind: text('kind').notNull().default('ws'),
+    // Migrated SQLite defaults (0021/0025 rewrote rows, not the defaults);
+    // see "Defaults" in the module header.
+    kind: text('kind').notNull().default('fleet_ws'),
     role: text('role').notNull().default('broker'),
-    deliveryAdapter: text('delivery_adapter').notNull().default('ws.node.v1'),
+    deliveryAdapter: text('delivery_adapter').notNull().default('fleet.ws.v1'),
     deliveryConfig: jsonb('delivery_config').$type<Record<string, unknown>>(),
     capabilities: jsonb('capabilities').$type<FleetCapability[]>().notNull().default([]),
     // Zero is the fleet-wide sentinel for unlimited capacity.
@@ -847,20 +879,23 @@ export const messages = relaycast.table(
   (table) => [
     uniqueIndex('messages_rowid_unique').on(table.rowid),
     index('idx_messages_channel_time').on(table.channelId, table.id),
-    index('idx_messages_retention').on(sql`length(${table.id})`, table.id),
+    // (length(id), id) orderings: `id` is indexed COLLATE "C" so the index
+    // order is SQLite's binary text order. Queries must order/compare with
+    // the same expression - `length(id), id COLLATE "C"` - to use it.
+    index('idx_messages_retention').on(sql`length(${table.id})`, idCollateC(table.id)),
     index('idx_messages_thread').on(table.threadId, table.id),
     index('idx_messages_workspace').on(table.workspaceId, table.id),
     index('idx_messages_workspace_length_id').on(
       table.workspaceId,
       sql`length(${table.id})`,
-      table.id,
+      idCollateC(table.id),
     ),
     index('idx_messages_agent').on(table.agentId),
     index('idx_messages_workspace_session').on(
       table.workspaceId,
       table.sessionRef,
       sql`length(${table.id})`,
-      table.id,
+      idCollateC(table.id),
     ),
   ],
 );
@@ -949,7 +984,8 @@ export const messageLogs = relaycast.table(
     uniqueIndex('message_logs_rowid_unique').on(table.rowid),
     uniqueIndex('message_logs_message_unique').on(table.messageId),
     index('idx_message_logs_workspace_time').on(table.workspaceId, table.id),
-    index('idx_message_logs_retention').on(sql`length(${table.id})`, table.id),
+    // See idx_messages_retention: `length(id), id COLLATE "C"`.
+    index('idx_message_logs_retention').on(sql`length(${table.id})`, idCollateC(table.id)),
     index('idx_message_logs_agent_time').on(table.agentId, table.id),
     index('idx_message_logs_channel_time').on(table.channelId, table.id),
     index('idx_message_logs_conversation_time').on(table.conversationId, table.id),
@@ -1369,15 +1405,24 @@ export const actionInvocations = relaycast.table(
       .on(table.workspaceId, table.createdAt)
       .where(sql`${table.status} = 'pending'`),
     // Present in the SQLite migrations (not declared in schema.ts).
-    // json_extract(task_state, '$.deadline') becomes task_state->>'deadline'.
+    //
+    // Deadline indexes: task_state.deadline is an ISO-8601 UTC string
+    // (`Date#toISOString()`, src/engine/taskInvocation.ts) and the engine
+    // compares it as text against another toISOString() value, which is
+    // chronological only under binary ordering. json_extract(task_state,
+    // '$.deadline') therefore becomes `(task_state ->> 'deadline') COLLATE "C"`
+    // and queries must use exactly that expression, e.g.
+    //   ("task_state" ->> 'deadline') COLLATE "C" <= $1
+    // A numeric cast (::bigint) is wrong here: it would raise 22P02 on every
+    // insert of a task_state, because the deadline is not a number.
     index('idx_action_invocations_spawn_canceled').on(table.workspaceId, table.dispatchedNodeId),
     index('idx_action_invocations_status_dispatched').on(table.status, table.dispatchedAt),
     index('idx_action_invocations_status_retry_after').on(table.status, table.retryAfterAt),
     index('idx_action_invocations_status_task_deadline')
-      .on(table.status, sql`(${table.taskState} ->> 'deadline')`)
+      .on(table.status, taskDeadlineC(table.taskState))
       .where(sql`${table.taskState} IS NOT NULL`),
     index('idx_action_invocations_task_deadline')
-      .on(sql`(${table.taskState} ->> 'deadline')`)
+      .on(taskDeadlineC(table.taskState))
       .where(sql`${table.taskState} IS NOT NULL AND ${table.status} IN ('pending', 'dispatched', 'running')`),
     check(
       'action_invocations_invocation_origin_check',
@@ -1479,7 +1524,8 @@ export const deliveries = relaycast.table(
     reason: text('reason'),
     priority: text('priority').notNull().default('normal'),
     deadline: epochSeconds('deadline'),
-    status: text('status').notNull().default('queued'),
+    // Migrated SQLite default (0000), not schema.ts's; see "Defaults" above.
+    status: text('status').notNull().default('pending'),
     seq: bigint('seq', { mode: 'number' }).notNull().default(0),
     locationType: text('location_type').notNull().default('self_connected'),
     locationNodeId: text('location_node_id').references((): AnyPgColumn => nodes.id, { onDelete: 'set null' }),
@@ -1563,7 +1609,9 @@ export const pendingEvents = relaycast.table(
     // live on webhookDeliveries. Keep enough headroom that lease recovery
     // cannot exhaust the parent before a subscriber reaches its final attempt.
     // Settled parents remain for 24h delivery-health/replay retention.
-    maxAttempts: integer('max_attempts').notNull().default(32),
+    // Migrated SQLite default (0000): 5. The engine always writes this column
+    // explicitly; see "Defaults" in the module header.
+    maxAttempts: integer('max_attempts').notNull().default(5),
     webhookInitialized: boolean('webhook_initialized').notNull().default(false),
     lastError: text('last_error'),
     createdAt: epochSeconds('created_at').notNull().default(epochNow),

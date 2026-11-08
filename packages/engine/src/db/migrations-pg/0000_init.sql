@@ -153,7 +153,7 @@ CREATE TABLE "relaycast"."agents" (
 	"token_hash" text NOT NULL,
 	"previous_token_hash" text,
 	"previous_token_expires_at" bigint,
-	"status" text DEFAULT 'active' NOT NULL,
+	"status" text DEFAULT 'online' NOT NULL,
 	"handle" text,
 	"persona" text,
 	"metadata" jsonb DEFAULT '{}'::jsonb,
@@ -240,7 +240,7 @@ CREATE TABLE "relaycast"."deliveries" (
 	"reason" text,
 	"priority" text DEFAULT 'normal' NOT NULL,
 	"deadline" bigint,
-	"status" text DEFAULT 'queued' NOT NULL,
+	"status" text DEFAULT 'pending' NOT NULL,
 	"seq" bigint DEFAULT 0 NOT NULL,
 	"location_type" text DEFAULT 'self_connected' NOT NULL,
 	"location_node_id" text,
@@ -478,9 +478,9 @@ CREATE TABLE "relaycast"."nodes" (
 	"rotation_idempotency_key_hash" text,
 	"rotation_request_digest" text,
 	"machine_id" text,
-	"kind" text DEFAULT 'ws' NOT NULL,
+	"kind" text DEFAULT 'fleet_ws' NOT NULL,
 	"role" text DEFAULT 'broker' NOT NULL,
-	"delivery_adapter" text DEFAULT 'ws.node.v1' NOT NULL,
+	"delivery_adapter" text DEFAULT 'fleet.ws.v1' NOT NULL,
 	"delivery_config" jsonb,
 	"capabilities" jsonb DEFAULT '[]'::jsonb NOT NULL,
 	"max_agents" integer DEFAULT 0 NOT NULL,
@@ -527,7 +527,7 @@ CREATE TABLE "relaycast"."pending_events" (
 	"payload" jsonb NOT NULL,
 	"status" text DEFAULT 'pending' NOT NULL,
 	"attempts" integer DEFAULT 0 NOT NULL,
-	"max_attempts" integer DEFAULT 32 NOT NULL,
+	"max_attempts" integer DEFAULT 5 NOT NULL,
 	"webhook_initialized" boolean DEFAULT false NOT NULL,
 	"last_error" text,
 	"created_at" bigint DEFAULT floor(extract(epoch from statement_timestamp()))::bigint NOT NULL,
@@ -804,8 +804,8 @@ CREATE INDEX "idx_action_invocations_pending_workspace" ON "relaycast"."action_i
 CREATE INDEX "idx_action_invocations_spawn_canceled" ON "relaycast"."action_invocations" USING btree ("workspace_id","dispatched_node_id");--> statement-breakpoint
 CREATE INDEX "idx_action_invocations_status_dispatched" ON "relaycast"."action_invocations" USING btree ("status","dispatched_at");--> statement-breakpoint
 CREATE INDEX "idx_action_invocations_status_retry_after" ON "relaycast"."action_invocations" USING btree ("status","retry_after_at");--> statement-breakpoint
-CREATE INDEX "idx_action_invocations_status_task_deadline" ON "relaycast"."action_invocations" USING btree ("status",("task_state" ->> 'deadline')) WHERE "relaycast"."action_invocations"."task_state" IS NOT NULL;--> statement-breakpoint
-CREATE INDEX "idx_action_invocations_task_deadline" ON "relaycast"."action_invocations" USING btree (("task_state" ->> 'deadline')) WHERE "relaycast"."action_invocations"."task_state" IS NOT NULL AND "relaycast"."action_invocations"."status" IN ('pending', 'dispatched', 'running');--> statement-breakpoint
+CREATE INDEX "idx_action_invocations_status_task_deadline" ON "relaycast"."action_invocations" USING btree ("status",(("task_state" ->> 'deadline') COLLATE "C")) WHERE "relaycast"."action_invocations"."task_state" IS NOT NULL;--> statement-breakpoint
+CREATE INDEX "idx_action_invocations_task_deadline" ON "relaycast"."action_invocations" USING btree ((("task_state" ->> 'deadline') COLLATE "C")) WHERE "relaycast"."action_invocations"."task_state" IS NOT NULL AND "relaycast"."action_invocations"."status" IN ('pending', 'dispatched', 'running');--> statement-breakpoint
 CREATE UNIQUE INDEX "actions_rowid_unique" ON "relaycast"."actions" USING btree ("rowid");--> statement-breakpoint
 CREATE UNIQUE INDEX "actions_workspace_node_name_unique" ON "relaycast"."actions" USING btree ("workspace_id","handler_node_id","name");--> statement-breakpoint
 CREATE UNIQUE INDEX "actions_workspace_agent_name_unique" ON "relaycast"."actions" USING btree ("workspace_id","name") WHERE "relaycast"."actions"."handler_node_id" IS NULL;--> statement-breakpoint
@@ -905,7 +905,7 @@ CREATE INDEX "idx_message_attachments_file" ON "relaycast"."message_attachments"
 CREATE UNIQUE INDEX "message_logs_rowid_unique" ON "relaycast"."message_logs" USING btree ("rowid");--> statement-breakpoint
 CREATE UNIQUE INDEX "message_logs_message_unique" ON "relaycast"."message_logs" USING btree ("message_id");--> statement-breakpoint
 CREATE INDEX "idx_message_logs_workspace_time" ON "relaycast"."message_logs" USING btree ("workspace_id","id");--> statement-breakpoint
-CREATE INDEX "idx_message_logs_retention" ON "relaycast"."message_logs" USING btree (length("id"),"id");--> statement-breakpoint
+CREATE INDEX "idx_message_logs_retention" ON "relaycast"."message_logs" USING btree (length("id"),"id" COLLATE "C");--> statement-breakpoint
 CREATE INDEX "idx_message_logs_agent_time" ON "relaycast"."message_logs" USING btree ("agent_id","id");--> statement-breakpoint
 CREATE INDEX "idx_message_logs_channel_time" ON "relaycast"."message_logs" USING btree ("channel_id","id");--> statement-breakpoint
 CREATE INDEX "idx_message_logs_conversation_time" ON "relaycast"."message_logs" USING btree ("conversation_id","id");--> statement-breakpoint
@@ -913,12 +913,12 @@ CREATE UNIQUE INDEX "message_sessions_rowid_unique" ON "relaycast"."message_sess
 CREATE INDEX "idx_message_sessions_workspace_last" ON "relaycast"."message_sessions" USING btree ("workspace_id","last_message_at");--> statement-breakpoint
 CREATE UNIQUE INDEX "messages_rowid_unique" ON "relaycast"."messages" USING btree ("rowid");--> statement-breakpoint
 CREATE INDEX "idx_messages_channel_time" ON "relaycast"."messages" USING btree ("channel_id","id");--> statement-breakpoint
-CREATE INDEX "idx_messages_retention" ON "relaycast"."messages" USING btree (length("id"),"id");--> statement-breakpoint
+CREATE INDEX "idx_messages_retention" ON "relaycast"."messages" USING btree (length("id"),"id" COLLATE "C");--> statement-breakpoint
 CREATE INDEX "idx_messages_thread" ON "relaycast"."messages" USING btree ("thread_id","id");--> statement-breakpoint
 CREATE INDEX "idx_messages_workspace" ON "relaycast"."messages" USING btree ("workspace_id","id");--> statement-breakpoint
-CREATE INDEX "idx_messages_workspace_length_id" ON "relaycast"."messages" USING btree ("workspace_id",length("id"),"id");--> statement-breakpoint
+CREATE INDEX "idx_messages_workspace_length_id" ON "relaycast"."messages" USING btree ("workspace_id",length("id"),"id" COLLATE "C");--> statement-breakpoint
 CREATE INDEX "idx_messages_agent" ON "relaycast"."messages" USING btree ("agent_id");--> statement-breakpoint
-CREATE INDEX "idx_messages_workspace_session" ON "relaycast"."messages" USING btree ("workspace_id","session_ref",length("id"),"id");--> statement-breakpoint
+CREATE INDEX "idx_messages_workspace_session" ON "relaycast"."messages" USING btree ("workspace_id","session_ref",length("id"),"id" COLLATE "C");--> statement-breakpoint
 CREATE UNIQUE INDEX "node_providers_rowid_unique" ON "relaycast"."node_providers" USING btree ("rowid");--> statement-breakpoint
 CREATE UNIQUE INDEX "node_providers_node_name_unique" ON "relaycast"."node_providers" USING btree ("workspace_id","node_id","name");--> statement-breakpoint
 CREATE INDEX "idx_node_providers_node" ON "relaycast"."node_providers" USING btree ("workspace_id","node_id");--> statement-breakpoint

@@ -4,7 +4,13 @@ import { fileURLToPath } from "node:url";
 import pg from "pg";
 import { afterEach, describe, expect, it } from "vitest";
 import type { PostgresConfig } from "../config.js";
-import { parseInt8, postgresPoolOptions, postgresTlsOptions } from "../pool.js";
+import {
+  closePostgresPool,
+  openPostgresPool,
+  parseInt8,
+  postgresPoolOptions,
+  postgresTlsOptions,
+} from "../pool.js";
 
 const pem = (name: string) =>
   readFileSync(
@@ -157,5 +163,32 @@ describe("connection parameters", () => {
       servername: "db.example.test",
     });
     expect(params).not.toHaveProperty("connectionString");
+  });
+});
+
+describe("openPostgresPool idle-client errors", () => {
+  it("logs the error message only, never the config, and does not throw", async () => {
+    const lines: string[] = [];
+    const pool = openPostgresPool(config({ password: "pw-dev-only-321" }), {
+      log: (l) => lines.push(l),
+    });
+    try {
+      pool.emit("error", new Error("terminating connection due to administrator command"));
+      expect(lines).toEqual([
+        "postgres pool: idle client error: terminating connection due to administrator command",
+      ]);
+      expect(lines.join("\n")).not.toMatch(/pw-dev-only-321|db\.example\.test|relaycast_runtime/);
+    } finally {
+      await closePostgresPool(pool);
+    }
+  });
+
+  it("still swallows idle-client errors when no log is given", async () => {
+    const pool = openPostgresPool(config());
+    try {
+      expect(() => pool.emit("error", new Error("boom"))).not.toThrow();
+    } finally {
+      await closePostgresPool(pool);
+    }
   });
 });

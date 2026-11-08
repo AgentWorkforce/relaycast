@@ -19,10 +19,13 @@ export function parseInt8(value: string): number {
 
 /**
  * TLS options: the configured CA only, certificate verification on, and
- * hostname verification against the configured host. node-postgres does not
- * pass the host to tls.connect, so for IP-literal hosts Node would otherwise
- * verify against "localhost"; checking against `config.host` explicitly makes
- * DNS names and IP SANs behave the same as libpq's verify-full.
+ * hostname verification against the configured host. node-postgres 8.23
+ * already passes `host` to tls.connect and sets `servername` (SNI) for DNS
+ * names, but these options are merged into its tls.connect options, so the
+ * engine pins verification itself rather than relying on that: `servername`
+ * for DNS names only (SNI must not be an IP, RFC 6066), and an explicit
+ * `checkServerIdentity` against `config.host`, so DNS names and IP SANs are
+ * verified like libpq's verify-full whatever the driver version does.
  */
 export function postgresTlsOptions(config: PostgresConfig) {
   return {
@@ -58,11 +61,27 @@ export function postgresPoolOptions(config: PostgresConfig): pg.PoolConfig {
   };
 }
 
+export interface OpenPostgresPoolOptions {
+  /**
+   * Receives one line per idle-client error. Only the error message is
+   * passed, never the config or connection string.
+   */
+  log?: (message: string) => void;
+}
+
 /** Open a pool for `config`. Connections are made lazily. */
-export function openPostgresPool(config: PostgresConfig): pg.Pool {
+export function openPostgresPool(
+  config: PostgresConfig,
+  opts: OpenPostgresPoolOptions = {},
+): pg.Pool {
   const pool = new pg.Pool(postgresPoolOptions(config));
-  // An idle client erroring (server restart, network) must not crash the process.
-  pool.on("error", () => {});
+  // An idle client erroring (server restart, network) must not crash the
+  // process; the pool discards that client. Report it, without config.
+  pool.on("error", (err: Error) => {
+    opts.log?.(
+      `postgres pool: idle client error: ${err instanceof Error ? err.message : String(err)}`,
+    );
+  });
   return pool;
 }
 

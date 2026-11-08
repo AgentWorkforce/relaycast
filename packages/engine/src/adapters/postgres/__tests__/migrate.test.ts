@@ -11,6 +11,9 @@ import {
 import { verifyIdentity, type Queryable } from "../identity.js";
 import {
   bundleMigrations,
+  FORBIDDEN_MIGRATION_PATTERNS,
+  forbiddenMigrationStatements,
+  parseMinCompatibleGeneration,
   loadBundledPostgresMigrations,
   runPostgresMigrations,
   splitPostgresStatements,
@@ -60,6 +63,124 @@ describe("bundleMigrations", () => {
   });
 });
 
+describe("min_compatible_generation header", () => {
+  it("honours the key in the leading comment header", () => {
+    expect(
+      parseMinCompatibleGeneration(
+        "x.sql",
+        "-- Custom SQL migration file\n-- min_compatible_generation: 3\n--\nSELECT 1;",
+      ),
+    ).toBe(3);
+    expect(parseMinCompatibleGeneration("x.sql", "SELECT 1;")).toBeUndefined();
+  });
+
+  it("refuses the key after the header block", () => {
+    for (const sql of [
+      "-- header\nSELECT 1;\n-- min_compatible_generation: 1\n",
+      "SELECT 1; -- min_compatible_generation: 1",
+      "-- header\n\n-- min_compatible_generation: 1\nSELECT 1;",
+      "CREATE FUNCTION f() RETURNS int AS $$ -- min_compatible_generation: 1\n SELECT 1 $$ LANGUAGE sql;",
+    ])
+      expect(() => parseMinCompatibleGeneration("x.sql", sql), sql).toThrow(
+        /only appear in the leading comment header/,
+      );
+  });
+
+  it("refuses malformed and duplicate header keys", () => {
+    expect(() =>
+      parseMinCompatibleGeneration("x.sql", "-- min_compatible_generation: two\nSELECT 1;"),
+    ).toThrow(/malformed/);
+    expect(() =>
+      parseMinCompatibleGeneration(
+        "x.sql",
+        "-- min_compatible_generation: 1\n-- min_compatible_generation: 2\nSELECT 1;",
+      ),
+    ).toThrow(/duplicate/);
+  });
+
+  it("bundleMigrations ignores no later occurrence: it refuses the file", () => {
+    expect(() =>
+      bundleMigrations([
+        { name: "0000_a.sql", sql: "SELECT 1;" },
+        { name: "0001_b.sql", sql: "SELECT 2;\n-- min_compatible_generation: 1\n" },
+      ]),
+    ).toThrow(/0001_b.sql: min_compatible_generation may only appear/);
+  });
+});
+
+describe("forbidden migration statements", () => {
+  const guarded = `CREATE OR REPLACE FUNCTION "relaycast"."f"() RETURNS trigger
+LANGUAGE plpgsql SET search_path = pg_catalog, pg_temp AS $$
+BEGIN
+  -- grant nothing; begin; commit;
+  IF NEW.x IS NULL THEN RAISE EXCEPTION 'x'; END IF;
+  RETURN NEW;
+END;
+$$;`;
+
+  it("allows the trigger-function guard, plpgsql BEGIN/END and prose in comments", () => {
+    expect(forbiddenMigrationStatements(guarded)).toEqual([]);
+    expect(
+      forbiddenMigrationStatements(
+        'CREATE TABLE "relaycast"."t" ("begin_at" bigint, "end" text);\n-- BEGIN; COMMIT; SET ROLE x',
+      ),
+    ).toEqual([]);
+  });
+
+  it.each([
+    ["transaction control", "BEGIN;\nCREATE TABLE t (x int);\nCOMMIT;"],
+    ["transaction control", "CREATE TABLE t (x int);\nCOMMIT;"],
+    ["transaction control", "ROLLBACK;"],
+    ["transaction control", "START TRANSACTION;"],
+    ["transaction control", "SAVEPOINT s;"],
+    ["transaction control", "SELECT 1;--> statement-breakpoint\nbegin;"],
+    ["SECURITY DEFINER", guarded.replace("LANGUAGE plpgsql SET", "LANGUAGE plpgsql SECURITY DEFINER SET")],
+    ["SET ROLE", "SET ROLE relaycast_owner;"],
+    ["SET ROLE", "SET LOCAL ROLE postgres;"],
+    ["SET ROLE", "RESET ROLE;"],
+    ["SET SESSION AUTHORIZATION", "SET SESSION AUTHORIZATION postgres;"],
+    ["role DDL", "ALTER ROLE relaycast_runtime SUPERUSER;"],
+    ["role DDL", "ALTER USER relaycast_runtime CREATEDB;"],
+    ["search_path", "SET search_path = public;"],
+    ["search_path", "SELECT set_config('search_path', 'public', false);"],
+    ["search_path", guarded.replace("pg_catalog, pg_temp", "public, pg_temp")],
+    ["search_path", guarded.replace("SET search_path", "SET search_path TO")],
+    ["schema DDL", 'CREATE SCHEMA "other";'],
+    ["GRANT/REVOKE", 'GRANT ALL ON "relaycast"."t" TO PUBLIC;'],
+    ["DROP OWNED", "DROP OWNED BY relaycast_runtime;"],
+    ["REASSIGN OWNED", "REASSIGN OWNED BY a TO b;"],
+  ])("refuses %s: %s", (name, sql) => {
+    expect(forbiddenMigrationStatements(sql)).toContain(name);
+    expect(() => bundleMigrations([{ name: "0000_x.sql", sql }])).toThrow(
+      /0000_x.sql: forbidden statement/,
+    );
+  });
+
+  it("matches the generator's list and verdicts", async () => {
+    const generator = (await import(
+      // @ts-expect-error -- plain JS module without type declarations
+      "../../../../scripts/generate-pg-migrations.mjs"
+    )) as {
+      FORBIDDEN: { name: string; re: RegExp; scope: string }[];
+      forbiddenStatements(sql: string): string[];
+    };
+    expect(
+      generator.FORBIDDEN.map(({ name, re, scope }) => [name, String(re), scope]),
+    ).toEqual(
+      FORBIDDEN_MIGRATION_PATTERNS.map(({ name, re, scope }) => [name, String(re), scope]),
+    );
+    for (const sql of [
+      guarded,
+      "BEGIN;",
+      "SET ROLE x;",
+      ...loadBundledPostgresMigrations().map((m) => m.statements.join("\n")),
+    ])
+      expect(generator.forbiddenStatements(sql), sql).toEqual(
+        forbiddenMigrationStatements(sql),
+      );
+  });
+});
+
 describe("loadBundledPostgresMigrations", () => {
   it("loads the bundled files in journal order", () => {
     const bundled = loadBundledPostgresMigrations();
@@ -70,17 +191,9 @@ describe("loadBundledPostgresMigrations", () => {
     expect(bundled.every((m) => m.statements.length > 0)).toBe(true);
   });
 
-  it("bundles no schema, role or privilege DDL", () => {
-    for (const m of loadBundledPostgresMigrations()) {
-      for (const statement of m.statements) {
-        const code = statement.replace(/--[^\n]*/g, "");
-        expect(code, m.name).not.toMatch(
-          /\b(CREATE|ALTER|DROP)\s+(SCHEMA|ROLE|USER|GROUP)\b/i,
-        );
-        expect(code, m.name).not.toMatch(/^\s*(GRANT|REVOKE)\b/im);
-        expect(code, m.name).not.toMatch(/\b(DROP|REASSIGN)\s+OWNED\b/i);
-      }
-    }
+  it("bundles no forbidden statement", () => {
+    for (const m of loadBundledPostgresMigrations())
+      expect(forbiddenMigrationStatements(m.statements.join("\n")), m.name).toEqual([]);
   });
 
   function journalDir(tags: string[], files: string[]): string {
@@ -255,6 +368,16 @@ describe("runPostgresMigrations", () => {
     expect(pool.log).toContain(
       'GRANT SELECT ON "relaycast"."_engine_migrations" TO "relaycast_runtime"',
     );
+  });
+
+  it("does not unlock when the lock acquire itself fails", async () => {
+    const pool = new FakePool();
+    pool.failOn = "pg_advisory_lock(";
+    await expect(
+      runPostgresMigrations(pool, { ...opts, bundled: bundleMigrations(files) }),
+    ).rejects.toThrow(/boom/);
+    expect(pool.log.some((l) => l.includes("pg_advisory_unlock("))).toBe(false);
+    expect(pool.releases).toHaveLength(1);
   });
 
   it("is idempotent on replay", async () => {
@@ -594,6 +717,9 @@ describe("verifyPostgresMigrations", () => {
 /** Scripted pg_catalog answers for verifyIdentity, keyed by a distinctive fragment of each query. */
 function catalog(overrides: Record<string, unknown[]> = {}): Queryable {
   const base: Record<string, unknown[]> = {
+    // Most specific first: the per-role query also mentions n.nspowner etc.
+    "AS subject": [],
+    pg_auth_members: [],
     "session_user::text": [
       { session_user: "relaycast_runtime", current_user: "relaycast_runtime" },
     ],
@@ -607,7 +733,6 @@ function catalog(overrides: Record<string, unknown[]> = {}): Queryable {
         rolbypassrls: false,
       },
     ],
-    "r.rolname <> current_user": [],
     "n.nspowner": [{ owner: "relaycast_owner", usage: true, create: false }],
     "n.nspname <> 'public'": [
       { nspname: "control", usage: false, create: false },
@@ -687,10 +812,6 @@ describe("verifyIdentity (fake catalog)", () => {
       },
     ],
     [
-      "no_privileged_memberships",
-      { "r.rolname <> current_user": [{ rolname: "pg_admin" }] },
-    ],
-    [
       "not_member_of_owner",
       { "'MEMBER') AS member": [{ member: true, usage: true }] },
     ],
@@ -726,6 +847,120 @@ describe("verifyIdentity (fake catalog)", () => {
     ],
   ])("fails %s", async (name, overrides) => {
     expect(await failing(overrides)).toEqual([name]);
+  });
+
+  it("refuses any reachable role, naming it, and judges its privileges too", async () => {
+    const creator = {
+      subject: "relaycast_creator",
+      schema_create: true,
+      schema_owner: false,
+      owned: [],
+      temp: true,
+      db_create: false,
+      foreign_schemas: ["control"],
+      public_create: false,
+    };
+    const result = await verifyIdentity(
+      catalog({
+        pg_auth_members: [{ rolname: "relaycast_creator", privileged: false }],
+        "AS subject": [creator],
+      }),
+      runtime,
+    );
+    const bad = result.checks.filter((c) => !c.ok);
+    expect(bad.map((c) => c.name)).toEqual([
+      "no_role_memberships",
+      "no_foreign_schema_access",
+      "no_schema_create",
+      "no_database_temp",
+    ]);
+    expect(bad[0].detail).toBe(
+      "can reach role(s) by membership or SET ROLE: relaycast_creator",
+    );
+    expect(bad[2].detail).toBe("CREATE on relaycast via role relaycast_creator");
+  });
+
+  it("names privileged reachable roles", async () => {
+    expect(
+      await failing({
+        pg_auth_members: [{ rolname: "pg_admin", privileged: true }],
+        "AS subject": [],
+      }),
+    ).toEqual(["no_privileged_memberships", "no_role_memberships"]);
+  });
+
+  it("reports the ledger check as skipped, not passed, while the ledger is absent", async () => {
+    const result = await verifyIdentity(
+      catalog({ "AS present": [{ present: false, sel: null, write: null }] }),
+      runtime,
+    );
+    expect(result.ok).toBe(true);
+    expect(result.checks.find((c) => c.name === "ledger_read_only")).toEqual({
+      name: "ledger_read_only",
+      ok: true,
+      skipped: true,
+      detail: expect.stringMatching(/^not applicable: relaycast\._engine_migrations absent/),
+    });
+  });
+
+  describe("owner mode", () => {
+    const owner = {
+      ...runtime,
+      expectedRole: "relaycast_owner",
+      mode: "owner" as const,
+    };
+    const ownerCatalog = (overrides: Record<string, unknown[]> = {}) =>
+      catalog({
+        "session_user::text": [
+          { session_user: "relaycast_owner", current_user: "relaycast_owner" },
+        ],
+        "n.nspowner": [{ owner: "relaycast_owner", usage: true, create: true }],
+        "current_database()": [{ temp: true, create: false }],
+        ...overrides,
+      });
+    const ownerFailing = async (overrides: Record<string, unknown[]> = {}) =>
+      (await verifyIdentity(ownerCatalog(overrides), owner)).checks
+        .filter((c) => !c.ok)
+        .map((c) => c.name);
+
+    it("accepts the owner's own TEMP grant", async () => {
+      const result = await verifyIdentity(ownerCatalog(), owner);
+      expect(result.checks.filter((c) => !c.ok)).toEqual([]);
+      expect(result.checks.find((c) => c.name === "database_temp")?.detail).toMatch(
+        /own grant only/,
+      );
+    });
+
+    it("refuses role memberships and TEMP or DDL reached through them", async () => {
+      expect(
+        await ownerFailing({
+          pg_auth_members: [{ rolname: "temp_granter", privileged: false }],
+          "AS subject": [
+            {
+              subject: "temp_granter",
+              schema_create: false,
+              schema_owner: false,
+              owned: [],
+              temp: true,
+              db_create: true,
+              foreign_schemas: [],
+              public_create: true,
+            },
+          ],
+        }),
+      ).toEqual([
+        "no_role_memberships",
+        "public_schema_locked",
+        "no_database_create",
+        "database_temp",
+      ]);
+    });
+
+    it("refuses CREATE on the database", async () => {
+      expect(
+        await ownerFailing({ "current_database()": [{ temp: true, create: true }] }),
+      ).toEqual(["no_database_create"]);
+    });
   });
 
   it("reports a missing schema", async () => {

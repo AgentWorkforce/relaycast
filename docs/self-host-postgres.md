@@ -1,9 +1,11 @@
 # Self-hosting the engine on PostgreSQL (connection layer)
 
 Status: **connection, identity, TLS, schema and migrations only.** The engine
-query surface still runs on SQLite; `relaycast-engine` (the server) does not
-yet read `RELAYCAST_DATABASE_URL`. This layer lets a platform provision and
-verify a PostgreSQL database ahead of the Postgres query backend.
+query surface still runs on SQLite. The PostgreSQL serving path is not in this
+build: `relaycast-engine` (the server) exits `64` if any `RELAYCAST_DATABASE_*`
+variable is set, rather than silently serving from SQLite. Only the `migrate`
+and `verify-db` subcommands use PostgreSQL. This layer lets a platform
+provision and verify a PostgreSQL database ahead of the Postgres query backend.
 
 ## What the platform provides
 
@@ -29,9 +31,12 @@ REVOKE CREATE ON SCHEMA public FROM PUBLIC;
 ```
 
 Neither role may be SUPERUSER, CREATEROLE, CREATEDB, REPLICATION or
-BYPASSRLS, or a member of a role that is. `relaycast_runtime` must not be a
-member of `relaycast_owner`. Neither role may have USAGE or CREATE on other
-application schemas in the same database.
+BYPASSRLS. Neither role may be a member of any other role at all - including
+NOINHERIT memberships that are usable only through `SET ROLE` - so in
+particular `relaycast_runtime` must not be a member of `relaycast_owner`.
+Neither role may have USAGE or CREATE on other application schemas in the
+same database, or CREATE on the database. Only `relaycast_owner` may hold
+TEMP on the database, by a direct grant.
 
 The migration ledger is the one exception to the default privileges.
 `migrate` revokes everything on `relaycast._engine_migrations` and grants
@@ -100,17 +105,32 @@ RELAYCAST_DATABASE_CA_FILE=/etc/relaycast/db-ca.pem \
 
 ### Identity checks
 
+The checks first enumerate every role the session can reach: roles it
+inherits from, roles it can `SET ROLE` to, and NOINHERIT memberships
+(`pg_has_role(current_user, role, 'MEMBER')` over `pg_roles`, plus a
+recursive walk of `pg_auth_members`; only the role itself is excluded, and
+PUBLIC is not a role row). Any reachable role fails `no_role_memberships`,
+which names the roles only. Every privilege check below is also evaluated
+with each reachable role as the subject (`has_schema_privilege`,
+`has_database_privilege`, ownership), and a problem found that way is
+reported under the same check name as "... via role X". A NOINHERIT
+membership grants the member nothing through the privilege functions, so
+without this a role that can `SET ROLE relaycast_creator` would look clean.
+
 Both modes check:
 
 - `session_user` and `current_user` are the expected role
 - `login`
 - `not_superuser`, `not_createrole`, `not_createdb`, `not_replication`, `not_bypassrls`
-- `no_privileged_memberships`
+- `no_privileged_memberships`: no reachable role has one of those attributes
+- `no_role_memberships`: no reachable role at all
 - `no_foreign_schema_access`
 - `public_schema_locked`
+- `no_database_create`
 - `schema_exists`, which is reported only when the schema is missing
 
-Owner mode also checks `owns_schema` and `schema_create`.
+Owner mode also checks `owns_schema`, `schema_create` and `database_temp`
+(TEMP only by the owner's own grant, never through another role).
 
 Runtime mode also checks:
 
@@ -120,8 +140,9 @@ Runtime mode also checks:
 - `no_schema_create`
 - `owns_no_objects_in_schema`
 - `no_database_temp`
-- `no_database_create`
-- `ledger_read_only`: SELECT but no write on the ledger; passes while the ledger does not exist yet
+- `ledger_read_only`: SELECT but no write on the ledger. While the ledger does
+  not exist yet the check is reported as `skip` ("not applicable") with the
+  reason, not as a pass.
 
 ### Migrations
 
@@ -176,7 +197,19 @@ An image's generation is the number of files it bundles. A migration's
 new migration refuses every older image. A purely additive migration can lower
 the floor with a `-- min_compatible_generation: N` header. Images at
 generation N or higher then still verify against the newer database; they
-report the newer rows as notes.
+report the newer rows as notes. The header is read only from the file's
+leading comment block (the consecutive `--` lines at the top); the key
+anywhere else in the file, a malformed value or a duplicate makes the bundle
+refuse to load.
+
+Every bundled file is also scanned when it is loaded, and the bundle is
+refused if any file contains schema or role DDL (including `ALTER ROLE` /
+`ALTER USER`), a statement-level `GRANT`/`REVOKE`, `DROP OWNED`,
+`REASSIGN OWNED`, transaction control (`BEGIN`, `COMMIT`, `ROLLBACK`,
+`START TRANSACTION`, `SAVEPOINT`, ...: the migrator owns the transaction per
+file), `SECURITY DEFINER`, `SET ROLE`, `SET SESSION AUTHORIZATION`, or any
+`search_path` change other than the trigger-function guard
+`LANGUAGE plpgsql SET search_path = pg_catalog, pg_temp AS $$`.
 
 `verify-db` is read-only. It takes no lock and runs no DDL. It checks every
 bundled file name and checksum. It fails when the ledger is missing, when a
@@ -185,22 +218,30 @@ bundled file is pending, or when any of the refusals above applies.
 ## Deploy ordering
 
 These commands provide the checks a deploy barrier needs. They are not the
-barrier. Helm does not order a Job and a Deployment in the same release by
-itself, and no chart changes ship with this work. Whoever wires the chart must
-provide the ordering:
+barrier, and no chart changes ship with this work. The intended shape is:
 
-- **Migration Job:** runs `relaycast-engine migrate` with owner credentials. It
-  completes only on exit `0`. Exits `64` (configuration), `65` (identity) and
-  `1` (connection or migration failure, including a refused ledger) are
-  failures and must stop the rollout. Do not retry `64` or `65`: they need an
-  operator fix.
-- **Server pods:** must not start serving until that Job has completed for
-  the target image, for example through a Helm `pre-install,pre-upgrade` hook
-  Job, or an init container that waits for it. Each pod runs
-  `relaycast-engine verify-db` with runtime credentials before it opens its
-  HTTP listener, and starts the server only on exit `0`. Any non-zero exit
-  (`64`, `65`, `1`) means do not start. The server cannot open the listener
-  until verification passes.
+- **Migration Job:** an ordinary Kubernetes Job (not a Helm hook) whose name
+  includes a hash of its rendered template, so each new image or
+  configuration gets a new Job. It runs `relaycast-engine migrate` with its
+  own owner credential and its own ServiceAccount; the server never receives
+  owner credentials. The Job completes only on exit `0`. Exits `64`
+  (configuration), `65` (identity) and `1` (connection or migration failure,
+  including a refused ledger) are failures and must stop the rollout. Do not
+  retry `64` or `65`: they need an operator fix.
+- **Server pods:** start only after the migration Job for the target image
+  has completed with exit `0`, and only once the server's own
+  `relaycast-engine verify-db` (runtime credentials) has exited `0` before
+  the HTTP listener opens. Any non-zero exit (`64`, `65`, `1`) means the pod
+  does not start and does not become ready.
+
+Helm does not order a Job and a Deployment in the same release, so Helm alone
+is not the barrier. The ordering has to come from rollout tooling that waits
+for the Job to complete before rolling the Deployment, or from an init step
+in the server pod that waits for the Job to complete; `verify-db` then gates
+the listener. Opening the listener only after verification passes is the
+designed behaviour of the PostgreSQL serving path; that path is not in this
+build yet (see [Not yet supported](#not-yet-supported)), so today run
+`verify-db` as a separate pre-start step.
 
 Behaviour when the compatibility floor rises while an older server is running:
 
@@ -208,13 +249,11 @@ Behaviour when the compatibility floor rises while an older server is running:
   connections until it restarts. Nothing in this layer stops it. Its queries
   run against a schema it may not understand.
 - On restart, its `verify-db` exits `1` (`requires image generation >= N`), so
-  it does not start again.
+  the pod does not become ready.
 - An older image's `migrate` against a newer database also exits `1`.
 
-These are startup-time checks only. They do not make rolling upgrades or
-rollbacks safe. A floor-raising migration needs the old pods stopped (or
-drained) before it runs. Rolling back an image after its database has moved
-past the old image's floor is refused, not handled.
+These are startup-time checks only. This document makes no claim that rolling
+upgrades or rollbacks are safe.
 
 ## Schema notes
 
@@ -225,6 +264,20 @@ past the old image's floor is refused, not handled.
   of rounding. Small bounded counters are `integer`.
 - JSON columns are `jsonb`, except the three replay-snapshot columns, which
   are `json` so the stored bytes are returned verbatim.
+- Column defaults, nullability and CHECK constraints follow the migrated
+  SQLite database (the result of every SQLite migration, not `schema.ts`
+  alone); `src/db/__tests__/schema.pg.test.ts` compares them table by table.
+  The SQLite-only `workspaces.stripe_customer_id` / `stripe_subscription_id`
+  columns are intentionally absent: `schema.ts` does not declare them.
+- The `(workspace_id, length(id), id)` style indexes use `id COLLATE "C"` so
+  their order is byte order, like SQLite's. Queries must order and compare by
+  the same expression (`length("id"), "id" COLLATE "C"`) to use them.
+- `task_state.deadline` is an ISO-8601 UTC string, so the deadline indexes
+  are on `(("task_state" ->> 'deadline') COLLATE "C")`: byte order is
+  chronological order for that format. Queries must use the same expression,
+  for example `("task_state" ->> 'deadline') COLLATE "C" <= $1` with an
+  ISO-8601 `$1`. (A `::bigint` expression index would fail every insert that
+  carries a deadline.)
 - The FTS mirror tables (`messages_fts`, `messages_mention_fts`,
   `directory_agents_fts`, `directory_skills_fts`) use a generated
   `tsvector` with the `simple` configuration. Their shape is provisional
@@ -235,12 +288,25 @@ past the old image's floor is refused, not handled.
 ```sh
 cd packages/engine
 npm run generate:pg-migrations -- --name <name>   # after editing schema.pg.ts
-npm run generate:pg-migrations -- --check         # CI: schema.pg.ts matches the snapshots
+npm run check:pg-migrations                       # CI: no drift, no forbidden statements
 ```
 
-The script strips drizzle-kit's `CREATE SCHEMA`. It fails if a generated file
-contains schema/role DDL, a statement-level GRANT/REVOKE, `DROP OWNED` or
-`REASSIGN OWNED`. Never edit an applied migration; add a new one.
+The generator strips drizzle-kit's `CREATE SCHEMA` and fails if any file
+contains a forbidden statement (the list under [Migrations](#migrations); the
+migrator applies the same list again at load time).
+
+`check:pg-migrations` changes nothing and fails when:
+
+- drizzle-kit, run against a scratch copy of the committed migrations, would
+  generate a new migration from `schema.pg.ts` (schema drift; the pending SQL
+  is printed);
+- a committed generated migration differs from the SQL drizzle-kit derives
+  from the committed snapshots (a hand-edited generated file); hand-written
+  `--custom` migrations, whose snapshots carry no change, are exempt;
+- any committed file contains a forbidden statement.
+
+CI runs it in the "Lint, Build & Test" job. Never edit an applied migration;
+add a new one.
 
 ## Testing against a real database
 
@@ -261,13 +327,15 @@ refusal roles the fixture needs.
 ## Not yet supported
 
 - The server itself on PostgreSQL. The query surface, dialect helpers and
-  search are separate work.
+  search are separate work. Until then the server refuses to start (exit
+  `64`) when any `RELAYCAST_DATABASE_*` variable is set.
 - `migrate` / `verify-db` through the container image. `docker/entrypoint-core.mjs`
   launches the pinned engine without subcommand dispatch, so run them through
   the `relaycast-engine` bin.
 - The standalone (bun-compiled) binary does not embed `migrations-pg`.
-- The server's own pre-listener `verify-db` call. The server does not run on
-  PostgreSQL yet. Until it does, run `verify-db` as a separate pre-start step,
-  as described in [Deploy ordering](#deploy-ordering).
-- Chart wiring of the Job barrier, and any rolling-upgrade or rollback
-  guarantee.
+- The server's own pre-listener `verify-db` call (designed behaviour of the
+  PostgreSQL serving path, which is not in this build). Until it lands, run
+  `verify-db` as a separate pre-start step, as described in
+  [Deploy ordering](#deploy-ordering).
+- Chart wiring of the migration Job and its barrier. No rolling-upgrade or
+  rollback safety is claimed.

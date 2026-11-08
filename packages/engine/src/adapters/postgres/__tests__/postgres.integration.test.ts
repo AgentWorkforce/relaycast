@@ -217,7 +217,10 @@ describe.skipIf(!enabled)(
       expect(failed(runtimeResult)).toEqual([]);
       expect(
         runtimeResult.checks.find((c) => c.name === "ledger_read_only")?.detail,
-      ).toMatch(/absent/);
+      ).toMatch(/^not applicable: .*absent/);
+      expect(
+        runtimeResult.checks.find((c) => c.name === "ledger_read_only")?.skipped,
+      ).toBe(true);
     });
 
     describe("(b) refuses mis-scoped identities with a named failing check", () => {
@@ -260,6 +263,57 @@ describe.skipIf(!enabled)(
         const result = await runtimeAs(url, "relaycast_creator");
         expect(result.ok).toBe(false);
         expect(failed(result)).toContain("no_schema_create");
+      });
+
+      it("relaycast_runtime with a NOINHERIT membership (reachable only by SET ROLE)", async () => {
+        // A NOINHERIT membership confers no privileges through has_*_privilege
+        // on the member, so only the reachable-role checks can see it. Run as a
+        // superuser inside a transaction that is always rolled back, switch to
+        // relaycast_runtime with SET LOCAL ROLE, and verify on that client.
+        const admin = poolFor(
+          roleUrl(
+            process.env.RELAYCAST_PG_TEST_URL_ADMIN,
+            "relaycast_admin",
+            "admin-dev-password",
+          ),
+          "runtime",
+        );
+        const { result, inherits } = await rolledBack(admin, async (client) => {
+          await client.query(
+            "GRANT relaycast_creator TO relaycast_runtime WITH INHERIT FALSE, SET TRUE",
+          );
+          await client.query("SET LOCAL ROLE relaycast_runtime");
+          const inherits = (
+            await client.query<{ create: boolean }>(
+              "SELECT pg_catalog.has_schema_privilege(current_user, $1, 'CREATE') AS create",
+              [SCHEMA],
+            )
+          ).rows[0].create;
+          const result = await verifyIdentity(client, {
+            expectedRole: "relaycast_runtime",
+            mode: "runtime",
+            schema: SCHEMA,
+            ownerRole: "relaycast_owner",
+          });
+          return { result, inherits };
+        });
+        // The membership really is NOINHERIT: the role's own privileges are unchanged.
+        expect(inherits).toBe(false);
+        expect(result.ok).toBe(false);
+        expect(failed(result)).toEqual(
+          expect.arrayContaining(["no_role_memberships", "no_schema_create"]),
+        );
+        expect(
+          result.checks.find((c) => c.name === "no_role_memberships")?.detail,
+        ).toBe("can reach role(s) by membership or SET ROLE: relaycast_creator");
+        // Rolled back: the real runtime identity is clean again.
+        const after = await verifyIdentity(runtime, {
+          expectedRole: "relaycast_runtime",
+          mode: "runtime",
+          schema: SCHEMA,
+          ownerRole: "relaycast_owner",
+        });
+        expect(failed(after)).toEqual([]);
       });
 
       it("relaycast_owner used as the runtime identity", async () => {

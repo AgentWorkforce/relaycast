@@ -40,7 +40,96 @@ export interface ClientSource {
   connect(): Promise<Queryable & { release(err?: Error | boolean): void }>;
 }
 
-const MIN_COMPAT_HEADER = /^--\s*min_compatible_generation:\s*(\d+)\s*$/m;
+const MIN_COMPAT_LINE = /^--\s*min_compatible_generation:\s*(\d+)\s*$/;
+const MIN_COMPAT_ANYWHERE = /min_compatible_generation\s*:/i;
+
+/**
+ * The `-- min_compatible_generation: N` value from the file's leading comment
+ * header: the consecutive `--` lines (excluding drizzle's `-->` breakpoint
+ * markers) that start the file. The key anywhere else - later in the file,
+ * duplicated in the header, or malformed - is refused rather than ignored,
+ * so a stray comment can never silently change compatibility metadata.
+ */
+export function parseMinCompatibleGeneration(
+  name: string,
+  sql: string,
+): number | undefined {
+  const lines = sql.split(/\r?\n/);
+  let headerEnd = 0;
+  while (headerEnd < lines.length && /^--(?!>)/.test(lines[headerEnd]))
+    headerEnd++;
+  let value: number | undefined;
+  for (let i = 0; i < lines.length; i++) {
+    if (!MIN_COMPAT_ANYWHERE.test(lines[i])) continue;
+    if (i >= headerEnd)
+      throw new Error(
+        `${name}: min_compatible_generation may only appear in the leading comment header (line ${i + 1})`,
+      );
+    const m = MIN_COMPAT_LINE.exec(lines[i]);
+    if (!m)
+      throw new Error(
+        `${name}: malformed min_compatible_generation header (line ${i + 1})`,
+      );
+    if (value !== undefined)
+      throw new Error(`${name}: duplicate min_compatible_generation header`);
+    value = Number(m[1]);
+  }
+  return value;
+}
+
+/**
+ * Statements a bundled migration must never contain. Schema/role creation
+ * and privileges belong to the platform bootstrap; transaction control would
+ * break the migrator's one-transaction-per-file boundary (and the ledger
+ * row's atomicity with the DDL); SECURITY DEFINER, role switching and
+ * search_path changes would let migrated code run with other privileges or
+ * resolve names elsewhere. The only search_path allowed is the trigger
+ * function guard `LANGUAGE plpgsql SET search_path = pg_catalog, pg_temp AS $$`.
+ *
+ * scripts/generate-pg-migrations.mjs carries the same list (kept in step by
+ * migrate.test.ts) and applies it at generation time; this copy applies it
+ * when an image loads its bundle.
+ */
+export const FORBIDDEN_MIGRATION_PATTERNS: readonly {
+  name: string;
+  re: RegExp;
+  /** `statement`: tested against each statement's start, dollar-quoted bodies removed. */
+  scope: "code" | "statement";
+}[] = [
+  { name: "schema DDL", re: /\b(?:CREATE|ALTER|DROP)\s+SCHEMA\b/i, scope: "code" },
+  { name: "role DDL", re: /\b(?:CREATE|ALTER|DROP)\s+(?:ROLE|USER|GROUP)\b/i, scope: "code" },
+  { name: "GRANT/REVOKE", re: /^\s*(?:GRANT|REVOKE)\b/im, scope: "code" },
+  { name: "DROP OWNED", re: /\bDROP\s+OWNED\b/i, scope: "code" },
+  { name: "REASSIGN OWNED", re: /\bREASSIGN\s+OWNED\b/i, scope: "code" },
+  { name: "SECURITY DEFINER", re: /\bSECURITY\s+DEFINER\b/i, scope: "code" },
+  { name: "SET ROLE", re: /\b(?:SET|RESET)\s+(?:(?:SESSION|LOCAL)\s+)?ROLE\b/i, scope: "code" },
+  { name: "SET SESSION AUTHORIZATION", re: /\bSESSION\s+AUTHORIZATION\b/i, scope: "code" },
+  { name: "search_path", re: /\bsearch_path\b/i, scope: "code" },
+  {
+    name: "transaction control",
+    re: /^(?:BEGIN|COMMIT|ROLLBACK|ABORT|END|START\s+TRANSACTION|SAVEPOINT|RELEASE|PREPARE\s+TRANSACTION)\b/i,
+    scope: "statement",
+  },
+];
+
+/** The trigger-function header that pins search_path; the only one allowed. */
+const SEARCH_PATH_GUARD =
+  /\bLANGUAGE\s+plpgsql\s+SET\s+search_path\s*=\s*pg_catalog\s*,\s*pg_temp\s+AS\s+(?=\$)/gi;
+
+/** Names of the forbidden patterns `sql` contains (comments ignored). */
+export function forbiddenMigrationStatements(sql: string): string[] {
+  const code = sql
+    .replace(/\/\*[\s\S]*?\*\//g, " ")
+    .replace(/--[^\n]*/g, " ")
+    .replace(SEARCH_PATH_GUARD, " ");
+  const statements = code
+    .replace(/\$([A-Za-z_][A-Za-z0-9_]*)?\$[\s\S]*?\$\1\$/g, "$$$$")
+    .split(";")
+    .map((s) => s.trim());
+  return FORBIDDEN_MIGRATION_PATTERNS.filter(({ re, scope }) =>
+    scope === "code" ? re.test(code) : statements.some((s) => re.test(s)),
+  ).map(({ name }) => name);
+}
 
 function quoteIdent(name: string): string {
   if (!/^[a-z_][a-z0-9_]{0,62}$/.test(name))
@@ -56,14 +145,22 @@ export function splitPostgresStatements(sql: string): string[] {
     .filter((chunk) => chunk.replace(/--[^\n]*/g, "").trim().length > 0);
 }
 
-/** Build bundled migrations from ordered files. Throws on malformed headers. */
+/**
+ * Build bundled migrations from ordered files. Throws on malformed or
+ * misplaced headers and on any {@link FORBIDDEN_MIGRATION_PATTERNS} match.
+ */
 export function bundleMigrations(
   files: readonly { name: string; sql: string }[],
 ): BundledMigration[] {
   return files.map(({ name, sql }, index) => {
     const generation = index + 1;
-    const header = MIN_COMPAT_HEADER.exec(sql);
-    const minCompatibleGeneration = header ? Number(header[1]) : generation;
+    const forbidden = forbiddenMigrationStatements(sql);
+    if (forbidden.length)
+      throw new Error(
+        `${name}: forbidden statement(s) in a bundled migration: ${forbidden.join(", ")}`,
+      );
+    const minCompatibleGeneration =
+      parseMinCompatibleGeneration(name, sql) ?? generation;
     if (minCompatibleGeneration < 1 || minCompatibleGeneration > generation) {
       throw new Error(
         `${name}: min_compatible_generation must be between 1 and ${generation}`,
@@ -349,11 +446,14 @@ export async function runPostgresMigrations(
       throw new Error(
         `schema ${schema} does not exist (the platform must create it)`,
       );
-    lock = migrationLockKey(Number(target.oid));
+    const key = migrationLockKey(Number(target.oid));
     await client.query(
       "SELECT pg_catalog.pg_advisory_lock($1::int4, $2::int4)",
-      [lock.namespace, lock.key],
+      [key.namespace, key.key],
     );
+    // Only once the acquire has returned: `finally` must never unlock a
+    // lock this session does not hold.
+    lock = key;
 
     await inTransaction(async () => {
       await client.query(

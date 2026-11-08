@@ -2,6 +2,7 @@
 import { startServer } from '../entrypoints/node.js';
 import { credentialConfigFromEnv } from '../config/credentialEnv.js';
 import { ConfigError, secretFromEnv } from './secretEnv.js';
+import { postgresServeRefusal } from './postgresServeGuard.js';
 import { engineVersion } from './version.js';
 import { MIN_INTERNAL_SECRET_LENGTH } from '../engine/internalAdmin.js';
 
@@ -38,7 +39,8 @@ Environment:
                                     ISO-8601 date sent as Sunset on legacy-authenticated responses
   A directly set variable wins over its _FILE variant.
 
-PostgreSQL (migrate / verify-db only; the server itself still uses SQLite):
+PostgreSQL (migrate / verify-db only; the server itself still uses SQLite and
+exits 64 if any RELAYCAST_DATABASE_* variable is set):
   RELAYCAST_DATABASE_URL(_FILE)     postgres://user:password@host:port/database
                                     (only sslmode=verify-full may appear in the query)
   RELAYCAST_DATABASE_CA_FILE        PEM CA bundle; TLS is always verify-full
@@ -102,6 +104,12 @@ async function main(): Promise<void> {
   }
   if (opts.version) {
     process.stdout.write(`${engineVersion()}\n`);
+    return;
+  }
+  const postgresRefusal = postgresServeRefusal(process.env);
+  if (postgresRefusal) {
+    process.stderr.write(`relaycast-engine: ${postgresRefusal}\n`);
+    process.exitCode = CONFIG_EXIT_CODE;
     return;
   }
   if (!Number.isFinite(opts.port) || opts.port <= 0) {

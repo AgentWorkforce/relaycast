@@ -36,7 +36,7 @@ function errorMessage(err: unknown): string {
 function reportIdentity(io: CliIo, result: IdentityResult): void {
   for (const check of result.checks) {
     (check.ok ? io.out : io.err)(
-      `  ${check.ok ? "ok  " : "FAIL"} ${check.name}: ${check.detail}`,
+      `  ${check.skipped ? "skip" : check.ok ? "ok  " : "FAIL"} ${check.name}: ${check.detail}`,
     );
   }
 }
@@ -65,7 +65,7 @@ async function withVerifiedPool(
     `postgres ${mode}: host=${safe.host} port=${safe.port} database=${safe.database} schema=${safe.schema} ` +
       `expected_role=${safe.expectedRole} ca_sha256=${safe.caSha256}`,
   );
-  const pool = openPostgresPool(config);
+  const pool = openPostgresPool(config, { log: io.err });
   try {
     let identity: IdentityResult;
     try {

@@ -1,5 +1,5 @@
 {
-  "id": "7b88d950-fa59-4d7d-b088-1201895d0b55",
+  "id": "dfa00e74-0a58-45a6-84b8-735a4ea214ff",
   "prevId": "00000000-0000-0000-0000-000000000000",
   "version": "7",
   "dialect": "postgresql",
@@ -1096,7 +1096,7 @@
               "nulls": "last"
             },
             {
-              "expression": "(\"task_state\" ->> 'deadline')",
+              "expression": "((\"task_state\" ->> 'deadline') COLLATE \"C\")",
               "asc": true,
               "isExpression": true,
               "nulls": "last"
@@ -1112,7 +1112,7 @@
           "name": "idx_action_invocations_task_deadline",
           "columns": [
             {
-              "expression": "(\"task_state\" ->> 'deadline')",
+              "expression": "((\"task_state\" ->> 'deadline') COLLATE \"C\")",
               "asc": true,
               "isExpression": true,
               "nulls": "last"
@@ -2199,7 +2199,7 @@
           "type": "text",
           "primaryKey": false,
           "notNull": true,
-          "default": "'active'"
+          "default": "'online'"
         },
         "handle": {
           "name": "handle",
@@ -3306,7 +3306,7 @@
           "type": "text",
           "primaryKey": false,
           "notNull": true,
-          "default": "'queued'"
+          "default": "'pending'"
         },
         "seq": {
           "name": "seq",
@@ -6029,9 +6029,9 @@
               "nulls": "last"
             },
             {
-              "expression": "id",
-              "isExpression": false,
+              "expression": "\"id\" COLLATE \"C\"",
               "asc": true,
+              "isExpression": true,
               "nulls": "last"
             }
           ],
@@ -6433,9 +6433,9 @@
               "nulls": "last"
             },
             {
-              "expression": "id",
-              "isExpression": false,
+              "expression": "\"id\" COLLATE \"C\"",
               "asc": true,
+              "isExpression": true,
               "nulls": "last"
             }
           ],
@@ -6502,9 +6502,9 @@
               "nulls": "last"
             },
             {
-              "expression": "id",
-              "isExpression": false,
+              "expression": "\"id\" COLLATE \"C\"",
               "asc": true,
+              "isExpression": true,
               "nulls": "last"
             }
           ],
@@ -6550,9 +6550,9 @@
               "nulls": "last"
             },
             {
-              "expression": "id",
-              "isExpression": false,
+              "expression": "\"id\" COLLATE \"C\"",
               "asc": true,
+              "isExpression": true,
               "nulls": "last"
             }
           ],
@@ -6977,7 +6977,7 @@
           "type": "text",
           "primaryKey": false,
           "notNull": true,
-          "default": "'ws'"
+          "default": "'fleet_ws'"
         },
         "role": {
           "name": "role",
@@ -6991,7 +6991,7 @@
           "type": "text",
           "primaryKey": false,
           "notNull": true,
-          "default": "'ws.node.v1'"
+          "default": "'fleet.ws.v1'"
         },
         "delivery_config": {
           "name": "delivery_config",
@@ -7661,7 +7661,7 @@
           "type": "integer",
           "primaryKey": false,
           "notNull": true,
-          "default": 32
+          "default": 5
         },
         "webhook_initialized": {
           "name": "webhook_initialized",
