@@ -421,11 +421,16 @@ export async function refreshNodeAggregate(
       // there are no rows to derive one from.
       capabilities: sql`CASE WHEN EXISTS(SELECT 1 FROM ${nodeProviders} WHERE ${onNode}) THEN COALESCE((
         SELECT ${sqlx.jsonAgg(db, sqlx.json(db, sql.raw('value')))} FROM (
-          SELECT je.value AS value
+          ${sqlx.dialectOf(db) === 'pg'
+            ? sql`SELECT DISTINCT ON (${sqlx.jsonGet(db, sql.raw('je.value'), '$.name')}) je.value AS value
           FROM ${nodeProviders} np, ${sqlx.jsonEach(db, sql.raw("COALESCE(np.capabilities, '[]')"), { alias: ' je', elements: 'json' })}
           WHERE np.workspace_id = ${workspaceId} AND np.node_id = ${nodeId}
-          GROUP BY ${sqlx.jsonGet(db, sql.raw('je.value'), '$.name')}
-        )
+          ORDER BY ${sqlx.jsonGet(db, sql.raw('je.value'), '$.name')}, je.key DESC`
+            : sql`SELECT je.value AS value
+          FROM ${nodeProviders} np, ${sqlx.jsonEach(db, sql.raw("COALESCE(np.capabilities, '[]')"), { alias: ' je', elements: 'json' })}
+          WHERE np.workspace_id = ${workspaceId} AND np.node_id = ${nodeId}
+          GROUP BY ${sqlx.jsonGet(db, sql.raw('je.value'), '$.name')}`}
+        )${sqlx.dialectOf(db) === 'pg' ? sql` AS merged_capabilities` : sql``}
       ), '[]') ELSE ${nodes.capabilities} END`,
       // Node liveness mirrors ONLINE providers only: an offline provider's
       // disconnect timestamp is fresh and must not keep a stale node "live".

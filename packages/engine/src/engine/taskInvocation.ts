@@ -149,7 +149,7 @@ export async function completeTaskInvocation(
     eq(actionInvocations.status, 'running'), eq(actionInvocations.dispatchedNodeId, nodeId),
     eq(actionInvocations.dispatchedProvider, provider), eq(actionInvocations.dispatchAttempts, row.dispatchAttempts),
     sql`${sqlx.jsonGet(db, actionInvocations.taskState, '$.execution_id')} = ${message.execution_id}`,
-    sql`${sqlx.jsonGetNum(db, actionInvocations.taskState, '$.worker_generation')} = ${message.worker_generation}`,
+    sql`${sqlx.jsonGet(db, actionInvocations.taskState, '$.worker_generation')} = ${message.worker_generation}`,
     sql`${sqlx.jsonGet(db, actionInvocations.taskState, '$.deadline')} > ${new Date().toISOString()}`,
   )).returning();
   if (completed) return { receipt: receipt(completed), completed };

@@ -273,6 +273,7 @@ function isUniqueConstraintError(error: unknown): boolean {
     if (
       code === 'SQLITE_CONSTRAINT_UNIQUE' ||
       code === 'SQLITE_CONSTRAINT_PRIMARYKEY' ||
+      code === '23505' ||
       (
         code === 'SQLITE_CONSTRAINT' &&
         (message.includes('unique constraint failed') || message.includes('sqlite_constraint_unique'))

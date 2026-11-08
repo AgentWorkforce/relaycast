@@ -12,6 +12,7 @@ import { secureHeaders } from 'hono/secure-headers';
 import type { AppEnv, EngineRuntime } from './env.js';
 import type { EngineDeps } from './ports/index.js';
 import { SqliteSearchIndex } from './adapters/sqlite/search.js';
+import { PostgresSearchIndex, isPostgresEngineDb } from './adapters/postgres/search.js';
 import { engineContext } from './middleware/engine-context.js';
 import { loggerMiddleware } from './middleware/logger.js';
 import { getRequestLogger, toErrorDetails } from './lib/logger.js';
@@ -94,7 +95,7 @@ export function createEngine(deps: EngineDeps): Hono<AppEnv> {
   }
   const runtime: EngineRuntime = {
     db: deps.db,
-    search: deps.search ?? new SqliteSearchIndex(deps.db),
+    search: deps.search ?? (isPostgresEngineDb(deps.db) ? new PostgresSearchIndex(deps.db) : new SqliteSearchIndex(deps.db)),
     realtime: deps.realtime,
     connections: deps.connections,
     nodeConnections: deps.nodeConnections,

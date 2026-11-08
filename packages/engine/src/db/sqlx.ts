@@ -410,6 +410,40 @@ export function castReal(source: DialectSource, expr: Fragment): SQL<number> {
 }
 
 /**
+ * A bound number compared against a bigint column. PostgreSQL infers the
+ * parameter as bigint and rejects a fractional value; the cast keeps the exact
+ * numeric comparison SQLite makes.
+ */
+export function numericParam(source: DialectSource, value: number): SQL<number> {
+  return pick(source, {
+    sqlite: () => sql<number>`${value}`,
+    pg: () => sql<number>`${value}::numeric`,
+  });
+}
+
+/**
+ * A bound text value inside `jsonb_build_object`-style calls, where PostgreSQL
+ * cannot infer a parameter's type.
+ */
+export function textParam(source: DialectSource, value: string | null): SQL<string | null> {
+  return pick(source, {
+    sqlite: () => sql<string | null>`${value}`,
+    pg: () => sql<string | null>`${value}::text`,
+  });
+}
+
+/**
+ * A NULL literal for an INSERT ... SELECT column. PostgreSQL types an untyped
+ * NULL in a CTE or select list as text, which the target column then refuses.
+ */
+export function nullFor<T = null>(source: DialectSource, column: Column): SQL<T> {
+  return pick(source, {
+    sqlite: () => sql<T>`null`,
+    pg: () => sql<T>`null::${sql.raw(column.getSQLType())}`,
+  });
+}
+
+/**
  * Numeric comparison key for snowflake id strings: `CAST(expr AS BIGINT)` on
  * SQLite, `(expr)::numeric` on PostgreSQL (ids may exceed bigint).
  */
@@ -681,4 +715,13 @@ export function isNoopLock(source: DialectSource): boolean {
  */
 export function inPgTransaction(source: DialectSource): boolean {
   return pick(source, { sqlite: () => false, pg: () => is(source, PgTransaction) });
+}
+
+/**
+ * A JSON column read through raw SQL: text on SQLite (including NULL and empty
+ * text, which `fallback` covers), already parsed on PostgreSQL (jsonb).
+ */
+export function parseJsonColumn<T>(value: unknown, fallback: T): T {
+  if (value === null || value === undefined || value === '') return fallback;
+  return typeof value === 'string' ? (JSON.parse(value) as T) : (value as T);
 }

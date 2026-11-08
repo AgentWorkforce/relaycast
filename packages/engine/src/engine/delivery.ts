@@ -392,9 +392,9 @@ function readCursorWrites(
   // after it, the row is already `acked` and this predicate would match nothing.
   const ackable = deliveryStillAckable(workspaceId, row.id);
   return [
-    tx
-      .insert(readReceipts)
-      .select(
+    sqlx.insertSelect(
+      tx,
+      readReceipts,
         tx.select({
           messageId: sql<string>`${row.messageId}`.as('message_id'),
           agentId: sql<string>`${agentId}`.as('agent_id'),
@@ -404,8 +404,8 @@ function readCursorWrites(
           eq(deliveries.workspaceId, workspaceId),
           notInArray(deliveries.status, ['acked', 'dead_lettered']),
         )),
-      )
-      .onConflictDoNothing(),
+      { onConflictDoNothing: true },
+    ),
     tx
       .update(channelMembers)
       .set({ lastReadId: row.messageId })

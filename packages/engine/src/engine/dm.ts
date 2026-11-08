@@ -144,6 +144,7 @@ export function isPairReservationConflict(err: unknown): boolean {
 
     if (
       candidate.code === 'SQLITE_CONSTRAINT_UNIQUE'
+      || candidate.code === '23505'
       || lowerMessage.includes('unique constraint failed')
       || (candidate.code === 'SQLITE_CONSTRAINT' && lowerMessage.includes('unique'))
     ) {

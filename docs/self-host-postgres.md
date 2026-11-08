@@ -279,8 +279,10 @@ upgrades or rollbacks are safe.
   carries a deadline.)
 - The FTS mirror tables (`messages_fts`, `messages_mention_fts`,
   `directory_agents_fts`, `directory_skills_fts`) use a generated
-  `tsvector` with the `simple` configuration. Their shape is provisional
-  until the Postgres search implementation lands.
+  `tsvector` with the `simple` configuration. Triggers maintain them and
+  message, directory and skill search query them; terms are ANDed and
+  `"quoted phrases"` match adjacent words. Relevance is `-ts_rank` (lower is
+  better, like bm25). Mention lookups use the workspace-scoped scan.
 
 ## Regenerating migrations (contributors)
 

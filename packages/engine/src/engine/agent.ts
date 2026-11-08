@@ -192,7 +192,7 @@ function isUniqueConstraintError(err: unknown): boolean {
   if (!err || typeof err !== 'object') return false;
   const e = err as { code?: string; message?: string; cause?: unknown };
   // Direct D1/SQLite error codes
-  if (e.code === 'SQLITE_CONSTRAINT_UNIQUE' || e.code === 'SQLITE_CONSTRAINT') return true;
+  if (e.code === 'SQLITE_CONSTRAINT_UNIQUE' || e.code === 'SQLITE_CONSTRAINT' || e.code === '23505') return true;
   // Message-based detection (D1 wraps as "D1_ERROR: UNIQUE constraint failed: ...")
   if (typeof e.message === 'string') {
     const msg = e.message.toLowerCase();
@@ -479,10 +479,10 @@ export async function listAgents(
   // after effectiveAgentStatus has marked it offline.
   const cutoff = (now - AGENT_LIVENESS_TTL_MS) / 1_000;
   if (requestedStatus === 'active' && !nodeLivenessAuthority(db)) {
-    conditions.push(sql`${agents.status} IN ('active', 'online') AND ${agents.lastSeen} >= ${cutoff}`);
+    conditions.push(sql`${agents.status} IN ('active', 'online') AND ${agents.lastSeen} >= ${sqlx.numericParam(db, cutoff)}`);
   } else if (requestedStatus === 'offline' && !nodeLivenessAuthority(db)) {
     conditions.push(sql`(${agents.status} = 'offline' OR (
-      ${agents.status} IN ('active', 'online') AND ${agents.lastSeen} < ${cutoff}
+      ${agents.status} IN ('active', 'online') AND ${agents.lastSeen} < ${sqlx.numericParam(db, cutoff)}
     ))`);
   } else if (requestedStatus && requestedStatus !== 'all' && !nodeLivenessAuthority(db)) {
     conditions.push(eq(agents.status, requestedStatus));
@@ -495,7 +495,7 @@ export async function listAgents(
     conditions.push(sql`(${agents.status} IN ${stored} OR (${agents.status} = 'offline' AND ${agents.statusBeforeLivenessLoss} IN ${stored}))`);
   }
   if ((!requestedStatus || requestedStatus === 'all') && !options.includeStale && !byName) {
-    const recent = sql`${agents.lastSeen} >= ${(now - AGENT_ROSTER_RECENCY_MS) / 1_000}`;
+    const recent = sql`${agents.lastSeen} >= ${sqlx.numericParam(db, (now - AGENT_ROSTER_RECENCY_MS) / 1_000)}`;
     // A stale hosted row stays listed while its node says it is live. One that
     // is offline with no saved pre-loss status resolves to offline whatever the
     // node says, and stale offline rows are dropped below, so leave it out here

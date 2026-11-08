@@ -76,9 +76,9 @@ function normalizeTags(tags?: string[]): string[] {
   )];
 }
 
-function safeJsonArray(value: string): string[] {
+function safeJsonArray(value: unknown): string[] {
   try {
-    const parsed = JSON.parse(value || '[]');
+    const parsed = sqlx.parseJsonColumn<unknown>(value, []);
     return Array.isArray(parsed)
       ? parsed.filter((item): item is string => typeof item === 'string')
       : [];
