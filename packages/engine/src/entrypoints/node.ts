@@ -155,6 +155,12 @@ export async function startPostgresServer(options: StartPostgresServerOptions): 
   return serveRuntime(runtime, options.port, baseUrl);
 }
 
+/** Run `relaycast-engine migrate` or `verify-db` and return its exit code (for the container entrypoint). */
+export async function runPostgresCommand(command: 'migrate' | 'verify-db'): Promise<number> {
+  const cli = await import('../adapters/postgres/cli.js');
+  return command === 'migrate' ? cli.runMigrateCommand() : cli.runVerifyDbCommand();
+}
+
 function serveRuntime<R extends NodeRuntimeWithDb>(
   runtime: R,
   port: number,

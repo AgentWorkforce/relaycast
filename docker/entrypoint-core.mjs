@@ -661,8 +661,8 @@ export function installPublicAuthorityMarker(server, baseUrl) {
 }
 
 async function runPostgresCommand(command) {
-  const cli = await import('@relaycast/engine/adapters/postgres');
-  process.exitCode = await (command === 'migrate' ? cli.runMigrateCommand() : cli.runVerifyDbCommand());
+  const engine = await import('@relaycast/engine/node');
+  process.exitCode = await engine.runPostgresCommand(command);
 }
 
 /** True when any RELAYCAST_DATABASE_* variable selects the PostgreSQL backend. */
