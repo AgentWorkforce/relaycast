@@ -27,12 +27,11 @@
  *   (values stay JS numbers, matching SQLite; the pool's int8 parser rejects
  *   anything beyond Number.MAX_SAFE_INTEGER instead of silently rounding).
  * - Booleans: SQLite `integer(mode: 'boolean')` becomes native `boolean`.
- * - JSON: `text(mode: 'json')` becomes `jsonb`, except the three replay
- *   snapshot columns (`direct_dm_idempotency.response`,
- *   `a2a_egress_context.response`, `a2a_inbound.response`) which are `json` so
- *   the stored document is returned byte-for-byte (jsonb normalises key order
- *   and whitespace). Plain `text` columns holding JSON strings (for example
- *   `workspace_events.payload`) stay `text`.
+ * - JSON: `text(mode: 'json')` becomes `jsonb`, except the two A2A replay
+ *   snapshot columns (`a2a_egress_context.response`, `a2a_inbound.response`)
+ *   which are `json` so the stored document is returned byte-for-byte (jsonb
+ *   normalises key order and whitespace). Plain `text` columns holding JSON
+ *   strings (for example `workspace_events.payload`) stay `text`.
  * - Defaults: the column DEFAULTs of a fully migrated SQLite database, not
  *   schema.ts's `.default()` values. drizzle only uses `.default()` when
  *   generating migrations; inserts never apply it, and several SQLite

@@ -720,6 +720,7 @@ function catalog(overrides: Record<string, unknown[]> = {}): Queryable {
     // Most specific first: the per-role query also mentions n.nspowner etc.
     "AS subject": [],
     pg_auth_members: [],
+    server_version_num: [{ server_version_num: 160000 }],
     "session_user::text": [
       { session_user: "relaycast_runtime", current_user: "relaycast_runtime" },
     ],
@@ -785,6 +786,7 @@ describe("verifyIdentity (fake catalog)", () => {
       .map((c) => c.name);
 
   it.each([
+    ["server_version", { server_version_num: [{ server_version_num: 150013 }] }],
     [
       "session_user",
       {

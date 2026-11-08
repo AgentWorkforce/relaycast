@@ -9,6 +9,9 @@ provision and verify a PostgreSQL database ahead of the Postgres query backend.
 
 ## What the platform provides
 
+The server must be PostgreSQL 16 or newer; `migrate`, `verify-db` and the
+engine handle refuse older servers in their identity checks (`server_version`).
+
 The engine never creates schemas or roles and never grants on them. Before
 the first `migrate`, the platform (DBA, operator, Terraform) must create:
 
@@ -119,6 +122,7 @@ without this a role that can `SET ROLE relaycast_creator` would look clean.
 
 Both modes check:
 
+- `server_version`: PostgreSQL 16 or newer
 - `session_user` and `current_user` are the expected role
 - `login`
 - `not_superuser`, `not_createrole`, `not_createdb`, `not_replication`, `not_bypassrls`
@@ -262,8 +266,9 @@ upgrades or rollbacks are safe.
 - Timestamps stay epoch seconds (`bigint`). Unbounded integers are `bigint`
   read as JS numbers; values beyond `Number.MAX_SAFE_INTEGER` raise instead
   of rounding. Small bounded counters are `integer`.
-- JSON columns are `jsonb`, except the three replay-snapshot columns, which
-  are `json` so the stored bytes are returned verbatim.
+- JSON columns are `jsonb`, except the two A2A replay-snapshot columns
+  (`a2a_egress_context.response`, `a2a_inbound.response`), which are `json`
+  so the stored bytes are returned verbatim.
 - Column defaults, nullability and CHECK constraints follow the migrated
   SQLite database (the result of every SQLite migration, not `schema.ts`
   alone); `src/db/__tests__/schema.pg.test.ts` compares them table by table.

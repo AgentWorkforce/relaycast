@@ -357,7 +357,7 @@ export function jsonAgg(source: DialectSource, expr: Fragment): SQL {
   });
 }
 
-/** `json_valid(expr)`; `pg_input_is_valid(text, 'jsonb')` on PostgreSQL (16+). */
+/** `json_valid(expr)`; `pg_input_is_valid(text, 'jsonb')` on PostgreSQL (16+, enforced by `verifyIdentity`). */
 export function jsonValid(source: DialectSource, expr: Fragment): SQL<boolean> {
   return pick(source, {
     sqlite: () => sql<boolean>`json_valid(${expr})`,

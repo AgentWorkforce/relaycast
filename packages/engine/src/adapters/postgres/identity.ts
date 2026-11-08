@@ -118,7 +118,8 @@ interface RolePrivileges {
  * reachable role as the subject, so a failure "via role X" is reported under
  * the same check name as the session's own.
  *
- * Common: session_user and current_user equal `expectedRole`; the role can
+ * Common: the server is PostgreSQL 16 or newer (`pg_input_is_valid`);
+ * session_user and current_user equal `expectedRole`; the role can
  * LOGIN and has none of SUPERUSER, CREATEROLE, CREATEDB, REPLICATION,
  * BYPASSRLS; no reachable role has one of those; no role memberships; no
  * USAGE/CREATE on other non-system schemas (control, pipeline, ...), no
@@ -138,6 +139,13 @@ interface RolePrivileges {
  * PUBLIC by default; holding that grant alone is harmless once CREATE is
  * revoked and nothing in it is readable.
  */
+/**
+ * Oldest server the engine runs on. `pg_input_is_valid` (behind
+ * `sqlx.jsonValid`) is PostgreSQL 16+; older servers would fail the first
+ * retention sweep or capability query at runtime instead of at startup.
+ */
+export const MIN_SERVER_VERSION_NUM = 160000;
+
 export async function verifyIdentity(
   client: Queryable,
   opts: VerifyIdentityOptions,
@@ -147,6 +155,17 @@ export async function verifyIdentity(
     checks.push({ name, ok, detail });
   const { expectedRole, mode, schema } = opts;
   const ledgerTable = opts.ledgerTable ?? "_engine_migrations";
+
+  const version = (
+    await client.query<{ server_version_num: number }>(
+      "SELECT current_setting('server_version_num')::int AS server_version_num",
+    )
+  ).rows[0].server_version_num;
+  add(
+    "server_version",
+    version >= MIN_SERVER_VERSION_NUM,
+    `server_version_num=${version}, need >= ${MIN_SERVER_VERSION_NUM} (PostgreSQL ${MIN_SERVER_VERSION_NUM / 10000})`,
+  );
 
   const who = (
     await client.query<{ session_user: string; current_user: string }>(
