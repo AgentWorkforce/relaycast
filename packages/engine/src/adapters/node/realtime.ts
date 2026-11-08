@@ -456,7 +456,7 @@ export class InProcessRealtime implements RealtimeBus, ConnectionRegistry, NodeC
               AND ${actions.name} = ${authorization.actionName}
               AND ${actions.handlerNodeId} = ${nodeId}
               AND COALESCE(${actions.handlerProvider}, ${DEFAULT_PROVIDER_NAME}) = ${providerName}
-              AND ${actions.isActive} = 1
+              AND ${actions.isActive} = ${sqlx.bool(this.db, true)}
           )`,
         ))
         .returning({
@@ -552,7 +552,7 @@ export class InProcessRealtime implements RealtimeBus, ConnectionRegistry, NodeC
             AND ${actions.name} = ${message.action}
             AND ${actions.handlerAgentId} = ${authorization.handlerAgentId}
             AND ${actions.handlerNodeId} IS NULL
-            AND ${actions.isActive} = 1
+            AND ${actions.isActive} = ${sqlx.bool(this.db, true)}
         )`,
       ))
       .returning({

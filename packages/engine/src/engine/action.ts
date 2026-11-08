@@ -1361,7 +1361,7 @@ async function dispatchRelease(args: {
           eq(actionInvocations.workspaceId, args.workspaceId),
           eq(actionInvocations.id, invocation.id),
           inArray(actionInvocations.status, OPEN_INVOCATION_STATUSES),
-          expectedTokenHash || expectedAgentId ? sql`NOT (${generationStillCurrent})` : sql`0`,
+          expectedTokenHash || expectedAgentId ? sql`NOT (${generationStillCurrent})` : sqlx.bool(writeDb, false),
         ))
         .returning({ id: actionInvocations.id }));
 
@@ -1469,13 +1469,13 @@ async function dispatchRelease(args: {
           tokenHash: releasedTokenHash,
           previousTokenHash: null,
           previousTokenExpiresAt: null,
-          metadata: sql`json_patch(COALESCE(${agents.metadata}, '{}'), ${JSON.stringify({
+          metadata: sqlx.jsonMerge(writeDb, sql`COALESCE(${agents.metadata}, '{}')`, sql`${JSON.stringify({
             release: {
               reason: typeof input.reason === 'string' ? input.reason : null,
               released_at: completedAt.toISOString(),
               previous_name: agent.name,
             },
-          })})`,
+          })}`),
         })
         .where(and(
           eq(agents.workspaceId, args.workspaceId),
@@ -2593,13 +2593,13 @@ async function completeReleaseNodeInvocation(
           locationType: 'self_connected',
           locationNodeId: null,
           lastSeen: completedAt,
-          metadata: sql`json_patch(COALESCE(${agents.metadata}, '{}'), ${JSON.stringify({
+          metadata: sqlx.jsonMerge(writeDb, sql`COALESCE(${agents.metadata}, '{}')`, sql`${JSON.stringify({
             release: {
               reason: typeof input.reason === 'string' ? input.reason : null,
               released_at: completedAt.toISOString(),
               previous_name: agent.name,
             },
-          })})`,
+          })}`),
         })
         .where(currentAgent));
     } else {
@@ -2746,7 +2746,7 @@ async function dispatchNodeAttempt(
             AND ${actions.id} = ${opts.expectedAction.id}
         )`,
         ...(opts.targetActionId || opts.expectedAction.handlerAgentId ? [
-          registeredActionDispatchPredicate({
+          registeredActionDispatchPredicate(db, {
             workspaceId,
             nodeId,
             providerName: opts.providerName,
@@ -2800,7 +2800,7 @@ async function restoreUnsentSpawnClaim(
     ));
 }
 
-function registeredActionDispatchPredicate(args: {
+function registeredActionDispatchPredicate(db: object, args: {
   workspaceId: string;
   nodeId: string;
   providerName: string;
@@ -2817,7 +2817,7 @@ function registeredActionDispatchPredicate(args: {
     WHERE ${actions.workspaceId} = ${args.workspaceId}
       AND ${actions.id} = ${args.actionId}
       AND ${actions.name} = ${args.actionName}
-      AND ${actions.isActive} = 1
+      AND ${actions.isActive} = ${sqlx.bool(db, true)}
       ${handlerPredicate}
   )`;
 }
@@ -2885,7 +2885,7 @@ async function claimRegisteredActionHandoff(
         WHERE ${actions.workspaceId} = ${args.workspaceId}
           AND ${actions.id} = ${args.expectedActionId}
       )`,
-      ...(args.targetActionId ? [registeredActionDispatchPredicate({
+      ...(args.targetActionId ? [registeredActionDispatchPredicate(db, {
         workspaceId: args.workspaceId,
         nodeId: args.nodeId,
         providerName: args.providerName,
@@ -2928,7 +2928,7 @@ async function bindInvocationToRegisteredNodeAction(
       isNull(actionInvocations.actionId),
       inArray(actionInvocations.status, OPEN_INVOCATION_STATUSES),
       eq(actionInvocations.dispatchAttempts, 0),
-      registeredActionDispatchPredicate(args),
+      registeredActionDispatchPredicate(db, args),
     ))
     .returning({ id: actionInvocations.id });
   return !!bound;

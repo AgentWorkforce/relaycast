@@ -113,18 +113,18 @@ export function drainedWorkspaceTables(): string[] {
  * bound: a page would exceed D1's 100-parameter limit), so they see the same
  * rows. Its LIMIT bounds the parent search.
  */
-function pageSql(step: DrainStep, workspaceId: string, column: 'id' | 'rowid', limit = step.chunk) {
+function pageSql(db: object, step: DrainStep, workspaceId: string, column: 'id' | 'rowid', limit = step.chunk) {
   return sql`
-    SELECT ${sql.raw(column)} FROM ${sql.raw(step.table)}
+    SELECT ${column === 'rowid' ? sqlx.rowid(db) : sql.raw(column)} FROM ${sql.raw(step.table)}
     WHERE workspace_id = ${workspaceId}${step.where ? sql.raw(` AND ${step.where}`) : sql``}
     ${step.order ? sql.raw(`ORDER BY ${step.order}`) : sql``}
     LIMIT ${limit}
   `;
 }
 
-function childPageSql(child: { table: string; key: string }, parentPage: ReturnType<typeof pageSql>, limit: number) {
+function childPageSql(db: object, child: { table: string; key: string }, parentPage: ReturnType<typeof pageSql>, limit: number) {
   return sql`
-    SELECT rowid FROM ${sql.raw(child.table)}
+    SELECT ${sqlx.rowid(db)} FROM ${sql.raw(child.table)}
     WHERE ${sql.raw(child.key)} IN (${parentPage})
     LIMIT ${limit}
   `;
@@ -157,12 +157,12 @@ export async function exceedsAtomicDeleteSize(
   for (const step of DRAIN_STEPS) {
     // Unguarded, unordered: the probe counts rows, it does not choose a page.
     const plain = { ...step, where: undefined, order: undefined };
-    if (await count(pageSql(plain, workspaceId, 'rowid', maxRows - seen + 1))) return true;
+    if (await count(pageSql(db, plain, workspaceId, 'rowid', maxRows - seen + 1))) return true;
     for (const child of step.children ?? []) {
       // Children of at most the first maxRows + 1 parents: if there are more
       // parents than that, the parent count above already decided.
-      const parents = pageSql(plain, workspaceId, 'id', maxRows + 1);
-      if (await count(childPageSql(child, parents, maxRows - seen + 1))) return true;
+      const parents = pageSql(db, plain, workspaceId, 'id', maxRows + 1);
+      if (await count(childPageSql(db, child, parents, maxRows - seen + 1))) return true;
     }
   }
   return false;
@@ -216,7 +216,7 @@ export async function drainWorkspaceRows(
   const run = async (table: string, rowids: ReturnType<typeof sql>): Promise<number | null> => {
     if (spent()) return null;
     const started = now();
-    const deleted = await sqlx.all(db, sql`DELETE FROM ${sql.raw(table)} WHERE rowid IN (${rowids}) RETURNING 1`);
+    const deleted = await sqlx.all(db, sql`DELETE FROM ${sql.raw(table)} WHERE ${sqlx.rowid(db)} IN (${rowids}) RETURNING 1`);
     const elapsed = now() - started;
     rows += deleted.length;
     if (deleted.length > 0) {
@@ -237,14 +237,14 @@ export async function drainWorkspaceRows(
       let deleted: number | null;
       let pageSize: number;
       if (step.children) {
-        const ids = (await sqlx.all<{ id: string }>(db, pageSql(step, workspaceId, 'id'))).map(row => row.id);
+        const ids = (await sqlx.all<{ id: string }>(db, pageSql(db, step, workspaceId, 'id'))).map(row => row.id);
         pageSize = ids.length;
         if (ids.length === 0) break;
         const page = sql.join(ids.map(id => sql`${id}`), sql`, `);
         for (const child of step.children) {
           for (;;) {
             const removed = await run(child.table, sql`
-              SELECT rowid FROM ${sql.raw(child.table)} WHERE ${sql.raw(child.key)} IN (${page}) LIMIT ${CHILD_CHUNK}
+              SELECT ${sqlx.rowid(db)} FROM ${sql.raw(child.table)} WHERE ${sql.raw(child.key)} IN (${page}) LIMIT ${CHILD_CHUNK}
             `);
             if (removed === null) return { complete: false, rows };
             if (removed < CHILD_CHUNK) break;
@@ -252,11 +252,11 @@ export async function drainWorkspaceRows(
         }
         // Exactly the parents whose children were drained, guard re-checked.
         deleted = await run(step.table, sql`
-          SELECT rowid FROM ${sql.raw(step.table)}
+          SELECT ${sqlx.rowid(db)} FROM ${sql.raw(step.table)}
           WHERE id IN (${page})${step.where ? sql.raw(` AND ${step.where}`) : sql``}
         `);
       } else {
-        deleted = await run(step.table, pageSql(step, workspaceId, 'rowid'));
+        deleted = await run(step.table, pageSql(db, step, workspaceId, 'rowid'));
         pageSize = deleted ?? 0;
       }
       if (deleted === null) return { complete: false, rows };

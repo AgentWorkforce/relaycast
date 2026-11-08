@@ -688,14 +688,12 @@ export async function updateAgentById(
     // write time, even when this update was built from a stale pre-claim read;
     // otherwise an overlapping generic metadata PATCH could erase a winning
     // legacy claim immediately after its atomic UPDATE.
+    const currentMetadata = sql`COALESCE(${agents.metadata}, '{}')`;
+    const nextMetadataJson = sqlx.json(db, sql`${nextMetadata}`);
     setClause.metadata = sql`CASE
-      WHEN json_type(COALESCE(${agents.metadata}, '{}'), ${AGENT_IDENTITY_METADATA_JSON_PATH}) IS NULL
-        THEN json(${nextMetadata})
-      ELSE json_set(
-        json(${nextMetadata}),
-        ${AGENT_IDENTITY_METADATA_JSON_PATH},
-        json_extract(COALESCE(${agents.metadata}, '{}'), ${AGENT_IDENTITY_METADATA_JSON_PATH})
-      )
+      WHEN ${sqlx.jsonType(db, currentMetadata, { bind: AGENT_IDENTITY_METADATA_JSON_PATH })} IS NULL
+        THEN ${nextMetadataJson}
+      ELSE ${sqlx.jsonSet(db, nextMetadataJson, { bind: AGENT_IDENTITY_METADATA_JSON_PATH }, sqlx.jsonGet(db, currentMetadata, { bind: AGENT_IDENTITY_METADATA_JSON_PATH }), 'text')}
     END`;
   }
   if (updates.capabilities !== undefined) setClause.capabilities = updates.capabilities;
@@ -759,13 +757,13 @@ export async function claimLegacyAgentIdentity(
   const [updated] = await db
     .update(agents)
     .set({
-      metadata: sql`json_set(COALESCE(${agents.metadata}, '{}'), ${AGENT_IDENTITY_METADATA_JSON_PATH}, ${identityKeyHash})`,
+      metadata: sqlx.jsonSet(db, sql`COALESCE(${agents.metadata}, '{}')`, { bind: AGENT_IDENTITY_METADATA_JSON_PATH }, sql`${identityKeyHash}`, 'text'),
     })
     .where(and(
       eq(agents.workspaceId, workspaceId),
       eq(agents.name, name),
       eq(agents.status, 'offline'),
-      sql`json_type(COALESCE(${agents.metadata}, '{}'), ${AGENT_IDENTITY_METADATA_JSON_PATH}) IS NULL`,
+      sql`${sqlx.jsonType(db, sql`COALESCE(${agents.metadata}, '{}')`, { bind: AGENT_IDENTITY_METADATA_JSON_PATH })} IS NULL`,
     ))
     .returning();
 
@@ -833,13 +831,13 @@ export async function deleteAgent(db: Db, workspaceId: string, name: string) {
         lastSeen: releasedAt,
         // Same `release` shape both release paths write, so an audit does not
         // have to know which path released the agent.
-        metadata: sql`json_patch(COALESCE(${agents.metadata}, '{}'), ${JSON.stringify({
+        metadata: sqlx.jsonMerge(writeDb, sql`COALESCE(${agents.metadata}, '{}')`, sql`${JSON.stringify({
           release: {
             reason: 'agent removed',
             released_at: releasedAt.toISOString(),
             previous_name: agent.name,
           },
-        })})`,
+        })}`),
       })
       .where(eq(agents.id, agent.id)));
     // `channel_members` and `dm_participants` cascade on DELETE; an UPDATE does
