@@ -425,6 +425,14 @@ export async function getCostStats(
   workspaceId: string,
   windowDays = 7,
 ) {
+  // Repeated in HAVING: PostgreSQL does not resolve output-column aliases
+  // there (only in ORDER BY), while SQLite accepts either form.
+  const costField = (path: string, cast: typeof sqlx.castReal) =>
+    sql`COALESCE(SUM(${cast(db, sqlx.jsonGet(db, sql.raw('ml.metadata'), path))}), 0)`;
+  const totalCostUsd = costField('$._cost.total_usd', sqlx.castReal);
+  const promptTokens = costField('$._cost.prompt_tokens', sqlx.castInt);
+  const completionTokens = costField('$._cost.completion_tokens', sqlx.castInt);
+  const totalTokens = costField('$._cost.total_tokens', sqlx.castInt);
   const rows = await sqlx.all<{
     agent_id: string;
     agent_name: string;
@@ -438,19 +446,19 @@ export async function getCostStats(
       ml.agent_id AS agent_id,
       a.name AS agent_name,
       COUNT(*) AS message_count,
-      COALESCE(SUM(${sqlx.castReal(db, sqlx.jsonGet(db, sql.raw('ml.metadata'), '$._cost.total_usd'))}), 0) AS total_cost_usd,
-      COALESCE(SUM(${sqlx.castInt(db, sqlx.jsonGet(db, sql.raw('ml.metadata'), '$._cost.prompt_tokens'))}), 0) AS prompt_tokens,
-      COALESCE(SUM(${sqlx.castInt(db, sqlx.jsonGet(db, sql.raw('ml.metadata'), '$._cost.completion_tokens'))}), 0) AS completion_tokens,
-      COALESCE(SUM(${sqlx.castInt(db, sqlx.jsonGet(db, sql.raw('ml.metadata'), '$._cost.total_tokens'))}), 0) AS total_tokens
+      ${totalCostUsd} AS total_cost_usd,
+      ${promptTokens} AS prompt_tokens,
+      ${completionTokens} AS completion_tokens,
+      ${totalTokens} AS total_tokens
     FROM message_logs ml
     INNER JOIN agents a ON a.id = ml.agent_id
     WHERE ml.workspace_id = ${workspaceId}
       AND ml.created_at >= ${sqlx.now(db)} - ${windowDays * 24 * 60 * 60}
     GROUP BY ml.agent_id, a.name
-    HAVING total_cost_usd > 0
-        OR prompt_tokens > 0
-        OR completion_tokens > 0
-        OR total_tokens > 0
+    HAVING ${totalCostUsd} > 0
+        OR ${promptTokens} > 0
+        OR ${completionTokens} > 0
+        OR ${totalTokens} > 0
     ORDER BY total_cost_usd DESC, total_tokens DESC
   `);
 
