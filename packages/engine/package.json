@@ -69,6 +69,7 @@
     "generate:actor-migrations": "node scripts/generate-actor-migrations.mjs",
     "build:standalone": "bun standalone/build.ts",
     "test": "vitest run",
+    "test:conformance:pg": "vitest run --config vitest.conformance-pg.config.ts",
     "test:bun": "bun --bun x vitest run",
     "lint": "eslint src/",
     "typecheck": "tsc --noEmit -p tsconfig.typecheck.json",

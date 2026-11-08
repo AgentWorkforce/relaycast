@@ -308,6 +308,45 @@ migrator applies the same list again at load time).
 CI runs it in the "Lint, Build & Test" job. Never edit an applied migration;
 add a new one.
 
+## Engine handle (runtime verification)
+
+`openPostgresEngineDb` (`src/adapters/postgres/engineDb.ts`) builds the
+PostgreSQL engine handle. Today it is used only by the conformance pg mode
+below; the server does not call it yet (see [Not yet supported](#not-yet-supported)).
+Before it returns a handle it:
+
+1. refuses any config not loaded in runtime mode;
+2. runs the runtime [identity checks](#identity-checks) (the same checks as
+   `verify-db`);
+3. verifies the migration ledger against the bundled migrations (the same
+   check as `verify-db`).
+
+It takes no lock, runs no DDL and never creates a schema or role. A failure
+closes the pool and throws a typed error (`PostgresUnavailableError`,
+`PostgresIdentityError` or `PostgresMigrationStateError`); there is no SQLite
+fallback. Error messages name the failed checks and never include the
+connection string or password.
+
+The handle binds the engine tables to `schema.pg.ts`, where every table is
+qualified with schema `relaycast`, so queries do not depend on `search_path`.
+`withTransaction` runs on one pooled client from `BEGIN` to `COMMIT`/`ROLLBACK`.
+int8 values are parsed to JavaScript numbers and throw beyond
+`Number.MAX_SAFE_INTEGER`. That parser is installed on the process-global
+`pg.types`, because drizzle-orm ignores per-pool type parsers.
+
+Database errors are decoded by SQLSTATE and constraint name, never by message
+text, except for the `agent_node_bindings` workspace trigger. That trigger
+raises `23000` with only a message, so its two exact messages are matched.
+Only constraints in schema `relaycast` are decoded:
+
+| SQLSTATE | Decoded as |
+| --- | --- |
+| `23502` on one of the six sentinel columns | the same constraint kind the SQLite message maps to |
+| `23505` on a known unique constraint or index | table and columns (`databaseUniqueViolation`) |
+| `23000` with an exact `agent_node_bindings` trigger message | `binding_agent_workspace_mismatch` / `binding_node_workspace_mismatch` |
+
+The engine's own code does not use the unique and trigger decoders yet.
+
 ## Testing against a real database
 
 ```sh
@@ -323,6 +362,35 @@ the owner role owns in schema `relaycast`**, so point them only at a
 disposable database. See the header of
 `src/adapters/postgres/__tests__/postgres.integration.test.ts` for the
 refusal roles the fixture needs.
+
+### Conformance suite in PostgreSQL mode
+
+```sh
+cd packages/engine
+RELAYCAST_TEST_DATABASE_URL=postgres://relaycast_runtime:...@localhost:5432/app?sslmode=verify-full \
+RELAYCAST_TEST_DATABASE_OWNER_URL=postgres://relaycast_owner:...@localhost:5432/app?sslmode=verify-full \
+RELAYCAST_TEST_DATABASE_CA_FILE=/path/to/ca.crt \
+  npm run test:conformance:pg
+```
+
+This runs `src/__tests__/conformance` through `vitest.conformance-pg.config.ts`.
+All three variables are required; without them, or if the database is
+unreachable or the handle fails verification, the run fails. It never falls
+back to SQLite.
+
+- **Once per run, as the owner:** hold the fixture advisory lock, drop the
+  owner's objects in schema `relaycast`, then migrate with the product
+  migrator. At the end it drops them again and releases the lock.
+- **Per test file:** open the runtime handle through `openPostgresEngineDb`,
+  as the runtime role.
+- **Before every test:** `TRUNCATE ... RESTART IDENTITY CASCADE` every engine
+  table, as the owner.
+
+Files run one at a time (`fileParallelism: false`) because they share the
+schema. Tests that need the SQLite handle (`runtime.handle`) fail in this mode
+with an explicit error. The pg-mode result is a baseline for the query-surface
+work, not a gate. As with the integration tests, use only a disposable
+database.
 
 ## Not yet supported
 

@@ -203,17 +203,74 @@ export async function runAtomicWrites(
   }
 }
 
-/** Normalize atomic admission sentinels across SQLite adapters (D1 wraps the message).
- * Keep driver-specific error decoding at this port boundary; engine callers use a stable kind.
+/** Normalize atomic admission sentinels across adapters (D1 wraps the message;
+ * PostgreSQL reports SQLSTATE fields). Keep driver-specific error decoding at
+ * this port boundary; engine callers use a stable kind.
  */
 export type DatabaseConstraintKind = 'mailbox_capacity' | 'workspace_delivery_capacity' | 'a2a_registration_changed' | 'address_changed' | 'node_capacity';
 
-export function databaseConstraintKind(error: unknown): DatabaseConstraintKind | undefined {
+/** The schema every PostgreSQL engine table lives in (db/schema.pg.ts). */
+const PG_ENGINE_SCHEMA = 'relaycast';
+
+/**
+ * PostgreSQL NOT NULL sentinels: SQLSTATE 23502 carries the violated
+ * `table` and `column` as fields, so the kind is a lookup, never a message
+ * parse. The same columns the SQLite branch below matches by message.
+ * `channels.workspace_id` (the internal-admin key guard) is deliberately
+ * absent: it is not an admission sentinel and must not decode as one.
+ */
+export const PG_NOT_NULL_SENTINELS: Readonly<Record<string, DatabaseConstraintKind>> = Object.freeze({
+  'messages.agent_id': 'a2a_registration_changed',
+  'a2a_inbound.workspace_id': 'a2a_registration_changed',
+  'deliveries.workspace_id': 'mailbox_capacity',
+  'deliveries.status': 'workspace_delivery_capacity',
+  'messages.body': 'address_changed',
+  'nodes.active_agents': 'node_capacity',
+});
+
+/** The fields node-postgres' DatabaseError carries (all optional on the wire). */
+interface PgErrorFields {
+  code?: unknown;
+  schema?: unknown;
+  table?: unknown;
+  column?: unknown;
+  constraint?: unknown;
+  message?: unknown;
+  cause?: unknown;
+}
+
+/** A PostgreSQL error carries a five-character SQLSTATE; SQLite codes are `SQLITE_*`. */
+function pgSqlState(record: PgErrorFields): string | undefined {
+  return typeof record.code === 'string' && /^[0-9A-Z]{5}$/.test(record.code) ? record.code : undefined;
+}
+
+/** Visit `error` and its `.cause` chain once each, stopping at the first defined result. */
+function walkCauses<T>(error: unknown, visit: (record: PgErrorFields) => T | undefined): T | undefined {
   const seen = new Set<unknown>();
   let cause = error;
   while (cause !== null && typeof cause === 'object' && !seen.has(cause)) {
     seen.add(cause);
-    const record = cause as { message?: unknown; cause?: unknown };
+    const record = cause as PgErrorFields;
+    const found = visit(record);
+    if (found !== undefined) return found;
+    cause = record.cause;
+  }
+  return undefined;
+}
+
+export function databaseConstraintKind(error: unknown): DatabaseConstraintKind | undefined {
+  return walkCauses(error, (record) => {
+    const sqlState = pgSqlState(record);
+    if (sqlState !== undefined) {
+      // PostgreSQL: decode SQLSTATE fields only. Trigger refusals (23000) are
+      // not admission sentinels, exactly as their SQLite RAISE(ABORT)
+      // counterparts are not; see databaseTriggerRefusal.
+      if (sqlState !== '23502' || record.schema !== PG_ENGINE_SCHEMA) return undefined;
+      if (typeof record.table !== 'string' || typeof record.column !== 'string') return undefined;
+      return Object.hasOwn(PG_NOT_NULL_SENTINELS, `${record.table}.${record.column}`)
+        ? PG_NOT_NULL_SENTINELS[`${record.table}.${record.column}`]
+        : undefined;
+    }
     const message = typeof record.message === 'string' ? record.message : '';
     // Registration guards use messages.agent_id for admission and
     // a2a_inbound.workspace_id for legacy identity promotion (both non-null).
@@ -230,7 +287,212 @@ export function databaseConstraintKind(error: unknown): DatabaseConstraintKind |
     // registration aborts its whole atomic group instead of committing an
     // agent row whose slot was never granted.
     if (/NOT NULL constraint failed: nodes\.active_agents/i.test(message)) return 'node_capacity';
-    cause = record.cause;
-  }
-  return undefined;
+    return undefined;
+  });
+}
+
+/**
+ * Every unique index, unique constraint and primary key in the PostgreSQL
+ * schema, by the name the server reports in a 23505's `constraint` field
+ * (PostgreSQL truncates identifiers to 63 bytes, so the long composite key
+ * name appears truncated). Each maps to `[table, columns]`. Kept in parity
+ * with db/schema.pg.ts by a unit test and with the migrated catalog by the
+ * fixture integration test.
+ */
+export const PG_UNIQUE_CONSTRAINTS: Readonly<Record<string, readonly [table: string, columns: readonly string[]]>> = Object.freeze({
+  a2a_agents_pkey: ['a2a_agents', ['id']],
+  a2a_agents_rowid_unique: ['a2a_agents', ['rowid']],
+  idx_a2a_agents_relay_agent: ['a2a_agents', ['relay_agent_id']],
+  a2a_egress_pkey: ['a2a_egress', ['id']],
+  a2a_egress_rowid_unique: ['a2a_egress', ['rowid']],
+  a2a_egress_context_pkey: ['a2a_egress_context', ['id']],
+  a2a_egress_context_rowid_unique: ['a2a_egress_context', ['rowid']],
+  a2a_inbound_pkey: ['a2a_inbound', ['id']],
+  a2a_inbound_rowid_unique: ['a2a_inbound', ['rowid']],
+  action_invocations_pkey: ['action_invocations', ['id']],
+  action_invocations_rowid_unique: ['action_invocations', ['rowid']],
+  actions_pkey: ['actions', ['id']],
+  actions_rowid_unique: ['actions', ['rowid']],
+  actions_workspace_agent_name_unique: ['actions', ['workspace_id', 'name']],
+  actions_workspace_global_name_unique: ['actions', ['workspace_id', 'name']],
+  actions_workspace_node_name_unique: ['actions', ['workspace_id', 'handler_node_id', 'name']],
+  agent_identity_audit_pkey: ['agent_identity_audit', ['id']],
+  agent_identity_audit_rowid_unique: ['agent_identity_audit', ['rowid']],
+  agent_node_bindings_agent_node_unique: ['agent_node_bindings', ['agent_id', 'node_id']],
+  agent_node_bindings_pkey: ['agent_node_bindings', ['id']],
+  agent_node_bindings_rowid_unique: ['agent_node_bindings', ['rowid']],
+  agent_recovery_credentials_agent_unique: ['agent_recovery_credentials', ['workspace_id', 'agent_id']],
+  agent_recovery_credentials_pkey: ['agent_recovery_credentials', ['id']],
+  agent_recovery_credentials_rowid_unique: ['agent_recovery_credentials', ['rowid']],
+  agent_recovery_credentials_verifier_unique: ['agent_recovery_credentials', ['verifier_hash']],
+  agents_pkey: ['agents', ['id']],
+  agents_rowid_unique: ['agents', ['rowid']],
+  agents_token_hash_unique: ['agents', ['token_hash']],
+  agents_workspace_id_unique: ['agents', ['workspace_id', 'id']],
+  agents_workspace_name_unique: ['agents', ['workspace_id', 'name']],
+  certifications_pkey: ['certifications', ['id']],
+  certifications_rowid_unique: ['certifications', ['rowid']],
+  channel_members_channel_id_agent_id_pk: ['channel_members', ['channel_id', 'agent_id']],
+  channel_members_rowid_unique: ['channel_members', ['rowid']],
+  channels_pkey: ['channels', ['id']],
+  channels_rowid_unique: ['channels', ['rowid']],
+  channels_workspace_name_unique: ['channels', ['workspace_id', 'name']],
+  credential_upgrades_pkey: ['credential_upgrades', ['legacy_hash']],
+  credential_upgrades_rowid_unique: ['credential_upgrades', ['rowid']],
+  deliveries_agent_seq_unique: ['deliveries', ['workspace_id', 'agent_id', 'seq']],
+  deliveries_message_agent_unique: ['deliveries', ['message_id', 'agent_id']],
+  deliveries_pkey: ['deliveries', ['id']],
+  deliveries_rowid_unique: ['deliveries', ['rowid']],
+  idx_deliveries_id_lookup: ['deliveries', ['id']],
+  direct_dm_idempotency_pkey: ['direct_dm_idempotency', ['id']],
+  direct_dm_idempotency_rowid_unique: ['direct_dm_idempotency', ['rowid']],
+  directory_agents_pkey: ['directory_agents', ['id']],
+  directory_agents_rowid_unique: ['directory_agents', ['rowid']],
+  directory_agents_workspace_slug_unique: ['directory_agents', ['workspace_id', 'slug']],
+  directory_ratings_agent_rater_unique: ['directory_ratings', ['directory_agent_id', 'rater_agent_id']],
+  directory_ratings_pkey: ['directory_ratings', ['id']],
+  directory_ratings_rowid_unique: ['directory_ratings', ['rowid']],
+  directory_skills_pkey: ['directory_skills', ['id']],
+  directory_skills_rowid_unique: ['directory_skills', ['rowid']],
+  dm_conversation_reservations_pair_unique: ['dm_conversation_reservations', ['workspace_id', 'participant_one_id', 'participant_two_id']],
+  dm_conversation_reservations_pkey: ['dm_conversation_reservations', ['conversation_id']],
+  dm_conversation_reservations_rowid_unique: ['dm_conversation_reservations', ['rowid']],
+  dm_conversations_pkey: ['dm_conversations', ['id']],
+  dm_conversations_rowid_unique: ['dm_conversations', ['rowid']],
+  dm_participants_conversation_id_agent_id_pk: ['dm_participants', ['conversation_id', 'agent_id']],
+  dm_participants_rowid_unique: ['dm_participants', ['rowid']],
+  event_subscriptions_pkey: ['event_subscriptions', ['id']],
+  event_subscriptions_rowid_unique: ['event_subscriptions', ['rowid']],
+  file_cleanup_queue_pkey: ['file_cleanup_queue', ['storage_key']],
+  file_cleanup_queue_rowid_unique: ['file_cleanup_queue', ['rowid']],
+  files_pkey: ['files', ['id']],
+  files_rowid_unique: ['files', ['rowid']],
+  maintenance_cursors_pkey: ['maintenance_cursors', ['id']],
+  maintenance_cursors_rowid_unique: ['maintenance_cursors', ['rowid']],
+  message_attachments_message_id_file_id_pk: ['message_attachments', ['message_id', 'file_id']],
+  message_attachments_rowid_unique: ['message_attachments', ['rowid']],
+  message_logs_message_unique: ['message_logs', ['message_id']],
+  message_logs_pkey: ['message_logs', ['id']],
+  message_logs_rowid_unique: ['message_logs', ['rowid']],
+  message_sessions_rowid_unique: ['message_sessions', ['rowid']],
+  message_sessions_workspace_id_session_ref_pk: ['message_sessions', ['workspace_id', 'session_ref']],
+  messages_pkey: ['messages', ['id']],
+  messages_rowid_unique: ['messages', ['rowid']],
+  node_providers_node_name_unique: ['node_providers', ['workspace_id', 'node_id', 'name']],
+  node_providers_pkey: ['node_providers', ['id']],
+  node_providers_rowid_unique: ['node_providers', ['rowid']],
+  nodes_pkey: ['nodes', ['id']],
+  nodes_rowid_unique: ['nodes', ['rowid']],
+  nodes_token_hash_unique: ['nodes', ['token_hash']],
+  nodes_workspace_id_unique: ['nodes', ['workspace_id', 'id']],
+  nodes_workspace_name_unique: ['nodes', ['workspace_id', 'name']],
+  observer_tokens_pkey: ['observer_tokens', ['id']],
+  observer_tokens_rowid_unique: ['observer_tokens', ['rowid']],
+  observer_tokens_token_hash_unique: ['observer_tokens', ['token_hash']],
+  observer_tokens_workspace_name_unique: ['observer_tokens', ['workspace_id', 'name']],
+  pending_events_pkey: ['pending_events', ['id']],
+  pending_events_rowid_unique: ['pending_events', ['rowid']],
+  reactions_message_agent_emoji_unique: ['reactions', ['message_id', 'agent_id', 'emoji']],
+  reactions_pkey: ['reactions', ['id']],
+  reactions_rowid_unique: ['reactions', ['rowid']],
+  idx_read_receipts_retention: ['read_receipts', ['message_id', 'agent_id']],
+  read_receipts_message_id_agent_id_pk: ['read_receipts', ['message_id', 'agent_id']],
+  read_receipts_rowid_unique: ['read_receipts', ['rowid']],
+  routing_configs_pkey: ['routing_configs', ['workspace_id']],
+  routing_configs_rowid_unique: ['routing_configs', ['rowid']],
+  routing_failures_rowid_unique: ['routing_failures', ['rowid']],
+  routing_failures_workspace_id_agent_id_pk: ['routing_failures', ['workspace_id', 'agent_id']],
+  session_events_agent_idempotency_unique: ['session_events', ['workspace_id', 'agent_id', 'idempotency_key_hash']],
+  session_events_agent_sequence_unique: ['session_events', ['agent_id', 'sequence']],
+  session_events_pkey: ['session_events', ['id']],
+  session_events_rowid_unique: ['session_events', ['rowid']],
+  triggers_pkey: ['triggers', ['id']],
+  triggers_rowid_unique: ['triggers', ['rowid']],
+  usage_records_pkey: ['usage_records', ['id']],
+  usage_records_rowid_unique: ['usage_records', ['rowid']],
+  webhook_deliveries_event_subscription_unique: ['webhook_deliveries', ['event_id', 'subscription_id']],
+  webhook_deliveries_pkey: ['webhook_deliveries', ['id']],
+  webhook_deliveries_rowid_unique: ['webhook_deliveries', ['rowid']],
+  webhooks_pkey: ['webhooks', ['id']],
+  webhooks_rowid_unique: ['webhooks', ['rowid']],
+  webhooks_workspace_name_unique: ['webhooks', ['workspace_id', 'name']],
+  workspace_create_idempotency_owner_scope_hash_idempotency_key_h: ['workspace_create_idempotency', ['owner_scope_hash', 'idempotency_key_hash']],
+  workspace_create_idempotency_rowid_unique: ['workspace_create_idempotency', ['rowid']],
+  workspace_create_idempotency_workspace_unique: ['workspace_create_idempotency', ['workspace_id']],
+  workspace_events_rowid_unique: ['workspace_events', ['rowid']],
+  workspace_events_workspace_id_seq_pk: ['workspace_events', ['workspace_id', 'seq']],
+  workspaces_api_key_hash_unique: ['workspaces', ['api_key_hash']],
+  workspaces_pkey: ['workspaces', ['id']],
+  workspaces_rowid_unique: ['workspaces', ['rowid']],
+});
+
+/** Which uniqueness rule a write violated: the table and the columns it covers. */
+export interface DatabaseUniqueViolation {
+  table: string;
+  columns: readonly string[];
+  /** The PostgreSQL constraint or index name; absent on SQLite, which does not report it. */
+  constraint?: string;
+}
+
+const SQLITE_UNIQUE_CODES = new Set(['SQLITE_CONSTRAINT_UNIQUE', 'SQLITE_CONSTRAINT_PRIMARYKEY']);
+
+/**
+ * Decode a unique or primary-key violation anywhere in the `.cause` chain.
+ * PostgreSQL: SQLSTATE 23505 in schema `relaycast`, looked up by the
+ * `constraint` field in {@link PG_UNIQUE_CONSTRAINTS} (an unmapped name
+ * decodes as undefined, never as a guess). SQLite: the extended result code,
+ * or the bare `SQLITE_CONSTRAINT` code / a D1-wrapped message, with the
+ * `UNIQUE constraint failed: t.a, t.b` column list. Returns undefined for
+ * anything else. No engine caller uses this yet; the per-table unique
+ * detectors in src/engine are SQLite-only today.
+ */
+export function databaseUniqueViolation(error: unknown): DatabaseUniqueViolation | undefined {
+  return walkCauses(error, (record) => {
+    const sqlState = pgSqlState(record);
+    if (sqlState !== undefined) {
+      if (sqlState !== '23505' || record.schema !== PG_ENGINE_SCHEMA || typeof record.constraint !== 'string') return undefined;
+      if (!Object.hasOwn(PG_UNIQUE_CONSTRAINTS, record.constraint)) return undefined;
+      const [table, columns] = PG_UNIQUE_CONSTRAINTS[record.constraint];
+      return { table, columns, constraint: record.constraint };
+    }
+    const message = typeof record.message === 'string' ? record.message : '';
+    const codeMatches = typeof record.code === 'string' && (SQLITE_UNIQUE_CODES.has(record.code) || record.code === 'SQLITE_CONSTRAINT');
+    const match = /UNIQUE constraint failed: ([\w.]+(?:, [\w.]+)*)/.exec(message);
+    if (!match || (record.code !== undefined && !codeMatches)) return undefined;
+    const qualified = match[1].split(', ');
+    const table = qualified[0].split('.')[0];
+    return { table, columns: qualified.map((name) => name.slice(name.indexOf('.') + 1)) };
+  });
+}
+
+/**
+ * Integrity triggers on agent_node_bindings (SQLite migrations/0024 and
+ * migrations-pg/0001_triggers.sql) refuse a binding whose agent or node
+ * belongs to another workspace. Neither dialect's trigger emits a table,
+ * column or constraint field, only a fixed message, so this matches the
+ * exact message text: on PostgreSQL only with SQLSTATE 23000
+ * (integrity_constraint_violation, the trigger's ERRCODE) and an exactly
+ * equal message; on SQLite the RAISE(ABORT) text, which D1 may wrap.
+ */
+export type DatabaseTriggerRefusal = 'binding_agent_workspace_mismatch' | 'binding_node_workspace_mismatch';
+
+export const TRIGGER_REFUSAL_MESSAGES: Readonly<Record<string, DatabaseTriggerRefusal>> = Object.freeze({
+  'agent_node_bindings workspace/agent mismatch': 'binding_agent_workspace_mismatch',
+  'agent_node_bindings workspace/node mismatch': 'binding_node_workspace_mismatch',
+});
+
+export function databaseTriggerRefusal(error: unknown): DatabaseTriggerRefusal | undefined {
+  return walkCauses(error, (record) => {
+    const message = typeof record.message === 'string' ? record.message : '';
+    const sqlState = pgSqlState(record);
+    if (sqlState !== undefined) {
+      return sqlState === '23000' && Object.hasOwn(TRIGGER_REFUSAL_MESSAGES, message)
+        ? TRIGGER_REFUSAL_MESSAGES[message]
+        : undefined;
+    }
+    for (const [text, kind] of Object.entries(TRIGGER_REFUSAL_MESSAGES)) {
+      if (message.includes(text)) return kind;
+    }
+    return undefined;
+  });
 }
