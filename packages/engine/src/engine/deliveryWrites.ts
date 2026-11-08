@@ -1,5 +1,5 @@
 import { inspectNodeLiveness, filterAsync, nodeLivenessAuthority } from './nodeLiveness.js';
-import { and, eq, isNull, ne, or, sql, inArray, getTableColumns, type SQL, type SQLWrapper } from 'drizzle-orm';
+import { and, eq, isNull, ne, or, sql, inArray, type SQL, type SQLWrapper } from 'drizzle-orm';
 import {
   agentNodeBindings,
   agents,
@@ -93,7 +93,9 @@ function deliveryAdmissionSelect(
 ): (query: SQLWrapper) => SQL {
   return (query) => {
     if (!policy) return query.getSQL();
-    const columns = Object.values(getTableColumns(deliveries));
+    // The insert's column list, so the CTE names match the select on both
+    // dialects (PostgreSQL's `rowid` identity is not an insert column).
+    const columns = Object.values(sqlx.insertColumns(deliveries));
     const names = sql.join(columns.map(column => sql.identifier(column.name)), sql`, `);
     const values = sql.join(columns.map(column => column.name === 'status'
       ? sql`CASE WHEN capacity_admission.allowed THEN capacity_candidates.status ELSE NULL END`
@@ -249,9 +251,8 @@ export function buildChannelDeliveryWrite(
   });
   const guardedSelect = deliveryAdmissionSelect(db, input.workspaceId, input.workspacePolicy, input.audience ?? 'broadcast');
   const status = sql<string>`${'queued'}`;
-  const write = db
-    .insert(deliveries)
-    .select((qb) =>
+  const write = sqlx.insertSelect(db, deliveries,
+    (qb) =>
       guardedSelect(qb
         .select({
           id: deliveryId(input.messageId, channelMembers.agentId),
@@ -313,8 +314,8 @@ export function buildChannelDeliveryWrite(
             input.rejectOnOverflow ? undefined : belowDepthCapSql(db, input.workspaceId, channelMembers.agentId, input.depthCap),
           ),
         )),
-    )
-    .onConflictDoNothing();
+    { onConflictDoNothing: true },
+  );
   // Allocates seq per recipient (MAX + 1): serialize on PostgreSQL by locking
   // the recipient agent rows in id order; the write itself on SQLite.
   return seqLockedWrite(db, { kind: 'delivery', workspaceId: input.workspaceId, agentIds: sql`SELECT ${channelMembers.agentId} FROM ${channelMembers} WHERE ${channelMembers.channelId} = ${input.channelId}` }, write);
@@ -342,9 +343,8 @@ export function buildGroupDmDeliveryWrite(
   const workspaceId = guardedWorkspaceIdSql({ workspaceId: input.workspaceId });
   const guardedSelect = deliveryAdmissionSelect(db, input.workspaceId, input.workspacePolicy, 'targeted');
   const status = sql<string>`${'queued'}`;
-  const write = db
-    .insert(deliveries)
-    .select((qb) =>
+  const write = sqlx.insertSelect(db, deliveries,
+    (qb) =>
       guardedSelect(qb
         .select({
           id: deliveryId(input.messageId, dmParticipants.agentId),
@@ -400,8 +400,8 @@ export function buildGroupDmDeliveryWrite(
             belowDepthCapSql(db, input.workspaceId, dmParticipants.agentId, input.depthCap),
           ),
         )),
-    )
-    .onConflictDoNothing();
+    { onConflictDoNothing: true },
+  );
   // Allocates seq per recipient (MAX + 1): serialize on PostgreSQL by locking
   // the recipient agent rows in id order; the write itself on SQLite.
   return seqLockedWrite(db, { kind: 'delivery', workspaceId: input.workspaceId, agentIds: sql`SELECT ${dmParticipants.agentId} FROM ${dmParticipants} WHERE ${dmParticipants.conversationId} = ${input.conversationId} AND ${dmParticipants.leftAt} IS NULL` }, write);
@@ -425,9 +425,8 @@ export function buildDirectDeliveryWrite(
   const workspaceId = guardedWorkspaceIdSql({ workspaceId: input.workspaceId });
   const guardedSelect = deliveryAdmissionSelect(db, input.workspaceId, input.workspacePolicy, 'targeted');
   const status = sql<string>`${'queued'}`;
-  const write = db
-    .insert(deliveries)
-    .select((qb) =>
+  const write = sqlx.insertSelect(db, deliveries,
+    (qb) =>
       guardedSelect(qb
         .select({
           id: sql<string>`${input.deliveryId ?? `del_${input.messageId}_${input.agentId}`}`,
@@ -478,8 +477,8 @@ export function buildDirectDeliveryWrite(
         newDeliveryIdentitySql(input.messageId, agents.id),
           belowDepthCapSql(db, input.workspaceId, agents.id, input.depthCap),
         ))),
-    )
-    .onConflictDoNothing();
+    { onConflictDoNothing: true },
+  );
   // Allocates seq per recipient (MAX + 1): serialize on PostgreSQL by locking
   // the recipient agent rows in id order; the write itself on SQLite.
   return seqLockedWrite(db, { kind: 'delivery', workspaceId: input.workspaceId, agentIds: [input.agentId] }, write);

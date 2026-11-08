@@ -164,7 +164,8 @@ export interface EngineInsert<T extends Table> extends EngineWrite, Returning<T>
   }): EngineInsert<T>;
 }
 
-type InsertSelectSource<T extends Table> =
+/** What `insert(table).select(...)` accepts: raw SQL, or a select whose fields are the table's insert keys. */
+export type InsertSelectSource<T extends Table> =
   | SQL
   | { readonly _: { readonly selectedFields: { [K in keyof T['$inferInsert']]: unknown } } };
 

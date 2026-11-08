@@ -51,7 +51,7 @@ function auditInsertAfterTokenChange(
   // The SELECT sees the token update earlier in the same transaction/batch.
   // If the target predicate matched no live agent, it produces no row, so D1
   // cannot commit a successful-looking audit entry for a failed mutation.
-  return writeDb.insert(agentIdentityAudit).select(
+  return sqlx.insertSelect(writeDb, agentIdentityAudit,
     writeDb
       .select({
         id: sql<string>`${row.id}`.as('id'),

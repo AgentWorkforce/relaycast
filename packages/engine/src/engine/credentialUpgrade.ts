@@ -49,7 +49,7 @@ function graceRecordAfterSwap(
     expiresAt: Date;
   },
 ) {
-  return w.insert(credentialUpgrades).select(
+  return sqlx.insertSelect(w, credentialUpgrades,
     w.select({
       legacyHash: sql<string>`${row.legacyHash}`.as('legacy_hash'),
       kind: sql<string>`${row.kind}`.as('kind'),

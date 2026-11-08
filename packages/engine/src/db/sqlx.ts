@@ -16,9 +16,9 @@
  * column on every table). Engine code may not spell those SQLite-isms inline;
  * an ESLint rule enforces it.
  */
-import { is, sql, type SQL, type SQLWrapper } from 'drizzle-orm';
-import { PgTransaction } from 'drizzle-orm/pg-core';
-import type { EngineDialect } from '../ports/engineDb.js';
+import { getTableColumns, is, SQL, sql, type Column, type Query, type SQLWrapper, type Table } from 'drizzle-orm';
+import { PgDialect, QueryBuilder as PgQueryBuilder, PgTransaction } from 'drizzle-orm/pg-core';
+import type { EngineDatabase, EngineDialect, EngineQueryBuilder, EngineWrite, InsertSelectSource } from '../ports/engineDb.js';
 import { currentSchemaDialect } from './tables.js';
 
 /** The SQLite raw executors (drizzle `BaseSQLiteDatabase`; sync drivers return values, async ones promises). */
@@ -519,6 +519,112 @@ export function rowid(source: DialectSource, table?: Fragment | string): SQL<num
   if (table === undefined) return sql.raw('rowid') as SQL<number>;
   if (typeof table === 'string') return sql.raw(`${identifier(table, 'table alias')}.rowid`) as SQL<number>;
   return sql<number>`${table}.rowid`;
+}
+
+// --- insert from select ------------------------------------------------------
+
+/**
+ * The columns an `INSERT ... SELECT` into `table` lists, keyed by property name
+ * in drizzle's declaration order: every column drizzle itself would list
+ * (generated `ALWAYS` columns excluded), minus identity columns. On
+ * PostgreSQL every table carries the `rowid bigint GENERATED ALWAYS AS
+ * IDENTITY` column (db/schema.pg.ts); drizzle 0.45 still lists it (its
+ * insert filter only checks generated columns), which is harmless for
+ * `values()` (it fills DEFAULT) but makes an insert-select one target column
+ * longer than its select. SQLite schema tables declare no identity column, so
+ * there this is exactly `getTableColumns(table)` filtered as drizzle does.
+ * Select lists and CTE column lists that feed such an insert use the same
+ * enumeration.
+ */
+export function insertColumns<T extends Table>(table: T): Record<string, Column> {
+  const columns: Record<string, Column> = {};
+  for (const [key, column] of Object.entries(getTableColumns(table)) as [string, Column][]) {
+    if (column.generated !== undefined && column.generated.type !== 'byDefault') continue;
+    if (column.generatedIdentity !== undefined) continue;
+    columns[key] = column;
+  }
+  return columns;
+}
+
+/** Options for {@link insertSelect}. */
+export interface InsertSelectOptions {
+  /** Append `on conflict do nothing` (no conflict target, as drizzle's `onConflictDoNothing()`). */
+  onConflictDoNothing?: boolean;
+}
+
+/**
+ * The text of `insert into <table> (<insertColumns>) <select>[ on conflict do
+ * nothing]`, laid out exactly as drizzle's insert builder lays out an
+ * insert-select (no `with`, no `returning`). `select` is rendered with its own
+ * `getSQL()`, as drizzle does, so it is not parenthesized.
+ */
+export function insertSelectSql(
+  source: DialectSource,
+  table: Table,
+  select: SQLWrapper,
+  options: InsertSelectOptions = {},
+): SQL {
+  const columns = Object.values(insertColumns(table)).map((column) => sql.identifier(column.name));
+  dialectOf(source);
+  const conflict = options.onConflictDoNothing ? sql` on conflict do nothing` : undefined;
+  return sql`insert into ${table} ${columns} ${sql.join([select.getSQL()])}${conflict}`;
+}
+
+const pgDialect = new PgDialect();
+
+/**
+ * `insert into <table> (...) select ...` as an executable write.
+ *
+ * SQLite: drizzle's own `db.insert(table).select(select)` builder (plus
+ * `onConflictDoNothing()`), unchanged, so D1 batches still receive drizzle
+ * builders and the SQL bytes are drizzle's. PostgreSQL: the statement from
+ * {@link insertSelectSql}, whose column list omits the `rowid` identity that
+ * drizzle's pg builder would list; awaiting it runs it on `db` (pass the
+ * transaction handle when it must join a transaction) and yields the driver
+ * result. A select builder (not raw SQL) must select exactly the
+ * {@link insertColumns} keys in order, the check drizzle applies.
+ */
+export function insertSelect<T extends Table>(
+  db: EngineDatabase,
+  table: T,
+  select: InsertSelectSource<T> | ((qb: EngineQueryBuilder) => InsertSelectSource<T>),
+  options: InsertSelectOptions = {},
+): EngineWrite {
+  const dialect = engineDialectOf(db);
+  switch (dialect) {
+    case 'sqlite': {
+      const insert = db.insert(table).select(select);
+      return options.onConflictDoNothing ? insert.onConflictDoNothing() : insert;
+    }
+    case 'pg': {
+      const source = typeof select === 'function'
+        ? select(new PgQueryBuilder() as unknown as EngineQueryBuilder)
+        : select;
+      if (!is(source, SQL)) {
+        const selected = Object.keys((source as { _: { selectedFields: object } })._.selectedFields);
+        const expected = Object.keys(insertColumns(table));
+        if (selected.length !== expected.length || selected.some((key, i) => key !== expected[i])) {
+          throw new Error(
+            'sqlx.insertSelect: selected fields are not the insertable columns in table order ' +
+              `(expected ${expected.join(', ')}; got ${selected.join(', ')})`,
+          );
+        }
+      }
+      const query = insertSelectSql(dialect, table, source as SQLWrapper, options);
+      return {
+        getSQL: () => query,
+        toSQL: (): Query => {
+          const { sql: text, params } = pgDialect.sqlToQuery(query);
+          return { sql: text, params };
+        },
+        then(onfulfilled, onrejected) {
+          return (db as unknown as PgRawExecutor).execute(query).then(onfulfilled, onrejected);
+        },
+      };
+    }
+    default:
+      return unsupported(dialect);
+  }
 }
 
 // --- sequence locks ----------------------------------------------------------
