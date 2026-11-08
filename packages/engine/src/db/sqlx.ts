@@ -16,8 +16,10 @@
  * column on every table). Engine code may not spell those SQLite-isms inline;
  * an ESLint rule enforces it.
  */
-import { sql, type SQL, type SQLWrapper } from 'drizzle-orm';
+import { is, sql, type SQL, type SQLWrapper } from 'drizzle-orm';
+import { PgTransaction } from 'drizzle-orm/pg-core';
 import type { EngineDialect } from '../ports/engineDb.js';
+import { currentSchemaDialect } from './tables.js';
 
 /** The SQLite raw executors (drizzle `BaseSQLiteDatabase`; sync drivers return values, async ones promises). */
 interface SqliteRawExecutor {
@@ -96,6 +98,19 @@ export function dialectOf(source: DialectSource): EngineDialect {
     throw new Error('sqlx: expected a branded database handle or a dialect name');
   }
   return engineDialectOf(source);
+}
+
+/**
+ * The dialect this process's table exports are bound to (db/tables.ts), for
+ * SQL builders that interpolate those tables but have no handle in scope.
+ * Throws before any handle has been branded.
+ */
+export function schemaDialect(): EngineDialect {
+  const dialect = currentSchemaDialect();
+  if (dialect === undefined) {
+    throw new Error('sqlx.schemaDialect(): no engine dialect is bound in this process (brand a handle first)');
+  }
+  return dialect;
 }
 
 /** Pick the fragment for the source's dialect; no branch is a default. */
@@ -241,7 +256,7 @@ export function jsonGetNum(source: DialectSource, expr: Fragment, path: JsonPath
  */
 export function jsonEach(
   source: DialectSource,
-  expr: Fragment,
+  expr: Fragment | string,
   opts: { alias?: string; elements: 'text' | 'json' },
 ): SQL {
   const alias = opts.alias ?? '';
@@ -422,10 +437,10 @@ export function least<T = unknown>(source: DialectSource, a: Fragment, b: Fragme
 }
 
 /** A boolean literal: `1`/`0` on SQLite, `true`/`false` on PostgreSQL. */
-export function bool(source: DialectSource, value: boolean): SQL<boolean> {
+export function bool<T = boolean>(source: DialectSource, value: boolean): SQL<T> {
   return pick(source, {
-    sqlite: () => sql.raw(value ? '1' : '0') as SQL<boolean>,
-    pg: () => sql.raw(value ? 'true' : 'false') as SQL<boolean>,
+    sqlite: () => sql.raw(value ? '1' : '0') as SQL<T>,
+    pg: () => sql.raw(value ? 'true' : 'false') as SQL<T>,
   });
 }
 
@@ -552,4 +567,12 @@ export function lockSeq(source: DialectSource, target: SeqLockTarget): SQL {
 /** True when {@link lockSeq} is a no-op for `source` (SQLite). */
 export function isNoopLock(source: DialectSource): boolean {
   return pick(source, { sqlite: () => true, pg: () => false });
+}
+
+/**
+ * True when `db` is a PostgreSQL transaction handle (drizzle `PgTransaction`),
+ * the only place a {@link lockSeq} statement has any effect. False for SQLite.
+ */
+export function inPgTransaction(source: DialectSource): boolean {
+  return pick(source, { sqlite: () => false, pg: () => is(source, PgTransaction) });
 }
