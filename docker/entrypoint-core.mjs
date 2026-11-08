@@ -718,6 +718,10 @@ async function launchPinnedEngine(args) {
   });
 }
 
+// TODO(postgres): dispatch `migrate` and `verify-db` to the engine's
+// adapters/postgres CLI once the pinned @relaycast/engine release ships it.
+// This entrypoint only validates server flags and launches the pinned engine,
+// so those subcommands are not reachable through the container image yet.
 export async function main(argv = process.argv.slice(2)) {
   if (isHelpRequest(argv)) {
     process.stdout.write(HELP);

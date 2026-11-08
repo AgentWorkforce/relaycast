@@ -11,6 +11,7 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Added
 
+- PostgreSQL connection layer (`@relaycast/engine/adapters/postgres`) plus `relaycast-engine migrate` / `verify-db`. Both require verify-full TLS with a pinned CA. `migrate` (owner role) applies the bundled `migrations-pg` under a schema-OID advisory lock with a validated, checksummed, integer-generation ledger; `verify-db` (runtime role) checks the identity and ledger read-only. Exit codes: 64 config, 65 identity, 1 failure. Neither creates schemas or roles. The server still runs on SQLite. See `docs/self-host-postgres.md`.
 - Hosts can supply a message-search backend through the optional `search` engine dependency (`SearchIndex`); without it, existing SQLite search behavior is unchanged. Configured backend errors propagate without falling back to SQLite.
 
 ### Fixed
