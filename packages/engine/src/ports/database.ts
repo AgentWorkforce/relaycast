@@ -2,16 +2,14 @@ import { configureNodeLiveness, nodeLivenessAuthority } from './nodeLiveness.js'
 import { inheritCredentials } from '../auth/credentials.js';
 import { WorkspaceDeliveryCapacityError } from '../engine/workspaceDeliveryPolicy.js';
 import type { SQLWrapper } from 'drizzle-orm';
-import type { BaseSQLiteDatabase } from 'drizzle-orm/sqlite-core';
-import type * as schema from '../db/tables.js';
+import type { EngineDatabase } from './engineDb.js';
 
 /**
  * Driver-agnostic Drizzle handle used by every engine module.
  *
- * Both the Cloudflare D1 driver (`drizzle-orm/d1`, async) and the Node
- * better-sqlite3 driver (`drizzle-orm/better-sqlite3`, sync) produce a
- * `BaseSQLiteDatabase` over the shared schema. Drizzle query builders are
- * thenable, so `await db.select()...` works against both. The engine never
+ * Every adapter (Cloudflare D1, Node better-sqlite3 / bun:sqlite, durable
+ * actors, and later Postgres) hands the engine a handle of this neutral type.
+ * Drizzle query builders are thenable, so `await db.select()...` works against both. The engine never
  * imports a concrete driver — adapters construct the handle and inject it.
  *
  * The one place the drivers genuinely diverge is atomicity across statements:
@@ -26,24 +24,14 @@ import type * as schema from '../db/tables.js';
  * atomicity (for example, an insert whose trigger advances a durable sequence
  * high-water) rather than a multi-step read-modify-write.
  */
-// The engine is written against the async surface (everything is `await`ed),
-// which is exactly what the D1 driver produces, so the Cloudflare adapter's
-// handle is assignable directly. The Node better-sqlite3 driver is synchronous;
-// `await` on its thenable builders works at runtime, and the Node adapter casts
-// its handle to this type once at construction.
-//
-// The second parameter is `TRunResult` — the return type of `db.run(...)`. The
-// drivers disagree on it (better-sqlite3: `{ changes, lastInsertRowid }`; D1:
-// `D1Result`) and share no common shape, so no single concrete type fits both,
-// and naming either here would drag a platform's types into the agnostic engine.
-//
-// So we leave it as a type parameter, defaulting to `unknown`. Engine core uses
-// the bare `EngineDb` (i.e. `EngineDb<unknown>`) and never calls `.run()` or
-// reads a run result, so it stays platform-free. Each adapter specializes it
-// with its own driver's result type (the Node adapter -> `EngineDb<RunResult>`),
-// importing only that platform's types, so the precise run-result type flows all
-// the way through on that side without the engine ever depending on it.
-export type EngineDb<TRunResult = unknown> = BaseSQLiteDatabase<'async', TRunResult, typeof schema>;
+// `EngineDb` is the dialect-neutral surface in `ports/engineDb.ts`: query
+// builders whose row types are inferred from the bound tables (`db/tables.ts`),
+// plus the `engineDialect` brand. It has no raw-SQL methods; raw statements go
+// through `db/sqlx.ts`, which dispatches on the brand. Adapters produce it:
+// SQLite drivers (better-sqlite3, bun:sqlite, actor sqlite-proxy, D1) through
+// `brandSqliteEngineDb`, whose result is both the precise drizzle SQLite type
+// and an `EngineDb`.
+export type EngineDb = EngineDatabase;
 
 /**
  * Optional atomicity capability an adapter may attach to its {@link EngineDb}
@@ -62,6 +50,20 @@ export type EngineDb<TRunResult = unknown> = BaseSQLiteDatabase<'async', TRunRes
  */
 export interface TransactionCapability {
   withTransaction<T>(fn: (tx: EngineDb) => Promise<T>): Promise<T>;
+}
+
+/** Whether the adapter attached {@link TransactionCapability} to this handle. */
+export function hasTransactionCapability<T extends object>(db: T): db is T & TransactionCapability {
+  return typeof (db as Partial<TransactionCapability>).withTransaction === 'function';
+}
+
+/**
+ * Narrow a handle to one that carries {@link TransactionCapability}, checking
+ * at runtime instead of casting. Throws when the adapter did not attach it.
+ */
+export function requireTransactionCapability<T extends object>(db: T): T & TransactionCapability {
+  if (!hasTransactionCapability(db)) throw new Error('database handle has no withTransaction capability');
+  return db;
 }
 
 /**
@@ -128,7 +130,8 @@ async function runSequentially(statements: readonly AtomicWrite[]): Promise<unkn
  * paths that must also be atomic under D1.
  */
 export function runAtomic<T>(db: EngineDb, fn: (tx: EngineDb) => Promise<T>): Promise<T> {
-  const { withTransaction } = db as EngineDb & Partial<TransactionCapability>;
+  // Capability probe: the cast only adds optional capability members.
+  const { withTransaction } = db as Partial<TransactionCapability>;
   return withTransaction ? withTransaction(tx => {
     inheritHandleBindings(tx, db);
     return fn(tx);
@@ -158,7 +161,8 @@ async function executeAtomicWrites(
   input: AtomicWriteInput,
   options: RunAtomicWritesOptions = {},
 ): Promise<unknown[]> {
-  const handle = db as EngineDb & Partial<TransactionCapability> & Partial<BatchCapability>;
+  // Capability probe: the cast only adds optional capability members.
+  const handle = db as Partial<TransactionCapability> & Partial<BatchCapability>;
   if (
     options.requireAtomic &&
     typeof handle.withTransaction !== 'function' &&

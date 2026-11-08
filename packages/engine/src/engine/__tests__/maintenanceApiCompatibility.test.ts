@@ -28,7 +28,7 @@ function fixture() {
   const db = brandSqliteEngineDb(drizzle(handle.sqlite, {
     schema,
     logger: { logQuery: (sql, params) => queries.push({ sql, params }) },
-  })) as unknown as EngineDb;
+  }));
   let state: RowidRetentionState | undefined;
   const cursorStore: RetentionCursorStore = {
     load: vi.fn(async () => structuredClone(state)),

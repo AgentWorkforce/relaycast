@@ -11,11 +11,18 @@
  * Branding also binds the process-wide table set (`db/tables.ts`) to SQLite, so
  * a process already bound to another dialect cannot obtain a SQLite handle.
  */
-import { is } from 'drizzle-orm';
-import { SQLiteDialect } from 'drizzle-orm/sqlite-core';
+import { is, type SQL } from 'drizzle-orm';
+import { SQLiteDialect, SQLiteSyncDialect } from 'drizzle-orm/sqlite-core';
+import type { BaseSQLiteDatabase } from 'drizzle-orm/sqlite-core';
+import type * as schema from '../db/schema.js';
 import { bindSchema } from '../db/tables.js';
+import type { EngineDatabase } from '../ports/engineDb.js';
 
-export type SqliteBranded<T> = T & { readonly engineDialect: 'sqlite' };
+/** The drizzle SQLite database type the engine's SQLite adapters build (async surface). */
+export type SqliteDrizzleDb<TRunResult = unknown> = BaseSQLiteDatabase<'async', TRunResult, typeof schema>;
+
+/** A branded SQLite handle: its precise drizzle type, and an engine handle. */
+export type SqliteBranded<T> = T & EngineDatabase & { readonly engineDialect: 'sqlite' };
 
 /**
  * Brand a drizzle SQLite database (in place) as an engine handle of dialect
@@ -36,5 +43,20 @@ export function brandSqliteEngineDb<T extends object>(db: T): SqliteBranded<T> {
     throw new Error(`brandSqliteEngineDb: handle is already branded ${JSON.stringify(existing)}`);
   }
   Object.defineProperty(db, 'engineDialect', { value: 'sqlite', enumerable: false, writable: false, configurable: false });
+  // The one SQLite -> EngineDatabase cast. TypeScript cannot relate drizzle's
+  // SQLite builder classes to the neutral interface (they return
+  // `Omit<SQLiteSelectBase, 'where'>`-style narrowed builders and take
+  // SQLiteTable-bound join arguments), but the runtime check above guarantees a
+  // drizzle SQLite database, and test/types/engineDb.ts pins that the neutral
+  // types infer the same rows as drizzle's SQLite builders.
   return db as SqliteBranded<T>;
+}
+
+/**
+ * Compile a query to SQLite SQL text and parameters without a database.
+ * Tests use this to inspect what reaches the driver (for example, D1's bound
+ * parameter limit) without importing drizzle-orm/sqlite-core themselves.
+ */
+export function compileSqliteQuery(query: SQL): { sql: string; params: unknown[] } {
+  return new SQLiteSyncDialect().sqlToQuery(query);
 }

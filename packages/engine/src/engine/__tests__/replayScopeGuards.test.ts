@@ -34,7 +34,7 @@ function fixture(history = 10_000, active = 125) {
   sqlite.prepare('UPDATE agents SET delivery_ack_seq = ? WHERE id = ?').run(history, 'agent');
   sqlite.exec('ANALYZE');
   const queries: { sql: string; params: unknown[] }[] = [];
-  const db = brandSqliteEngineDb(drizzle(sqlite, { schema, logger: { logQuery: (sql, params) => queries.push({ sql, params }) } })) as unknown as EngineDb;
+  const db = brandSqliteEngineDb(drizzle(sqlite, { schema, logger: { logQuery: (sql, params) => queries.push({ sql, params }) } }));
   const frames: { seq: number }[] = [];
   const send = vi.fn(async (_ws, _node, _provider, frame) => { frames.push(frame); return true; });
   const ready = vi.fn(() => true);

@@ -403,7 +403,7 @@ export async function routeBySkill(
       WHERE directory_agents_fts MATCH ${ftsQuery}
         AND da.workspace_id = ${workspaceId}
     `) : Promise.resolve([] as { directory_agent_id: string; rank: number }[]),
-    db.all<Omit<CandidateRow, 'skill_rank' | 'agent_rank'> & { directory_agent_id: string; skill_id: string }>(sql`
+    sqlx.all<Omit<CandidateRow, 'skill_rank' | 'agent_rank'> & { directory_agent_id: string; skill_id: string }>(db, sql`
       SELECT
         a.id AS agent_id,
         a.name AS agent_name,

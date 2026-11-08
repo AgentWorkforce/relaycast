@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { eq, sql } from 'drizzle-orm';
-import { SQLiteSyncDialect } from 'drizzle-orm/sqlite-core';
+import { compileSqliteQuery } from '../../adapters/sqlite-handle.js';
 import { attachDirectNodeSocket, createWorkspace, makeNodeStack, registerAgent, type TestStack } from './harness.js';
 import { actions, agents, agentNodeBindings, channels, files, messages, nodes, webhooks } from '../../db/tables.js';
 import { retainAgents } from '../../engine/agentRetention.js';
@@ -17,7 +17,7 @@ describe('bulk agent retention', () => {
     ws = await createWorkspace(stack.app, 'retention');
   });
   afterEach(async () => { vi.restoreAllMocks(); await stack.close(); });
-  const db = () => stack.runtime.deps.db;
+  const db = () => stack.runtime.handle.db;
   const options = { retention_days: 7 };
 
   async function seed(id: string, values: Partial<typeof agents.$inferInsert> = {}) {
@@ -52,10 +52,9 @@ describe('bulk agent retention', () => {
     for (let i = 0; i < 100; i++) await seed(`d1-${String(i).padStart(3, '0')}`);
     await seed('live', { status: 'active' });
     const original = db().all.bind(db());
-    const dialect = new SQLiteSyncDialect();
     let writes = 0;
     vi.spyOn(db(), 'all').mockImplementation(async (query) => {
-      const compiled = typeof query === 'string' ? { sql: query, params: [] } : dialect.sqlToQuery(query);
+      const compiled = typeof query === 'string' ? { sql: query, params: [] } : compileSqliteQuery(query);
       if (compiled.params.length > 100) throw new Error('D1_ERROR: too many bound parameters');
       if (/^\s*DELETE\b/.test(compiled.sql)) writes++;
       return original(query);

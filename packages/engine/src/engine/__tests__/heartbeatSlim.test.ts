@@ -37,7 +37,7 @@ function fixture() {
       VALUES ('act1','ws','echo','Node handler echo','node1','broker');
   `);
   const queries: { sql: string; params: unknown[] }[] = [];
-  const db = brandSqliteEngineDb(drizzle(sqlite, { schema, logger: { logQuery: (sql, params) => queries.push({ sql, params }) } })) as unknown as EngineDb;
+  const db = brandSqliteEngineDb(drizzle(sqlite, { schema, logger: { logQuery: (sql, params) => queries.push({ sql, params }) } }));
   const beat = (overrides: Partial<FleetNodeHeartbeatMessage> = {}) =>
     heartbeatNode(db, 'ws', 'node1', 'broker', {
       type: 'node.heartbeat',

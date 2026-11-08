@@ -2,6 +2,7 @@ import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import { sql } from 'drizzle-orm';
+import * as sqlx from '../../../db/sqlx.js';
 import { createActorEngineDb } from '../database.js';
 import { ACTOR_MIGRATIONS_TABLE, actorMigrationsCurrent, applyActorMigrations } from '../migrations.js';
 import { FakeActorDatabase } from './fakeActor.js';
@@ -46,10 +47,10 @@ describe('actor engine database', () => {
     await fake.atomic(async () => {
       await db.run(sql`INSERT INTO t (name) VALUES ('kept')`);
       await expect(db.withTransaction(async (tx) => {
-        await tx.run(sql`INSERT INTO t (name) VALUES ('rolled back')`);
-        await tx.run(sql`INSERT INTO t (name) VALUES ('kept')`);
+        await sqlx.run(tx, sql`INSERT INTO t (name) VALUES ('rolled back')`);
+        await sqlx.run(tx, sql`INSERT INTO t (name) VALUES ('kept')`);
       })).rejects.toMatchObject({ cause: { code: 'SQLITE_CONSTRAINT_UNIQUE' } });
-      await db.withTransaction((tx) => tx.run(sql`INSERT INTO t (name) VALUES ('after')`));
+      await db.withTransaction((tx) => sqlx.run(tx, sql`INSERT INTO t (name) VALUES ('after')`));
     });
     expect(fake.exec('SELECT name FROM t ORDER BY id')).toEqual([{ name: 'kept' }, { name: 'after' }]);
     expect(groups).toBe(2);

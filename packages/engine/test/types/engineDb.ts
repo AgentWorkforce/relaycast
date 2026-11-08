@@ -59,6 +59,17 @@ export async function inference(): Promise<void> {
   const fromSub = await db.select({ id: sub.id }).from(sub);
   assertType<Equal<typeof fromSub, { id: string }[]>>();
 
+  // Table-less source (an INDEXED BY hint) joined to tables: joined columns
+  // keep their join nullability. (Columns of the hinted table itself infer as
+  // `never` in drizzle's own SQLite/PG builders too: a SQL source has no
+  // nullability entry. delivery.ts reads them through a typed column record.)
+  const hinted = await db
+    .select({ workspace: workspaces.name, channel: channels.name })
+    .from(sql`${agents} INDEXED BY idx_agents_workspace`)
+    .innerJoin(workspaces, eq(agents.workspaceId, workspaces.id))
+    .leftJoin(channels, eq(channels.workspaceId, workspaces.id));
+  assertType<Equal<typeof hinted, { workspace: string; channel: string | null }[]>>();
+
   const inserted = await db.insert(channels).values({ id: 'c', workspaceId: 'w', name: 'n' }).returning();
   assertType<Equal<typeof inserted, (typeof channels.$inferSelect)[]>>();
 

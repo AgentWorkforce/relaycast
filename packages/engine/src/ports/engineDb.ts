@@ -9,7 +9,7 @@
  * conditional parameter). TypeScript cannot relate those generic signatures to
  * a neutral generic signature, so neither database class is structurally
  * assignable to an interface that still infers rows (see
- * `__tests__/engineDb.types.test.ts`, which pins this down).
+ * `test/types/engineDb.ts`, which pins this down).
  *
  * This module therefore describes the query-builder surface the engine uses in
  * terms of drizzle's dialect-independent helper types (`SelectResult`,
@@ -96,7 +96,10 @@ export interface EngineSelect<
   TTableName extends string | undefined,
   TSelection extends ColumnsSelection,
   TSelectMode extends SelectMode,
-  TNull extends Record<string, JoinNullability> = TTableName extends string ? Record<TTableName, 'not-null'> : Record<string, never>,
+  // `{}` (as in drizzle) for a table-less source such as `from(sql`...`)`: an
+  // index signature here would make every later join's nullability `never`.
+  // eslint-disable-next-line @typescript-eslint/no-empty-object-type
+  TNull extends Record<string, JoinNullability> = TTableName extends string ? Record<TTableName, 'not-null'> : {},
   TResult = SelectResult<TSelection, TSelectMode, TNull>[],
   TSelectedFields extends ColumnsSelection = BuildSubquerySelection<TSelection, TNull>,
 > extends PromiseLike<TResult>, SQLWrapper {

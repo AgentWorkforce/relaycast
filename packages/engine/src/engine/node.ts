@@ -29,7 +29,7 @@ import { codedError } from '../lib/httpError.js';
 import type { RegistrationAdmission } from './registrationAdmission.js';
 import { AdmissionDeniedError } from '../lib/admissionError.js';
 import { acceptTaskInvocation, completeTaskInvocation } from './taskInvocation.js';
-import { databaseConstraintKind, runAtomic, runAtomicWrites } from '../ports/database.js';
+import { databaseConstraintKind, hasTransactionCapability, runAtomic, runAtomicWrites } from '../ports/database.js';
 import { retryD1Write } from '../lib/d1Retry.js';
 import { chunkValues } from '../lib/queryChunks.js';
 import type { AtomicWrite, BatchCapability, EngineDb } from '../ports/database.js';
@@ -2062,9 +2062,7 @@ export async function bindAgentToNode(
   // in order inside it instead. Without one, the move has to be a D1 batch, and
   // a handle offering neither is refused before a single statement lands rather
   // than committing half a move it cannot undo.
-  const hasInteractiveTransaction = typeof (db as EngineDb & {
-    withTransaction?: unknown;
-  }).withTransaction === 'function';
+  const hasInteractiveTransaction = hasTransactionCapability(db);
   const bound = await runAtomic(db, async (tx) => {
     const node = await getNodeByName(tx, workspaceId, nodeName);
     if (!node) throw codedError(`Node "${nodeName}" not found`, 'node_not_found', 404);
@@ -2509,7 +2507,7 @@ export async function registerAgentViaNode(
     // sequentially — with results still pushed into the sinks as they land,
     // so the catch below compensates exactly the writes that committed, no
     // more and no less.
-    const hasBatch = typeof (tx as EngineDb & Partial<BatchCapability>).batch === 'function';
+    const hasBatch = typeof (tx as Partial<BatchCapability>).batch === 'function';
     const runStatements = async (
       statements: readonly AtomicWrite[],
       sink: unknown[],
@@ -2775,9 +2773,7 @@ export async function recoverAgentViaNode(
   options: { deliveryCursorSupported?: boolean } = {},
 ): Promise<AgentRegisterReplyData> {
   assertRegistrableAgentName(message.name);
-  const hasInteractiveTransaction = typeof (db as EngineDb & {
-    withTransaction?: unknown;
-  }).withTransaction === 'function';
+  const hasInteractiveTransaction = hasTransactionCapability(db);
   const recovered = await runAtomic(db, async (tx) => {
     const [node] = await tx
       .select()

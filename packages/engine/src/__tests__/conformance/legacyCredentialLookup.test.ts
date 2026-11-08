@@ -60,7 +60,7 @@ describe('legacy credential lookup', () => {
     await db.update(workspaces).set({ expiresAt: new Date(Date.now() + 3_600_000) })
       .where(eq(workspaces.id, workspace.workspaceId));
     const [workspaceRow] = await db.select().from(workspaces).where(eq(workspaces.id, workspace.workspaceId));
-    const row = async <T>(query: Promise<T[]>) => (await query)[0];
+    const row = async <T>(query: PromiseLike<T[]>) => (await query)[0];
 
     expect(await auth.authenticate({ token: workspace.workspaceKey, require: 'workspace', db }))
       .toEqual({ ok: true, workspace: workspaceRow });

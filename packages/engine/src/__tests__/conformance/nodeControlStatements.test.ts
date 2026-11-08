@@ -57,7 +57,7 @@ describe('node control D1 statements per frame', () => {
     }) as typeof sqlite.prepare;
     const db = brandSqliteEngineDb(drizzle(sqlite, { schema, logger: { logQuery: (sql, params) => {
       raw.push({ sql, params });
-    } } })) as unknown as EngineDb;
+    } } }));
     return {
       db,
       raw,

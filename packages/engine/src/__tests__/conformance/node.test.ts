@@ -1124,7 +1124,7 @@ describe('node adapter conformance', () => {
         capabilities: [capability('spawn:claude', 'spawn')],
         maxAgents: 1,
       });
-      const db = stack.runtime.handle.db as unknown as EngineDb;
+      const db = stack.runtime.handle.db;
       await db.insert(actionInvocations).values({
         id: 'inv_d1_reserved_spawn',
         workspaceId: ws.workspaceId,
@@ -1182,7 +1182,7 @@ describe('node adapter conformance', () => {
         capabilities: [],
         maxAgents: 1,
       });
-      const db = stack.runtime.handle.db as unknown as EngineDb;
+      const db = stack.runtime.handle.db;
       delete (db as Partial<TransactionCapability>).withTransaction;
       stack.runtime.handle.sqlite.exec(`
         CREATE TRIGGER fail_d1_agent_binding
@@ -2607,13 +2607,13 @@ describe('node adapter conformance', () => {
               return value.call(target, table);
             };
           },
-        }) as EngineDb;
+        });
       }
 
       it('re-marks a claimed spawn when the drain throws before any send', async () => {
         const { ws, alpha, db, readRow } = await setupMarkedSpawn('fleet-spawn-presend-throw-ws', 'inv_presend_throw');
         // reserveNodeCapacity is the drain's first nodes update.
-        const broken = failingUpdates(db as unknown as EngineDb, (table) => table === nodes);
+        const broken = failingUpdates(db, (table) => table === nodes);
         expect(await drainNodeInvocations(broken as never, stack.runtime.realtime, ws.workspaceId, 'node_alpha', { includeDeferred: true })).toBe(0);
         expect(alpha.sock.ofType('action.invoke')).toHaveLength(0);
         expect((await readRow()).handlerUnreachableSince).toBeInstanceOf(Date);
@@ -2640,7 +2640,7 @@ describe('node adapter conformance', () => {
         // actionInvocations updates in order: unsent claim, handler snapshot,
         // pre-send claim, restore after the rejected send, re-mark.
         let invocationUpdates = 0;
-        const broken = failingUpdates(db as unknown as EngineDb, (table) => table === actionInvocations && ++invocationUpdates === 5);
+        const broken = failingUpdates(db, (table) => table === actionInvocations && ++invocationUpdates === 5);
         expect(await drainNodeInvocations(broken as never, stack.runtime.realtime, ws.workspaceId, 'node_alpha', { includeDeferred: true })).toBe(0);
         expect(send).toHaveBeenCalledTimes(1);
         expect(invocationUpdates).toBe(5);

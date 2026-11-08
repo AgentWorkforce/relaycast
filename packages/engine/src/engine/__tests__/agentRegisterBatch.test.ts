@@ -47,7 +47,7 @@ function fixture(
     INSERT INTO channels(id,workspace_id,name) VALUES ('chan-general','ws','general');
     ${nodeSql}
   `);
-  const base = brandSqliteEngineDb(drizzle(sqlite, { schema })) as unknown as EngineDb;
+  const base = brandSqliteEngineDb(drizzle(sqlite, { schema }));
   // A stand-in for D1's `db.batch`: like the real one it receives
   // already-built statements and returns their results in order. D1 batches
   // are atomic; this double executes sequentially, which still exercises the
@@ -72,7 +72,7 @@ function fixture(
       }
       return results;
     },
-  }) as unknown as EngineDb;
+  });
   return { sqlite, db, batches };
 }
 

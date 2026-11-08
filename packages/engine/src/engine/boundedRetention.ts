@@ -104,7 +104,7 @@ export async function pruneBounded(db: EngineDb, opts: PruneOptions): Promise<Pr
   // cutoff; exact per-workspace policy is still checked on each candidate.
   // This avoids walking millions of recent rows that no policy can expire.
   const ttlTables = tables.filter(table => table.setting);
-  const [minimums] = await db.all<Record<string, number | null>>(sql`SELECT
+  const [minimums] = await sqlx.all<Record<string, number | null>>(db, sql`SELECT
     ${sql.join(ttlTables.map(table => sql.raw(
       `MIN(CASE WHEN json_extract(retention, '$.${table.setting}') > 0 THEN json_extract(retention, '$.${table.setting}') END) AS "${table.result}"`,
     )), sql`, `)} FROM workspaces`);

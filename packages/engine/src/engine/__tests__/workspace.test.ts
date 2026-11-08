@@ -40,7 +40,7 @@ describe('workspace write durability', () => {
 
   beforeEach(() => {
     stack = makeNodeStack();
-    db = stack.runtime.handle.db as unknown as EngineDb;
+    db = stack.runtime.handle.db;
     delete (db as Partial<TransactionCapability>).withTransaction;
   });
 
@@ -60,7 +60,7 @@ describe('workspace write durability', () => {
     let calls = 0;
     const sqlite = stack.runtime.handle.sqlite;
 
-    (db as EngineDb & Partial<BatchCapability>).batch = async (statements) => {
+    (db as Partial<BatchCapability>).batch = async (statements) => {
       calls += 1;
       if (calls === 1 && options.failBeforeFirst) {
         throw new Error('D1_ERROR: D1 DB is overloaded. Too many requests queued.');
@@ -584,7 +584,7 @@ describe('workspace write durability', () => {
 
   it('does not retry a non-transient database error', async () => {
     let calls = 0;
-    (db as EngineDb & Partial<BatchCapability>).batch = async () => {
+    (db as Partial<BatchCapability>).batch = async () => {
       calls += 1;
       throw new Error('D1_TYPE_ERROR: Type mismatch');
     };
@@ -640,7 +640,7 @@ describe('workspace write durability', () => {
   it('does not retry a non-transient workspace deletion error', async () => {
     await seedDeletionWorkspace('delete-type-error');
     let calls = 0;
-    (db as EngineDb & Partial<BatchCapability>).batch = async () => {
+    (db as Partial<BatchCapability>).batch = async () => {
       calls += 1;
       throw new Error('D1_TYPE_ERROR: Type mismatch');
     };
@@ -675,7 +675,7 @@ describe('ar_ workspace key derivation', () => {
 describe('workspace create replay across credential families', () => {
   it('returns the original key after the deployment changes the family it mints', async () => {
     const stack = makeNodeStack();
-    const legacyDb = stack.runtime.deps.db as unknown as EngineDb;
+    const legacyDb = stack.runtime.deps.db;
     const requestDigest = await workspaceCreateRequestDigest({ name: 'family-change' });
     const options = { ownerApiKey: 'rk_live_family_owner', idempotencyKey: 'family-job', requestDigest };
     const first = await createWorkspace(legacyDb, 'family-change', options);
@@ -691,7 +691,7 @@ describe('workspace create replay across credential families', () => {
 
   it('replays a legacy key for a workspace id that cannot carry an ar_ tag', async () => {
     const stack = makeNodeStack({ credentialTagger: createCredentialTagSigner({ current: 'a', keys: { a: 'tag-secret-a-0123456' } }) });
-    const db = stack.runtime.deps.db as unknown as EngineDb;
+    const db = stack.runtime.deps.db;
     const requestDigest = await workspaceCreateRequestDigest({ name: 'custom-id' });
     const options = { ownerApiKey: 'rk_live_custom_owner', idempotencyKey: 'custom-id-job', requestDigest, workspaceId: 'ws_custom' };
     const first = await createWorkspace(db, 'custom-id', options);
@@ -704,7 +704,7 @@ describe('workspace create replay across credential families', () => {
   it('returns the original ar_ key after the keyring rotates', async () => {
     const keys = { a: 'tag-secret-a-0123456', b: 'tag-secret-b-0123456' };
     const stack = makeNodeStack({ credentialFormat: 'ar', credentialTagger: createCredentialTagSigner({ current: 'a', keys: { a: keys.a } }) });
-    const base = stack.runtime.deps.db as unknown as EngineDb;
+    const base = stack.runtime.deps.db;
     const requestDigest = await workspaceCreateRequestDigest({ name: 'rotation' });
     const options = { ownerApiKey: 'rk_live_rotation_owner', idempotencyKey: 'rotation-job', requestDigest };
     const first = await createWorkspace(base, 'rotation', options);

@@ -50,7 +50,7 @@ function fixture({ tombstones = 0, failedRows = 5_000 } = {}) {
     }
   })();
   const queries: { sql: string; params: unknown[] }[] = [];
-  const db = brandSqliteEngineDb(drizzle(sqlite, { schema, logger: { logQuery: (sql, params) => queries.push({ sql, params }) } })) as unknown as EngineDb;
+  const db = brandSqliteEngineDb(drizzle(sqlite, { schema, logger: { logQuery: (sql, params) => queries.push({ sql, params }) } }));
   return { sqlite, db, queries };
 }
 

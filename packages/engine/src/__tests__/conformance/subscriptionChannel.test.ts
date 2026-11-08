@@ -4,6 +4,7 @@ import { generateId } from '../../engine/snowflake.js';
 import { deleteAgent } from '../../engine/agent.js';
 import { createChannel, getChannel, joinChannel, inviteAgent, leaveChannel, ensureAgentSubscriptionChannel } from '../../engine/channel.js';
 import type { EngineDb, TransactionCapability } from '../../ports/database.js';
+import { requireTransactionCapability } from '../../ports/database.js';
 import { makeNodeStack, createWorkspace, registerAgent, type TestStack } from './harness.js';
 
 describe('agent subscription channels', () => {
@@ -58,7 +59,7 @@ describe('agent subscription channels', () => {
   it('rejects a released recipient joining its old subscription channel', async () => {
     const ws = await createWorkspace(stack.app, 'released-join');
     const target = await registerAgent(stack.app, ws.workspaceKey, 'released-join-target');
-    const db = stack.runtime.deps.db;
+    const db = stack.runtime.handle.db;
     const channel = await ensureAgentSubscriptionChannel(db, ws.workspaceId, 'released-join-target');
     await deleteAgent(db, ws.workspaceId, 'released-join-target');
     await expect(joinChannel(db, ws.workspaceId, channel.name, target.agentId)).rejects.toMatchObject({ code: 'agent_not_found' });
@@ -68,7 +69,7 @@ describe('agent subscription channels', () => {
   it('prevents release racing a subscription join from recreating membership', async () => {
     const ws = await createWorkspace(stack.app, 'release-racing-join');
     const target = await registerAgent(stack.app, ws.workspaceKey, 'racing-join-target');
-    const db = stack.runtime.deps.db;
+    const db = stack.runtime.handle.db;
     const channel = await ensureAgentSubscriptionChannel(db, ws.workspaceId, 'racing-join-target');
     await leaveChannel(db, ws.workspaceId, channel.name, target.agentId);
     const original = db.run.bind(db);
@@ -85,7 +86,7 @@ describe('agent subscription channels', () => {
   it('does not recreate membership when release races a recipient self-invitation', async () => {
     const ws = await createWorkspace(stack.app, 'release-racing-invite');
     const target = await registerAgent(stack.app, ws.workspaceKey, 'racing-invite-target');
-    const db = stack.runtime.deps.db;
+    const db = stack.runtime.handle.db;
     const channel = await ensureAgentSubscriptionChannel(db, ws.workspaceId, 'racing-invite-target');
     const original = db.select.bind(db);
     let reads = 0;
@@ -154,7 +155,7 @@ describe('agent subscription channels', () => {
     const ws = await createWorkspace(stack.app, 'legacy-route');
     const target = await registerAgent(stack.app, ws.workspaceKey, 'legacy-target');
     const other = await registerAgent(stack.app, ws.workspaceKey, 'legacy-other');
-    const db = stack.runtime.deps.db;
+    const db = stack.runtime.handle.db;
     const channelId = generateId();
     await db.insert(channels).values({ id: channelId, workspaceId: ws.workspaceId,
       name: `agent-events-${target.agentId}`, metadata: { subscription_agent_id: target.agentId } });
@@ -171,7 +172,7 @@ describe('agent subscription channels', () => {
     'rejects malformed or mismatched legacy subscription metadata: %j', async (metadata) => {
       const ws = await createWorkspace(stack.app, 'invalid-route');
       const target = await registerAgent(stack.app, ws.workspaceKey, 'metadata-target');
-      const db = stack.runtime.deps.db;
+      const db = stack.runtime.handle.db;
       const channelId = generateId();
       await db.insert(channels).values({ id: channelId, workspaceId: ws.workspaceId,
         name: `agent-events-${target.agentId}`, metadata });
@@ -187,7 +188,7 @@ describe('agent subscription channels', () => {
   it('invalidates a membership cached after release preflight but before its transaction', async () => {
     const ws = await createWorkspace(stack.app, 'release-late-join');
     const target = await registerAgent(stack.app, ws.workspaceKey, 'late-target');
-    const db = stack.runtime.deps.db as EngineDb & TransactionCapability;
+    const db = requireTransactionCapability(stack.runtime.deps.db);
     await createChannel(db, ws.workspaceId, { name: 'late-channel' });
     const original = db.withTransaction.bind(db);
     const hook = vi.spyOn(db, 'withTransaction').mockImplementationOnce(async (fn) => {

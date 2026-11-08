@@ -33,7 +33,7 @@ function fixture() {
   sqlite.exec(`INSERT INTO messages(id,workspace_id,channel_id,agent_id,body,thread_id)
     VALUES ('reply-foreign','other','other-channel','other-agent','foreign','parent')`);
   const queries: { sql: string; params: unknown[] }[] = [];
-  const db = brandSqliteEngineDb(drizzle(sqlite, { schema, logger: { logQuery: (sql, params) => queries.push({ sql, params }) } })) as unknown as EngineDb;
+  const db = brandSqliteEngineDb(drizzle(sqlite, { schema, logger: { logQuery: (sql, params) => queries.push({ sql, params }) } }));
   return { sqlite, db, queries };
 }
 

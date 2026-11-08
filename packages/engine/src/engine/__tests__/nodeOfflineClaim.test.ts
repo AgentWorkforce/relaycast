@@ -47,7 +47,7 @@ function fixture() {
         id,workspace_id,action_name,status,dispatched_node_id,dispatched_at,dispatch_attempts)
       VALUES ('inv1','ws','echo','dispatched','node1',1000,1);
   `);
-  const db = brandSqliteEngineDb(drizzle(sqlite, { schema })) as unknown as EngineDb;
+  const db = brandSqliteEngineDb(drizzle(sqlite, { schema }));
   return { sqlite, db };
 }
 

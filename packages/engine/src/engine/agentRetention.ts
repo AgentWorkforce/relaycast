@@ -1,10 +1,10 @@
 import { sql, type SQL } from 'drizzle-orm';
 import { z } from 'zod';
 import * as sqlx from '../db/sqlx.js';
+import type { EngineDb } from '../ports/database.js';
 
-export interface AgentRetentionDb {
-  all<T>(query: SQL): PromiseLike<T[]>;
-}
+/** Any branded engine handle; every statement goes through `db/sqlx.ts`. */
+export type AgentRetentionDb = Pick<EngineDb, 'engineDialect'>;
 
 const cursorSchema = z.object({
   workspace_id: z.string(),

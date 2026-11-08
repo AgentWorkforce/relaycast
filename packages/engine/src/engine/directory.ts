@@ -583,7 +583,7 @@ export async function searchDirectory(
 
   const rows: SearchRow[] = ftsQuery && matchedIds.size === 0
     ? []
-    : (await db.all<Omit<SearchRow, 'agent_rank' | 'skill_rank'>>(sql`
+    : (await sqlx.all<Omit<SearchRow, 'agent_rank' | 'skill_rank'>>(db, sql`
         SELECT
           da.id,
           da.workspace_id,
