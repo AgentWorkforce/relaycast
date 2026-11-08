@@ -1,6 +1,7 @@
 /**
- * PostgreSQL connection, identity, TLS and migration layer. The engine query
- * surface still runs on SQLite; nothing here is wired into the server yet.
+ * PostgreSQL connection, identity, TLS and migration layer, and the verified
+ * engine handle (engineDb.ts). The server still serves SQLite only; the
+ * handle is used by the conformance harness's PostgreSQL mode.
  */
 export {
   DEFAULT_OWNER_ROLE,
@@ -50,3 +51,16 @@ export {
   runMigrateCommand,
   runVerifyDbCommand,
 } from "./cli.js";
+export {
+  brandPgEngineDb,
+  buildPostgresEngineDb,
+  openPostgresEngineDb,
+  PostgresIdentityError,
+  PostgresMigrationStateError,
+  PostgresUnavailableError,
+  type OpenPostgresEngineDbOptions,
+  type PgBranded,
+  type PgDrizzleDb,
+  type PostgresEngineDb,
+  type PostgresEngineHandle,
+} from "./engineDb.js";

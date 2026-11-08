@@ -38,13 +38,13 @@ import {
   verifyPostgresMigrations,
 } from "../migrate.js";
 import { openPostgresPool } from "../pool.js";
+import { holdFixtureLock, resetSchema, SCHEMA } from "./fixture.js";
 
 const OWNER_URL = process.env.RELAYCAST_PG_TEST_URL_OWNER;
 const RUNTIME_URL = process.env.RELAYCAST_PG_TEST_URL_RUNTIME;
 const CA_FILE = process.env.RELAYCAST_PG_TEST_CA_FILE;
 const enabled = Boolean(OWNER_URL && RUNTIME_URL && CA_FILE);
 
-const SCHEMA = "relaycast";
 const TRIGGER_FUNCTIONS = 28;
 
 /** Dev fixture credentials (not secrets) for the refusal roles. */
@@ -95,57 +95,6 @@ async function rolledBack<T>(
   }
 }
 
-/** Drop everything the owner owns in the schema (never the schema itself, never DROP OWNED). */
-async function resetSchema(owner: pg.Pool): Promise<void> {
-  const client = await owner.connect();
-  try {
-    const q = async (sql: string) =>
-      (await client.query<{ stmt: string }>(sql, [SCHEMA])).rows.map(
-        (r) => r.stmt,
-      );
-    const me = `(SELECT oid FROM pg_catalog.pg_roles WHERE rolname = current_user)`;
-    const drops = [
-      ...(await q(
-        `SELECT format('DROP TABLE IF EXISTS %I.%I CASCADE', n.nspname, c.relname) AS stmt
-         FROM pg_catalog.pg_class c JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
-         WHERE n.nspname = $1 AND c.relkind IN ('r', 'p') AND c.relowner = ${me}`,
-      )),
-      ...(await q(
-        `SELECT format('DROP FUNCTION IF EXISTS %s CASCADE', p.oid::regprocedure) AS stmt
-         FROM pg_catalog.pg_proc p JOIN pg_catalog.pg_namespace n ON n.oid = p.pronamespace
-         WHERE n.nspname = $1 AND p.proowner = ${me}`,
-      )),
-      ...(await q(
-        `SELECT format('DROP SEQUENCE IF EXISTS %I.%I CASCADE', n.nspname, c.relname) AS stmt
-         FROM pg_catalog.pg_class c JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
-         WHERE n.nspname = $1 AND c.relkind = 'S' AND c.relowner = ${me}`,
-      )),
-      ...(await q(
-        `SELECT format('DROP VIEW IF EXISTS %I.%I CASCADE', n.nspname, c.relname) AS stmt
-         FROM pg_catalog.pg_class c JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
-         WHERE n.nspname = $1 AND c.relkind IN ('v', 'm') AND c.relowner = ${me}`,
-      )),
-    ];
-    for (const stmt of drops) await client.query(stmt);
-    const types = await q(
-      `SELECT format('DROP TYPE IF EXISTS %I.%I CASCADE', n.nspname, t.typname) AS stmt
-       FROM pg_catalog.pg_type t JOIN pg_catalog.pg_namespace n ON n.oid = t.typnamespace
-       WHERE n.nspname = $1 AND t.typrelid = 0 AND t.typelem = 0 AND t.typowner = ${me}`,
-    );
-    for (const stmt of types) await client.query(stmt);
-    const left = await client.query(
-      `SELECT c.relname FROM pg_catalog.pg_class c JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace WHERE n.nspname = $1`,
-      [SCHEMA],
-    );
-    if (left.rowCount)
-      throw new Error(
-        `schema ${SCHEMA} still has relations: ${left.rows.map((r) => r.relname).join(", ")}`,
-      );
-  } finally {
-    client.release();
-  }
-}
-
 function capture(): CliIo & { lines: string[] } {
   const lines: string[] = [];
   return { lines, out: (l) => lines.push(l), err: (l) => lines.push(l) };
@@ -183,14 +132,18 @@ describe.skipIf(!enabled)(
     let runtime: pg.Pool;
     const bundled = enabled ? loadBundledPostgresMigrations() : [];
 
+    let releaseFixture: (() => Promise<void>) | undefined;
+
     beforeAll(async () => {
       owner = poolFor(OWNER_URL!, "owner");
       runtime = poolFor(RUNTIME_URL!, "runtime");
+      releaseFixture = await holdFixtureLock(owner);
       await resetSchema(owner);
     });
 
     afterAll(async () => {
       if (owner) await resetSchema(owner).catch(() => {});
+      await releaseFixture?.().catch(() => {});
       await Promise.all(pools.map((p) => p.end().catch(() => {})));
     });
 
