@@ -1147,6 +1147,11 @@ components:
           type: integer
         location_type:
           type: string
+          description: >
+            Where this delivery is served from. `via_node` is a fleet-node route;
+            `self_connected` is pulled by the recipient (`GET /v1/deliveries`).
+            An agent with `metadata.source` of `cloud-relay-connect` is snapshotted
+            `self_connected` even when registration bound a `ws.node.v1` node.
         location_node_id:
           type: string
           nullable: true
@@ -1165,7 +1170,11 @@ components:
         delivery_adapter:
           type: string
           nullable: true
-          description: Adapter selected for node delivery dispatch.
+          description: >
+            Adapter selected for node delivery dispatch, such as `ws.node.v1`.
+            Null when the row has no node route. Relay Connect agents
+            (`metadata.source` = `cloud-relay-connect`) stay on probe pull, so
+            this is null even if a node binding exists.
         dispatch_attempts:
           type: integer
           description: Number of node-adapter dispatch attempts recorded for this delivery.

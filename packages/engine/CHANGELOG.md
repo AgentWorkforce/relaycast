@@ -9,6 +9,10 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ## [Unreleased - Minor]
 
+### Fixed
+
+- Delivery routing treats agents with `metadata.source = "cloud-relay-connect"` as probe-pulled even when normal registration, a later claim, or reconnect replay gives them an active `ws.node.v1` binding. New rows omit node routing, reconnect replay excludes them (including after a mid-replay handoff), and redrive rewrites queued legacy rows to `self_connected` without erasing the prior dispatch attempt or error.
+
 ### Added
 
 - Hosts can supply a message-search backend through the optional `search` engine dependency (`SearchIndex`); without it, existing SQLite search behavior is unchanged. Configured backend errors propagate without falling back to SQLite.
