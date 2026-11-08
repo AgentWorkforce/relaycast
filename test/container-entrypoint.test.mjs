@@ -643,40 +643,156 @@ test('telemetry collector stays off without RELAYCAST_TELEMETRY_COLLECTOR_URL', 
   assert.equal(telemetryCollectorFromEnv({ RELAYCAST_TELEMETRY_COLLECTOR_URL: '  ', RELAYCAST_TELEMETRY_QUEUE_MAX: 'junk' }), undefined);
 });
 
+const TELEMETRY_DEFAULTS = {
+  queueMax: 1000,
+  batchMax: 50,
+  flushIntervalMs: 2000,
+  maxAttempts: 3,
+  requestTimeoutMs: 5000,
+  deliveryDeadlineMs: 60000,
+  shutdownTimeoutMs: 5000,
+  eventMaxBytes: 8192,
+  batchMaxBytes: 262144,
+  queueMaxBytes: 1048576,
+};
+const TELEMETRY_MINIMAL = {
+  RELAYCAST_TELEMETRY_COLLECTOR_URL: 'http://collector:8080/v1/events',
+  RELAYCAST_TELEMETRY_COLLECTOR_TOKEN: 'collector-token',
+  RELAYCAST_TELEMETRY_DEPLOYMENT_ID: 'acme-prod',
+};
+
 test('telemetry collector options come from the environment', () => {
   const dir = mkdtempSync(join(tmpdir(), 'relaycast-telemetry-'));
   try {
     const tokenFile = join(dir, 'token');
-    writeFileSync(tokenFile, 'collector-token\n');
-    const hostname = () => 'relaycast-0';
-    assert.deepEqual(
-      telemetryCollectorFromEnv({ RELAYCAST_TELEMETRY_COLLECTOR_URL: 'http://collector.analytics.svc:8080/v1/events' }, { hostname }),
-      { url: 'http://collector.analytics.svc:8080/v1/events', deployment: 'relaycast-0', instance: 'relaycast-0', queueMax: 1000, batchMax: 50, flushIntervalMs: 2000 },
-    );
+    writeFileSync(tokenFile, 'file-token\n');
     assert.deepEqual(
       telemetryCollectorFromEnv({
-        RELAYCAST_TELEMETRY_COLLECTOR_URL: 'https://collector.example.com/ingest',
-        RELAYCAST_TELEMETRY_COLLECTOR_TOKEN_FILE: tokenFile,
-        RELAYCAST_TELEMETRY_DEPLOYMENT: 'acme-prod',
-        RELAYCAST_TELEMETRY_QUEUE_MAX: '200',
-        RELAYCAST_TELEMETRY_BATCH_MAX: '20',
-        RELAYCAST_TELEMETRY_FLUSH_MS: '500',
-      }, { hostname }),
-      { url: 'https://collector.example.com/ingest', bearerToken: 'collector-token', deployment: 'acme-prod', instance: 'relaycast-0', queueMax: 200, batchMax: 20, flushIntervalMs: 500 },
+        RELAYCAST_TELEMETRY_COLLECTOR_URL: 'http://collector.analytics.svc:8080/v1/events',
+        RELAYCAST_TELEMETRY_COLLECTOR_TOKEN: '  inline-token  ',
+        RELAYCAST_TELEMETRY_DEPLOYMENT_ID: ' relaycast-install-1 ',
+      }),
+      { url: 'http://collector.analytics.svc:8080/v1/events', bearerToken: 'inline-token', deployment: 'relaycast-install-1', ...TELEMETRY_DEFAULTS },
+    );
+    const full = telemetryCollectorFromEnv({
+      RELAYCAST_TELEMETRY_COLLECTOR_URL: 'https://collector.example.com/v1/events',
+      RELAYCAST_TELEMETRY_COLLECTOR_TOKEN_FILE: tokenFile,
+      RELAYCAST_TELEMETRY_DEPLOYMENT_ID: 'acme-prod',
+      RELAYCAST_TELEMETRY_QUEUE_MAX: '200',
+      RELAYCAST_TELEMETRY_BATCH_MAX: '20',
+      RELAYCAST_TELEMETRY_FLUSH_MS: '500',
+      RELAYCAST_TELEMETRY_MAX_ATTEMPTS: '5',
+      RELAYCAST_TELEMETRY_REQUEST_TIMEOUT_MS: '1500',
+      RELAYCAST_TELEMETRY_DELIVERY_DEADLINE_MS: '30000',
+      RELAYCAST_TELEMETRY_SHUTDOWN_TIMEOUT_MS: '2500',
+      RELAYCAST_TELEMETRY_EVENT_MAX_BYTES: '4096',
+      RELAYCAST_TELEMETRY_BATCH_MAX_BYTES: '65536',
+      RELAYCAST_TELEMETRY_QUEUE_MAX_BYTES: '131072',
+    });
+    assert.deepEqual(full, {
+      url: 'https://collector.example.com/v1/events',
+      bearerToken: 'file-token',
+      deployment: 'acme-prod',
+      queueMax: 200,
+      batchMax: 20,
+      flushIntervalMs: 500,
+      maxAttempts: 5,
+      requestTimeoutMs: 1500,
+      deliveryDeadlineMs: 30000,
+      shutdownTimeoutMs: 2500,
+      eventMaxBytes: 4096,
+      batchMaxBytes: 65536,
+      queueMaxBytes: 131072,
+    });
+    assert.equal('instance' in full, false);
+    // A directly set token wins over its _FILE variant.
+    assert.equal(
+      telemetryCollectorFromEnv({ ...TELEMETRY_MINIMAL, RELAYCAST_TELEMETRY_COLLECTOR_TOKEN_FILE: tokenFile }).bearerToken,
+      'collector-token',
     );
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
 });
 
-test('telemetry collector refuses malformed values', () => {
-  const url = 'http://collector:8080/';
-  for (const [name, value] of [['RELAYCAST_TELEMETRY_QUEUE_MAX', '0'], ['RELAYCAST_TELEMETRY_BATCH_MAX', '1.5'], ['RELAYCAST_TELEMETRY_FLUSH_MS', 'soon']]) {
+test('telemetry collector requires a token and an explicit deployment id', () => {
+  const { RELAYCAST_TELEMETRY_COLLECTOR_TOKEN: _token, ...noToken } = TELEMETRY_MINIMAL;
+  for (const env of [noToken, { ...noToken, RELAYCAST_TELEMETRY_COLLECTOR_TOKEN: '   ' }]) {
     assert.throws(
-      () => telemetryCollectorFromEnv({ RELAYCAST_TELEMETRY_COLLECTOR_URL: url, [name]: value }),
-      (error) => error instanceof BaseUrlError && error.code === 'invalid_telemetry_config' && /refused to start/.test(error.message) && error.message.includes(name),
+      () => telemetryCollectorFromEnv(env),
+      (error) => error instanceof BaseUrlError && error.code === 'missing_telemetry_collector_token' && /RELAYCAST_TELEMETRY_COLLECTOR_TOKEN/.test(error.message),
     );
   }
+  const dir = mkdtempSync(join(tmpdir(), 'relaycast-telemetry-'));
+  try {
+    const emptyFile = join(dir, 'empty');
+    writeFileSync(emptyFile, '\n');
+    assert.throws(
+      () => telemetryCollectorFromEnv({ ...noToken, RELAYCAST_TELEMETRY_COLLECTOR_TOKEN_FILE: emptyFile }),
+      (error) => error instanceof BaseUrlError && error.code === 'missing_telemetry_collector_token',
+    );
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+  const { RELAYCAST_TELEMETRY_DEPLOYMENT_ID: _deployment, ...noDeployment } = TELEMETRY_MINIMAL;
+  for (const env of [
+    noDeployment,
+    { ...noDeployment, RELAYCAST_TELEMETRY_DEPLOYMENT_ID: '  ' },
+    // The pre-review variable name and HOSTNAME are not fallbacks.
+    { ...noDeployment, RELAYCAST_TELEMETRY_DEPLOYMENT: 'acme-prod', HOSTNAME: 'relaycast-0' },
+  ]) {
+    assert.throws(
+      () => telemetryCollectorFromEnv(env),
+      (error) => error instanceof BaseUrlError && error.code === 'missing_telemetry_collector_deployment_id' && /no hostname default/.test(error.message),
+    );
+  }
+  for (const bad of ['-leading-dash', 'has space', 'slash/inside', 'x'.repeat(129), 'é-unicode']) {
+    assert.throws(
+      () => telemetryCollectorFromEnv({ ...TELEMETRY_MINIMAL, RELAYCAST_TELEMETRY_DEPLOYMENT_ID: bad }),
+      (error) => error instanceof BaseUrlError && error.code === 'invalid_telemetry_config' && error.message.includes('RELAYCAST_TELEMETRY_DEPLOYMENT_ID'),
+      bad,
+    );
+  }
+  assert.equal(telemetryCollectorFromEnv({ ...TELEMETRY_MINIMAL, RELAYCAST_TELEMETRY_DEPLOYMENT_ID: 'x'.repeat(128) }).deployment, 'x'.repeat(128));
+});
+
+test('telemetry collector refuses malformed values', () => {
+  const url = 'http://collector:8080/v1/events';
+  const names = [
+    'RELAYCAST_TELEMETRY_QUEUE_MAX',
+    'RELAYCAST_TELEMETRY_BATCH_MAX',
+    'RELAYCAST_TELEMETRY_FLUSH_MS',
+    'RELAYCAST_TELEMETRY_MAX_ATTEMPTS',
+    'RELAYCAST_TELEMETRY_REQUEST_TIMEOUT_MS',
+    'RELAYCAST_TELEMETRY_DELIVERY_DEADLINE_MS',
+    'RELAYCAST_TELEMETRY_SHUTDOWN_TIMEOUT_MS',
+    'RELAYCAST_TELEMETRY_EVENT_MAX_BYTES',
+    'RELAYCAST_TELEMETRY_BATCH_MAX_BYTES',
+    'RELAYCAST_TELEMETRY_QUEUE_MAX_BYTES',
+  ];
+  for (const name of names) {
+    for (const value of ['0', '-1', '1.5', 'soon', '1e3', '9007199254740993']) {
+      assert.throws(
+        () => telemetryCollectorFromEnv({ ...TELEMETRY_MINIMAL, [name]: value }),
+        (error) => error instanceof BaseUrlError && error.code === 'invalid_telemetry_config' && /refused to start/.test(error.message) && error.message.includes(name),
+        `${name}=${value}`,
+      );
+    }
+  }
+  // Byte relations: a batch must hold one maximal event plus the 55-byte frame;
+  // the queue must hold one maximal event.
+  assert.equal(
+    telemetryCollectorFromEnv({ ...TELEMETRY_MINIMAL, RELAYCAST_TELEMETRY_EVENT_MAX_BYTES: '1000', RELAYCAST_TELEMETRY_BATCH_MAX_BYTES: '1055', RELAYCAST_TELEMETRY_QUEUE_MAX_BYTES: '1000' }).batchMaxBytes,
+    1055,
+  );
+  assert.throws(
+    () => telemetryCollectorFromEnv({ ...TELEMETRY_MINIMAL, RELAYCAST_TELEMETRY_EVENT_MAX_BYTES: '1000', RELAYCAST_TELEMETRY_BATCH_MAX_BYTES: '1054' }),
+    (error) => error instanceof BaseUrlError && error.code === 'invalid_telemetry_config' && error.message.includes('RELAYCAST_TELEMETRY_BATCH_MAX_BYTES must be at least RELAYCAST_TELEMETRY_EVENT_MAX_BYTES + 55'),
+  );
+  assert.throws(
+    () => telemetryCollectorFromEnv({ ...TELEMETRY_MINIMAL, RELAYCAST_TELEMETRY_EVENT_MAX_BYTES: '1000', RELAYCAST_TELEMETRY_QUEUE_MAX_BYTES: '999' }),
+    (error) => error instanceof BaseUrlError && error.code === 'invalid_telemetry_config' && error.message.includes('RELAYCAST_TELEMETRY_QUEUE_MAX_BYTES must be at least RELAYCAST_TELEMETRY_EVENT_MAX_BYTES'),
+  );
   for (const bad of [
     'not a url',
     'http://collector.example.com/',
@@ -688,13 +804,14 @@ test('telemetry collector refuses malformed values', () => {
     'http://collector:8080/v1/events#',
   ]) {
     assert.throws(
-      () => telemetryCollectorFromEnv({ RELAYCAST_TELEMETRY_COLLECTOR_URL: bad }),
+      () => telemetryCollectorFromEnv({ ...TELEMETRY_MINIMAL, RELAYCAST_TELEMETRY_COLLECTOR_URL: bad }),
       (error) => error instanceof BaseUrlError && error.code === 'invalid_telemetry_collector_url',
       bad,
     );
   }
+  const { RELAYCAST_TELEMETRY_COLLECTOR_TOKEN: _token, ...noToken } = TELEMETRY_MINIMAL;
   assert.throws(
-    () => telemetryCollectorFromEnv({ RELAYCAST_TELEMETRY_COLLECTOR_URL: url, RELAYCAST_TELEMETRY_COLLECTOR_TOKEN_FILE: '/nonexistent/relaycast-token' }),
+    () => telemetryCollectorFromEnv({ ...noToken, RELAYCAST_TELEMETRY_COLLECTOR_URL: url, RELAYCAST_TELEMETRY_COLLECTOR_TOKEN_FILE: '/nonexistent/relaycast-token' }),
     (error) => error instanceof BaseUrlError && error.code === 'unreadable_secret_file',
   );
 });
@@ -706,4 +823,22 @@ test('a malformed telemetry setting exits 64 before engine handoff', () => {
   });
   assert.equal(result.status, 64, result.stderr);
   assert.match(result.stderr, /RELAYCAST_TELEMETRY_COLLECTOR_URL must use https/);
+});
+
+test('a collector URL without a token or deployment id exits 64 before engine handoff', () => {
+  const base = { ...process.env };
+  for (const key of Object.keys(base)) if (key.startsWith('RELAYCAST_TELEMETRY_')) delete base[key];
+  const noToken = spawnSync(process.execPath, [entrypoint, ...acceptedArgs], {
+    encoding: 'utf8',
+    env: { ...base, RELAYCAST_TELEMETRY_COLLECTOR_URL: 'http://collector:8080/v1/events', RELAYCAST_TELEMETRY_DEPLOYMENT_ID: 'acme-prod' },
+  });
+  assert.equal(noToken.status, 64, noToken.stderr);
+  assert.match(noToken.stderr, /missing_telemetry_collector_token|RELAYCAST_TELEMETRY_COLLECTOR_TOKEN\(_FILE\) is not/);
+  const noDeployment = spawnSync(process.execPath, [entrypoint, ...acceptedArgs], {
+    encoding: 'utf8',
+    env: { ...base, RELAYCAST_TELEMETRY_COLLECTOR_URL: 'http://collector:8080/v1/events', RELAYCAST_TELEMETRY_COLLECTOR_TOKEN: 'collector-token', HOSTNAME: 'relaycast-0' },
+  });
+  assert.equal(noDeployment.status, 64, noDeployment.stderr);
+  assert.match(noDeployment.stderr, /missing_telemetry_collector_deployment_id|RELAYCAST_TELEMETRY_DEPLOYMENT_ID is not/);
+  assert.doesNotMatch(noToken.stderr + noDeployment.stderr, /collector-token/);
 });

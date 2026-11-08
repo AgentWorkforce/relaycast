@@ -68,15 +68,30 @@ export {
   CollectorTelemetrySink,
   createCollectorTelemetrySink,
   COLLECTOR_TELEMETRY_DEFAULTS,
+  CollectorConfigError,
+  validateCollectorIdentity,
+  type CollectorConfigErrorCode,
   type CollectorTelemetrySinkOptions,
 } from './providers/collector-telemetry.js';
 export {
   EXPORT_ENVELOPE_VERSION,
+  ANALYTICS_FIELD_RULES,
+  ANALYTICS_EVENT_FIELDS,
+  ANALYTICS_DROPPED_FIELDS,
+  REGISTERED_ORIGIN_APPS,
+  REGISTERED_ORIGIN_ACTOR_TYPES,
+  REGISTERED_ORIGIN_CLIENTS,
+  REGISTERED_ERROR_NAMES,
+  REGISTERED_ERROR_CODES,
+  isOpaqueId,
   projectObservation,
   projectException,
+  type AnalyticsFieldRule,
   type ExportEvent,
   type ExportIdentity,
+  type ExportOrigin,
 } from './telemetry/exportEnvelope.js';
+export { utf8Bytes, wireEventBytes, WIRE_BATCH_FRAME_BYTES } from './telemetry/httpTransport.js';
 export {
   configureEngineDiagnostics,
   currentEngineOperation,

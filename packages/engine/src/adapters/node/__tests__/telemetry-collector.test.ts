@@ -61,7 +61,7 @@ describe('startServer telemetryCollector', () => {
       port: 0,
       migrate: true,
       config: { environment: 'test' },
-      telemetryCollector: { url: collector.url, bearerToken: 'tok_COLLECTOR_SECRET', deployment: 'it-deploy', instance: 'it-0' },
+      telemetryCollector: { url: collector.url, bearerToken: 'tok_COLLECTOR_SECRET', deployment: 'it-deploy' },
     });
     const apiKey = await createWorkspace(running);
 
@@ -87,7 +87,12 @@ describe('startServer telemetryCollector', () => {
     for (const batch of batches) expect(batch.schema).toBe('agent-relay.analytics.batch/v1');
     const created = batches.flatMap((batch) => batch.events).find((event) => event.event === 'workspace.created');
     expect(created).toBeDefined();
-    expect(created).toMatchObject({ version: 1, component: 'relaycast', deployment_id: 'it-deploy', properties: { instance: 'it-0' } });
+    expect(created).toMatchObject({ version: 1, component: 'relaycast', deployment_id: 'it-deploy' });
+    expect(created!.properties).not.toHaveProperty('instance');
+    expect(typeof created!.trace_id).toBe('string');
+    expect((created!.trace_id as string).length).toBeGreaterThan(0);
+    // Workspace name is a user string: never exported.
+    expect(JSON.stringify(batches)).not.toContain('ws-telemetry-collector');
     expect(typeof created!.event_id).toBe('string');
     expect(typeof created!.workspace_id).toBe('string');
     expect(created).not.toHaveProperty('tenant_id');

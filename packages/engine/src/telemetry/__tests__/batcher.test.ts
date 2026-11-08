@@ -1,5 +1,15 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { createBatcher, DELIVERY_DEADLINE_DEFAULT_MS, FAILURE_LOG_INTERVAL_MS, RETRY_DELAY_MAX_MS, type BatchAttempt, type BatcherOptions } from '../batcher.js';
+import {
+  BATCH_MAX_BYTES_DEFAULT,
+  createBatcher,
+  DELIVERY_DEADLINE_DEFAULT_MS,
+  EVENT_MAX_BYTES_DEFAULT,
+  jsonUtf8Bytes,
+  QUEUE_MAX_BYTES_DEFAULT,   FAILURE_LOG_INTERVAL_MS,
+  RETRY_DELAY_MAX_MS,
+  type BatchAttempt,
+  type BatcherOptions,
+} from '../batcher.js';
 
 const base: BatcherOptions = { queueMax: 10, batchMax: 3, flushIntervalMs: 1000, maxAttempts: 3, backoffMs: 100, shutdownTimeoutMs: 500 };
 
@@ -163,7 +173,7 @@ describe('createBatcher', () => {
     await batcher.flush();
     expect(sent).toEqual([[0, 1], [2], [4, 5, 6, 7]]);
     // 8 -> [0..3] -> [2,3] -> [3]: three splits; depth never exceeds log2(batchMax).
-    expect(batcher.stats()).toMatchObject({ exported: 7, dropped: 1, rejected: 1, failedBatches: 1, splits: 3, retries: 0 });
+    expect(batcher.stats()).toMatchObject({ exported: 7, dropped: 1, rejected: 1, oversized: 1, failedBatches: 1, splits: 3, retries: 0 });
     expect(send).toHaveBeenCalledTimes(7);
   });
 
@@ -314,5 +324,162 @@ describe('delivery deadline', () => {
     batcher.enqueue(2);
     await batcher.shutdown();
     expect(attempts.map((a) => a.timeoutMs)).toEqual([60_000, 500]);
+  });
+});
+
+describe('byte bounds (UTF-8)', () => {
+  // JSON-encoded sizes, measured in UTF-8 bytes, not UTF-16 code units.
+  const E_ACUTE = '\u00e9'; // 2 bytes, 1 code unit
+  const EMOJI = '\u{1F600}'; // 4 bytes, 2 code units
+  const CJK = '\u4e2d'; // 3 bytes, 1 code unit
+  const strings = recorderOf<string>();
+
+  function recorderOf<T>() {
+    return () => {
+      const batches: T[][] = [];
+      return { batches, send: vi.fn(async (items: T[]) => { batches.push(items); }) };
+    };
+  }
+
+  it('measures events in UTF-8 bytes', () => {
+    expect(jsonUtf8Bytes(E_ACUTE.repeat(10))).toBe(22);
+    expect(E_ACUTE.repeat(10).length + 2).toBe(12);
+    expect(jsonUtf8Bytes(EMOJI.repeat(3))).toBe(14);
+    expect(jsonUtf8Bytes(CJK.repeat(4))).toBe(14);
+    expect(jsonUtf8Bytes({ a: CJK })).toBe(Buffer.byteLength(JSON.stringify({ a: CJK })));
+  });
+
+  it('has finite, documented producer defaults', () => {
+    expect(EVENT_MAX_BYTES_DEFAULT).toBe(8192);
+    expect(BATCH_MAX_BYTES_DEFAULT).toBe(262_144);
+    expect(QUEUE_MAX_BYTES_DEFAULT).toBe(1_048_576);
+    expect(() => createBatcher(strings(), base)).not.toThrow();
+  });
+
+  it('drops and counts an event over eventMaxBytes as oversized, judged by bytes not characters', async () => {
+    const transport = strings();
+    const log = vi.fn();
+    const batcher = createBatcher<string>(transport, { ...base, eventMaxBytes: 16, batchMaxBytes: 64, queueMaxBytes: 64 }, { log });
+    batcher.enqueue('e'.repeat(10)); // 12 bytes: fits
+    batcher.enqueue(E_ACUTE.repeat(10)); // 12 code units, 22 bytes: oversized
+    batcher.enqueue(EMOJI.repeat(3)); // 8 code units, 14 bytes: fits
+    batcher.enqueue(CJK.repeat(5)); // 7 code units, 17 bytes: oversized
+    expect(batcher.stats()).toMatchObject({ enqueued: 2, dropped: 2, oversized: 2, queueFull: 0, queued: 2, queuedBytes: 26 });
+    expect(log.mock.calls[0]![0]).toMatch(/over 16 bytes/);
+    await batcher.flush();
+    expect(transport.batches).toEqual([['e'.repeat(10), EMOJI.repeat(3)]]);
+    expect(batcher.stats()).toMatchObject({ exported: 2, queuedBytes: 0 });
+  });
+
+  it('counts an event whose size cannot be measured as oversized', () => {
+    const batcher = createBatcher<unknown>(strings(), { ...base, sizeOf: () => { throw new Error('cyclic'); } }, { log: () => {} });
+    batcher.enqueue({});
+    const nan = createBatcher<unknown>(strings(), { ...base, sizeOf: () => Number.NaN }, { log: () => {} });
+    nan.enqueue({});
+    expect(batcher.stats()).toMatchObject({ dropped: 1, oversized: 1, enqueued: 0 });
+    expect(nan.stats()).toMatchObject({ dropped: 1, oversized: 1, enqueued: 0 });
+  });
+
+  it('forms batches within batchMaxBytes, counting frame and separators', async () => {
+    const transport = strings();
+    // Each event is "\u00e9\u00e9" = 6 bytes; a batch of n is 2 + 6n + (n - 1) bytes, so at most 4 fit in 30.
+    const batcher = createBatcher<string>(transport, { ...base, batchMax: 100, eventMaxBytes: 16, batchMaxBytes: 30, queueMaxBytes: 1000 });
+    for (let i = 0; i < 6; i += 1) batcher.enqueue(E_ACUTE.repeat(2));
+    await batcher.flush();
+    expect(transport.batches.map((batch) => batch.length)).toEqual([4, 2]);
+    for (const batch of transport.batches) expect(Buffer.byteLength(JSON.stringify(batch))).toBeLessThanOrEqual(30);
+    expect(Buffer.byteLength(JSON.stringify(transport.batches[0]))).toBe(29);
+  });
+
+  it('sends immediately once a full batch by bytes is queued', async () => {
+    const transport = strings();
+    const batcher = createBatcher<string>(transport, { ...base, batchMax: 100, eventMaxBytes: 16, batchMaxBytes: 30, queueMaxBytes: 1000 });
+    for (let i = 0; i < 4; i += 1) batcher.enqueue(E_ACUTE.repeat(2));
+    await vi.advanceTimersByTimeAsync(0);
+    expect(transport.batches).toEqual([]);
+    batcher.enqueue(E_ACUTE.repeat(2));
+    // Well before flushIntervalMs: the byte-full batch goes out and the pump drains the remainder.
+    await vi.advanceTimersByTimeAsync(0);
+    expect(transport.batches.map((batch) => batch.length)).toEqual([4, 1]);
+  });
+
+  it('drops the NEWEST event and counts queueFull when the byte budget is exhausted', async () => {
+    const transport = strings();
+    const log = vi.fn();
+    // Each CJK x4 event is 14 bytes; 40 bytes holds two (28), the third would make 42.
+    const batcher = createBatcher<string>(transport, { ...base, queueMax: 100, batchMax: 100, eventMaxBytes: 16, batchMaxBytes: 64, queueMaxBytes: 40 }, { log });
+    batcher.enqueue(CJK.repeat(4));
+    batcher.enqueue(CJK.repeat(4));
+    batcher.enqueue(`${CJK.repeat(3)}z`); // 12 bytes: 28 + 12 = 40 fits exactly
+    batcher.enqueue('n'); // 3 bytes: over budget, newest dropped
+    expect(batcher.stats()).toMatchObject({ enqueued: 3, dropped: 1, queueFull: 1, oversized: 0, queued: 3, queuedBytes: 40 });
+    expect(log.mock.calls[0]![0]).toMatch(/queue full \(40 bytes\); dropped the newest event/);
+    await batcher.flush();
+    expect(transport.batches).toEqual([[CJK.repeat(4), CJK.repeat(4), `${CJK.repeat(3)}z`]]);
+    // Budget is released after sending.
+    batcher.enqueue('n');
+    expect(batcher.stats()).toMatchObject({ enqueued: 4, queueFull: 1, queuedBytes: 3 });
+  });
+
+  it('drops the NEWEST event and counts queueFull when the event count is exhausted', () => {
+    const batcher = createBatcher<string>(strings(), { ...base, queueMax: 2, batchMax: 100 }, { log: () => {} });
+    for (const item of ['first', 'second', 'newest']) batcher.enqueue(item);
+    expect(batcher.stats()).toMatchObject({ enqueued: 2, queueFull: 1, queued: 2 });
+  });
+
+  it('releases queued bytes for expired events', async () => {
+    const send = vi.fn(() => new Promise<void>((resolve) => { setTimeout(resolve, 1500); }));
+    const batcher = createBatcher<string>({ send }, { ...base, batchMax: 1, deliveryDeadlineMs: 1000, eventMaxBytes: 16, batchMaxBytes: 64, queueMaxBytes: 64 }, { log: () => {} });
+    batcher.enqueue('a');
+    batcher.enqueue('b');
+    await vi.advanceTimersByTimeAsync(0);
+    expect(send).toHaveBeenCalledTimes(1);
+    expect(batcher.stats()).toMatchObject({ queued: 1, queuedBytes: 3 });
+    await vi.advanceTimersByTimeAsync(1500);
+    expect(send).toHaveBeenCalledTimes(1);
+    expect(batcher.stats()).toMatchObject({ queued: 0, queuedBytes: 0, expired: 1 });
+  });
+
+  it('rejects inconsistent byte bounds at construction', () => {
+    expect(() => createBatcher(strings(), { ...base, eventMaxBytes: 100, batchMaxBytes: 101 })).toThrow(/batchMaxBytes must hold/);
+    expect(() => createBatcher(strings(), { ...base, eventMaxBytes: 100, batchMaxBytes: 102 })).not.toThrow();
+    expect(() => createBatcher(strings(), { ...base, eventMaxBytes: 100, batchMaxBytes: 200, batchFrameBytes: 101 })).toThrow(/batchMaxBytes must hold/);
+    expect(() => createBatcher(strings(), { ...base, eventMaxBytes: 100, queueMaxBytes: 99 })).toThrow(/queueMaxBytes must be at least/);
+    for (const key of ['eventMaxBytes', 'batchMaxBytes', 'queueMaxBytes'] as const) {
+      expect(() => createBatcher(strings(), { ...base, [key]: 0 }), key).toThrow(new RegExp(key));
+      expect(() => createBatcher(strings(), { ...base, [key]: 1.5 }), key).toThrow(new RegExp(key));
+    }
+  });
+});
+
+describe('configuration failures', () => {
+  it('counts a configuration failure separately and logs it as one', async () => {
+    const send = vi.fn(async () => {
+      throw Object.assign(new Error('x'), { retryable: false, configuration: true, reason: 'collector rejected producer credential (403); check the collector token and deployment id' });
+    });
+    const log = vi.fn();
+    const batcher = createBatcher<number>({ send }, { ...base, batchMax: 2 }, { log });
+    for (let i = 0; i < 3; i += 1) batcher.enqueue(i);
+    await batcher.flush();
+    expect(send).toHaveBeenCalledTimes(2);
+    expect(batcher.stats()).toMatchObject({ exported: 0, dropped: 3, rejected: 3, configFailures: 2, failedBatches: 2, retries: 0 });
+    expect(log.mock.calls[0]![0]).toMatch(/CONFIGURATION FAILURE.*\(403\).*configFailures=1/);
+  });
+
+  it('does not let ordinary failures suppress the configuration-failure log', async () => {
+    let calls = 0;
+    const send = vi.fn(async () => {
+      calls += 1;
+      if (calls === 1) throw Object.assign(new Error('x'), { retryable: false, reason: 'collector rejected batch (400)' });
+      throw Object.assign(new Error('x'), { retryable: false, configuration: true, reason: 'collector rejected producer credential (401)' });
+    });
+    const log = vi.fn();
+    const batcher = createBatcher<number>({ send }, { ...base, batchMax: 1 }, { log });
+    batcher.enqueue(1);
+    batcher.enqueue(2);
+    await batcher.flush();
+    expect(log).toHaveBeenCalledTimes(2);
+    expect(log.mock.calls[0]![0]).not.toMatch(/CONFIGURATION/);
+    expect(log.mock.calls[1]![0]).toMatch(/CONFIGURATION FAILURE.*\(401\)/);
   });
 });

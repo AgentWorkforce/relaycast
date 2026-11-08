@@ -1,17 +1,34 @@
 import type { TelemetryEvent, TelemetrySink } from '../ports/telemetry.js';
-import { createBatcher, DELIVERY_DEADLINE_DEFAULT_MS, type Batcher, type BatcherDeps, type BatcherStats } from '../telemetry/batcher.js';
+import {
+  BATCH_MAX_BYTES_DEFAULT,
+  createBatcher,
+  DELIVERY_DEADLINE_DEFAULT_MS,
+  EVENT_MAX_BYTES_DEFAULT,
+  QUEUE_MAX_BYTES_DEFAULT,
+  type Batcher,
+  type BatcherDeps,
+  type BatcherStats,
+} from '../telemetry/batcher.js';
 import { projectException, projectObservation, type ExportEvent, type ExportIdentity } from '../telemetry/exportEnvelope.js';
-import { createHttpCollectorTransport, type CollectorTransport } from '../telemetry/httpTransport.js';
+import {
+  createHttpCollectorTransport,
+  WIRE_BATCH_FRAME_BYTES,
+  wireEventBytes,
+  type CollectorTransport,
+} from '../telemetry/httpTransport.js';
 import { NoopTelemetrySink } from './noop-telemetry.js';
 
 export interface CollectorTelemetrySinkOptions {
   /** Collector ingest URL (https, or http to a private in-cluster/loopback host). */
   url: string;
-  bearerToken?: string;
-  /** Installation label exported on every event. */
+  /** Per-producer collector bearer token. Required; never logged. */
+  bearerToken: string;
+  /**
+   * Explicitly configured, stable installation/deployment identity
+   * (`deployment_id`). Required; there is no hostname default. 1-128 chars of
+   * `[A-Za-z0-9._:-]`, starting with a letter or digit.
+   */
   deployment: string;
-  /** Replica label exported on every event. */
-  instance?: string;
   /** Default 1000. */
   queueMax?: number;
   /** Default 50. */
@@ -32,6 +49,12 @@ export interface CollectorTelemetrySinkOptions {
   deliveryDeadlineMs?: number;
   /** Per-attempt request timeout, clipped to the remaining delivery deadline. Default 5000. */
   requestTimeoutMs?: number;
+  /** Largest serialized (UTF-8) event; larger events are dropped as `oversized`. Default 8192. */
+  eventMaxBytes?: number;
+  /** Largest serialized (UTF-8) batch body. Default 262144. */
+  batchMaxBytes?: number;
+  /** Queue byte budget (serialized UTF-8); the newest event over it is dropped as `queueFull`. Default 1048576. */
+  queueMaxBytes?: number;
   fetch?: typeof globalThis.fetch;
   /** Replace the HTTP transport (tests). */
   transport?: CollectorTransport;
@@ -53,7 +76,48 @@ export const COLLECTOR_TELEMETRY_DEFAULTS = {
   shutdownTimeoutMs: 5000,
   deliveryDeadlineMs: DELIVERY_DEADLINE_DEFAULT_MS,
   requestTimeoutMs: 5000,
+  eventMaxBytes: EVENT_MAX_BYTES_DEFAULT,
+  batchMaxBytes: BATCH_MAX_BYTES_DEFAULT,
+  queueMaxBytes: QUEUE_MAX_BYTES_DEFAULT,
 } as const;
+
+/** Stable reason codes for a refused collector configuration. */
+export type CollectorConfigErrorCode =
+  | 'missing_telemetry_collector_token'
+  | 'missing_telemetry_collector_deployment_id'
+  | 'invalid_telemetry_collector_deployment_id';
+
+/** An enabled collector whose configuration is refused at startup. */
+export class CollectorConfigError extends Error {
+  readonly code: CollectorConfigErrorCode;
+
+  constructor(code: CollectorConfigErrorCode, message: string) {
+    super(message);
+    this.name = 'CollectorConfigError';
+    this.code = code;
+  }
+}
+
+/** Opaque deployment id: 1-128 chars, `[A-Za-z0-9._:-]`, starting alphanumeric. */
+export const DEPLOYMENT_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/;
+
+/**
+ * Refuse an enabled collector without a bearer token or an explicit, valid
+ * deployment id. Never falls back to the hostname or an unauthenticated send.
+ */
+export function validateCollectorIdentity(options: { bearerToken?: unknown; deployment?: unknown }): { bearerToken: string; deployment: string } {
+  const { bearerToken, deployment } = options;
+  if (typeof bearerToken !== 'string' || bearerToken.trim() === '') {
+    throw new CollectorConfigError('missing_telemetry_collector_token', 'telemetry collector is enabled but no bearer token is configured');
+  }
+  if (typeof deployment !== 'string' || deployment.trim() === '') {
+    throw new CollectorConfigError('missing_telemetry_collector_deployment_id', 'telemetry collector is enabled but no deployment id is configured');
+  }
+  if (!DEPLOYMENT_ID_PATTERN.test(deployment)) {
+    throw new CollectorConfigError('invalid_telemetry_collector_deployment_id', 'telemetry collector deployment id must be 1-128 characters of [A-Za-z0-9._:-], starting with a letter or digit');
+  }
+  return { bearerToken, deployment };
+}
 
 /**
  * Self-host analytics producer: projects observations into the export envelope
@@ -66,13 +130,12 @@ export class CollectorTelemetrySink implements TelemetrySink {
   private readonly local: TelemetrySink;
 
   constructor(options: CollectorTelemetrySinkOptions) {
-    if (typeof options.deployment !== 'string' || options.deployment.trim() === '') {
-      throw new Error('telemetry collector deployment must be a non-empty string');
-    }
-    this.identity = { deployment: options.deployment, ...(options.instance ? { instance: options.instance } : {}) };
+    // Required whenever the collector is enabled, even with an injected transport.
+    const { bearerToken, deployment } = validateCollectorIdentity(options);
+    this.identity = { deployment };
     const transport = options.transport ?? createHttpCollectorTransport({
       url: options.url,
-      bearerToken: options.bearerToken,
+      bearerToken,
       timeoutMs: options.requestTimeoutMs ?? COLLECTOR_TELEMETRY_DEFAULTS.requestTimeoutMs,
       fetch: options.fetch,
     });
@@ -84,6 +147,12 @@ export class CollectorTelemetrySink implements TelemetrySink {
       backoffMs: options.backoffMs ?? COLLECTOR_TELEMETRY_DEFAULTS.backoffMs,
       shutdownTimeoutMs: options.shutdownTimeoutMs ?? COLLECTOR_TELEMETRY_DEFAULTS.shutdownTimeoutMs,
       deliveryDeadlineMs: options.deliveryDeadlineMs ?? COLLECTOR_TELEMETRY_DEFAULTS.deliveryDeadlineMs,
+      eventMaxBytes: options.eventMaxBytes ?? COLLECTOR_TELEMETRY_DEFAULTS.eventMaxBytes,
+      batchMaxBytes: options.batchMaxBytes ?? COLLECTOR_TELEMETRY_DEFAULTS.batchMaxBytes,
+      queueMaxBytes: options.queueMaxBytes ?? COLLECTOR_TELEMETRY_DEFAULTS.queueMaxBytes,
+      // Measured on the exact wire encoding the transport sends.
+      sizeOf: wireEventBytes,
+      batchFrameBytes: WIRE_BATCH_FRAME_BYTES,
     }, options.batcherDeps);
     this.local = options.local ?? new NoopTelemetrySink();
   }

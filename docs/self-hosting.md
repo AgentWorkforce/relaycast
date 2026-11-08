@@ -127,75 +127,119 @@ writes no analytics files and needs no extra volume.
 | Variable | Default | Meaning |
 |---|---|---|
 | `RELAYCAST_TELEMETRY_COLLECTOR_URL` | unset (off) | Collector ingest URL. Must be `https://`, or `http://` only to `localhost`, `127.0.0.1`, `[::1]`, a `*.svc` / `*.svc.cluster.local` Service or a single-label host (e.g. `http://collector:8080/v1/events`). Credentials, a query string (`?…`) or a fragment (`#…`) in the URL are refused. |
-| `RELAYCAST_TELEMETRY_COLLECTOR_TOKEN` / `RELAYCAST_TELEMETRY_COLLECTOR_TOKEN_FILE` | unset | This server's per-producer collector credential, sent as `Authorization: Bearer …`. Mount it from a Secret and use the `_FILE` form; do not reuse a database, user or migration credential. Trimmed; never logged. |
-| `RELAYCAST_TELEMETRY_DEPLOYMENT` | container hostname | Deployment label on every event. |
-| `RELAYCAST_TELEMETRY_QUEUE_MAX` | `1000` | Most events held in memory; more are dropped and counted. |
+| `RELAYCAST_TELEMETRY_COLLECTOR_TOKEN` / `RELAYCAST_TELEMETRY_COLLECTOR_TOKEN_FILE` | **required** when the URL is set | This server's per-producer collector credential, sent as `Authorization: Bearer …`. Mount it from a Secret and use the `_FILE` form; do not reuse a database, user or migration credential. Trimmed; never logged. Missing: exit `64`, `missing_telemetry_collector_token`. |
+| `RELAYCAST_TELEMETRY_DEPLOYMENT_ID` | **required** when the URL is set | Stable, opaque installation/deployment id sent as `deployment_id` on every event; it must match the collector's producer registration. 1–128 characters of `[A-Za-z0-9._:-]`, starting with a letter or digit. There is no hostname default (a pod name changes on every restart). Missing: exit `64`, `missing_telemetry_collector_deployment_id`; malformed: `invalid_telemetry_config`. |
+| `RELAYCAST_TELEMETRY_QUEUE_MAX` | `1000` | Most events held in memory. |
+| `RELAYCAST_TELEMETRY_QUEUE_MAX_BYTES` | `1048576` (1 MiB) | Queue budget in serialized UTF-8 bytes. Must be at least `RELAYCAST_TELEMETRY_EVENT_MAX_BYTES`. |
 | `RELAYCAST_TELEMETRY_BATCH_MAX` | `50` | Most events per POST. |
+| `RELAYCAST_TELEMETRY_BATCH_MAX_BYTES` | `262144` (256 KiB) | Largest POST body in UTF-8 bytes, including the 55-byte `{"schema":…,"events":[]}` frame and the commas. Must be at least `RELAYCAST_TELEMETRY_EVENT_MAX_BYTES + 55`. |
+| `RELAYCAST_TELEMETRY_EVENT_MAX_BYTES` | `8192` (8 KiB) | Largest single serialized event in UTF-8 bytes; a larger event is dropped before it is queued and counted as `oversized`. |
 | `RELAYCAST_TELEMETRY_FLUSH_MS` | `2000` | Longest wait before a partial batch is sent. |
+| `RELAYCAST_TELEMETRY_MAX_ATTEMPTS` | `3` | POST attempts per batch, the first included. |
+| `RELAYCAST_TELEMETRY_REQUEST_TIMEOUT_MS` | `5000` | Per-attempt request timeout (also clipped to the remaining delivery deadline). |
+| `RELAYCAST_TELEMETRY_DELIVERY_DEADLINE_MS` | `60000` | Total per-event delivery deadline, from enqueue (see below). |
+| `RELAYCAST_TELEMETRY_SHUTDOWN_TIMEOUT_MS` | `5000` | Longest drain on shutdown; anything left is dropped. |
 
-A malformed value stops startup with exit code `64`. Library users pass the
-same settings as `telemetryCollector` to `startServer` / `createNodeRuntime`
-(an explicit `telemetry` sink takes precedence).
+The numeric defaults are conservative **producer defaults**: the collector
+contract requires finite, configurable limits but does not publish numbers.
+Keep `RELAYCAST_TELEMETRY_BATCH_MAX_BYTES` and
+`RELAYCAST_TELEMETRY_EVENT_MAX_BYTES` at or below your collector's own request
+and event limits. Every numeric setting must be a positive decimal integer. A
+missing required value, a malformed value or an inconsistent byte budget stops
+startup with exit code `64`. Library users pass the same settings as
+`telemetryCollector` to `startServer` / `createNodeRuntime` (`bearerToken` and
+`deployment` are required there too and throw a `CollectorConfigError` with the
+same codes; an explicit `telemetry` sink takes precedence).
 
 The container image pins a published `@relaycast/engine`; until a release that
 includes collector support is pinned there, setting
 `RELAYCAST_TELEMETRY_COLLECTOR_URL` stops startup with exit code `64` and
 `unsupported_telemetry_collector` rather than silently ignoring the setting.
 
-Each request is `POST <url>` with `content-type: application/json` and a body
+Each request is `POST <url>` with `content-type: application/json`, exactly one
+`Authorization: Bearer <token>` header and a body
 `{ "schema": "agent-relay.analytics.batch/v1", "events": [...] }`. Each event
-has `version` (`1`), `event_id` (UUID, kept across retries), `occurred_at`
-(UTC), `component` (`relaycast`), `deployment_id`, `event` (the engine
-observation kind, or `exception`), `trace_id` (when a request id is known),
-`workspace_id` (only for workspace-scoped events) and `properties`.
-`properties` holds only the identifiers and counts listed for that kind (for
-example `channel_id` and `message_id` for `message.created`) plus
-`actor_type` (`human` / `agent` / `system`, when authenticated),
-`origin_actor`, `origin_client`, `origin_version` and `instance` (hostname),
-as strings (at most 256 characters), numbers, booleans or null; it never
-repeats a top-level field name. An `exception` carries only a registered
-classification: `error_name` is a constructor name from a fixed list
-(JavaScript built-ins, Relaycast's own error classes, SQLite and Drizzle
-driver errors) or `unregistered`; `error_code` is sent only when it is on a
-fixed list of Relaycast wire codes, SQLite codes and Node system codes, and is
-omitted otherwise; `operation` is allowlisted. Error messages and exception
-context are never exported. `tenant_id` is never sent: Relaycast is a native
-workspace with no separate tenant model, so workspace events carry
-`workspace_id` only and installation-wide events carry neither.
+has `version` (`1`), `event_id` (random UUID, kept across retries and splits),
+`occurred_at` (UTC), `component` (`relaycast`), `deployment_id` (the configured
+`RELAYCAST_TELEMETRY_DEPLOYMENT_ID`), `event` (the engine observation kind, or
+`exception`), `trace_id` (always present: the request id when one is known,
+otherwise a random UUID; kept across retries and splits), `workspace_id` (for
+workspace-scoped events) and `properties`. `tenant_id` is never sent:
+Relaycast is a native workspace with no separate tenant model, so workspace
+events carry `workspace_id` only and installation-wide events carry neither.
+
+`properties` is built from a reviewed allowlist (`ANALYTICS_FIELD_RULES` and
+`ANALYTICS_EVENT_FIELDS` in `@relaycast/engine`) with a value rule per field;
+a value that fails its rule is omitted, and any field not on the list is never
+exported:
+
+- **ids** (`agent_id`, `channel_id`, `message_id`, `conversation_id`, …): only
+  opaque engine ids (snowflakes, UUIDs or engine-prefixed ids); a name sitting
+  in an id field is dropped;
+- **counts and measurements** (`size_bytes`, `result_count`, `query_length`,
+  `skill_count`, `tag_count`, `duration_ms`, …): non-negative integers
+  (`score`: a finite non-negative number);
+- **flags** (`has_attachments`, `changed_name`, …): booleans only;
+- **enums** (`stream_mode`, `session_scope`, `agent_type`, `created_via`, …):
+  a fixed value set, anything else becomes `other`;
+- `actor_type` (`human` / `agent` / `system`, when authenticated);
+- `origin_app`, `origin_actor_type` and `origin_client`: the request origin
+  reduced to registered values (`unknown` when absent, `other` when not
+  registered). The actor's own name segment and the client version are never
+  exported.
+
+Names, slugs, commands, skills and other user strings are never exported:
+`agent_name`, `invited_agent_name`, `channel_name`, `command`, `action_name`,
+`slug`, `skill`, `emoji` and `provider` are dropped (`ANALYTICS_DROPPED_FIELDS`).
+An `exception` carries only a registered classification: `error_name` is a
+constructor name from a fixed registry (JavaScript built-ins, Relaycast's own
+error classes, SQLite and Drizzle driver errors) or `unregistered`;
+`error_code` is sent only when it is in the fixed registry of Relaycast wire
+codes, SQLite codes and Node system codes, and is omitted otherwise; a name or
+code that merely looks like one is not exported. `operation` is allowlisted.
+Error messages and exception context are never exported.
 
 Never exported: message or file content, search queries, request bodies or
-headers, tokens, API keys, credential hashes, the sender's name, error messages
-or stacks, and any field not on the allowlist.
+headers, tokens, API keys, credential hashes, agent / channel / workspace
+names, sender names, commands, slugs, skills, error messages or stacks, and
+any field not on the allowlist.
 
 Collector responses:
 
 | Response | What the server does |
 |---|---|
 | `204` | Batch accepted. This is the only acceptance. |
-| Any other `2xx` (`200`, `202`, `206`, …) | Protocol error: retried like a `5xx`, then dropped and counted. |
-| `400` and other `4xx` (except `408`, retried) | Batch dropped and counted as `rejected`; not retried. |
-| `401` / `403` | Batch dropped and counted as `rejected`; the log line says `collector rejected producer credential (401)` (or `403`): check the token. |
-| `413` | The batch is split in halves and each half is sent again; a single event that is still too large is dropped and counted as `rejected`. |
-| `429` / `503` / `507` | Retried. A `Retry-After` in unsigned decimal seconds is honored, capped at 30 s and clipped to the remaining delivery and shutdown deadlines; an HTTP-date or malformed value is ignored (the normal backoff applies), and `0` never allows more than the usual attempts. `507` logs `collector storage exhausted (507)`. |
-| Other `5xx`, timeout or connection failure | Retried. |
-| Redirect | Not followed (the credential is never forwarded); batch dropped and counted. |
+| Any other `2xx` (`200`, `202`, `206`, …) | Protocol error, never counted as accepted: retried within the attempt and deadline budget, then dropped and counted (`dropped`, `failedBatches`). |
+| `400` and other `4xx` (except `408`, retried) | Terminal: batch dropped and counted as `rejected`; never retried unchanged. |
+| `401` / `403` | Terminal configuration failure: batch dropped and counted as `rejected` and `configFailures`; a `CONFIGURATION FAILURE` line says `collector rejected producer credential (401)` (or `403`): check the token and `RELAYCAST_TELEMETRY_DEPLOYMENT_ID`. |
+| `413` | The batch is split in halves (bounded depth) and each half is sent again within the original deadline; a single event that is still too large is dropped and counted as `oversized` and `rejected`. |
+| `429` / `503` / `507` | Retried within the budget. A `Retry-After` in unsigned decimal seconds is honored, capped at 30 s and clipped to the remaining delivery and shutdown deadlines; an HTTP-date or malformed value is ignored (the normal backoff applies), and `0` never allows more than the usual attempts. `507` logs `collector storage exhausted (507)`; once the budget is spent the loss is counted. |
+| Other `5xx`, timeout or connection failure | Retried within the budget. |
+| Redirect (`3xx`) | Not followed (`redirect: 'manual'`, so the credential is never forwarded) and not retried; batch dropped and counted (`rejected`, `failedBatches`). |
 
-Export never affects requests: events are queued in memory (bounded by
-`RELAYCAST_TELEMETRY_QUEUE_MAX`; when full, new events are dropped and counted
-as `queueFull`), sent one batch at a time with a 5 s request timeout, retried
-up to 3 attempts with a short backoff and then dropped. Each event also has a
-total delivery deadline of 60 s (`deliveryDeadlineMs`, default `60000`) that
-starts when it is enqueued and covers queued time, every attempt and every
-backoff or `Retry-After` wait; a batch uses its earliest event's deadline, and
-neither a retry nor a `413` split resets it. Each request's timeout is
-shortened to the time left, and once the deadline passes (or a wait would pass
-it) the events are dropped and counted as `expired` instead of retried. A retry can duplicate a
-batch the collector already stored (same `event_id`s). A failed export logs at
-most one `[telemetry] collector export: …` line to stderr every 30 s, with the
-`exported`, `dropped`, `rejected`, `queueFull`, `expired`, `failedBatches` and
-`retries` counters, and never the token or a response body. On shutdown the queue is
-drained for up to 5 s; anything left is dropped. There is no hosted fallback:
-a failed export is dropped, never sent anywhere else.
+Export never affects requests. Every event is measured as serialized UTF-8
+bytes before it is queued: one over `RELAYCAST_TELEMETRY_EVENT_MAX_BYTES` is
+dropped and counted as `oversized`. The queue is bounded by both
+`RELAYCAST_TELEMETRY_QUEUE_MAX` and `RELAYCAST_TELEMETRY_QUEUE_MAX_BYTES`;
+when either is exhausted the **newest** event (the one being added) is dropped
+and counted as `queueFull`. Batches are formed under both
+`RELAYCAST_TELEMETRY_BATCH_MAX` and `RELAYCAST_TELEMETRY_BATCH_MAX_BYTES`, sent
+one at a time and retried up to `RELAYCAST_TELEMETRY_MAX_ATTEMPTS` with a short
+backoff. Each event also has a total delivery deadline
+(`RELAYCAST_TELEMETRY_DELIVERY_DEADLINE_MS`) that starts when it is enqueued
+and covers queued time, every attempt and every backoff or `Retry-After` wait;
+a batch uses its earliest event's deadline, and neither a retry nor a `413`
+split resets it. Each request's timeout is shortened to the time left, and
+once the deadline passes (or a wait would pass it) the events are dropped and
+counted as `expired` instead of retried. A retry can duplicate a batch the
+collector already stored (same `event_id`s). A failed export logs at most one
+`[telemetry] collector export: …` line to stderr every 30 s (configuration
+failures have their own rate limit, so they are not hidden behind transient
+errors), with the `exported`, `dropped`, `rejected`, `expired`, `queueFull`,
+`oversized`, `configFailures`, `failedBatches` and `retries` counters, and
+never the token or a response body. On shutdown the queue is drained for up to
+`RELAYCAST_TELEMETRY_SHUTDOWN_TIMEOUT_MS`; anything left is dropped. There is
+no hosted fallback: a failed export is dropped, never sent anywhere else.
 
 Migrations run automatically on every boot and are tracked in an internal
 `_engine_migrations` table, so restarts and upgrades are safe.

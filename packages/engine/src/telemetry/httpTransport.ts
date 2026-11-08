@@ -8,7 +8,7 @@
  * configures the complete endpoint URL, including `/v1/events`; no path is
  * ever appended. The URL carries no credentials, query or fragment.
  *
- * Request: `POST <url>`, `content-type: application/json`, optional
+ * Request: `POST <url>`, `content-type: application/json`, required
  * `authorization: Bearer <per-producer credential>`, body
  * `{ "schema": "agent-relay.analytics.batch/v1", "events": [WireEvent...] }`.
  *
@@ -22,7 +22,8 @@
  * - any other 2xx (200, 202, 206, ...): a protocol error, never accepted.
  *   Retryable within the finite attempt budget, then dropped and counted.
  * - 400, 401, 403, other 4xx: terminal; the batch is dropped and counted.
- *   401/403 are reported as a producer-credential configuration failure.
+ *   401/403 are reported as a producer-credential configuration failure
+ *   (the batcher counts `configFailures` and logs it on its own rate limit).
  * - 413: terminal for that batch; the batcher splits it in halves, and a
  *   single oversized event is dropped.
  * - 408, 429, 503, 507, other 5xx, timeout, connection failure: retryable;
@@ -75,7 +76,8 @@ export interface WireEvent {
   component: string;
   deployment_id: string;
   event: string;
-  trace_id?: string;
+  /** Always present: the request id, or a UUID created once at projection. */
+  trace_id: string;
   // tenant_id: never sent. Relaycast is a "native workspace with no separate
   // tenant model": workspace events carry workspace_id only, and
   // installation-only events (an exception outside a workspace) carry
@@ -91,9 +93,9 @@ export interface WireBatch {
 
 /**
  * Map an internal export event to the collector wire shape. Pure. `facts`
- * plus the envelope's `actor_type`, `origin` (flattened to `origin_actor`,
- * `origin_client`, `origin_version`) and `instance` become `properties`;
- * reserved field names are stripped from `properties`.
+ * plus the envelope's `actor_type` and `origin` (flattened to `origin_app`,
+ * `origin_actor_type`, `origin_client`) become `properties`; reserved field
+ * names are stripped from `properties`.
  */
 export function toWireEvent(event: ExportEvent): WireEvent {
   const properties: Record<string, ExportFactValue> = {};
@@ -104,11 +106,10 @@ export function toWireEvent(event: ExportEvent): WireEvent {
   for (const [key, value] of Object.entries(event.facts)) put(key, value);
   put('actor_type', event.actor_type);
   if (event.origin) {
-    put('origin_actor', event.origin.actor);
+    put('origin_app', event.origin.app);
+    put('origin_actor_type', event.origin.actor_type);
     put('origin_client', event.origin.client);
-    put('origin_version', event.origin.version);
   }
-  put('instance', event.instance);
   return {
     version: COLLECTOR_EVENT_VERSION,
     event_id: event.event_id,
@@ -116,7 +117,7 @@ export function toWireEvent(event: ExportEvent): WireEvent {
     component: event.component,
     deployment_id: event.deployment,
     event: event.kind,
-    ...(event.correlation_id ? { trace_id: event.correlation_id } : {}),
+    trace_id: event.trace_id,
     // Present only for workspace-scoped events.
     ...(event.workspace_id ? { workspace_id: event.workspace_id } : {}),
     properties,
@@ -127,15 +128,38 @@ export function toWireBatch(events: ExportEvent[]): WireBatch {
   return { schema: COLLECTOR_BATCH_SCHEMA, events: events.map(toWireEvent) };
 }
 
+/**
+ * UTF-8 byte length of a string: `Buffer.byteLength(value, 'utf8')` on Node,
+ * a `TextEncoder` count where `Buffer` is absent. Never `value.length`.
+ */
+export function utf8Bytes(value: string): number {
+  const buffer = (globalThis as { Buffer?: { byteLength(v: string, enc: 'utf8'): number } }).Buffer;
+  return buffer ? buffer.byteLength(value, 'utf8') : new TextEncoder().encode(value).byteLength;
+}
+
+/** Serialized UTF-8 bytes of one wire event (as it appears inside a batch body). */
+export function wireEventBytes(event: ExportEvent): number {
+  return utf8Bytes(JSON.stringify(toWireEvent(event)));
+}
+
+/**
+ * Serialized UTF-8 bytes of a batch body with no events
+ * (`{"schema":"agent-relay.analytics.batch/v1","events":[]}`). A body of n
+ * events is exactly this plus the events' {@link wireEventBytes} plus n - 1
+ * separating commas.
+ */
+export const WIRE_BATCH_FRAME_BYTES = utf8Bytes(JSON.stringify({ schema: COLLECTOR_BATCH_SCHEMA, events: [] }));
+
 /** A failed collector request. The message is the content-free `reason`. */
 export class CollectorExportError extends Error implements ExportFailureHint {
   readonly retryable: boolean;
   readonly status?: number;
   readonly retryAfterMs?: number;
   readonly split?: boolean;
+  readonly configuration?: boolean;
   readonly reason: string;
 
-  constructor(reason: string, init: { retryable: boolean; status?: number; retryAfterMs?: number; split?: boolean }) {
+  constructor(reason: string, init: { retryable: boolean; status?: number; retryAfterMs?: number; split?: boolean; configuration?: boolean }) {
     super(reason);
     this.name = 'CollectorExportError';
     this.reason = reason;
@@ -143,6 +167,7 @@ export class CollectorExportError extends Error implements ExportFailureHint {
     if (init.status !== undefined) this.status = init.status;
     if (init.retryAfterMs !== undefined) this.retryAfterMs = init.retryAfterMs;
     if (init.split) this.split = true;
+    if (init.configuration) this.configuration = true;
   }
 }
 
@@ -165,7 +190,7 @@ export function collectorResponseError(status: number, retryAfter: string | null
     return new CollectorExportError(`collector protocol error: ${status} is not an acceptance (204)`, { retryable: true, status });
   }
   if (status === 401 || status === 403) {
-    return new CollectorExportError(`collector rejected producer credential (${status})`, { retryable: false, status });
+    return new CollectorExportError(`collector rejected producer credential (${status}); check the collector token and deployment id`, { retryable: false, status, configuration: true });
   }
   if (status === 413) {
     return new CollectorExportError('collector rejected an oversized batch (413)', { retryable: false, status, split: true });
@@ -188,8 +213,8 @@ export function collectorResponseError(status: number, retryAfter: string | null
 export interface HttpCollectorTransportOptions {
   /** Collector ingest URL (the full URL; no path is appended). */
   url: string;
-  /** Optional bearer token for the collector. Never logged. */
-  bearerToken?: string;
+  /** Per-producer bearer token for the collector (required). Never logged. */
+  bearerToken: string;
   /**
    * Per-attempt request timeout. An attempt's `timeoutMs` from the batcher
    * (the remaining delivery or shutdown deadline) shortens it further.
@@ -244,8 +269,13 @@ export function createHttpCollectorTransport(options: HttpCollectorTransportOpti
   if (!Number.isInteger(options.timeoutMs) || options.timeoutMs <= 0) {
     throw new Error('telemetry collector timeoutMs must be a positive integer');
   }
-  const headers: Record<string, string> = { 'content-type': 'application/json' };
-  if (options.bearerToken) headers.authorization = `Bearer ${options.bearerToken}`;
+  if (typeof options.bearerToken !== 'string' || options.bearerToken.trim() === '') {
+    throw new Error('telemetry collector bearerToken is required');
+  }
+  const headers: Record<string, string> = {
+    'content-type': 'application/json',
+    authorization: `Bearer ${options.bearerToken}`,
+  };
   const timeoutMs = options.timeoutMs;
 
   return {

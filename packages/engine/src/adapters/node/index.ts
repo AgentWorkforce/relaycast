@@ -1,6 +1,5 @@
 import { safeTelemetrySink } from '../../ports/telemetry.js';
 import { randomBytes } from 'node:crypto';
-import { hostname } from 'node:os';
 import type { EngineDeps, EngineConfig } from '../../ports/index.js';
 import type { AuthProvider } from '../../ports/auth.js';
 import type { AdmissionHooks } from '../../ports/admission.js';
@@ -47,18 +46,30 @@ export type { DurableEventQueueOptions, InProcessEventQueueOptions } from './eve
 export interface NodeTelemetryCollectorOptions {
   /** Collector ingest URL: https, or http to localhost / `*.svc` / a single-label host. */
   url: string;
-  /** Bearer token for the collector (read it from a Secret file; never log it). */
-  bearerToken?: string;
-  /** Installation label on every exported event. Default: the OS hostname. */
-  deployment?: string;
-  /** Replica label on every exported event. Default: unset. */
-  instance?: string;
+  /** Per-producer bearer token for the collector (required; read it from a Secret file; never log it). */
+  bearerToken: string;
+  /** Explicit, stable installation/deployment id on every exported event (required; no hostname default). */
+  deployment: string;
   /** Default 1000. */
   queueMax?: number;
   /** Default 50. */
   batchMax?: number;
   /** Default 2000. */
   flushIntervalMs?: number;
+  /** Transport attempts per batch, first try included. Default 3. */
+  maxAttempts?: number;
+  /** Per-attempt request timeout, ms. Default 5000. */
+  requestTimeoutMs?: number;
+  /** Total delivery deadline per event from enqueue, ms. Default 60000. */
+  deliveryDeadlineMs?: number;
+  /** Longest shutdown drain, ms. Default 5000. */
+  shutdownTimeoutMs?: number;
+  /** Largest serialized event, UTF-8 bytes. Default 8192. */
+  eventMaxBytes?: number;
+  /** Largest serialized batch body, UTF-8 bytes. Default 262144. */
+  batchMaxBytes?: number;
+  /** Queue byte budget, UTF-8 bytes. Default 1048576. */
+  queueMaxBytes?: number;
 }
 
 export interface NodeRuntimeOptions {
@@ -119,11 +130,17 @@ export function createNodeRuntime(options: NodeRuntimeOptions): NodeRuntime {
     ? new CollectorTelemetrySink({
         url: options.telemetryCollector.url,
         bearerToken: options.telemetryCollector.bearerToken,
-        deployment: options.telemetryCollector.deployment ?? hostname(),
-        instance: options.telemetryCollector.instance,
+        deployment: options.telemetryCollector.deployment,
         queueMax: options.telemetryCollector.queueMax,
         batchMax: options.telemetryCollector.batchMax,
         flushIntervalMs: options.telemetryCollector.flushIntervalMs,
+        maxAttempts: options.telemetryCollector.maxAttempts,
+        requestTimeoutMs: options.telemetryCollector.requestTimeoutMs,
+        deliveryDeadlineMs: options.telemetryCollector.deliveryDeadlineMs,
+        shutdownTimeoutMs: options.telemetryCollector.shutdownTimeoutMs,
+        eventMaxBytes: options.telemetryCollector.eventMaxBytes,
+        batchMaxBytes: options.telemetryCollector.batchMaxBytes,
+        queueMaxBytes: options.telemetryCollector.queueMaxBytes,
       })
     : undefined;
   let telemetryClosed: Promise<void> | undefined;
