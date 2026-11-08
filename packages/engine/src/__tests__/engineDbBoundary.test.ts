@@ -12,6 +12,12 @@ const SELF = relative(SRC, fileURLToPath(import.meta.url)).split(sep).join('/');
 const ALLOWED = (path: string) =>
   path === 'db/schema.ts' || path === 'db/tables.ts' || path.startsWith('adapters/') || path === SELF;
 
+// The PG/SQLite schema parity test reads both declarations' table configs
+// (sqlite-core's getTableConfig/SQLiteTable beside pg-core's) to compare
+// them column by column. It is the only non-adapter file that may import
+// sqlite-core, and only for that comparison; it is still held to the cast rule.
+const SQLITE_CORE_ALLOWED = (path: string) => ALLOWED(path) || path === 'db/__tests__/schema.pg.test.ts';
+
 function sources(dir: string): string[] {
   return readdirSync(dir, { withFileTypes: true }).flatMap((entry) => {
     const path = join(dir, entry.name);
@@ -20,11 +26,11 @@ function sources(dir: string): string[] {
   });
 }
 
-function violations(pattern: RegExp): string[] {
+function violations(pattern: RegExp, allowed: (path: string) => boolean = ALLOWED): string[] {
   const found: string[] = [];
   for (const file of sources(SRC)) {
     const path = relative(SRC, file).split(sep).join('/');
-    if (ALLOWED(path)) continue;
+    if (allowed(path)) continue;
     readFileSync(file, 'utf8').split('\n').forEach((line, index) => {
       if (pattern.test(line)) found.push(`${path}:${index + 1}: ${line.trim()}`);
     });
@@ -38,7 +44,7 @@ describe('EngineDb boundary', () => {
   });
 
   it('has no drizzle-orm/sqlite-core import outside the schema, binding and adapters', () => {
-    expect(violations(/['"]drizzle-orm\/sqlite-core['"]/)).toEqual([]);
+    expect(violations(/['"]drizzle-orm\/sqlite-core['"]/, SQLITE_CORE_ALLOWED)).toEqual([]);
   });
 
   it('scans the engine sources', () => {
