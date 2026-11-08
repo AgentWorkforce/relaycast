@@ -13,10 +13,14 @@ const ALLOWED = (path: string) =>
   path === 'db/schema.ts' || path === 'db/tables.ts' || path.startsWith('adapters/') || path === SELF;
 // drizzle-orm/pg-core is for the Postgres schema, the binding, the dialect
 // helpers (sqlx renders and detects PG fragments), the adapters, and the
-// sqlx tests that compile PG text.
+// sqlx tests that compile PG text. Three tests read the PG table configs:
+// the PG/SQLite schema parity test, the binding test (checks PgTable), and
+// the database-error test (builds the unique-constraint map from the PG schema).
 const PG_CORE_ALLOWED = (path: string) =>
   path === 'db/sqlx.ts' || path === 'db/schema.pg.ts' || path === 'db/tables.ts'
-  || path.startsWith('adapters/') || path === SELF || /^(?:db\/)?__tests__\/sqlx[^/]*\.test\.ts$/.test(path);
+  || path.startsWith('adapters/') || path === SELF || /^(?:db\/)?__tests__\/sqlx[^/]*\.test\.ts$/.test(path)
+  || path === 'db/__tests__/schema.pg.test.ts' || path === 'db/__tests__/tables.test.ts'
+  || path === 'ports/__tests__/databaseErrors.test.ts';
 
 // The PG/SQLite schema parity test reads both declarations' table configs
 // (sqlite-core's getTableConfig/SQLiteTable beside pg-core's) to compare
