@@ -17,6 +17,12 @@
  * relaycast_owner owns in schema relaycast. They never drop the schema and
  * never use DROP OWNED.
  */
+import {
+  createHash,
+  createHmac,
+  pbkdf2Sync,
+  randomBytes,
+} from "node:crypto";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import type pg from "pg";
@@ -29,6 +35,7 @@ import {
   type CliIo,
 } from "../cli.js";
 import { loadPostgresConfig, type PostgresMode } from "../config.js";
+import { openPostgresEngineDb, PostgresIdentityError } from "../engineDb.js";
 import { verifyIdentity } from "../identity.js";
 import {
   bundleMigrations,
@@ -302,6 +309,278 @@ describe.skipIf(!enabled)(
           EXIT_IDENTITY,
         );
         expect(io.lines.join("\n")).toMatch(/FAIL owns_schema/);
+      });
+
+      describe("a real LOGIN role that can SET ROLE to a privileged role", () => {
+        // Unlike the NOINHERIT test above (a superuser's SET LOCAL ROLE inside
+        // a rolled-back transaction), these create a committed temporary LOGIN
+        // role, log in as it over the same verify-full TLS, prove the SET ROLE
+        // escape is real, and show both the checks and the runtime handle
+        // refuse it. The control revokes the membership: the escape is gone
+        // and the same two checks pass. The role is dropped in finally.
+        const ROLE_PREFIX = "relaycast_setrole_";
+        const adminUrl = () =>
+          roleUrl(
+            process.env.RELAYCAST_PG_TEST_URL_ADMIN,
+            "relaycast_admin",
+            "admin-dev-password",
+          );
+        const runtimeOpts = (role: string) => ({
+          expectedRole: role,
+          mode: "runtime" as const,
+          schema: SCHEMA,
+          ownerRole: "relaycast_owner",
+        });
+        const check = (
+          result: { checks: { name: string; ok: boolean; detail: string }[] },
+          name: string,
+        ) => result.checks.find((c) => c.name === name);
+
+        /**
+         * A SCRAM-SHA-256 verifier (RFC 5802/7677) for `password`, so CREATE
+         * ROLE never sends the plaintext (or anything a server log could
+         * replay as a login) to the server.
+         */
+        function scramVerifier(password: string): string {
+          const salt = randomBytes(16);
+          const iterations = 4096;
+          const salted = pbkdf2Sync(password, salt, iterations, 32, "sha256");
+          const hmac = (key: Buffer, text: string) =>
+            createHmac("sha256", key).update(text).digest();
+          const storedKey = createHash("sha256")
+            .update(hmac(salted, "Client Key"))
+            .digest();
+          const serverKey = hmac(salted, "Server Key");
+          return `SCRAM-SHA-256$${iterations}:${salt.toString("base64")}$${storedKey.toString("base64")}:${serverKey.toString("base64")}`;
+        }
+
+        interface TempLogin {
+          role: string;
+          password: string;
+          env: NodeJS.ProcessEnv;
+          /** A new pool (fresh sessions) as the temp role, closed by `drop`. */
+          pool: () => pg.Pool;
+          drop: () => Promise<void>;
+        }
+
+        /** Create (and commit) a LOGIN role with CONNECT and USAGE on the schema only. */
+        async function createTempLogin(admin: pg.Pool): Promise<TempLogin> {
+          const role = `${ROLE_PREFIX}${randomBytes(6).toString("hex")}`;
+          // Hex only, generated here; never logged, printed or put in a message.
+          const password = randomBytes(24).toString("hex");
+          const { rows } = await admin.query<{ db: string }>(
+            "SELECT pg_catalog.current_database()::text AS db",
+          );
+          const ident = (name: string) => `"${name.replace(/"/g, '""')}"`;
+          await admin.query(
+            `CREATE ROLE ${ident(role)} LOGIN PASSWORD '${scramVerifier(password)}'`,
+          );
+          const opened: pg.Pool[] = [];
+          const env = {
+            ...envFor(roleUrl(undefined, role, password)),
+            RELAYCAST_DATABASE_RUNTIME_ROLE: role,
+          };
+          const drop = async () => {
+            await Promise.all(opened.map((p) => p.end().catch(() => {})));
+            await admin.query(
+              `SELECT pg_catalog.pg_terminate_backend(pid) FROM pg_catalog.pg_stat_activity WHERE usename = $1`,
+              [role],
+            );
+            await admin.query(`DROP OWNED BY ${ident(role)}`);
+            await admin.query(`DROP ROLE IF EXISTS ${ident(role)}`);
+          };
+          try {
+            await admin.query(
+              `GRANT CONNECT ON DATABASE ${ident(rows[0].db)} TO ${ident(role)}`,
+            );
+            await admin.query(
+              `GRANT USAGE ON SCHEMA ${ident(SCHEMA)} TO ${ident(role)}`,
+            );
+          } catch (err) {
+            await drop().catch(() => {});
+            throw err;
+          }
+          const pool = () => {
+            const p = openPostgresPool(loadPostgresConfig(env, "runtime"));
+            opened.push(p);
+            return p;
+          };
+          return { role, password, env, pool, drop };
+        }
+
+        /** SET ROLE `target` on one fresh session as the temp role; current_user after it, or the SQLSTATE. */
+        async function trySetRole(
+          login: TempLogin,
+          target: string,
+        ): Promise<{ currentUser?: string; code?: string; session: pg.Pool }> {
+          const session = login.pool();
+          const client = await session.connect();
+          try {
+            const me = (
+              await client.query<{ session_user: string; ssl: boolean }>(
+                `SELECT session_user::text AS session_user, s.ssl
+                 FROM pg_catalog.pg_stat_ssl s WHERE s.pid = pg_catalog.pg_backend_pid()`,
+              )
+            ).rows[0];
+            // A real login over TLS as the temp role, not a superuser switching roles.
+            expect(me).toEqual({ session_user: login.role, ssl: true });
+            const code = await pgError(
+              client.query(`SET ROLE "${target}"`),
+            );
+            if (code) return { code, session };
+            const currentUser = (
+              await client.query<{ u: string }>("SELECT current_user::text AS u")
+            ).rows[0].u;
+            await client.query("RESET ROLE");
+            return { currentUser, session };
+          } finally {
+            client.release();
+          }
+        }
+
+        let admin: pg.Pool;
+        beforeAll(() => {
+          admin = poolFor(adminUrl(), "runtime");
+        });
+
+        afterAll(async () => {
+          const { rows } = await admin.query<{ rolname: string }>(
+            "SELECT rolname::text AS rolname FROM pg_catalog.pg_roles WHERE starts_with(rolname, $1)",
+            [ROLE_PREFIX],
+          );
+          expect(rows).toEqual([]);
+        });
+
+        it("SET ROLE relaycast_owner: not_member_of_owner and no_role_memberships fail, the handle and verify-db refuse; revoked, both pass", async () => {
+          const login = await createTempLogin(admin);
+          try {
+            await admin.query(
+              `GRANT relaycast_owner TO "${login.role}" WITH INHERIT FALSE, SET TRUE`,
+            );
+
+            // The escape is real: the login can become the schema owner.
+            const escaped = await trySetRole(login, "relaycast_owner");
+            expect(escaped.code).toBeUndefined();
+            expect(escaped.currentUser).toBe("relaycast_owner");
+
+            const result = await verifyIdentity(
+              escaped.session,
+              runtimeOpts(login.role),
+            );
+            expect(result.ok).toBe(false);
+            expect(check(result, "not_member_of_owner")).toMatchObject({
+              ok: false,
+              detail: "can SET ROLE to relaycast_owner",
+            });
+            expect(check(result, "no_role_memberships")?.ok).toBe(false);
+            expect(check(result, "no_role_memberships")?.detail).toMatch(
+              /^can reach role\(s\) by membership or SET ROLE: .*\brelaycast_owner\b/,
+            );
+
+            // The runtime engine handle refuses it, naming the check, no password.
+            const err = await openPostgresEngineDb(
+              loadPostgresConfig(login.env, "runtime"),
+            ).then(
+              () => expect.fail("openPostgresEngineDb accepted a SET ROLE escape"),
+              (e: unknown) => e,
+            );
+            expect(err).toBeInstanceOf(PostgresIdentityError);
+            const message = (err as Error).message;
+            expect(message).toContain(
+              "not_member_of_owner: can SET ROLE to relaycast_owner",
+            );
+            expect(message).toContain("no_role_memberships: can reach role(s)");
+            expect(message).not.toContain(login.password);
+            expectNoCredentials(message);
+
+            // verify-db, driven in-process with this env, exits 65.
+            const io = capture();
+            expect(await runVerifyDbCommand(login.env, io)).toBe(EXIT_IDENTITY);
+            const out = io.lines.join("\n");
+            expect(out).toContain(
+              "FAIL not_member_of_owner: can SET ROLE to relaycast_owner",
+            );
+            expect(out).toMatch(/FAIL no_role_memberships: .*relaycast_owner/);
+            expect(out).not.toContain(login.password);
+            expectNoCredentials(out);
+
+            // Control: revoke the membership; only the escape is removed.
+            await admin.query(`REVOKE relaycast_owner FROM "${login.role}"`);
+            const refused = await trySetRole(login, "relaycast_owner");
+            expect(refused.code).toBe("42501");
+            const after = await verifyIdentity(
+              refused.session,
+              runtimeOpts(login.role),
+            );
+            expect(check(after, "not_member_of_owner")).toMatchObject({
+              ok: true,
+              detail: "not a member of relaycast_owner",
+            });
+            expect(check(after, "no_role_memberships")).toMatchObject({
+              ok: true,
+              detail: "member of no other role",
+            });
+            // Whatever this minimal role still lacks failed before too.
+            for (const name of failed(after)) expect(failed(result)).toContain(name);
+            const handleAfter = await openPostgresEngineDb(
+              loadPostgresConfig(login.env, "runtime"),
+            ).then(
+              (h) => h.close().then(() => undefined),
+              (e: unknown) => e as Error,
+            );
+            expect(handleAfter?.message ?? "").not.toMatch(
+              /not_member_of_owner|no_role_memberships/,
+            );
+            expect(handleAfter?.message ?? "").not.toContain(login.password);
+          } finally {
+            await login.drop();
+          }
+        });
+
+        it("SET ROLE relaycast_creator: no_role_memberships names it; revoked, it passes", async () => {
+          const login = await createTempLogin(admin);
+          try {
+            await admin.query(
+              `GRANT relaycast_creator TO "${login.role}" WITH INHERIT FALSE, SET TRUE`,
+            );
+            const escaped = await trySetRole(login, "relaycast_creator");
+            expect(escaped.code).toBeUndefined();
+            expect(escaped.currentUser).toBe("relaycast_creator");
+
+            const result = await verifyIdentity(
+              escaped.session,
+              runtimeOpts(login.role),
+            );
+            expect(result.ok).toBe(false);
+            expect(check(result, "no_role_memberships")).toMatchObject({
+              ok: false,
+              detail:
+                "can reach role(s) by membership or SET ROLE: relaycast_creator",
+            });
+            // Judged by what the reachable role can do, too.
+            expect(check(result, "no_schema_create")).toMatchObject({
+              ok: false,
+              detail: `CREATE on ${SCHEMA} via role relaycast_creator`,
+            });
+
+            // Control: revoked, the escape and both failures are gone.
+            await admin.query(`REVOKE relaycast_creator FROM "${login.role}"`);
+            const refused = await trySetRole(login, "relaycast_creator");
+            expect(refused.code).toBe("42501");
+            const after = await verifyIdentity(
+              refused.session,
+              runtimeOpts(login.role),
+            );
+            expect(check(after, "no_role_memberships")).toMatchObject({
+              ok: true,
+              detail: "member of no other role",
+            });
+            expect(check(after, "no_schema_create")?.ok).toBe(true);
+            for (const name of failed(after)) expect(failed(result)).toContain(name);
+          } finally {
+            await login.drop();
+          }
+        });
       });
     });
 

@@ -363,6 +363,19 @@ disposable database. See the header of
 `src/adapters/postgres/__tests__/postgres.integration.test.ts` for the
 refusal roles the fixture needs.
 
+Two of those tests also create a temporary LOGIN role (`relaycast_setrole_<hex>`,
+as `relaycast_admin`), log in as it over TLS, and grant it `SET ROLE` to
+`relaycast_owner` or `relaycast_creator` without inheritance. They check that
+the `SET ROLE` really works, that `not_member_of_owner` / `no_role_memberships`,
+`openPostgresEngineDb` and `verify-db` (exit 65) refuse it, and, after `REVOKE`,
+that `SET ROLE` fails with `42501` and those checks pass. The role is dropped
+afterwards and the suite fails if any `relaycast_setrole_` role remains.
+
+`src/bin/__tests__/serveStartup.test.ts` needs no database. It spawns the server
+with `RELAYCAST_DATABASE_URL` (or `_URL_FILE`) set and checks that it exits 64
+without creating the SQLite file or accepting on its port. The same command
+without those variables serves `/health` (the control).
+
 ### Conformance suite in PostgreSQL mode
 
 ```sh
