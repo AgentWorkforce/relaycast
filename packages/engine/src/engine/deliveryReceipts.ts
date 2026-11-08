@@ -1,5 +1,5 @@
 import { and, eq, inArray } from 'drizzle-orm';
-import { agents, deliveries, messages } from '../db/schema.js';
+import { agents, deliveries, messages } from '../db/tables.js';
 import { queryInChunks } from '../lib/queryChunks.js';
 import { toIso } from '../lib/serialize.js';
 import { publishEventsToAgents, type EventDispatchDeps } from './eventDispatch.js';

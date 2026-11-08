@@ -4,7 +4,7 @@ import assert from 'node:assert/strict';
 import { readFileSync, readdirSync, writeFileSync } from 'node:fs';
 import { randomUUID, createHash } from 'node:crypto';
 import { createNodeRuntime } from '../dist/adapters/node/index.js';
-import { createEngine, schema } from '../dist/index.js';
+import { brandSqliteEngineDb, createEngine, schema } from '../dist/index.js';
 import { drizzle } from 'drizzle-orm/d1';
 import { Miniflare } from 'miniflare';
 import Database from 'better-sqlite3';
@@ -98,7 +98,7 @@ try {
  }finally{upgradeSqlite.close();}
  for(const adapter of ['node-memory','node-file','workerd-d1']){
   const runtime=runtimes[adapter==='node-file'?1:0];
-  const db=adapter==='workerd-d1'?drizzle(measuredD1,{schema}):runtime.deps.db;
+  const db=adapter==='workerd-d1'?brandSqliteEngineDb(drizzle(measuredD1,{schema})):runtime.deps.db;
   const run=async(sql,...args)=>adapter==='workerd-d1'?d1.prepare(sql).bind(...args).run():runtime.handle.sqlite.prepare(sql).run(...args);
   const rows=async(sql,...args)=>adapter==='workerd-d1'?(await d1.prepare(sql).bind(...args).all()).results:runtime.handle.sqlite.prepare(sql).all(...args);
   const scalar=async(sql,...args)=>Object.values((await rows(sql,...args))[0])[0];

@@ -1,9 +1,10 @@
 import { sql, type SQL } from 'drizzle-orm';
 import { z } from 'zod';
 import type { EngineDb } from '../ports/database.js';
-import type { WorkspaceRetentionSettings } from '../db/schema.js';
+import type { WorkspaceRetentionSettings } from '../db/tables.js';
 import type { PruneOptions, PruneResult, RetentionDefaults } from './retention.js';
 import { snowflakeIdLowerBound } from './snowflake.js';
+import * as sqlx from '../db/sqlx.js';
 
 const DAY_MS = 86_400_000;
 const position = z.array(z.union([z.string(), z.number()]));
@@ -103,16 +104,17 @@ export async function pruneBounded(db: EngineDb, opts: PruneOptions): Promise<Pr
   // cutoff; exact per-workspace policy is still checked on each candidate.
   // This avoids walking millions of recent rows that no policy can expire.
   const ttlTables = tables.filter(table => table.setting);
-  const [minimums] = await db.all<Record<string, number | null>>(sql`SELECT
-    ${sql.join(ttlTables.map(table => sql.raw(
-      `MIN(CASE WHEN json_extract(retention, '$.${table.setting}') > 0 THEN json_extract(retention, '$.${table.setting}') END) AS "${table.result}"`,
-    )), sql`, `)} FROM workspaces`);
+  const [minimums] = await sqlx.all<Record<string, number | null>>(db, sql`SELECT
+    ${sql.join(ttlTables.map(table => {
+      const ttl = sqlx.jsonGetNum(db, sql.raw('retention'), `$.${table.setting}`);
+      return sql`MIN(CASE WHEN ${ttl} > 0 THEN ${ttl} END) AS ${sql.raw(`"${table.result}"`)}`;
+    }), sql`, `)} FROM workspaces`);
   if (!Number.isFinite(nowMs) && [
     ...Object.values(defaults), ...Object.values(minimums ?? {}),
   ].some(ttl => typeof ttl === 'number' && Number.isFinite(ttl) && ttl > 0)) {
     throw new Error('Invalid retention clock: expected a finite Date when a positive TTL is active');
   }
-  const saved = await db.all<{ cursor: string }>(sql`SELECT cursor FROM maintenance_cursors WHERE id = 'retention-v1'`);
+  const saved = await sqlx.all<{ cursor: string }>(db, sql`SELECT cursor FROM maintenance_cursors WHERE id = 'retention-v1'`);
   const parsed = saved[0] ? stateSchema.safeParse(decodeCursor(saved[0].cursor)) : undefined;
   const state: State = parsed?.success ? parsed.data : { next: 0, positions: {}, highs: {} };
   const result: PruneResult = { messages: 0, deliveries: 0, messageLogs: 0, readReceipts: 0, workspaceEvents: 0 };
@@ -131,7 +133,7 @@ export async function pruneBounded(db: EngineDb, opts: PruneOptions): Promise<Pr
       delete state.positions[table.name];
       delete state.highs[table.name];
       finished.add(index);
-      await db.run(sql`INSERT INTO maintenance_cursors (id, cursor) VALUES ('retention-v1', ${JSON.stringify(state)})
+      await sqlx.run(db, sql`INSERT INTO maintenance_cursors (id, cursor) VALUES ('retention-v1', ${JSON.stringify(state)})
         ON CONFLICT(id) DO UPDATE SET cursor = excluded.cursor`);
       continue;
     }
@@ -141,8 +143,8 @@ export async function pruneBounded(db: EngineDb, opts: PruneOptions): Promise<Pr
     // A traversal has a finite end even while new rows keep arriving. Without
     // this fence the cursor might never wrap to retained rows that later age out.
     if (!state.highs[table.name]) {
-      const [last] = await db.all<Candidate>(sql`SELECT ${columns}
-        FROM ${sql.raw(table.name)} INDEXED BY ${sql.raw(table.index)}
+      const [last] = await sqlx.all<Candidate>(db, sql`SELECT ${columns}
+        FROM ${sql.raw(table.name)} ${sqlx.indexedBy(db, table.index)}
         ${table.predicate ? sql`WHERE ${sql.raw(table.predicate)}` : sql``}
         ORDER BY ${sql.raw(table.keys.map(k => k + ' DESC').join(', '))} LIMIT 1`);
       if (last) state.highs[table.name] = key(last, table);
@@ -167,10 +169,10 @@ export async function pruneBounded(db: EngineDb, opts: PruneOptions): Promise<Pr
     }
     // MATERIALIZED prevents the planner pushing eligibility/TTL checks ahead
     // of LIMIT. The keyset seek and covering index bound candidate traversal.
-    const page = await db.all<Candidate>(sql`
+    const page = await sqlx.all<Candidate>(db, sql`
       WITH page AS MATERIALIZED (
         SELECT ${columns}
-        FROM ${sql.raw(table.name)} INDEXED BY ${sql.raw(table.index)}
+        FROM ${sql.raw(table.name)} ${sqlx.indexedBy(db, table.index)}
         ${predicates.length ? sql`WHERE ${sql.join(predicates, sql` AND `)}` : sql``}
         ORDER BY ${sql.raw(table.keys.join(', '))} LIMIT ${limit}
       )
@@ -191,7 +193,7 @@ export async function pruneBounded(db: EngineDb, opts: PruneOptions): Promise<Pr
         : table.result === 'workspaceEvents'
           ? sql`AND EXISTS (SELECT 1 FROM workspace_events hw WHERE hw.workspace_id = workspace_events.workspace_id AND hw.seq > workspace_events.seq LIMIT 1)`
         : table.predicate ? sql`AND ${sql.raw(table.predicate)}` : sql``;
-      const deleted = await db.all(sql`DELETE FROM ${sql.raw(table.name)}
+      const deleted = await sqlx.all(db, sql`DELETE FROM ${sql.raw(table.name)}
         WHERE (${sql.join(chunk.map(row => identity(row, table)), sql` OR `)}) ${guard}
         RETURNING 1`);
       result[table.result] += deleted.length;
@@ -203,7 +205,7 @@ export async function pruneBounded(db: EngineDb, opts: PruneOptions): Promise<Pr
     } else {
       state.positions[table.name] = key(page[page.length - 1]!, table);
     }
-    await db.run(sql`INSERT INTO maintenance_cursors (id, cursor) VALUES ('retention-v1', ${JSON.stringify(state)})
+    await sqlx.run(db, sql`INSERT INTO maintenance_cursors (id, cursor) VALUES ('retention-v1', ${JSON.stringify(state)})
       ON CONFLICT(id) DO UPDATE SET cursor = excluded.cursor`);
     if (finished.size === tables.length) break;
   }

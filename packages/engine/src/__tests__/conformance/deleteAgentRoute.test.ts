@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { and, eq } from 'drizzle-orm';
 import { createWorkspace, makeNodeStack, registerAgent, type TestStack } from './harness.js';
-import { agents, channelMembers, deliveries, messages } from '../../db/schema.js';
+import { agents, channelMembers, deliveries, messages } from '../../db/tables.js';
 
 /**
  * `DELETE /v1/agents/:name` -> `agentEngine.deleteAgent` was the last release

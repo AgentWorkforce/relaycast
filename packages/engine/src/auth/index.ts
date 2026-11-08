@@ -1,5 +1,5 @@
 import { and, eq, gt, or } from 'drizzle-orm';
-import { workspaces, agents, nodes, observerTokens } from '../db/schema.js';
+import { workspaces, agents, nodes, observerTokens } from '../db/tables.js';
 import { sha256Hex } from '../lib/crypto.js';
 import {
   activeObserverTokenCondition,

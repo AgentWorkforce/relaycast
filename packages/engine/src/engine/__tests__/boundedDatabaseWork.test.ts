@@ -1,7 +1,8 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { brandSqliteEngineDb } from '../../adapters/sqlite-handle.js';
 import { drizzle } from 'drizzle-orm/better-sqlite3';
 import { getSqliteDb, runMigrations, type SqliteDbHandle } from '../../adapters/node/database.js';
-import * as schema from '../../db/schema.js';
+import * as schema from '../../db/tables.js';
 import type { EngineDb } from '../../ports/database.js';
 import type { NodeConnectionRegistry } from '../../ports/realtime.js';
 import { deliverPendingToNode, fetchDueNodeDeliveryEvents } from '../delivery.js';
@@ -38,7 +39,7 @@ function fixture(history = 10_000, active = 125) {
   })();
   sqlite.exec('ANALYZE');
   const queries: { sql: string; params: unknown[] }[] = [];
-  const db = drizzle(sqlite, { schema, logger: { logQuery: (sql, params) => queries.push({ sql, params }) } }) as unknown as EngineDb;
+  const db = brandSqliteEngineDb(drizzle(sqlite, { schema, logger: { logQuery: (sql, params) => queries.push({ sql, params }) } }));
   const frames: { seq: number }[] = [];
   const send = vi.fn(async (_ws, _node, _provider, frame) => { frames.push(frame); return true; });
   const ready = vi.fn(() => true);
@@ -167,7 +168,7 @@ describe('bounded database work with retained history', () => {
     const opts = { limit: 25 };
     expect(await fetchDueNodeDeliveryEvents(f.db, opts)).toHaveLength(0);
     // A new adapter handle reads durable progress, not process-local state.
-    const nextDb = drizzle(f.sqlite, { schema }) as unknown as EngineDb;
+    const nextDb = brandSqliteEngineDb(drizzle(f.sqlite, { schema }));
     expect(await fetchDueNodeDeliveryEvents(nextDb, opts)).toHaveLength(0);
     const due = await fetchDueNodeDeliveryEvents(f.db, opts);
     expect(due.map(event => event.delivery.seq)).toEqual([10051, 10052, 10053, 10054, 10055]);
@@ -232,7 +233,7 @@ describe('bounded database work with retained history', () => {
     const cursor = () => JSON.parse((f.sqlite.prepare("SELECT cursor FROM maintenance_cursors WHERE id = 'retention-v1'").get() as { cursor: string }).cursor);
     expect(cursor().positions.deliveries[1]).toBe('d0000000010');
     // A new handle simulates the next isolate; progress is not process memory.
-    const nextDb = drizzle(f.sqlite, { schema }) as unknown as EngineDb;
+    const nextDb = brandSqliteEngineDb(drizzle(f.sqlite, { schema }));
     await pruneExpired(nextDb, opts);
     expect(cursor().positions.deliveries[1]).toBe('d0000000020');
     const pages = f.queries.filter(q => q.sql.includes('WITH page AS MATERIALIZED'));
@@ -318,7 +319,7 @@ describe('per-node agent lookups in a large workspace without ANALYZE', () => {
       for (let n = 0; n < 2_000; n++) agent.run(`other-${n}`, `other-${n}`, `other-key-${n}`);
     })();
     const queries: { sql: string; params: unknown[] }[] = [];
-    const db = drizzle(sqlite, { schema, logger: { logQuery: (sql, params) => queries.push({ sql, params }) } }) as unknown as EngineDb;
+    const db = brandSqliteEngineDb(drizzle(sqlite, { schema, logger: { logQuery: (sql, params) => queries.push({ sql, params }) } }));
     const registry = {
       sendToProvider: vi.fn(async () => true),
       isProviderAgentDeliveryReady: vi.fn(() => true),

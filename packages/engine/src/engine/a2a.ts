@@ -24,7 +24,7 @@ import {
 import { z } from 'zod';
 import type { FileAttachment } from '@relaycast/types';
 import type { getDb } from '../db/index.js';
-import { a2aAgents, agents } from '../db/schema.js';
+import { a2aAgents, agents } from '../db/tables.js';
 import { registerAgent, getAgentByName, updateAgent, updateAgentById } from './agent.js';
 import type { RegistrationAdmission } from './registrationAdmission.js';
 import { rotateAgentToken } from './tokenRotate.js';

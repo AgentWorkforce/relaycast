@@ -20,7 +20,9 @@ function providerReturning(result: AuthResult): AuthProvider {
   };
 }
 
-const args = { token: 'rk_live_x', require: 'workspace' as const, db: {} as EngineDb };
+// The stub providers never touch the handle.
+const unusedDb: EngineDb = Object.create(null);
+const args = { token: 'rk_live_x', require: 'workspace' as const, db: unusedDb };
 
 describe('isWorkspaceExpired', () => {
   it('is false without a deadline', () => {

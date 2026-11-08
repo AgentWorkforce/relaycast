@@ -1,7 +1,8 @@
 import { and, eq, notInArray, sql, type SQL } from 'drizzle-orm';
+import * as sqlx from '../db/sqlx.js';
 import type { FleetCapability, FleetCapabilityKind } from '@relaycast/types';
 import type { getDb } from '../db/index.js';
-import { actions, nodeProviders, nodes } from '../db/schema.js';
+import { actions, nodeProviders, nodes } from '../db/tables.js';
 import { generateId } from './snowflake.js';
 import { codedError } from '../lib/httpError.js';
 import { NODE_LIVENESS_TTL_MS } from './placement.js';
@@ -213,10 +214,10 @@ export function claimOrphanedGlobalAliases(db: Db, workspaceId: string) {
   return db
     .update(actions)
     .set({ isGlobal: true })
-    .where(sql`${actions.id} IN (${orphanedAliasClaimants(workspaceId)})`);
+    .where(sql`${actions.id} IN (${orphanedAliasClaimants(db, workspaceId)})`);
 }
 
-function orphanedAliasClaimants(workspaceId: string): SQL {
+function orphanedAliasClaimants(db: object, workspaceId: string): SQL {
   return sql`
     SELECT (
       SELECT c.id FROM actions c
@@ -227,12 +228,12 @@ function orphanedAliasClaimants(workspaceId: string): SQL {
     FROM (
       SELECT DISTINCT workspace_id, name FROM actions
       WHERE workspace_id = ${workspaceId}
-        AND handler_node_id IS NOT NULL AND handler_provider = ${DEFAULT_PROVIDER_NAME} AND is_global = 0
+        AND handler_node_id IS NOT NULL AND handler_provider = ${DEFAULT_PROVIDER_NAME} AND is_global = ${sqlx.bool(db, false)}
     ) n
     WHERE NOT EXISTS (
       SELECT 1 FROM actions b
       WHERE b.workspace_id = n.workspace_id AND b.name = n.name
-        AND (b.handler_node_id IS NULL OR b.is_global = 1)
+        AND (b.handler_node_id IS NULL OR b.is_global = ${sqlx.bool(db, true)})
     )`;
 }
 
@@ -404,26 +405,26 @@ export async function refreshNodeAggregate(
   // sentinel must never be summed into a finite cap.
   const anyUnbounded = sql`EXISTS(SELECT 1 FROM ${nodeProviders} WHERE ${onNode} AND ${nodeProviders.maxAgents} = 0)`;
   // Load is only a measurement when EVERY provider measured it.
-  const allReported = sql`(SELECT count(*) FROM ${nodeProviders} WHERE ${onNode}) > 0 AND NOT EXISTS(SELECT 1 FROM ${nodeProviders} WHERE ${onNode} AND ${nodeProviders.loadReported} = 0)`;
+  const allReported = sql`(SELECT count(*) FROM ${nodeProviders} WHERE ${onNode}) > 0 AND NOT EXISTS(SELECT 1 FROM ${nodeProviders} WHERE ${onNode} AND ${nodeProviders.loadReported} = ${sqlx.bool(db, false)})`;
   const [updated] = await db
     .update(nodes)
     .set({
       maxAgents: sql`CASE WHEN ${anyUnbounded} THEN 0 ELSE COALESCE((SELECT sum(${nodeProviders.maxAgents}) FROM ${nodeProviders} WHERE ${onNode}), 0) END`,
       activeAgents: sql`COALESCE((SELECT sum(${nodeProviders.activeAgents}) FROM ${nodeProviders} WHERE ${onNode}), 0)`,
-      loadReported: sql`CASE WHEN ${allReported} THEN 1 ELSE 0 END`,
+      loadReported: sql`CASE WHEN ${allReported} THEN ${sqlx.bool(db, true)} ELSE ${sqlx.bool(db, false)} END`,
       load: sql`CASE WHEN ${allReported} THEN COALESCE((SELECT max(${nodeProviders.load}) FROM ${nodeProviders} WHERE ${onNode}), 0) ELSE 0 END`,
-      handlersLive: sql`EXISTS(SELECT 1 FROM ${nodeProviders} WHERE ${online} AND ${nodeProviders.handlersLive} = 1)`,
+      handlersLive: sql`EXISTS(SELECT 1 FROM ${nodeProviders} WHERE ${online} AND ${nodeProviders.handlersLive} = ${sqlx.bool(db, true)})`,
       status: sql`CASE WHEN EXISTS(SELECT 1 FROM ${nodeProviders} WHERE ${online}) THEN 'online' ELSE 'offline' END`,
       // The union manifest recomputes in-database so a manifest written out of
       // band (e.g. REST enrollment on a provider-backed node) cannot drift from
       // provider truth indefinitely. Provider-less nodes keep their manifest —
       // there are no rows to derive one from.
       capabilities: sql`CASE WHEN EXISTS(SELECT 1 FROM ${nodeProviders} WHERE ${onNode}) THEN COALESCE((
-        SELECT json_group_array(json(value)) FROM (
+        SELECT ${sqlx.jsonAgg(db, sqlx.json(db, sql.raw('value')))} FROM (
           SELECT je.value AS value
-          FROM ${nodeProviders} np, json_each(COALESCE(np.capabilities, '[]')) je
+          FROM ${nodeProviders} np, ${sqlx.jsonEach(db, sql.raw("COALESCE(np.capabilities, '[]')"), { alias: ' je', elements: 'json' })}
           WHERE np.workspace_id = ${workspaceId} AND np.node_id = ${nodeId}
-          GROUP BY json_extract(je.value, '$.name')
+          GROUP BY ${sqlx.jsonGet(db, sql.raw('je.value'), '$.name')}
         )
       ), '[]') ELSE ${nodes.capabilities} END`,
       // Node liveness mirrors ONLINE providers only: an offline provider's

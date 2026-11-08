@@ -3,7 +3,7 @@ import { eq } from 'drizzle-orm';
 import { makeNodeStack, createWorkspace, type TestStack } from './harness.js';
 import { createTrigger } from '../../engine/trigger.js';
 import { RAW_WEBHOOK_EVENT_TEXT_LIMIT } from '../../engine/inboundWebhook.js';
-import { messageSessions, messages } from '../../db/schema.js';
+import { messageSessions, messages } from '../../db/tables.js';
 
 // A third party (e.g. Roma) may post its own event envelope as-is. The body is
 // rendered into the message text only: its fields must never be read as

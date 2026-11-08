@@ -2,7 +2,7 @@ import { and, eq, inArray } from 'drizzle-orm';
 import type { PresenceTracker } from '../../ports/presence.js';
 import type { RealtimeBus, EngineEvent } from '../../ports/realtime.js';
 import type { EngineDb } from '../../ports/database.js';
-import { agents, workspaces } from '../../db/schema.js';
+import { agents, workspaces } from '../../db/tables.js';
 import { appendWorkspaceEvent } from '../../engine/workspaceEvents.js';
 
 const DEFAULT_TTL_MS = 60_000;

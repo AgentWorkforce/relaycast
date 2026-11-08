@@ -9,7 +9,7 @@ import { createNodeRuntime } from '../index.js';
 import { claimDueEvents, enqueueEvent } from '../../../engine/eventQueue.js';
 import { deliverEvent, WEBHOOK_RETRY_DELAYS_MS } from '../../../engine/eventDelivery.js';
 import { BackgroundTasks } from '../../../__tests__/backgroundTasks.js';
-import { pendingEvents, webhookDeliveries, workspaces, eventSubscriptions } from '../../../db/schema.js';
+import { pendingEvents, webhookDeliveries, workspaces, eventSubscriptions } from '../../../db/tables.js';
 import { verifyStandardWebhook } from '../../../lib/standardWebhook.js';
 import { createNodeOutboundWebhookFetch } from '../ssrf-fetch.js';
 

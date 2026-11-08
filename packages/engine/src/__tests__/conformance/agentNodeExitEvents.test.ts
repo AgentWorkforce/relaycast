@@ -6,7 +6,7 @@ import {
   FakeSocket,
   type TestStack,
 } from './harness.js';
-import { actionInvocations, nodes, workspaceEvents } from '../../db/schema.js';
+import { actionInvocations, nodes, workspaceEvents } from '../../db/tables.js';
 import { sweepOfflineNodes } from '../../engine/node.js';
 import { NODE_LIVENESS_TTL_MS } from '../../engine/placement.js';
 

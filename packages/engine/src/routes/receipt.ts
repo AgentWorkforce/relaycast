@@ -4,7 +4,7 @@ import { requireAuth, requireAgentToken } from '../middleware/auth.js';
 import { rateLimit } from '../middleware/rateLimit.js';
 import * as receiptEngine from '../engine/receipt.js';
 import { and, eq } from 'drizzle-orm';
-import { dmConversations, messages } from '../db/schema.js';
+import { dmConversations, messages } from '../db/tables.js';
 import { fanoutToChannel } from './fanout.js';
 import { sendNodeDeliveriesForChannel } from '../engine/nodeDeliver.js';
 import { runInBackground } from './background.js';

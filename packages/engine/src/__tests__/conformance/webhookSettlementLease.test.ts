@@ -1,5 +1,5 @@
 import { expect, it, vi } from 'vitest';
-import { eventSubscriptions, pendingEvents, webhookDeliveries } from '../../db/schema.js';
+import { eventSubscriptions, pendingEvents, webhookDeliveries } from '../../db/tables.js';
 import { deliverEvent } from '../../engine/eventDelivery.js';
 import { createWorkspace, makeNodeStack } from './harness.js';
 

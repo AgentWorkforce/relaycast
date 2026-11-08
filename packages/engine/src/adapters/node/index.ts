@@ -1,6 +1,6 @@
 import { safeTelemetrySink } from '../../ports/telemetry.js';
 import { randomBytes } from 'node:crypto';
-import type { EngineDeps, EngineConfig } from '../../ports/index.js';
+import type { EngineDeps, EngineConfig, EngineDb } from '../../ports/index.js';
 import type { AuthProvider } from '../../ports/auth.js';
 import type { AdmissionHooks } from '../../ports/admission.js';
 import type { TelemetrySink } from '../../ports/telemetry.js';
@@ -100,8 +100,34 @@ export function createNodeRuntime(options: NodeRuntimeOptions): NodeRuntime {
       throw err;
     }
   }
-  const db = handle.db;
+  const runtime = createNodeRuntimeWithDb(handle.db, options, () => {
+    try {
+      handle.sqlite.close();
+    } catch {
+      // already closed
+    }
+  });
+  return { ...runtime, handle };
+}
 
+/** Options for {@link createNodeRuntimeWithDb}: everything but opening the database. */
+export type NodeRuntimeWithDbOptions = Omit<NodeRuntimeOptions, 'dbPath' | 'migrate'>;
+
+/** {@link NodeRuntime} without the SQLite handle, for a runtime over an injected database. */
+export type NodeRuntimeWithDb = Omit<NodeRuntime, 'handle'>;
+
+/**
+ * Assemble the in-process runtime over an already opened, migrated and branded
+ * engine database. {@link createNodeRuntime} uses this for SQLite; the
+ * PostgreSQL conformance mode uses it with the verified PostgreSQL handle (the
+ * server does not serve PostgreSQL yet). `closeDb` runs last in `close()` and
+ * owns releasing the database; it must not throw.
+ */
+export function createNodeRuntimeWithDb(
+  db: EngineDb,
+  options: NodeRuntimeWithDbOptions,
+  closeDb: () => void,
+): NodeRuntimeWithDb {
   const telemetry = safeTelemetrySink(options.telemetry ?? new NoopTelemetrySink());
   const testEnvironment = options.config?.environment === 'test';
   const testFetch: typeof globalThis.fetch = (input, init) => globalThis.fetch(input, init);
@@ -218,7 +244,6 @@ export function createNodeRuntime(options: NodeRuntimeOptions): NodeRuntime {
     presence,
     webhookQueue,
     fileHandler: createFileRouteHandler(fileStorage),
-    handle,
     close() {
       clearInterval(sweepTimer);
       // Parked long-polls answer now instead of holding their connections open.
@@ -226,11 +251,7 @@ export function createNodeRuntime(options: NodeRuntimeOptions): NodeRuntime {
       presence.stop();
       webhookQueue.stop();
       kv.dispose();
-      try {
-        handle.sqlite.close();
-      } catch {
-        // already closed
-      }
+      closeDb();
     },
   };
 }
