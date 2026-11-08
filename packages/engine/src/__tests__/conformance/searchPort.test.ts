@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createEngine } from '../../engine.js';
-import type { MessageSearchQuery } from '../../ports/search.js';
+import type { MessageSearchQuery, MessageSearchResult } from '../../ports/search.js';
 import { createWorkspace, makeNodeStack, registerAgent, type TestStack } from './harness.js';
 
 /** Exercise actual authenticated HTTP -> adapter selection, not a mocked route. */
@@ -47,6 +47,40 @@ describe('message search adapter boundary', () => {
     expect(searchMessages).toHaveBeenCalledExactlyOnceWith({
       workspaceId: workspace.workspaceId, q: 'Needle', channel: 'general', from: 'alice', limit: 3, before: '10', after: '2',
     });
+  });
+
+  it('filters mixed adapter results for restricted observers and removes internal fields', async () => {
+    const workspace = await createWorkspace(stack.app, 'search-port-observer');
+    const alice = await registerAgent(stack.app, workspace.workspaceKey, 'alice');
+    const bob = await registerAgent(stack.app, workspace.workspaceKey, 'bob');
+    const makeResult = (id: string, channel: string, agentId: string): MessageSearchResult => ({
+      id, channel_id: `channel-${channel}`, channel_name: channel, channel_type: 0,
+      conversation_id: null, agent_id: agentId, agent_name: agentId === alice.agentId ? 'alice' : 'bob',
+      text: id, created_at: '2026-11-07T00:00:00.000Z', relevance_score: -1,
+    });
+    const searchMessages = vi.fn(async (_query: MessageSearchQuery) => [
+      makeResult('visible-result', 'general', alice.agentId),
+      makeResult('hidden-channel-result', 'team-only', alice.agentId),
+      makeResult('hidden-agent-result', 'general', bob.agentId),
+    ]);
+    const app = createEngine({ ...stack.runtime.deps, search: { searchMessages } });
+    const issued = await app.request('/v1/observer-tokens', {
+      method: 'POST', headers: { authorization: `Bearer ${workspace.workspaceKey}`, 'content-type': 'application/json' },
+      body: JSON.stringify({ name: 'restricted-search', scopes: ['search:read'],
+        filters: { channel_names: ['general'], agent_ids: [alice.agentId] } }),
+    });
+    expect(issued.status).toBe(201);
+    const { data: { token } } = await issued.json() as { data: { token: string } };
+    const response = await app.request('/v1/search?q=needle', { headers: { authorization: `Bearer ${token}` } });
+    expect(response.status).toBe(200);
+    const body = await response.json() as { data: Array<Record<string, unknown>> };
+    expect(searchMessages).toHaveBeenCalledOnce();
+    expect(searchMessages.mock.calls[0][0].workspaceId).toBe(workspace.workspaceId);
+    expect(body.data.map(row => row.id)).toEqual(['visible-result']);
+    expect(body.data[0]).not.toHaveProperty('agent_id');
+    expect(body.data[0]).not.toHaveProperty('channel_type');
+    expect(JSON.stringify(body)).not.toContain('hidden-channel-result');
+    expect(JSON.stringify(body)).not.toContain('hidden-agent-result');
   });
 
   it('does not invoke a backend for unauthenticated or invalid requests', async () => {
