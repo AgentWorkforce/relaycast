@@ -211,7 +211,7 @@ export function projectException(err: unknown, context: unknown, identity: Expor
   const errorCode = codeOf(err && typeof err === 'object' ? (err as { code?: unknown }).code : undefined)
     ?? codeOf(ctx.error_code);
   const operation = operationOf(ctx);
-  const workspaceId = ctx.workspace_id ?? ctx.workspaceId;
+  const workspaceId = ctx.workspace_id;
   return {
     ...base(identity, undefined),
     kind: 'exception',
