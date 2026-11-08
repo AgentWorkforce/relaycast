@@ -42,6 +42,7 @@ export class SqliteSearchIndex implements SearchIndex {
     // bm25() returns negative values where more negative = more relevant,
     // so ORDER BY rank ASC gives best results first.
     const rows = await db.all<{
+      workspace_id: string;
       id: string;
       channel_id: string;
       channel_name: string;
@@ -53,7 +54,7 @@ export class SqliteSearchIndex implements SearchIndex {
       created_at: number;
       rank: number;
     }>(sql`
-      SELECT m.id, m.channel_id, c.name AS channel_name, c.channel_type, dc.id AS conversation_id, m.agent_id, a.name AS agent_name, m.body, m.created_at,
+      SELECT m.workspace_id, m.id, m.channel_id, c.name AS channel_name, c.channel_type, dc.id AS conversation_id, m.agent_id, a.name AS agent_name, m.body, m.created_at,
              bm25(messages_fts) AS rank
       FROM messages_fts fts
       JOIN messages m ON m.id = fts.id
@@ -71,6 +72,7 @@ export class SqliteSearchIndex implements SearchIndex {
     `);
 
     return rows.map((row) => ({
+      workspace_id: row.workspace_id,
       id: row.id,
       channel_id: row.channel_id,
       channel_name: row.channel_name || 'unknown',

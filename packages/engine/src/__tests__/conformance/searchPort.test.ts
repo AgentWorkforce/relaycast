@@ -67,6 +67,7 @@ describe('message search adapter boundary', () => {
     const alice = await registerAgent(stack.app, workspace.workspaceKey, 'alice');
     const bob = await registerAgent(stack.app, workspace.workspaceKey, 'bob');
     const makeResult = (id: string, channel: string, agentId: string): MessageSearchResult & { internal_notes: string } => ({
+      workspace_id: workspace.workspaceId,
       id, channel_id: `channel-${channel}`, channel_name: channel, channel_type: 0,
       conversation_id: null, agent_id: agentId, agent_name: agentId === alice.agentId ? 'alice' : 'bob',
       text: id, created_at: '2026-11-07T00:00:00.000Z', relevance_score: -1,
@@ -100,6 +101,27 @@ describe('message search adapter boundary', () => {
     expect(JSON.stringify(body)).not.toContain('must-not-leak');
     expect(JSON.stringify(body)).not.toContain('hidden-channel-result');
     expect(JSON.stringify(body)).not.toContain('hidden-agent-result');
+  });
+
+  it('refuses a foreign-workspace adapter result before returning ordinary authenticated search data', async () => {
+    const workspace = await createWorkspace(stack.app, 'search-port-scoped');
+    const foreign = await createWorkspace(stack.app, 'search-port-foreign');
+    const searchMessages = vi.fn(async (_query: MessageSearchQuery): Promise<MessageSearchResult[]> => [{
+      workspace_id: foreign.workspaceId, id: 'foreign-secret-result',
+      channel_id: 'foreign-channel', channel_name: 'general', channel_type: 0,
+      conversation_id: null, agent_id: 'foreign-agent', agent_name: 'foreign-agent',
+      text: 'foreign-secret-body', created_at: '2026-11-07T00:00:00.000Z', relevance_score: -1,
+    }]);
+    const app = createEngine({ ...stack.runtime.deps, search: { searchMessages } });
+    const response = await app.request('/v1/search?q=needle', {
+      headers: { authorization: `Bearer ${workspace.workspaceKey}` },
+    });
+    expect(response.status).toBe(500);
+    expect(searchMessages).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ workspaceId: workspace.workspaceId }));
+    const body = await response.text();
+    expect(body).not.toContain('foreign-secret-result');
+    expect(body).not.toContain('foreign-secret-body');
+    expect(body).not.toContain(foreign.workspaceId);
   });
 
   it('does not invoke a backend for unauthenticated or invalid requests', async () => {

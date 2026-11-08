@@ -10,5 +10,11 @@ export async function searchMessages(
   searchIndex?: SearchIndex,
 ) {
   const limit = Math.min(Math.max(opts.limit || 20, 1), 100);
-  return (searchIndex ?? new SqliteSearchIndex(db)).searchMessages({ ...opts, limit, workspaceId });
+  const results = await (searchIndex ?? new SqliteSearchIndex(db)).searchMessages({ ...opts, limit, workspaceId });
+  // Storage scoping is mandatory, but a buggy adapter must not expose rows from
+  // another workspace through ordinary tokens or observer-token filtering.
+  if (results.some((result) => result.workspace_id !== workspaceId)) {
+    throw new Error('Search adapter returned a result outside the authenticated workspace');
+  }
+  return results;
 }

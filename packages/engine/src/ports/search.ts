@@ -16,6 +16,8 @@ export interface MessageSearchQuery extends MessageSearchOptions {
 
 /** Internal result includes visibility metadata which the HTTP route filters before returning. */
 export interface MessageSearchResult {
+  /** Internal tenant identity, checked against the authenticated query before use. */
+  workspace_id: string;
   id: string;
   channel_id: string;
   channel_name: string;
