@@ -97,7 +97,11 @@ async function main() {
   let db: AgentRetentionDb | undefined = sqlite ? brandSqliteEngineDb(drizzle(sqlite)) as unknown as EngineDb : undefined;
   if (values['d1-database-id']) {
     const dialect = new SQLiteSyncDialect();
-    db = {
+    // Branded as SQLite (D1 speaks SQLite) so the engine's dialect-dispatched
+    // helpers accept it; `dialect` is the drizzle SQLiteDialect the brand
+    // helper checks for, and is also what compiles each query below.
+    db = brandSqliteEngineDb({
+      dialect,
       all: async <T,>(query: SQL | string): Promise<T[]> => {
         const compiled = typeof query === 'string' ? { sql: query, params: [] } : dialect.sqlToQuery(query);
         if (!/^\s*(SELECT|WITH)\b/i.test(compiled.sql)) throw new Error('D1 preview refused a non-read query');
@@ -112,7 +116,7 @@ async function main() {
         if (body.success !== true || body.result?.[0]?.success !== true) throw new Error('D1 preview query was not successful');
         return body.result[0].results;
       },
-    };
+    });
   }
   const totals = { pages: 0, scanned: 0, eligible: 0, deleted: 0, skipped_changed: 0,
     not_offline: 0, recent_or_unknown: 0, ownership_protected: 0, history_unverified: 0, history_referenced: 0 };
