@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import { eq } from 'drizzle-orm';
 import { getSqliteDb, runMigrations, type SqliteDbHandle } from '../../adapters/node/database.js';
-import { pendingEvents, workspaces } from '../../db/schema.js';
+import { pendingEvents, workspaces } from '../../db/tables.js';
 import { cleanupOldEvents, enqueueEvent, sweepPendingEvents } from '../eventQueue.js';
 
 let seq = 0;

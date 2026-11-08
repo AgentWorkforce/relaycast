@@ -1,7 +1,6 @@
 import { and, eq, exists, gt, lt, ne, notExists, or, sql, type SQL } from 'drizzle-orm';
-import { alias } from 'drizzle-orm/sqlite-core';
 import type { getDb } from '../db/index.js';
-import { channels, workspaces } from '../db/schema.js';
+import { alias, channels, workspaces } from '../db/tables.js';
 import { sha256Hex } from '../lib/crypto.js';
 import { issueCredential } from '../auth/credentials.js';
 import { codedError } from '../lib/httpError.js';

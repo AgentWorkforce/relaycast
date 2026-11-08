@@ -3,7 +3,7 @@ import { listAgents, getAgentByName, sweepStaleAgents } from '../../engine/agent
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { eq, sql } from 'drizzle-orm';
 import { makeNodeStack, createWorkspace, registerAgent, type TestStack } from './harness.js';
-import { nodes, agents, agentNodeBindings, channels, channelMembers } from '../../db/schema.js';
+import { nodes, agents, agentNodeBindings, channels, channelMembers } from '../../db/tables.js';
 import { configureNodeLiveness, filterAsync, nodeLive, nodeMayOwn, providerLive } from '../../engine/nodeLiveness.js';
 import { chooseNodeForAction, claimSpawnNode } from '../../engine/placement.js';
 import { getBrokerNodeByMachineId, listNodes, sweepOfflineNodes, bindAgentToNode } from '../../engine/node.js';

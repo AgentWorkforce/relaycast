@@ -3,7 +3,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { and, eq } from 'drizzle-orm';
 import { handleProviderDisconnect, markNodeOffline } from '../../node-control.js';
 import { makeNodeStack, createWorkspace, registerAgent, FakeSocket, type TestStack } from './harness.js';
-import { actionInvocations, agents, channelMembers, nodeProviders, nodes } from '../../db/schema.js';
+import { actionInvocations, agents, channelMembers, nodeProviders, nodes } from '../../db/tables.js';
 
 // The provider-disconnect lifecycle is exported from @relaycast/engine/node-control
 // so an out-of-process socket owner — the relaycast-cloud NodeDO — drives it on

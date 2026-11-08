@@ -4,7 +4,7 @@ import { and, eq } from 'drizzle-orm';
 import type { AppEnv } from '../env.js';
 import * as routingEngine from '../engine/routing.js';
 import * as directoryEngine from '../engine/directory.js';
-import { agents } from '../db/schema.js';
+import { agents } from '../db/tables.js';
 import { requireAuth, requireWorkspaceKey } from '../middleware/auth.js';
 import { rateLimit } from '../middleware/rateLimit.js';
 import { emitServerEvent } from '../lib/serverTelemetry.js';

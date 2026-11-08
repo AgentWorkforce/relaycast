@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { and, eq } from 'drizzle-orm';
 import { deliverEvent } from '../../engine/eventDelivery.js';
-import { actionInvocations, sessionEvents, webhooks } from '../../db/schema.js';
+import { actionInvocations, sessionEvents, webhooks } from '../../db/tables.js';
 import {
   makeNodeStack,
   createWorkspace,
@@ -1057,7 +1057,7 @@ describe('SDK v8 service contract', () => {
     // and the agent status write: inject a failure into the status mutation
     // only, so the caller sees an error while the event row is already
     // durable — exactly the interrupted window relaycast#425 is about.
-    const { agents } = await import('../../db/schema.js');
+    const { agents } = await import('../../db/tables.js');
 
     // Recursively proxy the builder chain (`.update(...).set(...).where(...)`)
     // so the failure surfaces only when the final statement is executed

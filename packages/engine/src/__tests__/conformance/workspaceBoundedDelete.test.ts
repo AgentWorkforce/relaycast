@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { eq } from 'drizzle-orm';
 import { configureEngineDiagnostics } from '../../lib/engineDiagnostics.js';
 import type { EngineProgressSample } from '../../ports/diagnostics.js';
-import { messages, workspaceCreateIdempotency, workspaceEvents, workspaces } from '../../db/schema.js';
+import { messages, workspaceCreateIdempotency, workspaceEvents, workspaces } from '../../db/tables.js';
 import { reapExpiredWorkspaces } from '../../engine/workspace.js';
 import { handleNodeControlMessage } from '../../node-control.js';
 import {
@@ -189,7 +189,7 @@ describe('bounded workspace deletion', () => {
       + ['channels', 'agents', 'files', 'nodes'].reduce((sum, table) => sum + count(table, ws.workspaceId), 0);
     let clock = 0;
     // Each statement "takes" 100ms; the 50% duty cycle idles as long again.
-    const db = stack.runtime.deps.db;
+    const db = stack.runtime.handle.db;
     const all = db.all.bind(db);
     (db as { all: typeof db.all }).all = (async (...args: Parameters<typeof db.all>) => {
       clock += 100;
@@ -220,7 +220,7 @@ describe('bounded workspace deletion', () => {
     const before = count('workspace_events', ws.workspaceId) + count('messages', ws.workspaceId);
     let clock = 0;
     // Every raw statement "takes" a full budget, so the size probe overruns it.
-    const db = stack.runtime.deps.db;
+    const db = stack.runtime.handle.db;
     const all = db.all.bind(db);
     (db as { all: typeof db.all }).all = (async (...args: Parameters<typeof db.all>) => {
       clock += 1_000;
@@ -310,7 +310,7 @@ describe('bounded workspace deletion', () => {
     // A budget far too small to drain the large one in a single call. Every raw
     // statement "takes" 10ms on a fake clock, so a slow runner cannot change it.
     let clock = 0;
-    const db = stack.runtime.deps.db;
+    const db = stack.runtime.handle.db;
     const all = db.all.bind(db);
     (db as { all: typeof db.all }).all = (async (...args: Parameters<typeof db.all>) => { clock += 10; return all(...args); }) as typeof db.all;
     let reaped: string[];
@@ -388,7 +388,7 @@ describe('bounded workspace deletion', () => {
     // Every statement "takes" 50ms: probing and deleting the small ones alone
     // would eat the whole budget.
     let clock = 0;
-    const db = stack.runtime.deps.db;
+    const db = stack.runtime.handle.db;
     const all = db.all.bind(db);
     (db as { all: typeof db.all }).all = (async (...args: Parameters<typeof db.all>) => { clock += 50; return all(...args); }) as typeof db.all;
     try {

@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { eq } from 'drizzle-orm';
-import { agentIdentityAudit, agentRecoveryCredentials, agents } from '../../db/schema.js';
+import { agentIdentityAudit, agentRecoveryCredentials, agents } from '../../db/tables.js';
 import { sha256Hex } from '../../lib/crypto.js';
 import { RELEASED_AGENT_STATUS } from '../../engine/agent.js';
 import {

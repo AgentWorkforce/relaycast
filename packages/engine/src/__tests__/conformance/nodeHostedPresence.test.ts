@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { and, eq } from 'drizzle-orm';
-import { agentNodeBindings, agents, nodeProviders, nodes } from '../../db/schema.js';
+import { agentNodeBindings, agents, nodeProviders, nodes } from '../../db/tables.js';
 import { handleProviderDisconnect, registerAgentViaNode } from '../../engine/node.js';
 import { getPresence, nodeHostedPresenceQuery } from '../../engine/presence.js';
 import { isNodeLive, NODE_LIVENESS_TTL_MS } from '../../engine/placement.js';

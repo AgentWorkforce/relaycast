@@ -7,7 +7,15 @@ import { DurableEventQueue } from '../../adapters/node/event-queue.js';
 import * as nodeContext from '../../engine/nodeContext.js';
 import type { Hono } from 'hono';
 import { createEngine } from '../../engine.js';
-import { createNodeRuntime, type NodeRuntime, type EngineSocket } from '../../adapters/node/index.js';
+import {
+  createNodeRuntime,
+  createNodeRuntimeWithDb,
+  type NodeRuntime,
+  type NodeRuntimeWithDbOptions,
+  type SqliteDbHandle,
+  type EngineSocket,
+} from '../../adapters/node/index.js';
+import { conformancePgDb } from './pgMode.js';
 import type { AppEnv } from '../../env.js';
 import type { AdmissionHooks, EngineConfig, EngineDb } from '../../ports/index.js';
 import type { TelemetrySink } from '../../ports/telemetry.js';
@@ -44,7 +52,27 @@ afterEach(async () => {
   await Promise.all([...stacks].map((stack) => stack.close()));
 });
 
-/** Build an in-memory engine on the Node adapter with a fast presence sweep disabled. */
+/**
+ * PostgreSQL conformance mode: the Node runtime over the shared, verified
+ * PostgreSQL handle (the setup file owns its pool, so closing the stack leaves
+ * it open; the setup file TRUNCATEs between tests). There is no SQLite handle
+ * in this mode: reading `runtime.handle` throws instead of handing out one.
+ */
+function pgNodeRuntime(db: EngineDb, options: NodeRuntimeWithDbOptions): NodeRuntime {
+  const runtime = createNodeRuntimeWithDb(db, options, () => {});
+  return {
+    ...runtime,
+    get handle(): SqliteDbHandle {
+      throw new Error('conformance pg mode: this test needs the SQLite handle (runtime.handle), which does not exist on PostgreSQL');
+    },
+  };
+}
+
+/**
+ * Build an engine on the Node adapter with a fast presence sweep disabled: an
+ * in-memory SQLite database, or in PostgreSQL conformance mode the shared
+ * PostgreSQL handle.
+ */
 export function makeNodeStack(options?: {
   ttlMs?: number;
   mailbox?: EngineConfig['mailbox'];
@@ -78,11 +106,9 @@ export function makeNodeStack(options?: {
   };
   let runtime: NodeRuntime;
   try {
-    runtime = createNodeRuntime({
-      dbPath: ':memory:',
+    const runtimeOptions: NodeRuntimeWithDbOptions = {
       fileDir,
       baseUrl: 'http://localhost:0',
-      migrate: true,
       config: {
         environment: options?.environment ?? 'test',
         mailbox: options?.mailbox,
@@ -105,7 +131,11 @@ export function makeNodeStack(options?: {
       // Disable the auto-sweep timer; tests drive presence.sweep() explicitly.
       eventQueue: { pollIntervalMs: 0 },
       presence: { ttlMs: options?.ttlMs ?? 60_000, sweepIntervalMs: 0 },
-    });
+    };
+    const pgDb = conformancePgDb();
+    runtime = pgDb
+      ? pgNodeRuntime(pgDb, runtimeOptions)
+      : createNodeRuntime({ ...runtimeOptions, dbPath: ':memory:', migrate: true });
   } catch (err) {
     rmSync(fileDir, { recursive: true, force: true });
     throw err;

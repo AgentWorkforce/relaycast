@@ -1,5 +1,5 @@
 import { and, eq, inArray, isNull } from 'drizzle-orm';
-import { agents, agentNodeBindings, channelMembers, dmConversations, dmParticipants, nodes } from '../db/schema.js';
+import { agents, agentNodeBindings, channelMembers, dmConversations, dmParticipants, nodes } from '../db/tables.js';
 import type { EngineDb } from '../ports/database.js';
 import { isProviderAgentDeliveryReady, type NodeConnectionRegistry } from '../ports/realtime.js';
 import { buildDeliverFrame, buildDeliverPayload } from './deliveryWire.js';

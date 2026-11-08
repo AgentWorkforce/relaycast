@@ -1,7 +1,8 @@
 import { afterEach, describe, expect, it } from 'vitest';
+import { brandSqliteEngineDb } from '../../adapters/sqlite-handle.js';
 import { drizzle } from 'drizzle-orm/better-sqlite3';
 import { getSqliteDb, runMigrations, type SqliteDbHandle } from '../../adapters/node/database.js';
-import * as schema from '../../db/schema.js';
+import * as schema from '../../db/tables.js';
 import type { EngineDb } from '../../ports/database.js';
 import { heartbeatNode } from '../node.js';
 import type { FleetNodeHeartbeatMessage } from '@relaycast/types';
@@ -36,7 +37,7 @@ function fixture() {
       VALUES ('act1','ws','echo','Node handler echo','node1','broker');
   `);
   const queries: { sql: string; params: unknown[] }[] = [];
-  const db = drizzle(sqlite, { schema, logger: { logQuery: (sql, params) => queries.push({ sql, params }) } }) as unknown as EngineDb;
+  const db = brandSqliteEngineDb(drizzle(sqlite, { schema, logger: { logQuery: (sql, params) => queries.push({ sql, params }) } }));
   const beat = (overrides: Partial<FleetNodeHeartbeatMessage> = {}) =>
     heartbeatNode(db, 'ws', 'node1', 'broker', {
       type: 'node.heartbeat',

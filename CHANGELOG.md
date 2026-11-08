@@ -20,6 +20,7 @@ Packages without a separate changelog are covered by the cross-package notes bel
 
 ### Added
 
+- `@relaycast/engine` adds a PostgreSQL connection layer and `relaycast-engine migrate` / `verify-db` for self-hosted setups; the server still serves from SQLite only. See `docs/self-host-postgres.md`.
 - Hosts can supply a message-search backend through the optional `search` engine dependency (`SearchIndex`); without it, existing SQLite search behavior is unchanged. Configured backend errors propagate without falling back to SQLite.
 
 ### Fixed

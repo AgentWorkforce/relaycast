@@ -1,6 +1,6 @@
 import { eq, and, sql } from 'drizzle-orm';
 import type { getDb } from '../db/index.js';
-import { agents, workspaces } from '../db/schema.js';
+import { agents, workspaces } from '../db/tables.js';
 import { sha256Hex } from '../lib/crypto.js';
 import { codedError } from '../lib/httpError.js';
 import { issueCredential } from '../auth/credentials.js';

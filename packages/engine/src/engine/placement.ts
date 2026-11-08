@@ -2,7 +2,7 @@ import { nodeReady, filterAsync, nodeLivenessAuthority } from './nodeLiveness.js
 import { and, eq, sql } from 'drizzle-orm';
 import type { FleetCapability } from '@relaycast/types';
 import type { getDb } from '../db/index.js';
-import { agents, nodes } from '../db/schema.js';
+import { agents, nodes } from '../db/tables.js';
 import { codedError } from '../lib/httpError.js';
 import { runAtomic } from '../ports/database.js';
 

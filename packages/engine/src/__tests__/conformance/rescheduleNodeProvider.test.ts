@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { and, eq } from 'drizzle-orm';
 import { makeNodeStack, createWorkspace, registerAgent, FakeSocket, type TestStack } from './harness.js';
 import { rescheduleInvocationsForLostNode, rescheduleNodeInvocation } from '../../engine/action.js';
-import { actionInvocations, nodes } from '../../db/schema.js';
+import { actionInvocations, nodes } from '../../db/tables.js';
 
 type Cap = { name: string; kind?: string; queue?: boolean };
 

@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { pendingEvents } from '../../db/schema.js';
+import { pendingEvents } from '../../db/tables.js';
 import { makeNodeStack, createWorkspace, registerAgent, type TestStack } from './harness.js';
 
 /**

@@ -7,42 +7,22 @@ import {
   dmConversations,
   agents,
   dmParticipants,
-} from '../db/schema.js';
+} from '../db/tables.js';
 import { queryInChunks } from '../lib/queryChunks.js';
 import { parseMessageMentions } from './mentions.js';
 import { reportEngineProgress, withEngineOperation } from '../lib/engineDiagnostics.js';
+import * as sqlx from '../db/sqlx.js';
+import * as sqliteFts from '../adapters/sqlite/fts.js';
 
 type Db = ReturnType<typeof getDb>;
 
 // The handle alphabet of `parseMessageMentions`.
 const MENTION_HANDLE = /^[\w-]+$/;
-// Tokens unicode61 actually indexes: `_` and `-` are separators, so a handle
-// made only of those characters produces no FTS tokens.
-const MENTION_FTS_TOKEN = /^[A-Za-z0-9]+$/;
 const MENTION_FTS_CURSOR = 'mention-fts-backfill';
-// A shorter final token (`"1"*`, `"dev"*`) makes FTS walk a huge term range.
-// Those handles keep the workspace scan, which still matches a trailing letter.
-const MIN_FTS_PREFIX = 4;
 export const MESSAGE_MENTION_BACKFILL_BATCH = 500;
 
-/**
- * Workspace-scoped FTS5 MATCH for a canonical handle, or null when FTS cannot
- * represent it. The prefix is limited to the `body` column: an unscoped
- * `"1"*` also matches workspace snowflakes and returns every row. The last
- * token is a prefix so `@alice你好` (one unicode61 token) still matches
- * handle `alice`. Callers keep the `instr` and `parseMessageMentions` checks.
- */
-function mentionFtsMatch(workspaceId: string, tokens: string[]): string | null {
-  if (tokens.length === 0) return null;
-  if (!MENTION_HANDLE.test(workspaceId)) return null;
-  if (tokens.some((token) => !MENTION_FTS_TOKEN.test(token))) return null;
-  const last = tokens[tokens.length - 1] ?? '';
-  if (last.length < MIN_FTS_PREFIX) return null;
-  return `workspace_id : "${workspaceId}" AND body : "${tokens.join(' ')}"*`;
-}
-
 export async function messageMentionIndexReady(db: Db): Promise<boolean> {
-  const [row] = await db.all<{ cursor: string }>(
+  const [row] = await sqlx.all<{ cursor: string }>(db, 
     sql`SELECT cursor FROM maintenance_cursors WHERE id = ${MENTION_FTS_CURSOR}`,
   );
   return row?.cursor === 'complete';
@@ -62,7 +42,7 @@ export async function backfillMessageMentionFts(
 
 async function backfillMessageMentionFtsUnlabeled(db: Db, limit: number): Promise<number> {
   const start = performance.now();
-  const [saved] = await db.all<{ cursor: string }>(
+  const [saved] = await sqlx.all<{ cursor: string }>(db, 
     sql`SELECT cursor FROM maintenance_cursors WHERE id = ${MENTION_FTS_CURSOR}`,
   );
   if (!saved || saved.cursor === 'complete') return 0;
@@ -71,21 +51,15 @@ async function backfillMessageMentionFtsUnlabeled(db: Db, limit: number): Promis
   const until = Number(untilText);
   if (!Number.isSafeInteger(after) || !Number.isSafeInteger(until)) return 0;
   const batchSize = Math.min(Math.max(Math.floor(limit), 1), MESSAGE_MENTION_BACKFILL_BATCH);
-  const [page] = await db.all<{ copied: number; next_rowid: number | null }>(sql`
-    SELECT count(*) AS copied, max(rowid) AS next_rowid FROM (
-      SELECT rowid FROM messages
-      WHERE rowid > ${after} AND rowid <= ${until}
-      ORDER BY rowid
-      LIMIT ${batchSize}
-    )
-  `);
+  const [page] = await sqlx.all<{ copied: number; next_rowid: number | null }>(db,
+    sqliteFts.mentionFtsBackfillPage(db, after, until, batchSize));
   const copied = Number(page?.copied ?? 0);
   const nextRowid = page?.next_rowid == null ? null : Number(page.next_rowid);
   const cursor = copied === 0 || nextRowid == null || nextRowid >= until
     ? 'complete'
     : `${nextRowid}/${until}`;
   if (copied === 0 || nextRowid == null) {
-    await db.run(sql`UPDATE maintenance_cursors SET cursor = ${cursor} WHERE id = ${MENTION_FTS_CURSOR}`);
+    await sqlx.run(db, sql`UPDATE maintenance_cursors SET cursor = ${cursor} WHERE id = ${MENTION_FTS_CURSOR}`);
     reportEngineProgress({ operation: 'backfill.mention_fts', phase: 'completed', rows: 0, remaining: 0 });
     return 0;
   }
@@ -95,16 +69,8 @@ async function backfillMessageMentionFtsUnlabeled(db: Db, limit: number): Promis
   // needed here: rows already indexed (an edit during the copy, or a replay
   // after the cursor update was lost) are skipped, so a second insert of the
   // same rowid cannot fail the docsize primary key and leave the cursor stuck.
-  await db.run(sql`
-    INSERT INTO messages_mention_fts(rowid, workspace_id, body)
-    SELECT rowid, workspace_id, body FROM messages
-    WHERE rowid > ${after} AND rowid <= ${nextRowid}
-      AND NOT EXISTS (
-        SELECT 1 FROM messages_mention_fts_docsize
-        WHERE id = messages.rowid
-      )
-  `);
-  await db.run(sql`UPDATE maintenance_cursors SET cursor = ${cursor} WHERE id = ${MENTION_FTS_CURSOR}`);
+  await sqlx.run(db, sqliteFts.mentionFtsBackfillInsert(db, after, nextRowid));
+  await sqlx.run(db, sql`UPDATE maintenance_cursors SET cursor = ${cursor} WHERE id = ${MENTION_FTS_CURSOR}`);
   reportEngineProgress({
     operation: 'backfill.mention_fts',
     phase: cursor === 'complete' ? 'completed' : 'batch',
@@ -130,7 +96,7 @@ export async function getInbox(db: Db, workspaceId: string, agentId: string) {
 }
 
 async function getInboxUnlabeled(db: Db, workspaceId: string, agentId: string) {
-  const unreadChannels = await db.all<{ channel_name: string; unread_count: number }>(sql`
+  const unreadChannels = await sqlx.all<{ channel_name: string; unread_count: number }>(db, sql`
     SELECT ch.name AS channel_name, count(*) AS unread_count
     FROM channel_members cm
     JOIN channels ch ON ch.id = cm.channel_id
@@ -181,7 +147,7 @@ async function getInboxUnlabeled(db: Db, workspaceId: string, agentId: string) {
     // row of this workspace. Until the backfill finishes, and for handles FTS
     // cannot represent, the workspace-scoped scan stays.
     const mentionMatch = await messageMentionIndexReady(db)
-      ? mentionFtsMatch(workspaceId, mentionTokens)
+      ? sqliteFts.mentionFtsCandidateFilter(db, workspaceId, mentionTokens)
       : null;
     let cursor: string | undefined;
     for (;;) {
@@ -200,7 +166,7 @@ async function getInboxUnlabeled(db: Db, workspaceId: string, agentId: string) {
         // to satisfy the ORDER BY and merely filters on the candidate set.
         // Handles with no FTS tokens keep the ordinary table so that walk
         // stays on idx_messages_workspace_length_id.
-        .from(mentionMatch ? sql`${messages} NOT INDEXED` : messages)
+        .from(mentionMatch ? sql`${messages} ${sqlx.notIndexed(db)}` : messages)
         .innerJoin(channels, eq(messages.channelId, channels.id))
         .innerJoin(agents, eq(messages.agentId, agents.id))
         .leftJoin(
@@ -221,13 +187,11 @@ async function getInboxUnlabeled(db: Db, workspaceId: string, agentId: string) {
             eq(messages.workspaceId, workspaceId),
             eq(channels.isArchived, false),
             ne(messages.agentId, agentId), // exclude self-mentions
-            ...(mentionMatch
-              ? [sql`messages.rowid IN (SELECT rowid FROM messages_mention_fts WHERE messages_mention_fts MATCH ${sql.raw(`'${mentionMatch}'`)})`]
-              : []),
+            ...(mentionMatch ? [mentionMatch] : []),
             // instr, not LIKE: D1 rejects LIKE patterns over 50 bytes and agent
             // names have no length cap. `parseMessageMentions` is case-sensitive
             // and needs the literal `@name`, so instr drops no canonical mention.
-            sql`instr(${messages.body}, ${'@' + agentName}) > 0`,
+            sqlx.contains(db, messages.body, '@' + agentName),
             or(
               and(eq(channels.channelType, 0), eq(channelMembers.agentId, agentId)),
               and(ne(channels.channelType, 0), eq(dmParticipants.agentId, agentId)),
@@ -269,11 +233,11 @@ async function getInboxUnlabeled(db: Db, workspaceId: string, agentId: string) {
   }
 
   // 3. Unread DMs (1:1 + group)
-  const unreadDmRows = await db.all<{
+  const unreadDmRows = await sqlx.all<{
     conversation_id: string;
     channel_id: string;
     unread_count: number;
-  }>(sql`
+  }>(db, sql`
     SELECT dc.id AS conversation_id, dc.channel_id, count(m.id) AS unread_count
     FROM dm_conversations dc
     JOIN dm_participants dp
@@ -355,15 +319,15 @@ async function getInboxUnlabeled(db: Db, workspaceId: string, agentId: string) {
   }
 
   // 4. Recent reactions on the agent's own messages (from other agents)
-  const reactionRows = await db.all<{
+  const reactionRows = await sqlx.all<{
     message_id: string;
     channel_name: string;
     emoji: string;
     agent_name: string;
     created_at: string;
-  }>(sql`
+  }>(db, sql`
     SELECT r.message_id, ch.name AS channel_name, r.emoji,
-           a.name AS agent_name, datetime(r.created_at, 'unixepoch') AS created_at
+           a.name AS agent_name, ${sqlx.isoFromEpoch(db, sql.raw('r.created_at'), 'datetime')} AS created_at
     FROM reactions r
     JOIN messages m ON m.id = r.message_id
     JOIN channels ch ON ch.id = m.channel_id

@@ -1,7 +1,7 @@
 import { prepareAuthorityFanout } from './deliveryWrites.js';
 import { eq, and } from 'drizzle-orm';
 import type { getDb } from '../db/index.js';
-import { webhooks, channels, messages, agents, workspaces } from '../db/schema.js';
+import { webhooks, channels, messages, agents, workspaces } from '../db/tables.js';
 import { isWorkspaceExpired } from '../auth/workspaceExpiry.js';
 import { sha256Hex } from '../lib/crypto.js';
 import { codedError } from '../lib/httpError.js';

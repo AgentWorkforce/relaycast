@@ -1,4 +1,4 @@
-import type { workspaces, agents, nodes, observerTokens } from './db/schema.js';
+import type { workspaces, agents, nodes, observerTokens } from './db/tables.js';
 import type { Logger } from './lib/logger.js';
 import type { AdmissionDenial } from './ports/admission.js';
 import type {

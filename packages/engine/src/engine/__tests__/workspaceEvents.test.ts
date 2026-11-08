@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { eq } from 'drizzle-orm';
 import { getSqliteDb, runMigrations, type SqliteDbHandle } from '../../adapters/node/database.js';
-import { workspaceEvents, workspaces } from '../../db/schema.js';
+import { workspaceEvents, workspaces } from '../../db/tables.js';
 import {
   appendAndPublishWorkspaceEvent,
   appendWorkspaceEventBatch,

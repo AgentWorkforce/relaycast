@@ -1,7 +1,8 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { brandSqliteEngineDb } from '../../adapters/sqlite-handle.js';
 import { drizzle } from 'drizzle-orm/better-sqlite3';
 import { getSqliteDb, runMigrations, type SqliteDbHandle } from '../../adapters/node/database.js';
-import * as schema from '../../db/schema.js';
+import * as schema from '../../db/tables.js';
 import type { EngineDb } from '../../ports/database.js';
 import type { NodeConnectionRegistry } from '../../ports/realtime.js';
 import { deliverPendingToNode } from '../delivery.js';
@@ -33,7 +34,7 @@ function fixture(history = 10_000, active = 125) {
   sqlite.prepare('UPDATE agents SET delivery_ack_seq = ? WHERE id = ?').run(history, 'agent');
   sqlite.exec('ANALYZE');
   const queries: { sql: string; params: unknown[] }[] = [];
-  const db = drizzle(sqlite, { schema, logger: { logQuery: (sql, params) => queries.push({ sql, params }) } }) as unknown as EngineDb;
+  const db = brandSqliteEngineDb(drizzle(sqlite, { schema, logger: { logQuery: (sql, params) => queries.push({ sql, params }) } }));
   const frames: { seq: number }[] = [];
   const send = vi.fn(async (_ws, _node, _provider, frame) => { frames.push(frame); return true; });
   const ready = vi.fn(() => true);

@@ -6,7 +6,7 @@ import {
   registerAgent,
   type TestStack,
 } from './harness.js';
-import { files, messageAttachments, messages } from '../../db/schema.js';
+import { files, messageAttachments, messages } from '../../db/tables.js';
 import type { LocalFileStorage } from '../../adapters/node/files.js';
 
 const TEXT_BYTES = new TextEncoder().encode('hello world\n');
