@@ -18,6 +18,7 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Fixed
 
+- Strict spawn replay resumes an exact-node claim stranded before dispatch and atomically returns any held capacity when that claim expires.
 - Workspace WebSocket message, update, and thread frames preserve arbitrary rich blocks; DM transforms retain blocks when present without changing DM send/storage support.
 - Relayfile callbacks deliver valid Linear and Jira segment-glob events instead of dropping them with `path_mismatch`; matching resolves repeated slashes and dot segments while preserving case and percent escapes.
 - Relayfile inbound callbacks deliver authenticated `file.deleted` events, preserving metadata and paths when no snapshot is available.

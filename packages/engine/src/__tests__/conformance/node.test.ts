@@ -7,14 +7,17 @@ import {
   registerAgent,
   FakeSocket,
   attachDirectNodeSocket,
+  attachFakeBatch,
   contextUpdatesOfType,
   deliverFramesOfType,
+  injectUpdateFailure,
+  stripTransactionCapability,
   type TestStack,
 } from './harness.js';
 import { actionInvocations, actions, agentNodeBindings, agents, channelMembers, deliveries, nodeProviders, nodes } from '../../db/tables.js';
 import { handleNodeControlMessage } from '../../node-control.js';
 import type { NodeConnectionRegistry } from '../../ports/realtime.js';
-import type { EngineDb, TransactionCapability } from '../../ports/database.js';
+import { requireTransactionCapability, type EngineDb } from '../../ports/database.js';
 import { sha256Hex } from '../../lib/crypto.js';
 import { waitForSignal } from '../../../../../scripts/test-support/signals.js';
 
@@ -3000,6 +3003,448 @@ describe('node adapter conformance', () => {
         .set({ input: input('/first/materialization') })
         .where(eq(actionInvocations.id, firstId));
       expect((await replay(caller.token, 'logical-spawn')).status).toBe(400);
+    });
+
+    it.each(['unreserved', 'reserved'] as const)(
+      'recovers a strict spawn after restart from the %s predispatch state',
+      async (state) => {
+        const ws = await createWorkspace(stack.app, `strict-restart-${state}`);
+        const caller = await registerAgent(stack.app, ws.workspaceKey, 'caller');
+        const alpha = await enrollAndAttachNode(ws, {
+          id: 'node_alpha', name: 'alpha',
+          capabilities: [capability('spawn:claude', 'spawn', { agent: 'claude' })],
+          load: 0, maxAgents: 2,
+        });
+        const alternate = await enrollAndAttachNode(ws, {
+          id: 'node_alternate', name: 'alternate',
+          capabilities: [capability('spawn:claude', 'spawn', { agent: 'claude' })],
+          load: 0, maxAgents: 2,
+        });
+        const logical = {
+          schema: 'relay.spawn.invoke.logical/1', target_node_id: 'node_alpha', target_node: 'alpha',
+          name: `restart-${state}`, cli: 'claude', task: 'recover exactly once', directory: '/repo',
+          verify_ready: true,
+        };
+        const input = {
+          spawn_contract: logical.schema,
+          target_node_id: logical.target_node_id,
+          target_node: logical.target_node,
+          name: logical.name,
+          cli: logical.cli,
+          task: logical.task,
+          worker_cwd: '/repo',
+          verify_ready: logical.verify_ready,
+          logical_request: logical,
+          spawn_contract_applied: logical.schema,
+        };
+        const key = `strict-restart-${state}`;
+        const digest = await sha256Hex(['action-invoke-v1', ws.workspaceId, caller.agentId, 'spawn', key].join('\0'));
+        const invocationId = `inv_idem_${digest}`;
+        const heldAt = state === 'reserved' ? new Date() : null;
+        await stack.runtime.handle.db.insert(actionInvocations).values({
+          id: invocationId,
+          workspaceId: ws.workspaceId,
+          actionId: null,
+          actionName: 'spawn',
+          invocationOrigin: 'builtin',
+          callerId: caller.agentId,
+          callerName: caller.name,
+          handlerNodeId: 'node_alpha',
+          input,
+          status: 'pending',
+          spawnReservedAt: heldAt,
+        });
+        if (heldAt) {
+          await stack.runtime.handle.db.update(nodes)
+            .set({ reservedAgents: 1 })
+            .where(and(eq(nodes.workspaceId, ws.workspaceId), eq(nodes.id, 'node_alpha')));
+        }
+
+        const replay = await stack.app.request('/v1/actions/spawn/replay', {
+          method: 'POST',
+          headers: {
+            'content-type': 'application/json', authorization: `Bearer ${caller.token}`,
+            'Idempotency-Key': key,
+          },
+          body: JSON.stringify({ logical_request: logical }),
+        });
+        expect(replay.status).toBe(200);
+        expect(await replay.json()).toMatchObject({
+          data: { invocation_id: invocationId, spawn_contract_applied: logical.schema },
+        });
+        expect(alpha.sock.ofType('action.invoke').filter((frame) => frame.action === 'spawn:claude')).toHaveLength(1);
+        expect(alternate.sock.ofType('action.invoke')).toHaveLength(0);
+        const [row] = await stack.runtime.handle.db.select().from(actionInvocations)
+          .where(eq(actionInvocations.id, invocationId));
+        const [node] = await stack.runtime.handle.db.select().from(nodes)
+          .where(and(eq(nodes.workspaceId, ws.workspaceId), eq(nodes.id, 'node_alpha')));
+        expect(row).toMatchObject({
+          handlerNodeId: 'node_alpha', dispatchedNodeId: 'node_alpha', dispatchAttempts: 1,
+        });
+        expect(row.spawnReservedAt).toBeInstanceOf(Date);
+        expect(node.reservedAgents).toBe(1);
+      },
+    );
+
+    it('lets concurrent strict invoke and replay recover one claim with one reservation and frame', async () => {
+      const ws = await createWorkspace(stack.app, 'strict-recovery-race');
+      const caller = await registerAgent(stack.app, ws.workspaceKey, 'caller');
+      const alpha = await enrollAndAttachNode(ws, {
+        id: 'node_alpha', name: 'alpha',
+        capabilities: [capability('spawn:claude', 'spawn', { agent: 'claude' })],
+        load: 0, maxAgents: 2,
+      });
+      const logical = {
+        schema: 'relay.spawn.invoke.logical/1', target_node_id: 'node_alpha', target_node: 'alpha',
+        name: 'race-worker', cli: 'claude', task: 'recover once', directory: '/repo', verify_ready: true,
+      };
+      const input = {
+        spawn_contract: logical.schema, target_node_id: logical.target_node_id, target_node: logical.target_node,
+        name: logical.name, cli: logical.cli, task: logical.task, worker_cwd: '/repo',
+        verify_ready: logical.verify_ready, logical_request: logical,
+      };
+      const key = 'strict-recovery-race';
+      const digest = await sha256Hex(['action-invoke-v1', ws.workspaceId, caller.agentId, 'spawn', key].join('\0'));
+      await stack.runtime.handle.db.insert(actionInvocations).values({
+        id: `inv_idem_${digest}`, workspaceId: ws.workspaceId, actionId: null, actionName: 'spawn',
+        invocationOrigin: 'builtin', callerId: caller.agentId, callerName: caller.name,
+        handlerNodeId: 'node_alpha', input: { ...input, spawn_contract_applied: logical.schema }, status: 'pending',
+      });
+      const headers = {
+        'content-type': 'application/json', authorization: `Bearer ${caller.token}`, 'Idempotency-Key': key,
+      };
+      const [invoke, replay] = await Promise.all([
+        stack.app.request('/v1/actions/spawn/strict-invoke', {
+          method: 'POST', headers, body: JSON.stringify({ input }),
+        }),
+        stack.app.request('/v1/actions/spawn/replay', {
+          method: 'POST', headers, body: JSON.stringify({ logical_request: logical }),
+        }),
+      ]);
+      expect([invoke.status, replay.status].sort()).toEqual([200, 201]);
+      expect(alpha.sock.ofType('action.invoke').filter((frame) => frame.action === 'spawn:claude')).toHaveLength(1);
+      const [node] = await stack.runtime.handle.db.select().from(nodes)
+        .where(and(eq(nodes.workspaceId, ws.workspaceId), eq(nodes.id, 'node_alpha')));
+      const [row] = await stack.runtime.handle.db.select().from(actionInvocations)
+        .where(eq(actionInvocations.id, `inv_idem_${digest}`));
+      expect(node.reservedAgents).toBe(1);
+      expect(row.dispatchAttempts).toBe(1);
+    });
+
+    it('rolls back the strict reservation when the D1-style marker write fails', async () => {
+      const ws = await createWorkspace(stack.app, 'strict-reservation-d1-rollback');
+      const caller = await registerAgent(stack.app, ws.workspaceKey, 'caller');
+      const alpha = await enrollAndAttachNode(ws, {
+        id: 'node_alpha', name: 'alpha',
+        capabilities: [capability('spawn:claude', 'spawn', { agent: 'claude' })],
+        load: 0, maxAgents: 2,
+      });
+      const logical = {
+        schema: 'relay.spawn.invoke.logical/1', target_node_id: 'node_alpha', target_node: 'alpha',
+        name: 'd1-worker', cli: 'claude', task: 'rollback', directory: '/repo', verify_ready: true,
+      };
+      const input = {
+        spawn_contract: logical.schema, target_node_id: logical.target_node_id, target_node: logical.target_node,
+        name: logical.name, cli: logical.cli, task: logical.task, worker_cwd: '/repo',
+        verify_ready: logical.verify_ready, logical_request: logical,
+      };
+      const key = 'strict-reservation-d1-rollback';
+      attachFakeBatch(stack, stack.runtime.handle.db);
+      const restore = injectUpdateFailure(
+        stack.runtime.handle.db,
+        actionInvocations,
+        'injected strict reservation marker failure',
+        { times: 1 },
+      );
+      const first = await stack.app.request('/v1/actions/spawn/strict-invoke', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', authorization: `Bearer ${caller.token}`, 'Idempotency-Key': key },
+        body: JSON.stringify({ input }),
+      });
+      expect(first.status).toBe(500);
+      restore();
+      let [node] = await stack.runtime.handle.db.select().from(nodes)
+        .where(and(eq(nodes.workspaceId, ws.workspaceId), eq(nodes.id, 'node_alpha')));
+      expect(node.reservedAgents).toBe(0);
+      expect(alpha.sock.ofType('action.invoke')).toHaveLength(0);
+
+      const replay = await stack.app.request('/v1/actions/spawn/replay', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', authorization: `Bearer ${caller.token}`, 'Idempotency-Key': key },
+        body: JSON.stringify({ logical_request: logical }),
+      });
+      expect(replay.status).toBe(200);
+      [node] = await stack.runtime.handle.db.select().from(nodes)
+        .where(and(eq(nodes.workspaceId, ws.workspaceId), eq(nodes.id, 'node_alpha')));
+      expect(node.reservedAgents).toBe(1);
+      expect(alpha.sock.ofType('action.invoke').filter((frame) => frame.action === 'spawn:claude')).toHaveLength(1);
+    });
+
+    it('does not publish a strict marker when the D1-style node reservation write fails', async () => {
+      const ws = await createWorkspace(stack.app, 'strict-reservation-d1-node-failure');
+      const caller = await registerAgent(stack.app, ws.workspaceKey, 'caller');
+      const alpha = await enrollAndAttachNode(ws, {
+        id: 'node_alpha', name: 'alpha',
+        capabilities: [capability('spawn:claude', 'spawn', { agent: 'claude' })],
+        load: 0, maxAgents: 2,
+      });
+      const logical = {
+        schema: 'relay.spawn.invoke.logical/1', target_node_id: 'node_alpha', target_node: 'alpha',
+        name: 'd1-node-worker', cli: 'claude', task: 'rollback', directory: '/repo', verify_ready: true,
+      };
+      const input = {
+        spawn_contract: logical.schema, target_node_id: logical.target_node_id, target_node: logical.target_node,
+        name: logical.name, cli: logical.cli, task: logical.task, worker_cwd: '/repo',
+        verify_ready: logical.verify_ready, logical_request: logical,
+      };
+      attachFakeBatch(stack, stack.runtime.handle.db);
+      const restore = injectUpdateFailure(
+        stack.runtime.handle.db,
+        nodes,
+        'injected strict node reservation failure',
+        { times: 1 },
+      );
+      const response = await stack.app.request('/v1/actions/spawn/strict-invoke', {
+        method: 'POST',
+        headers: {
+          'content-type': 'application/json', authorization: `Bearer ${caller.token}`,
+          'Idempotency-Key': 'strict-reservation-d1-node-failure',
+        },
+        body: JSON.stringify({ input }),
+      });
+      restore();
+      expect(response.status).toBe(500);
+      const [node] = await stack.runtime.handle.db.select().from(nodes)
+        .where(and(eq(nodes.workspaceId, ws.workspaceId), eq(nodes.id, 'node_alpha')));
+      const [row] = await stack.runtime.handle.db.select().from(actionInvocations)
+        .where(eq(actionInvocations.workspaceId, ws.workspaceId));
+      expect(node.reservedAgents).toBe(0);
+      expect(row).toMatchObject({ handlerNodeId: 'node_alpha', spawnReservedAt: null, dispatchAttempts: 0 });
+      expect(alpha.sock.ofType('action.invoke')).toHaveLength(0);
+    });
+
+    it('rolls back the strict reservation when the transactional marker write fails', async () => {
+      const ws = await createWorkspace(stack.app, 'strict-reservation-tx-rollback');
+      const caller = await registerAgent(stack.app, ws.workspaceKey, 'caller');
+      const alpha = await enrollAndAttachNode(ws, {
+        id: 'node_alpha', name: 'alpha',
+        capabilities: [capability('spawn:claude', 'spawn', { agent: 'claude' })],
+        load: 0, maxAgents: 2,
+      });
+      const logical = {
+        schema: 'relay.spawn.invoke.logical/1', target_node_id: 'node_alpha', target_node: 'alpha',
+        name: 'tx-worker', cli: 'claude', task: 'rollback', directory: '/repo', verify_ready: true,
+      };
+      const input = {
+        spawn_contract: logical.schema, target_node_id: logical.target_node_id, target_node: logical.target_node,
+        name: logical.name, cli: logical.cli, task: logical.task, worker_cwd: '/repo',
+        verify_ready: logical.verify_ready, logical_request: logical,
+      };
+      const db = requireTransactionCapability(stack.runtime.handle.db);
+      const originalTransaction = db.withTransaction.bind(db);
+      let inject = true;
+      db.withTransaction = (fn) => originalTransaction(async (tx) => {
+        if (!inject) return fn(tx);
+        inject = false;
+        const restore = injectUpdateFailure(
+          tx,
+          actionInvocations,
+          'injected transactional reservation marker failure',
+          { times: 1 },
+        );
+        try {
+          return await fn(tx);
+        } finally {
+          restore();
+        }
+      });
+      const first = await stack.app.request('/v1/actions/spawn/strict-invoke', {
+        method: 'POST',
+        headers: {
+          'content-type': 'application/json', authorization: `Bearer ${caller.token}`,
+          'Idempotency-Key': 'strict-reservation-tx-rollback',
+        },
+        body: JSON.stringify({ input }),
+      });
+      db.withTransaction = originalTransaction;
+      expect(first.status).toBe(500);
+      let [node] = await db.select().from(nodes)
+        .where(and(eq(nodes.workspaceId, ws.workspaceId), eq(nodes.id, 'node_alpha')));
+      expect(node.reservedAgents).toBe(0);
+      expect(alpha.sock.ofType('action.invoke')).toHaveLength(0);
+
+      const replay = await stack.app.request('/v1/actions/spawn/replay', {
+        method: 'POST',
+        headers: {
+          'content-type': 'application/json', authorization: `Bearer ${caller.token}`,
+          'Idempotency-Key': 'strict-reservation-tx-rollback',
+        },
+        body: JSON.stringify({ logical_request: logical }),
+      });
+      expect(replay.status).toBe(200);
+      [node] = await db.select().from(nodes)
+        .where(and(eq(nodes.workspaceId, ws.workspaceId), eq(nodes.id, 'node_alpha')));
+      expect(node.reservedAgents).toBe(1);
+      expect(alpha.sock.ofType('action.invoke').filter((frame) => frame.action === 'spawn:claude')).toHaveLength(1);
+    });
+
+    it('fails a strict reservation closed when the database has no atomic write capability', async () => {
+      const ws = await createWorkspace(stack.app, 'strict-reservation-no-atomic');
+      const caller = await registerAgent(stack.app, ws.workspaceKey, 'caller');
+      const alpha = await enrollAndAttachNode(ws, {
+        id: 'node_alpha', name: 'alpha',
+        capabilities: [capability('spawn:claude', 'spawn', { agent: 'claude' })],
+        load: 0, maxAgents: 2,
+      });
+      stripTransactionCapability(stack.runtime.handle.db);
+      const logical = {
+        schema: 'relay.spawn.invoke.logical/1', target_node_id: 'node_alpha', target_node: 'alpha',
+        name: 'no-atomic-worker', cli: 'claude', task: 'fail closed', directory: '/repo', verify_ready: true,
+      };
+      const input = {
+        spawn_contract: logical.schema, target_node_id: logical.target_node_id, target_node: logical.target_node,
+        name: logical.name, cli: logical.cli, task: logical.task, worker_cwd: '/repo',
+        verify_ready: logical.verify_ready, logical_request: logical,
+      };
+      const response = await stack.app.request('/v1/actions/spawn/strict-invoke', {
+        method: 'POST',
+        headers: {
+          'content-type': 'application/json', authorization: `Bearer ${caller.token}`,
+          'Idempotency-Key': 'strict-reservation-no-atomic',
+        },
+        body: JSON.stringify({ input }),
+      });
+      expect(response.status).toBe(500);
+      const [node] = await stack.runtime.handle.db.select().from(nodes)
+        .where(and(eq(nodes.workspaceId, ws.workspaceId), eq(nodes.id, 'node_alpha')));
+      const [row] = await stack.runtime.handle.db.select().from(actionInvocations)
+        .where(eq(actionInvocations.workspaceId, ws.workspaceId));
+      expect(node.reservedAgents).toBe(0);
+      expect(row).toMatchObject({
+        status: 'pending', handlerNodeId: 'node_alpha', dispatchedNodeId: null,
+        spawnReservedAt: null, dispatchAttempts: 0,
+      });
+      expect(alpha.sock.ofType('action.invoke')).toHaveLength(0);
+    });
+
+    it('sweeps a stranded strict reservation exactly once before replay can dispatch it', async () => {
+      const ws = await createWorkspace(stack.app, 'strict-reservation-sweep');
+      const caller = await registerAgent(stack.app, ws.workspaceKey, 'caller');
+      const alpha = await enrollAndAttachNode(ws, {
+        id: 'node_alpha', name: 'alpha',
+        capabilities: [capability('spawn:claude', 'spawn', { agent: 'claude' })],
+        load: 0, maxAgents: 2,
+      });
+      const logical = {
+        schema: 'relay.spawn.invoke.logical/1', target_node_id: 'node_alpha', target_node: 'alpha',
+        name: 'sweep-worker', cli: 'claude', task: 'expire', directory: '/repo', verify_ready: true,
+      };
+      const key = 'strict-reservation-sweep';
+      const digest = await sha256Hex(['action-invoke-v1', ws.workspaceId, caller.agentId, 'spawn', key].join('\0'));
+      const invocationId = `inv_idem_${digest}`;
+      await stack.runtime.handle.db.insert(actionInvocations).values({
+        id: invocationId, workspaceId: ws.workspaceId, actionId: null, actionName: 'spawn',
+        invocationOrigin: 'builtin', callerId: caller.agentId, callerName: caller.name,
+        handlerNodeId: 'node_alpha',
+        input: {
+          spawn_contract: logical.schema, target_node_id: logical.target_node_id, target_node: logical.target_node,
+          name: logical.name, cli: logical.cli, task: logical.task, worker_cwd: '/repo',
+          verify_ready: logical.verify_ready, logical_request: logical, spawn_contract_applied: logical.schema,
+        },
+        status: 'pending', spawnReservedAt: new Date(Date.now() - 60_000),
+        createdAt: new Date(Date.now() - 60_000),
+      });
+      await stack.runtime.handle.db.update(nodes).set({ reservedAgents: 1 })
+        .where(and(eq(nodes.workspaceId, ws.workspaceId), eq(nodes.id, 'node_alpha')));
+
+      await sweepTimedOutInvocations(stack.runtime.handle.db, stack.runtime.realtime, {
+        timeoutMs: 60_000,
+        pendingInvocationMaxAgeMs: 0,
+        neverDispatchedSweepGraceMs: 0,
+      });
+      const [row] = await stack.runtime.handle.db.select().from(actionInvocations)
+        .where(eq(actionInvocations.id, invocationId));
+      const [node] = await stack.runtime.handle.db.select().from(nodes)
+        .where(and(eq(nodes.workspaceId, ws.workspaceId), eq(nodes.id, 'node_alpha')));
+      expect(row).toMatchObject({ status: 'failed', error: 'never_dispatched_expired', spawnReservedAt: null });
+      expect(node.reservedAgents).toBe(0);
+      const replay = await stack.app.request('/v1/actions/spawn/replay', {
+        method: 'POST',
+        headers: {
+          'content-type': 'application/json', authorization: `Bearer ${caller.token}`, 'Idempotency-Key': key,
+        },
+        body: JSON.stringify({ logical_request: logical }),
+      });
+      expect(replay.status).toBe(503);
+      expect(alpha.sock.ofType('action.invoke')).toHaveLength(0);
+    });
+
+    it('lets dispatch win a strict replay race without the sweep releasing its reservation', async () => {
+      const ws = await createWorkspace(stack.app, 'strict-replay-sweep-race');
+      const caller = await registerAgent(stack.app, ws.workspaceKey, 'caller');
+      const alpha = await enrollAndAttachNode(ws, {
+        id: 'node_alpha', name: 'alpha',
+        capabilities: [capability('spawn:claude', 'spawn', { agent: 'claude' })],
+        load: 0, maxAgents: 2,
+      });
+      const logical = {
+        schema: 'relay.spawn.invoke.logical/1', target_node_id: 'node_alpha', target_node: 'alpha',
+        name: 'race-sweep-worker', cli: 'claude', task: 'race cleanup', directory: '/repo', verify_ready: true,
+      };
+      const key = 'strict-replay-sweep-race';
+      const digest = await sha256Hex(['action-invoke-v1', ws.workspaceId, caller.agentId, 'spawn', key].join('\0'));
+      const invocationId = `inv_idem_${digest}`;
+      const heldAt = new Date(Date.now() - 60_000);
+      await stack.runtime.handle.db.insert(actionInvocations).values({
+        id: invocationId, workspaceId: ws.workspaceId, actionId: null, actionName: 'spawn',
+        invocationOrigin: 'builtin', callerId: caller.agentId, callerName: caller.name,
+        handlerNodeId: 'node_alpha',
+        input: {
+          spawn_contract: logical.schema, target_node_id: logical.target_node_id, target_node: logical.target_node,
+          name: logical.name, cli: logical.cli, task: logical.task, worker_cwd: '/repo',
+          verify_ready: logical.verify_ready, logical_request: logical, spawn_contract_applied: logical.schema,
+        },
+        status: 'pending', spawnReservedAt: heldAt, createdAt: heldAt,
+      });
+      await stack.runtime.handle.db.update(nodes).set({ reservedAgents: 1 })
+        .where(and(eq(nodes.workspaceId, ws.workspaceId), eq(nodes.id, 'node_alpha')));
+
+      let cleanupEntered!: () => void;
+      const cleanupEnteredPromise = new Promise<void>((resolve) => { cleanupEntered = resolve; });
+      let continueCleanup!: () => void;
+      const continueCleanupPromise = new Promise<void>((resolve) => { continueCleanup = resolve; });
+      let paused = false;
+      attachFakeBatch(stack, stack.runtime.handle.db, async () => {
+        if (paused) return;
+        paused = true;
+        cleanupEntered();
+        await continueCleanupPromise;
+      });
+      const sweep = sweepTimedOutInvocations(stack.runtime.handle.db, stack.runtime.realtime, {
+        timeoutMs: 60_000,
+        pendingInvocationMaxAgeMs: 0,
+        neverDispatchedSweepGraceMs: 0,
+      });
+      await cleanupEnteredPromise;
+      const replay = await stack.app.request('/v1/actions/spawn/replay', {
+        method: 'POST',
+        headers: {
+          'content-type': 'application/json', authorization: `Bearer ${caller.token}`, 'Idempotency-Key': key,
+        },
+        body: JSON.stringify({ logical_request: logical }),
+      });
+      expect(replay.status).toBe(200);
+      continueCleanup();
+      await sweep;
+
+      const [row] = await stack.runtime.handle.db.select().from(actionInvocations)
+        .where(eq(actionInvocations.id, invocationId));
+      const [node] = await stack.runtime.handle.db.select().from(nodes)
+        .where(and(eq(nodes.workspaceId, ws.workspaceId), eq(nodes.id, 'node_alpha')));
+      expect(row).toMatchObject({ status: 'dispatched', dispatchedNodeId: 'node_alpha', dispatchAttempts: 1 });
+      expect(row.spawnReservedAt).toBeInstanceOf(Date);
+      expect(node.reservedAgents).toBe(1);
+      expect(alpha.sock.ofType('action.invoke').filter((frame) => frame.action === 'spawn:claude')).toHaveLength(1);
     });
 
     it('keeps legacy target_node_id and logical_request metadata backward compatible', async () => {
