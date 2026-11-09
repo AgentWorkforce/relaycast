@@ -5679,21 +5679,22 @@ paths:
               schema:
                 $ref: '#/components/schemas/SuccessResponse'
         '400':
-          description: Invalid Idempotency-Key, task_idempotency_required, or invalid_task_context.
+          description: >-
+            Invalid Idempotency-Key, task_idempotency_required,
+            invalid_task_context, or a strict spawn contract sent to this
+            generic route instead of `/actions/spawn/strict-invoke`.
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
         '409':
-          description: >-
-            The idempotency key was reused with different input, or a strict
-            spawn's node id/name/capability contract does not match.
+          description: The idempotency key was reused with different input.
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
         '404':
-          description: A strict spawn's exact target node id does not exist.
+          description: No action has this name.
           content:
             application/json:
               schema:
@@ -5711,9 +5712,7 @@ paths:
             a handler that cannot answer; or `idempotency_unavailable` — the
             durable idempotency claim cannot be read, or a keyed invocation
             replay cannot yet observe its durable placement/dispatch outcome.
-            A strict spawn also returns `spawn_target_unavailable` when its exact
-            node is not ready or has no capacity. Retry the same logical request
-            with the same key.
+            Retry the same logical request with the same key.
           content:
             application/json:
               schema:
