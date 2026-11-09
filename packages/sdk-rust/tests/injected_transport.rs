@@ -13,8 +13,15 @@ fn reply(
     thread::spawn(move || {
         (0..count).map(|_| {
             let (mut stream, _) = listener.accept().unwrap();
-            let mut bytes = [0;8192]; let read = stream.read(&mut bytes).unwrap();
-            let request = String::from_utf8_lossy(&bytes[..read]).to_lowercase();
+            // Read until the end of the headers: one read can return a partial request.
+            let mut received = Vec::new();
+            let mut chunk = [0; 8192];
+            while !received.windows(4).any(|w| w == b"\r\n\r\n") {
+                let read = stream.read(&mut chunk).unwrap();
+                if read == 0 { break; }
+                received.extend_from_slice(&chunk[..read]);
+            }
+            let request = String::from_utf8_lossy(&received).to_lowercase();
             let body = json!({"ok":true,"data":{"marker":marker}}).to_string();
             write!(stream,"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",body.len(),body).unwrap();
             request
