@@ -2067,18 +2067,19 @@ export async function invokeNodeAction(
   const strictLogicalRequest = isSpawnInvocation(actionName)
     ? materializedSpawnLogicalRequest(requestInput, false)
     : null;
-  if (strictLogicalRequest && actionName.startsWith('spawn:')
-    && actionName !== `spawn:${strictLogicalRequest.cli}`) {
-    throw codedError('Addressed spawn capability does not match logical_request.cli', 'capability_mismatch', 409);
+  if (strictLogicalRequest) {
+    throw codedError(
+      'Strict spawn contracts require /v1/actions/spawn/strict-invoke',
+      'invalid_spawn_request',
+      400,
+    );
   }
   const action = await fetchNodeAction(db, workspaceId, nodeId, actionName);
   if (!action) {
     if (isSpawnInvocation(actionName)) {
       // Carry the harness from the URL (`spawn:<harness>`) into placement so the
       // native fallback targets the right capacity even when the body omits it.
-      const harness = !strictLogicalRequest && actionName.startsWith('spawn:')
-        ? actionName.slice('spawn:'.length)
-        : undefined;
+      const harness = actionName.startsWith('spawn:') ? actionName.slice('spawn:'.length) : undefined;
       const spawnInput = harness ? { ...(data.input ?? {}), capability: harness } : data.input;
       return dispatchSpawn({ db, registry: options.nodeConnections, workspaceId, data: { ...data, input: spawnInput }, targetNodeId: nodeId });
     }
@@ -2093,16 +2094,6 @@ export async function invokeNodeAction(
       const who = data.caller_name ? `Agent "${data.caller_name}"` : 'Caller';
       throw codedError(`${who} is not authorized to invoke action "${actionName}"`, 'action_denied', 403);
     }
-  }
-
-  if (strictLogicalRequest) {
-    return dispatchSpawn({
-      db,
-      registry: options.nodeConnections,
-      workspaceId,
-      data,
-      targetNodeId: nodeId,
-    });
   }
 
   const { invocation } = await createInvocation(db, workspaceId, action, {
@@ -2241,6 +2232,13 @@ export async function invokeAction(
   if (actionName === 'spawn') rejectClientSpawnContractProof(requestInput);
   const strictSpawnRequested = actionName === 'spawn'
     && materializedSpawnLogicalRequest(requestInput, false) !== null;
+  if (strictSpawnRequested) {
+    throw codedError(
+      'Strict spawn contracts require /v1/actions/spawn/strict-invoke',
+      'invalid_spawn_request',
+      400,
+    );
+  }
   const action = await fetchAction(db, workspaceId, actionName, options.includeNodeScoped);
   let invocationId: string | undefined;
   if (options.idempotencyKey !== undefined) {
@@ -2282,8 +2280,7 @@ export async function invokeAction(
   // target_node. Capacity placement validates that target and its live provider.
   // Keep the alias ACL above this branch; explicit targeting is not an ACL bypass.
   if (actionName === 'spawn' && (
-    strictSpawnRequested
-    || !action
+    !action
     || (action.handlerNodeId && typeof data.input?.target_node === 'string' && data.input.target_node.trim().length > 0)
   )) {
     return dispatchSpawn({

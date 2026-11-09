@@ -2830,6 +2830,23 @@ describe('node adapter conformance', () => {
       expect(workspaceStrictCall.status).toBe(403);
       expect(alpha.sock.ofType('action.invoke')).toHaveLength(0);
 
+      const genericStrictCall = await stack.app.request('/v1/actions/spawn/invoke', {
+        method: 'POST',
+        headers: {
+          'content-type': 'application/json', authorization: `Bearer ${caller.token}`,
+          'Idempotency-Key': 'strict-on-generic-route',
+        },
+        body: JSON.stringify({ input: input('/materialized') }),
+      });
+      expect(genericStrictCall.status).toBe(400);
+      const nodeStrictCall = await stack.app.request('/v1/nodes/alpha/actions/spawn/invoke', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', authorization: `Bearer ${caller.token}` },
+        body: JSON.stringify({ input: input('/materialized') }),
+      });
+      expect(nodeStrictCall.status).toBe(400);
+      expect(alpha.sock.ofType('action.invoke')).toHaveLength(0);
+
       // Neither a node-addressed public route nor a registered action may mint
       // the server-owned proof from caller input.
       const spoof = await stack.app.request('/v1/nodes/alpha/actions/spawn/invoke', {
