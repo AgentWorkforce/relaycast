@@ -678,9 +678,15 @@ function assertInvocationClaimMatches(
   expectedActionName: string,
   data: { input?: Record<string, unknown>; caller_id?: string | null },
 ): void {
+  const existingInput = recordInput(existing.input);
+  const incomingInput = recordInput(data.input);
+  const exactPayload = canonicalJson(existingInput) === canonicalJson(incomingInput);
+  const logicalReplay = !exactPayload
+    && expectedActionName === 'spawn'
+    && sameSpawnLogicalRequest(existingInput, incomingInput);
   const samePayload = existing.actionName === expectedActionName
     && existing.callerId === (data.caller_id ?? null)
-    && canonicalJson(recordInput(existing.input)) === canonicalJson(recordInput(data.input));
+    && (exactPayload || logicalReplay);
   if (!samePayload) {
     throw codedError(
       'Idempotency-Key was reused with a different request payload',
@@ -688,6 +694,97 @@ function assertInvocationClaimMatches(
       409,
     );
   }
+}
+
+const SPAWN_LOGICAL_REQUEST_SCHEMA = 'relay.spawn.invoke.logical/1';
+const SPAWN_LOGICAL_REQUEST_KEYS = [
+  'schema', 'target_node_id', 'target_node', 'name', 'cli', 'task', 'directory', 'verify_ready',
+] as const;
+const SPAWN_MATERIALIZED_INPUT_KEYS = [
+  'spawn_contract', 'target_node_id', 'target_node', 'name', 'cli', 'task', 'worker_cwd', 'verify_ready',
+  'logical_request',
+] as const;
+const SPAWN_STORED_INPUT_KEYS = [
+  ...SPAWN_MATERIALIZED_INPUT_KEYS, 'spawn_contract_applied',
+] as const;
+
+function spawnLogicalRequest(value: unknown): Record<string, unknown> {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    throw codedError('spawn logical_request must be an object', 'invalid_spawn_request', 400);
+  }
+  const logical = value as Record<string, unknown>;
+  if (canonicalJson(Object.keys(logical).sort()) !== canonicalJson([...SPAWN_LOGICAL_REQUEST_KEYS].sort())) {
+    throw codedError('spawn logical_request has unknown or missing fields', 'invalid_spawn_request', 400);
+  }
+  if (logical.schema !== SPAWN_LOGICAL_REQUEST_SCHEMA) {
+    throw codedError('spawn logical_request schema is unsupported', 'invalid_spawn_request', 400);
+  }
+  for (const field of ['target_node_id', 'target_node', 'name', 'cli', 'task', 'directory'] as const) {
+    if (typeof logical[field] !== 'string' || logical[field].trim().length === 0) {
+      throw codedError(`spawn logical_request.${field} is required`, 'invalid_spawn_request', 400);
+    }
+  }
+  if (typeof logical.verify_ready !== 'boolean') {
+    throw codedError('spawn logical_request.verify_ready must be boolean', 'invalid_spawn_request', 400);
+  }
+  return logical;
+}
+
+function materializedSpawnLogicalRequest(
+  input: Record<string, unknown>,
+  stored: boolean,
+): Record<string, unknown> | null {
+  if (input.spawn_contract !== SPAWN_LOGICAL_REQUEST_SCHEMA) return null;
+  const expectedKeys = stored ? SPAWN_STORED_INPUT_KEYS : SPAWN_MATERIALIZED_INPUT_KEYS;
+  if (canonicalJson(Object.keys(input).sort()) !== canonicalJson([...expectedKeys].sort())) {
+    throw codedError('fingerprinted spawn input has unknown or missing fields', 'invalid_spawn_request', 400);
+  }
+  if (stored && input.spawn_contract_applied !== SPAWN_LOGICAL_REQUEST_SCHEMA) {
+    throw codedError('stored spawn contract was not applied', 'invalid_spawn_request', 400);
+  }
+  const logical = spawnLogicalRequest(input.logical_request);
+  for (const field of ['target_node_id', 'target_node', 'name', 'cli', 'task', 'verify_ready'] as const) {
+    if (input[field] !== logical[field]) {
+      throw codedError(`spawn input.${field} does not match logical_request`, 'invalid_spawn_request', 400);
+    }
+  }
+  if (typeof input.worker_cwd !== 'string' || input.worker_cwd.trim().length === 0) {
+    throw codedError('spawn input.worker_cwd is required', 'invalid_spawn_request', 400);
+  }
+  return logical;
+}
+
+function rejectClientSpawnContractProof(input: Record<string, unknown>): void {
+  if (Object.prototype.hasOwnProperty.call(input, 'spawn_contract_applied')) {
+    throw codedError('spawn_contract_applied is server-owned', 'invalid_spawn_request', 400);
+  }
+}
+
+function prepareSpawnClaimInput(input: Record<string, unknown>): Record<string, unknown> {
+  rejectClientSpawnContractProof(input);
+  const logical = materializedSpawnLogicalRequest(input, false);
+  return logical
+    ? { ...input, spawn_contract_applied: SPAWN_LOGICAL_REQUEST_SCHEMA }
+    : input;
+}
+
+function sameSpawnLogicalRequest(
+  existing: Record<string, unknown>,
+  incoming: Record<string, unknown>,
+): boolean {
+  const existingLogical = materializedSpawnLogicalRequest(existing, true);
+  const preparedIncoming = incoming.spawn_contract_applied === SPAWN_LOGICAL_REQUEST_SCHEMA
+    ? incoming
+    : prepareSpawnClaimInput(incoming);
+  const incomingLogical = materializedSpawnLogicalRequest(preparedIncoming, true);
+  return existingLogical !== null
+    && incomingLogical !== null
+    && canonicalJson(existingLogical) === canonicalJson(incomingLogical);
+}
+
+function strictBuiltinSpawnContract(invocation: InvocationRow): Record<string, unknown> | null {
+  if (invocation.invocationOrigin !== 'builtin' || invocation.actionId !== null) return null;
+  return materializedSpawnLogicalRequest(recordInput(invocation.input), true);
 }
 
 async function idempotentInvocationId(
@@ -843,6 +940,8 @@ function invocationAck(
     handlerNodeId?: string | null;
   } = {},
 ) {
+  const input = recordInput(invocation.input);
+  const strictSpawn = strictBuiltinSpawnContract(invocation);
   return {
     invocation_id: invocation.id,
     action_name: actionName,
@@ -851,7 +950,10 @@ function invocationAck(
     // dispatched node remains available separately for current lifecycle state.
     handler_node_id: handlerNodeId ?? invocation.dispatchedNodeId,
     dispatched_node_id: invocation.dispatchedNodeId,
-    input: recordInput(invocation.input),
+    input,
+    ...(strictSpawn
+      ? { spawn_contract_applied: SPAWN_LOGICAL_REQUEST_SCHEMA }
+      : {}),
     status: invocation.status,
     created_at: invocation.createdAt.toISOString(),
   };
@@ -1739,13 +1841,18 @@ function spawnResult(
   nodeId: string,
   dispatched: { accepted: boolean; pending: boolean },
 ) {
+  const input = recordInput(invocation.input);
+  const strictSpawn = strictBuiltinSpawnContract(invocation);
   return {
     invocation_id: invocation.id,
     action_name: 'spawn',
     handler_agent_id: null,
     handler_node_id: nodeId,
     dispatched_node_id: dispatched.accepted ? nodeId : null,
-    input: recordInput(invocation.input),
+    input,
+    ...(strictSpawn
+      ? { spawn_contract_applied: SPAWN_LOGICAL_REQUEST_SCHEMA }
+      : {}),
     status: dispatched.accepted ? (dispatched.pending ? 'pending' : 'dispatched') : 'pending',
     created_at: invocation.createdAt.toISOString(),
   };
@@ -1770,18 +1877,32 @@ async function dispatchSpawn(args: {
     throw codedError('Node dispatch is not available', 'node_dispatch_unavailable', 503);
   }
 
-  const input = recordInput(args.data.input);
+  const input = prepareSpawnClaimInput(recordInput(args.data.input));
+  const data = { ...args.data, input };
   const requestedName = typeof input.name === 'string' ? input.name : '';
   if (requestedName.trim().length === 0) {
     throw codedError('spawn action input.name is required', 'invalid_spawn_request', 400);
   }
   assertRegistrableAgentName(requestedName);
+  const logicalRequest = materializedSpawnLogicalRequest(input, true);
   const capability = dispatchActionNameForInvocation('spawn', input);
+  const inputTargetNodeId = typeof logicalRequest?.target_node_id === 'string'
+    ? logicalRequest.target_node_id.trim()
+    : '';
+  if (inputTargetNodeId && args.targetNodeId && inputTargetNodeId !== args.targetNodeId) {
+    throw codedError(
+      `Spawn target node id "${inputTargetNodeId}" does not match addressed node "${args.targetNodeId}"`,
+      'node_target_mismatch',
+      409,
+    );
+  }
+  const targetNodeId = args.targetNodeId ?? (inputTargetNodeId || undefined);
+  const bypassShadow = args.bypassShadow || logicalRequest !== null;
 
   const { invocation, replayed } = await createInvocation(args.db, args.workspaceId, null, {
-    input: args.data.input,
-    caller_id: args.data.caller_id,
-    caller_name: args.data.caller_name,
+    input,
+    caller_id: data.caller_id,
+    caller_name: data.caller_name,
     invocation_id: args.invocationId,
   });
   if (replayed) {
@@ -1794,8 +1915,8 @@ async function dispatchSpawn(args: {
     placement = await claimSpawnNode(args.db, args.workspaceId, {
       actionName: 'spawn',
       input,
-      callerId: args.data.caller_id,
-      preferredNodeId: args.targetNodeId,
+      callerId: data.caller_id,
+      preferredNodeId: targetNodeId,
     });
   } catch (error) {
     // Placement is transactional and no provider frame can exist yet. Release
@@ -1816,7 +1937,7 @@ async function dispatchSpawn(args: {
     throw error;
   }
   const nodeId = placement.node.id;
-  const shadow = args.bypassShadow ? null : await fetchNodeAction(args.db, args.workspaceId, nodeId, capability);
+  const shadow = bypassShadow ? null : await fetchNodeAction(args.db, args.workspaceId, nodeId, capability);
   const capProvider = (await capacityProviderName(args.db, args.workspaceId, nodeId, capability)) ?? DEFAULT_PROVIDER_NAME;
   if (input.verify_ready === true && (placement.queued || !await isNodeProviderLive(args.db, args.registry, args.workspaceId, nodeId, shadow?.handlerProvider ?? capProvider))) {
     await failNeverDispatchedInvocation(args.db, args.workspaceId, invocation.id, 'spawn_target_unavailable');
@@ -1834,7 +1955,7 @@ async function dispatchSpawn(args: {
   // A registered `spawn:<harness>` action shadows native capacity on this node.
   // Capacity-direct delegation (ctx.spawnAgent) bypasses the shadow so a handler
   // that delegates cannot re-enter itself.
-  if (!args.bypassShadow) {
+  if (!bypassShadow) {
     if (shadow && shadow.handlerProvider) {
       const bound = await bindInvocationToRegisteredNodeAction(args.db, {
         workspaceId: args.workspaceId,
@@ -1941,12 +2062,23 @@ export async function invokeNodeAction(
   if (!options.nodeConnections) {
     throw codedError('Node dispatch is not available', 'node_dispatch_unavailable', 503);
   }
+  const requestInput = recordInput(data.input);
+  if (isSpawnInvocation(actionName)) rejectClientSpawnContractProof(requestInput);
+  const strictLogicalRequest = isSpawnInvocation(actionName)
+    ? materializedSpawnLogicalRequest(requestInput, false)
+    : null;
+  if (strictLogicalRequest && actionName.startsWith('spawn:')
+    && actionName !== `spawn:${strictLogicalRequest.cli}`) {
+    throw codedError('Addressed spawn capability does not match logical_request.cli', 'capability_mismatch', 409);
+  }
   const action = await fetchNodeAction(db, workspaceId, nodeId, actionName);
   if (!action) {
     if (isSpawnInvocation(actionName)) {
       // Carry the harness from the URL (`spawn:<harness>`) into placement so the
       // native fallback targets the right capacity even when the body omits it.
-      const harness = actionName.startsWith('spawn:') ? actionName.slice('spawn:'.length) : undefined;
+      const harness = !strictLogicalRequest && actionName.startsWith('spawn:')
+        ? actionName.slice('spawn:'.length)
+        : undefined;
       const spawnInput = harness ? { ...(data.input ?? {}), capability: harness } : data.input;
       return dispatchSpawn({ db, registry: options.nodeConnections, workspaceId, data: { ...data, input: spawnInput }, targetNodeId: nodeId });
     }
@@ -1961,6 +2093,16 @@ export async function invokeNodeAction(
       const who = data.caller_name ? `Agent "${data.caller_name}"` : 'Caller';
       throw codedError(`${who} is not authorized to invoke action "${actionName}"`, 'action_denied', 403);
     }
+  }
+
+  if (strictLogicalRequest) {
+    return dispatchSpawn({
+      db,
+      registry: options.nodeConnections,
+      workspaceId,
+      data,
+      targetNodeId: nodeId,
+    });
   }
 
   const { invocation } = await createInvocation(db, workspaceId, action, {
@@ -2002,6 +2144,74 @@ export async function invokeNodeAction(
   };
 }
 
+/**
+ * Invoke builtin spawn through the strict logical contract. This dedicated
+ * entry point lets rolling-upgrade clients fail before any side effect on an
+ * older server, where the route is absent, and never resolves a registered
+ * action or shadow handler.
+ */
+export async function invokeStrictSpawn(
+  db: Db,
+  workspaceId: string,
+  data: { input?: Record<string, unknown>; caller_id: string; caller_name?: string },
+  options: { nodeConnections?: NodeConnectionRegistry; idempotencyKey: string },
+) {
+  const input = recordInput(data.input);
+  rejectClientSpawnContractProof(input);
+  if (!materializedSpawnLogicalRequest(input, false)) {
+    throw codedError('Strict spawn contract is required', 'invalid_spawn_request', 400);
+  }
+  const invocationId = await idempotentInvocationId(
+    workspaceId,
+    data.caller_id,
+    'spawn',
+    options.idempotencyKey,
+  );
+  return dispatchSpawn({
+    db,
+    registry: options.nodeConnections,
+    workspaceId,
+    data,
+    invocationId,
+    bypassShadow: true,
+  });
+}
+
+/** Read an existing keyed builtin-spawn claim without creating or dispatching. */
+export async function replaySpawnInvocation(
+  db: Db,
+  workspaceId: string,
+  data: { logical_request: Record<string, unknown>; caller_id: string },
+  idempotencyKey: string,
+) {
+  const logical = spawnLogicalRequest(data.logical_request);
+  const invocationId = await idempotentInvocationId(workspaceId, data.caller_id, 'spawn', idempotencyKey);
+  const [invocation] = await db
+    .select()
+    .from(actionInvocations)
+    .where(and(
+      eq(actionInvocations.workspaceId, workspaceId),
+      eq(actionInvocations.id, invocationId),
+      eq(actionInvocations.actionName, 'spawn'),
+      eq(actionInvocations.callerId, data.caller_id),
+      eq(actionInvocations.invocationOrigin, 'builtin'),
+      isNull(actionInvocations.actionId),
+    ));
+  if (!invocation) {
+    throw codedError('No matching spawn invocation exists', 'invocation_not_found', 404);
+  }
+  const stored = strictBuiltinSpawnContract(invocation);
+  if (!stored || canonicalJson(stored) !== canonicalJson(logical)) {
+    throw codedError(
+      'Idempotency-Key was reused with a different request payload',
+      'idempotency_key_reused',
+      409,
+    );
+  }
+  const settled = await replayInvocationClaim(db, workspaceId, invocation);
+  return markInvocationReplay(invocationAck(settled, { actionName: 'spawn' }));
+}
+
 export async function invokeAction(
   db: Db,
   workspaceId: string,
@@ -2027,6 +2237,10 @@ export async function invokeAction(
     authorizeBuiltinRelease?: boolean;
   } = {},
 ) {
+  const requestInput = recordInput(data.input);
+  if (actionName === 'spawn') rejectClientSpawnContractProof(requestInput);
+  const strictSpawnRequested = actionName === 'spawn'
+    && materializedSpawnLogicalRequest(requestInput, false) !== null;
   const action = await fetchAction(db, workspaceId, actionName, options.includeNodeScoped);
   let invocationId: string | undefined;
   if (options.idempotencyKey !== undefined) {
@@ -2067,7 +2281,11 @@ export async function invokeAction(
   // Legacy workspace-global broker aliases must not swallow an explicit
   // target_node. Capacity placement validates that target and its live provider.
   // Keep the alias ACL above this branch; explicit targeting is not an ACL bypass.
-  if (actionName === 'spawn' && (!action || (action.handlerNodeId && typeof data.input?.target_node === 'string' && data.input.target_node.trim().length > 0))) {
+  if (actionName === 'spawn' && (
+    strictSpawnRequested
+    || !action
+    || (action.handlerNodeId && typeof data.input?.target_node === 'string' && data.input.target_node.trim().length > 0)
+  )) {
     return dispatchSpawn({
       db,
       registry: options.nodeConnections,
@@ -3515,10 +3733,15 @@ async function selectRetryPlacement(
 ) {
   const input = recordInput(invocation.input);
   if (isSpawnInvocation(invocation.actionName)) {
+    const logicalRequest = materializedSpawnLogicalRequest(input, true);
+    const preferredNodeId = typeof logicalRequest?.target_node_id === 'string'
+      ? logicalRequest.target_node_id.trim()
+      : undefined;
     return claimSpawnNode(db, invocation.workspaceId, {
       actionName: 'spawn',
       input,
       callerId: invocation.callerId,
+      preferredNodeId,
       excludeNodeIds,
     });
   }

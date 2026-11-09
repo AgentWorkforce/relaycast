@@ -1168,6 +1168,18 @@ replay that reaches the narrow interval before its placement/dispatch outcome is
 durable returns retryable `idempotency_unavailable`; clients must retry the same
 logical request with the same key rather than minting a replacement.
 
+Builtin spawn callers that require exact node identity use
+`POST /v1/actions/spawn/strict-invoke` with the
+`relay.spawn.invoke.logical/1` contract. The dedicated route is absent on older
+servers, so an unsupported client fails before dispatch instead of sending new
+fields through the legacy generic route. The request binds the target node ID
+and name plus the stable logical spawn fields; only the server-materialized
+`worker_cwd` may differ on a retry with the same key. A successful response
+includes the server-owned `spawn_contract_applied` marker, which callers must
+verify. If a caller can no longer materialize a safe local path,
+`POST /v1/actions/spawn/replay` reads the existing caller-scoped claim without
+creating, placing, or dispatching work.
+
 Long-running providers can register an action capability with
 `execution_mode: "task"` (for example `{name: "task.run", kind: "action", global:
 true, execution_mode: "task"}`). Task invocations use the existing authenticated

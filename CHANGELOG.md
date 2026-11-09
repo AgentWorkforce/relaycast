@@ -20,6 +20,7 @@ Packages without a separate changelog are covered by the cross-package notes bel
 
 ### Added
 
+- `POST /v1/actions/spawn/strict-invoke` binds builtin spawn to an exact node id and versioned logical request, with a server-owned response marker proving the contract was applied; `POST /v1/actions/spawn/replay` recovers that caller's existing keyed claim without creating, placing, or dispatching another invocation.
 - Self-hosted servers can run on PostgreSQL (its own database, schema `public`, single replica) with `relaycast-engine migrate` / `verify-db`; see `docs/self-host-postgres.md`.
 - Hosts can supply a message-search backend through the optional `search` engine dependency (`SearchIndex`); without it, existing SQLite search behavior is unchanged. Configured backend errors propagate without falling back to SQLite.
 
