@@ -2397,7 +2397,10 @@ export async function deleteNode(
     // sent, that snapshot is only a 201 record: the settle may have unpinned
     // the row for placement elsewhere.
     w.update(actionInvocations)
-      .set({ status: 'failed', error: 'node_deleted', completedAt: lostAt, spawnReservedAt: null })
+      .set({
+        status: 'failed', error: 'node_deleted', completedAt: lostAt,
+        spawnReservedAt: null, spawnReservationToken: null,
+      })
       .where(and(
         eq(actionInvocations.workspaceId, workspaceId),
         inArray(actionInvocations.status, ['pending', 'dispatched', 'invoked', 'running']),
@@ -3186,6 +3189,7 @@ export async function reconcileInventory(
       dispatchedProvider: actionInvocations.dispatchedProvider,
       providerAcceptedAttempt: actionInvocations.providerAcceptedAttempt,
       spawnReservedAt: actionInvocations.spawnReservedAt,
+      spawnReservationToken: actionInvocations.spawnReservationToken,
       attemptedNodeIds: actionInvocations.attemptedNodeIds,
       dispatchAttempts: actionInvocations.dispatchAttempts,
       retryAfterAt: actionInvocations.retryAfterAt,

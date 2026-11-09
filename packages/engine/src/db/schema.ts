@@ -1197,6 +1197,10 @@ export const actionInvocations = sqliteTable(
     // later retry generation the previous attempt's acceptance.
     providerAcceptedAttempt: integer('provider_accepted_attempt'),
     spawnReservedAt: integer('spawn_reserved_at', { mode: 'timestamp' }),
+    // Per-operation ownership token for atomic strict-spawn reservation and
+    // cleanup. The timestamp alone is not unique (PostgreSQL stores seconds),
+    // so it cannot distinguish concurrent recovery transactions.
+    spawnReservationToken: text('spawn_reservation_token'),
     attemptedNodeIds: text('attempted_node_ids', { mode: 'json' }).$type<string[]>().notNull().default([]),
     dispatchAttempts: integer('dispatch_attempts').notNull().default(0),
     // Provider connection that received the current node dispatch. Inventory is

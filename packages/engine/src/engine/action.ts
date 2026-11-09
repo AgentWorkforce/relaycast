@@ -35,7 +35,7 @@ type ActionRow = typeof actions.$inferSelect;
 type InvocationRow = typeof actionInvocations.$inferSelect;
 type RetryableInvocationRow = Pick<
   InvocationRow,
-  'id' | 'workspaceId' | 'actionId' | 'actionName' | 'invocationOrigin' | 'callerId' | 'input' | 'status' | 'dispatchedNodeId' | 'providerAcceptedAttempt' | 'spawnReservedAt' | 'attemptedNodeIds' | 'dispatchAttempts' | 'retryAfterAt'
+  'id' | 'workspaceId' | 'actionId' | 'actionName' | 'invocationOrigin' | 'callerId' | 'input' | 'status' | 'dispatchedNodeId' | 'providerAcceptedAttempt' | 'spawnReservedAt' | 'spawnReservationToken' | 'attemptedNodeIds' | 'dispatchAttempts' | 'retryAfterAt'
 >;
 
 const OPEN_INVOCATION_STATUSES = ['pending', 'dispatched', 'invoked'];
@@ -802,6 +802,7 @@ function strictSpawnPredispatchState(
   invocationId: string,
   nodeId: string,
   reservedAt?: Date | null,
+  reservationToken?: string | null,
 ) {
   return and(
     eq(actionInvocations.workspaceId, workspaceId),
@@ -818,6 +819,11 @@ function strictSpawnPredispatchState(
       : reservedAt === null
         ? isNull(actionInvocations.spawnReservedAt)
         : eq(actionInvocations.spawnReservedAt, reservedAt),
+    reservationToken === undefined
+      ? undefined
+      : reservationToken === null
+        ? isNull(actionInvocations.spawnReservationToken)
+        : eq(actionInvocations.spawnReservationToken, reservationToken),
   );
 }
 
@@ -834,22 +840,35 @@ async function reserveStrictSpawnClaim(
   node: typeof nodes.$inferSelect,
 ): Promise<InvocationRow> {
   const reservedAt = new Date();
+  const reservationToken = `srt_${globalThis.crypto.randomUUID()}`;
   const predispatch = strictSpawnPredispatchState(
     invocation.workspaceId,
     invocation.id,
     node.id,
     null,
+    null,
   );
-  const hasPredispatchClaim = sql`EXISTS (
-    SELECT 1 FROM ${actionInvocations}
-    WHERE ${predispatch}
-  )`;
+  const ownsReservation = strictSpawnPredispatchState(
+    invocation.workspaceId,
+    invocation.id,
+    node.id,
+    reservedAt,
+    reservationToken,
+  );
   const hasCapacity = or(
     eq(nodes.maxAgents, 0),
     sql`${nodes.activeAgents} + COALESCE(${nodes.reservedAgents}, 0) < ${nodes.maxAgents}`,
   );
   try {
     await runAtomicWrites(db, (writeDb) => [
+      // Win durable ownership before touching capacity. Under PostgreSQL
+      // READ COMMITTED the row lock serializes this CAS; under D1 the batch
+      // executes in order. The unique token keeps the losing transaction's
+      // node write at zero rows on every adapter.
+      writeDb
+        .update(actionInvocations)
+        .set({ spawnReservedAt: reservedAt, spawnReservationToken: reservationToken })
+        .where(predispatch),
       writeDb
         .update(nodes)
         .set({
@@ -863,20 +882,7 @@ async function reserveStrictSpawnClaim(
         .where(and(
           eq(nodes.workspaceId, invocation.workspaceId),
           eq(nodes.id, node.id),
-          hasPredispatchClaim,
-        )),
-      writeDb
-        .update(actionInvocations)
-        .set({ spawnReservedAt: reservedAt })
-        .where(and(
-          predispatch,
-          sql`EXISTS (
-            SELECT 1 FROM ${nodes}
-            WHERE ${nodes.workspaceId} = ${invocation.workspaceId}
-              AND ${nodes.id} = ${node.id}
-              AND (${nodes.maxAgents} = 0 OR
-                ${nodes.activeAgents} + COALESCE(${nodes.reservedAgents}, 0) <= ${nodes.maxAgents})
-          )`,
+          sql`EXISTS (SELECT 1 FROM ${actionInvocations} WHERE ${ownsReservation})`,
         )),
     ], { requireAtomic: true });
   } catch (error) {
@@ -913,20 +919,44 @@ async function failStrictSpawnPredispatch(
   const nodeId = invocation.handlerNodeId;
   if (!nodeId || invocation.dispatchedNodeId || invocation.dispatchAttempts !== 0) return null;
   const reservedAt = invocation.spawnReservedAt;
+  const reservationToken = invocation.spawnReservationToken;
   const predicate = and(
-    strictSpawnPredispatchState(invocation.workspaceId, invocation.id, nodeId, reservedAt),
+    strictSpawnPredispatchState(
+      invocation.workspaceId,
+      invocation.id,
+      nodeId,
+      reservedAt,
+      reservationToken,
+    ),
     ...(cutoff ? [lte(actionInvocations.createdAt, cutoff)] : []),
   );
   if (!reservedAt) {
     const [failed] = await db
       .update(actionInvocations)
-      .set({ status: 'failed', error, completedAt: new Date() })
+      .set({ status: 'failed', error, completedAt: new Date(), spawnReservationToken: null })
       .where(predicate)
       .returning();
     return failed ?? null;
   }
 
+  const cleanupToken = `src_${globalThis.crypto.randomUUID()}`;
+  const cleanupOwner = and(
+    strictSpawnPredispatchState(
+      invocation.workspaceId,
+      invocation.id,
+      nodeId,
+      reservedAt,
+      cleanupToken,
+    ),
+    ...(cutoff ? [lte(actionInvocations.createdAt, cutoff)] : []),
+  );
   const results = await runAtomicWrites(db, (writeDb) => [
+    // Claim cleanup first. Two sweepers can observe the same reservation, but
+    // only the unique-token winner is allowed to decrement node capacity.
+    writeDb
+      .update(actionInvocations)
+      .set({ spawnReservationToken: cleanupToken })
+      .where(predicate),
     writeDb
       .update(nodes)
       .set({
@@ -936,15 +966,21 @@ async function failStrictSpawnPredispatch(
       .where(and(
         eq(nodes.workspaceId, invocation.workspaceId),
         eq(nodes.id, nodeId),
-        sql`EXISTS (SELECT 1 FROM ${actionInvocations} WHERE ${predicate})`,
+        sql`EXISTS (SELECT 1 FROM ${actionInvocations} WHERE ${cleanupOwner})`,
       )),
     writeDb
       .update(actionInvocations)
-      .set({ status: 'failed', error, completedAt: new Date(), spawnReservedAt: null })
-      .where(predicate)
+      .set({
+        status: 'failed',
+        error,
+        completedAt: new Date(),
+        spawnReservedAt: null,
+        spawnReservationToken: null,
+      })
+      .where(cleanupOwner)
       .returning(),
   ], { requireAtomic: true });
-  return ((results[1] as InvocationRow[] | undefined)?.[0]) ?? null;
+  return ((results[2] as InvocationRow[] | undefined)?.[0]) ?? null;
 }
 
 async function idempotentInvocationId(
@@ -1170,7 +1206,10 @@ async function failInvocationForUnavailableProvider(
 ): Promise<void> {
   await db
     .update(actionInvocations)
-    .set({ status: 'failed', error: 'handler_unavailable', completedAt: new Date(), spawnReservedAt: null })
+    .set({
+      status: 'failed', error: 'handler_unavailable', completedAt: new Date(),
+      spawnReservedAt: null, spawnReservationToken: null,
+    })
     .where(and(
       eq(actionInvocations.workspaceId, workspaceId),
       eq(actionInvocations.id, invocationId),
@@ -1200,7 +1239,7 @@ async function failNeverDispatchedInvocation(
 ): Promise<boolean> {
   const failed = await db
     .update(actionInvocations)
-    .set({ status: 'failed', error, completedAt: new Date(), spawnReservedAt: null })
+    .set({ status: 'failed', error, completedAt: new Date(), spawnReservedAt: null, spawnReservationToken: null })
     .where(and(
       eq(actionInvocations.workspaceId, workspaceId),
       eq(actionInvocations.id, invocationId),
@@ -1245,7 +1284,7 @@ async function failOpenInvocationRows(
     ));
   const failed = await db
     .update(actionInvocations)
-    .set({ status: 'failed', error, completedAt: new Date(), spawnReservedAt: null })
+    .set({ status: 'failed', error, completedAt: new Date(), spawnReservedAt: null, spawnReservationToken: null })
     .where(and(
       eq(actionInvocations.workspaceId, workspaceId),
       inArray(actionInvocations.id, invocationIds),
@@ -2927,6 +2966,7 @@ async function completeReleaseNodeInvocation(
         error: expectedAgentId ? RELEASE_IDENTITY_MISMATCH_CODE : RELEASE_GENERATION_CONFLICT_CODE,
         completedAt: new Date(),
         spawnReservedAt: null,
+        spawnReservationToken: null,
       })
       .where(and(
         eq(actionInvocations.workspaceId, workspaceId),
@@ -2955,6 +2995,7 @@ async function completeReleaseNodeInvocation(
         error: expectedAgentId ? RELEASE_IDENTITY_MISMATCH_CODE : RELEASE_GENERATION_CONFLICT_CODE,
         completedAt: new Date(),
         spawnReservedAt: null,
+        spawnReservationToken: null,
       })
       .where(and(
         eq(actionInvocations.workspaceId, workspaceId),
@@ -3015,6 +3056,7 @@ async function completeReleaseNodeInvocation(
         error: expectedAgentId ? RELEASE_IDENTITY_MISMATCH_CODE : RELEASE_GENERATION_CONFLICT_CODE,
         completedAt,
         spawnReservedAt: null,
+        spawnReservationToken: null,
       })
       .where(and(
         eq(actionInvocations.workspaceId, workspaceId),
@@ -3077,6 +3119,7 @@ async function completeReleaseNodeInvocation(
         status: 'completed',
         completedAt,
         spawnReservedAt: null,
+        spawnReservationToken: null,
       })
       .where(and(
         eq(actionInvocations.workspaceId, workspaceId),
@@ -3243,6 +3286,7 @@ async function dispatchNodeAttempt(
       dispatchedNodeId: nodeId,
       dispatchedProvider: opts.providerName,
       spawnReservedAt: opts.reservationHeld ? new Date() : null,
+      spawnReservationToken: opts.reservationHeld ? actionInvocations.spawnReservationToken : null,
       ...(opts.targetActionId ? { actionId: opts.targetActionId } : {}),
       ...attemptFields,
     })
@@ -3313,6 +3357,7 @@ async function restoreUnsentSpawnClaim(
       dispatchedAt: null,
       dispatchedNodeId: claim.restoreDispatchedNodeId,
       spawnReservedAt: claim.restoreSpawnReservedAt,
+      spawnReservationToken: claim.restoreSpawnReservedAt ? actionInvocations.spawnReservationToken : null,
       retryAfterAt: claim.restoreRetryAfterAt,
       dispatchAttempts: claim.restoreDispatchAttempts,
     })
@@ -3387,6 +3432,7 @@ async function claimRegisteredActionHandoff(
       dispatchedNodeId: args.nodeId,
       dispatchedProvider: args.providerName,
       spawnReservedAt: args.reservationHeld ? new Date() : null,
+      spawnReservationToken: null,
       actionId: claimedActionId,
       ...attemptFields,
     })
@@ -3475,6 +3521,7 @@ async function settleDeletedRegisteredAction(
       error: 'action_deleted',
       completedAt: new Date(),
       spawnReservedAt: null,
+      spawnReservationToken: null,
     })
     .where(and(
       eq(actionInvocations.workspaceId, workspaceId),
@@ -4412,7 +4459,7 @@ export async function rescheduleNodeInvocation(
       await runAtomic(db, async (tx) => {
         const [releasedHold] = await tx
           .update(actionInvocations)
-          .set({ spawnReservedAt: null })
+          .set({ spawnReservedAt: null, spawnReservationToken: null })
           .where(and(holdWhere, eq(actionInvocations.spawnReservedAt, heldAt)))
           .returning({ id: actionInvocations.id });
         if (releasedHold) await releaseNodeCapacity(tx, invocation.workspaceId, nodeId);
@@ -4420,7 +4467,7 @@ export async function rescheduleNodeInvocation(
     } catch (error) {
       await db
         .update(actionInvocations)
-        .set({ spawnReservedAt: heldAt })
+        .set({ spawnReservedAt: heldAt, spawnReservationToken: invocation.spawnReservationToken ?? null })
         .where(and(holdWhere, isNull(actionInvocations.spawnReservedAt)));
       throw error;
     }
@@ -4435,7 +4482,10 @@ export async function rescheduleNodeInvocation(
     if (shadow) {
       const [reset] = await db
         .update(actionInvocations)
-        .set({ status: 'pending', dispatchedAt: null, spawnReservedAt: null, retryAfterAt: null })
+        .set({
+          status: 'pending', dispatchedAt: null,
+          spawnReservedAt: null, spawnReservationToken: null, retryAfterAt: null,
+        })
         .where(and(
           eq(actionInvocations.workspaceId, invocation.workspaceId),
           eq(actionInvocations.id, invocation.id),
@@ -4649,6 +4699,7 @@ export async function rescheduleNodeInvocation(
       dispatchedProvider: null,
       dispatchedAt: null,
       spawnReservedAt: null,
+      spawnReservationToken: null,
       retryAfterAt: opts.retryAfterAt ?? nextRetryAfter(invocation.dispatchAttempts + 1),
     })
     .where(and(
@@ -4707,6 +4758,7 @@ export async function rescheduleInvocationsForLostNode(
           dispatchedProvider: null,
           dispatchedAt: null,
           spawnReservedAt: null,
+          spawnReservationToken: null,
           retryAfterAt: nextRetryAfter(invocation.dispatchAttempts + 1),
         })
         .where(and(
@@ -4765,6 +4817,7 @@ export async function detachInvocationsFromLostNode(
         dispatchedProvider: null,
         dispatchedAt: null,
         spawnReservedAt: null,
+        spawnReservationToken: null,
         retryAfterAt: nextRetryAfter(invocation.dispatchAttempts + 1),
       })
       .where(and(
@@ -4886,6 +4939,7 @@ export async function completeNodeInvocation(
       dispatchedAt: actionInvocations.dispatchedAt,
       providerAcceptedAttempt: actionInvocations.providerAcceptedAttempt,
       spawnReservedAt: actionInvocations.spawnReservedAt,
+      spawnReservationToken: actionInvocations.spawnReservationToken,
       attemptedNodeIds: actionInvocations.attemptedNodeIds,
       dispatchAttempts: actionInvocations.dispatchAttempts,
       retryAfterAt: actionInvocations.retryAfterAt,
@@ -4943,6 +4997,7 @@ export async function completeNodeInvocation(
       status: data.error ? 'failed' : 'completed',
       completedAt: new Date(),
       spawnReservedAt: null,
+      spawnReservationToken: null,
     })
     .where(and(
       eq(actionInvocations.workspaceId, workspaceId),
@@ -5063,7 +5118,28 @@ async function failNeverDispatchedExpiredInvocations(
 
   const byWorkspace = new Map<string, string[]>();
   for (const row of rows) {
-    if (strictBuiltinSpawnContract(row) && row.handlerNodeId) {
+    let strictSpawn: Record<string, unknown> | null;
+    try {
+      strictSpawn = strictBuiltinSpawnContract(row);
+    } catch {
+      // A corrupt persisted strict marker must fail closed without aborting the
+      // workspace-wide sweep. If it owns capacity, use the exact-token cleanup
+      // path; otherwise the ordinary never-dispatched CAS is sufficient.
+      try {
+        const failed = row.handlerNodeId
+          ? await failStrictSpawnPredispatch(db, row, 'invalid_spawn_request', cutoff)
+          : (await failNeverDispatchedInvocationRows(
+            db, row.workspaceId, [row.id], cutoff, 'invalid_spawn_request',
+          ))[0] ?? null;
+        if (completionDeps && failed) {
+          await emitFailedInvocationEffects(completionDeps, row.workspaceId, [failed]);
+        }
+      } catch {
+        // Leave this exact malformed claim for the next sweep; other rows run.
+      }
+      continue;
+    }
+    if (strictSpawn && row.handlerNodeId) {
       try {
         const failed = await failStrictSpawnPredispatch(
           db,
@@ -5125,7 +5201,7 @@ async function failNeverDispatchedInvocationRows(
   if (invocationIds.length === 0) return [];
   return await db
     .update(actionInvocations)
-    .set({ status: 'failed', error, completedAt: new Date(), spawnReservedAt: null })
+    .set({ status: 'failed', error, completedAt: new Date(), spawnReservedAt: null, spawnReservationToken: null })
     .where(and(
       eq(actionInvocations.workspaceId, workspaceId),
       inArray(actionInvocations.id, invocationIds),

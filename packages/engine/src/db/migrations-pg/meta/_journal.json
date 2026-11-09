@@ -15,6 +15,13 @@
       "when": 1794168009366,
       "tag": "0001_triggers",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1794267103860,
+      "tag": "0002_spawn_reservation_token",
+      "breakpoints": true
     }
   ]
 }

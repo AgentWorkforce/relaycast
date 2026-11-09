@@ -45,11 +45,12 @@ it('upgrades existing actions and results additively, preserving rows and every 
       '0079_credential_upgrades.sql',
       '0080_nodes_context_reachable_index.sql',
       '0082_pending_events_settled_retention.sql',
+      '0083_spawn_reservation_token.sql',
     ]);
     for (const table of before) {
       const columns = db.pragma(`table_info(${table.name})`) as { name: string }[];
       expect(columns.slice(0, table.columns.length)).toEqual(table.columns);
-      expect(columns).toHaveLength(table.columns.length + (table.name === 'action_invocations' ? 2 : 1));
+      expect(columns).toHaveLength(table.columns.length + (table.name === 'action_invocations' ? 3 : 1));
       expect(db.pragma(`foreign_key_list(${table.name})`)).toEqual(table.fks);
       expect(db.prepare(`SELECT ${table.columns.map(c => c.name).join(',')} FROM ${table.name}`).all()).toEqual(table.rows);
     }

@@ -126,15 +126,18 @@ describe('bundled actor migrations', () => {
     const fake = new FakeActorDatabase();
     const { applied } = applyActorMigrations(fake);
     expect(actorMigrationsCurrent(fake)).toBe(true);
-    // A database that recorded the two superseded files and lacks the newest
-    // one has more rows than the plan needs, and is not current.
-    const newest = applied[applied.length - 1];
-    fake.exec(`DELETE FROM ${ACTOR_MIGRATIONS_TABLE} WHERE name = ?`, newest);
+    // A database that recorded the two superseded files and lacks a replay-safe
+    // current file has more rows than the plan needs, and is not current. Use
+    // an index migration: SQLite cannot replay an ALTER TABLE ADD COLUMN after
+    // its ledger row alone is lost because the column itself remains present.
+    const absent = '0082_pending_events_settled_retention.sql';
+    expect(applied).toContain(absent);
+    fake.exec(`DELETE FROM ${ACTOR_MIGRATIONS_TABLE} WHERE name = ?`, absent);
     for (const superseded of ['0048_bounded_maintenance.sql', '0049_redrive_review_hardening.sql']) {
       fake.exec(`INSERT OR IGNORE INTO ${ACTOR_MIGRATIONS_TABLE} (name, applied_at) VALUES (?, 0)`, superseded);
     }
     expect(actorMigrationsCurrent(fake)).toBe(false);
-    expect(applyActorMigrations(fake, { trackingTableExists: true }).applied).toEqual([newest]);
+    expect(applyActorMigrations(fake, { trackingTableExists: true }).applied).toEqual([absent]);
     expect(actorMigrationsCurrent(fake)).toBe(true);
   });
 });

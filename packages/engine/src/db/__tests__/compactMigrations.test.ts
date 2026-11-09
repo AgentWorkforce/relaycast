@@ -198,6 +198,12 @@ function expectConstraintsPreserved(before: ReturnType<typeof constraints>, afte
           sql: table.sql.replace(', liveness_revision INTEGER NOT NULL DEFAULT 0', ''),
         };
       }
+      if (table.name === 'action_invocations') {
+        table = {
+          ...table,
+          sql: table.sql.replace(', spawn_reservation_token TEXT DEFAULT NULL', ''),
+        };
+      }
       return {
         ...table,
         uniqueIndexes: table.uniqueIndexes.filter(index =>

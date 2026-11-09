@@ -26,6 +26,31 @@ function capability(name: string, kind?: string, metadata?: Record<string, unkno
 }
 
 /**
+ * PostgreSQL READ COMMITTED regression harness: hold the invocation row while
+ * both contenders enter their transactions. The old node-first protocol then
+ * let both node mutations use a stale marker snapshot. Other adapters simply
+ * run the same public-API concurrency assertion without the row-lock barrier.
+ */
+async function withConcurrentInvocationContenders<T>(
+  db: EngineDb,
+  workspaceId: string,
+  invocationId: string,
+  start: () => Promise<T>,
+): Promise<T> {
+  if (db.engineDialect !== 'pg') return start();
+  let contenders: Promise<T> | undefined;
+  await requireTransactionCapability(db).withTransaction(async (tx) => {
+    await tx.execute(sql`SELECT ${actionInvocations.id} FROM ${actionInvocations}
+      WHERE ${actionInvocations.workspaceId} = ${workspaceId}
+        AND ${actionInvocations.id} = ${invocationId}
+      FOR UPDATE`);
+    contenders = start();
+    await new Promise((resolve) => setTimeout(resolve, 100));
+  });
+  return await contenders!;
+}
+
+/**
  * Conformance suite for the in-process Node adapter. These assert the
  * parity-critical realtime invariants for node transport, presence fanout,
  * workspace observer streams, rate limiting, and queued action drain.
@@ -3131,6 +3156,56 @@ describe('node adapter conformance', () => {
       expect(row.dispatchAttempts).toBe(1);
     });
 
+    it('wins strict recovery ownership before one concurrent capacity increment', async () => {
+      const db = stack.runtime.deps.db;
+      const ws = await createWorkspace(stack.app, 'strict-recovery-ownership-race');
+      const caller = await registerAgent(stack.app, ws.workspaceKey, 'caller');
+      const alpha = await enrollAndAttachNode(ws, {
+        id: 'node_alpha', name: 'alpha',
+        capabilities: [capability('spawn:claude', 'spawn', { agent: 'claude' })],
+        load: 0, maxAgents: 3,
+      });
+      const logical = {
+        schema: 'relay.spawn.invoke.logical/1', target_node_id: 'node_alpha', target_node: 'alpha',
+        name: 'owned-race-worker', cli: 'claude', task: 'recover once', directory: '/repo', verify_ready: true,
+      };
+      const key = 'strict-recovery-ownership-race';
+      const digest = await sha256Hex(['action-invoke-v1', ws.workspaceId, caller.agentId, 'spawn', key].join('\0'));
+      const invocationId = `inv_idem_${digest}`;
+      await db.insert(actionInvocations).values({
+        id: invocationId, workspaceId: ws.workspaceId, actionId: null, actionName: 'spawn',
+        invocationOrigin: 'builtin', callerId: caller.agentId, callerName: caller.name,
+        handlerNodeId: 'node_alpha',
+        input: {
+          spawn_contract: logical.schema, target_node_id: logical.target_node_id, target_node: logical.target_node,
+          name: logical.name, cli: logical.cli, task: logical.task, worker_cwd: '/repo',
+          verify_ready: logical.verify_ready, logical_request: logical, spawn_contract_applied: logical.schema,
+        },
+        status: 'pending',
+      });
+      const replay = () => stack.app.request('/v1/actions/spawn/replay', {
+        method: 'POST',
+        headers: {
+          'content-type': 'application/json', authorization: `Bearer ${caller.token}`, 'Idempotency-Key': key,
+        },
+        body: JSON.stringify({ logical_request: logical }),
+      });
+      const responses = await withConcurrentInvocationContenders(
+        db,
+        ws.workspaceId,
+        invocationId,
+        () => Promise.all([replay(), replay()]),
+      );
+      expect(responses.map((response) => response.status)).toEqual([200, 200]);
+      const [node] = await db.select().from(nodes)
+        .where(and(eq(nodes.workspaceId, ws.workspaceId), eq(nodes.id, 'node_alpha')));
+      const [row] = await db.select().from(actionInvocations).where(eq(actionInvocations.id, invocationId));
+      expect(node.reservedAgents).toBe(1);
+      expect(row.spawnReservationToken).toMatch(/^srt_/);
+      expect(row.dispatchAttempts).toBe(1);
+      expect(alpha.sock.ofType('action.invoke').filter((frame) => frame.action === 'spawn:claude')).toHaveLength(1);
+    });
+
     it('rolls back the strict reservation when the D1-style marker write fails', async () => {
       const ws = await createWorkspace(stack.app, 'strict-reservation-d1-rollback');
       const caller = await registerAgent(stack.app, ws.workspaceKey, 'caller');
@@ -3377,6 +3452,96 @@ describe('node adapter conformance', () => {
       });
       expect(replay.status).toBe(503);
       expect(alpha.sock.ofType('action.invoke')).toHaveLength(0);
+    });
+
+    it('wins strict cleanup ownership before one concurrent capacity decrement', async () => {
+      const db = stack.runtime.deps.db;
+      const ws = await createWorkspace(stack.app, 'strict-cleanup-ownership-race');
+      const caller = await registerAgent(stack.app, ws.workspaceKey, 'caller');
+      await enrollAndAttachNode(ws, {
+        id: 'node_alpha', name: 'alpha',
+        capabilities: [capability('spawn:claude', 'spawn', { agent: 'claude' })],
+        load: 0, maxAgents: 3,
+      });
+      const heldAt = new Date(Date.now() - 60_000);
+      const invocationId = 'inv_strict_cleanup_ownership_race';
+      const logical = {
+        schema: 'relay.spawn.invoke.logical/1', target_node_id: 'node_alpha', target_node: 'alpha',
+        name: 'cleanup-worker', cli: 'claude', task: 'expire once', directory: '/repo', verify_ready: true,
+      };
+      await db.insert(actionInvocations).values({
+        id: invocationId, workspaceId: ws.workspaceId, actionId: null, actionName: 'spawn',
+        invocationOrigin: 'builtin', callerId: caller.agentId, callerName: caller.name,
+        handlerNodeId: 'node_alpha',
+        input: {
+          spawn_contract: logical.schema, target_node_id: logical.target_node_id, target_node: logical.target_node,
+          name: logical.name, cli: logical.cli, task: logical.task, worker_cwd: '/repo',
+          verify_ready: logical.verify_ready, logical_request: logical, spawn_contract_applied: logical.schema,
+        },
+        status: 'pending', spawnReservedAt: heldAt, spawnReservationToken: 'srt_fixture', createdAt: heldAt,
+      });
+      // One slot belongs to this claim; the other belongs to unrelated work.
+      await db.update(nodes).set({ reservedAgents: 2 })
+        .where(and(eq(nodes.workspaceId, ws.workspaceId), eq(nodes.id, 'node_alpha')));
+      const sweep = () => sweepTimedOutInvocations(db, stack.runtime.realtime, {
+        timeoutMs: 60_000,
+        pendingInvocationMaxAgeMs: 0,
+        neverDispatchedSweepGraceMs: 0,
+      });
+      await withConcurrentInvocationContenders(
+        db,
+        ws.workspaceId,
+        invocationId,
+        () => Promise.all([sweep(), sweep()]),
+      );
+      const [node] = await db.select().from(nodes)
+        .where(and(eq(nodes.workspaceId, ws.workspaceId), eq(nodes.id, 'node_alpha')));
+      const [row] = await db.select().from(actionInvocations).where(eq(actionInvocations.id, invocationId));
+      expect(node.reservedAgents).toBe(1);
+      expect(row).toMatchObject({
+        status: 'failed', error: 'never_dispatched_expired',
+        spawnReservedAt: null, spawnReservationToken: null,
+      });
+    });
+
+    it('fails a malformed strict row without stalling unrelated never-dispatched cleanup', async () => {
+      const db = stack.runtime.deps.db;
+      const ws = await createWorkspace(stack.app, 'malformed-strict-sweep-isolation');
+      const caller = await registerAgent(stack.app, ws.workspaceKey, 'caller');
+      await enrollAndAttachNode(ws, {
+        id: 'node_alpha', name: 'alpha',
+        capabilities: [capability('spawn:claude', 'spawn', { agent: 'claude' })],
+        load: 0, maxAgents: 2,
+      });
+      const createdAt = new Date(Date.now() - 60_000);
+      await db.insert(actionInvocations).values([
+        {
+          id: 'inv_malformed_strict', workspaceId: ws.workspaceId, actionId: null, actionName: 'spawn',
+          invocationOrigin: 'builtin', callerId: caller.agentId, callerName: caller.name,
+          handlerNodeId: 'node_alpha', status: 'pending', createdAt,
+          input: {
+            spawn_contract: 'relay.spawn.invoke.logical/1',
+            spawn_contract_applied: 'relay.spawn.invoke.logical/1',
+            logical_request: { schema: 'relay.spawn.invoke.logical/1' },
+          },
+        },
+        {
+          id: 'inv_unrelated_expired', workspaceId: ws.workspaceId, actionId: null, actionName: 'ordinary',
+          invocationOrigin: 'builtin', callerId: caller.agentId, callerName: caller.name,
+          status: 'pending', createdAt, input: {},
+        },
+      ]);
+      await sweepTimedOutInvocations(db, stack.runtime.realtime, {
+        timeoutMs: 60_000,
+        pendingInvocationMaxAgeMs: 0,
+        neverDispatchedSweepGraceMs: 0,
+      });
+      const rows = await db.select().from(actionInvocations)
+        .where(eq(actionInvocations.workspaceId, ws.workspaceId));
+      expect(rows).toEqual(expect.arrayContaining([
+        expect.objectContaining({ id: 'inv_malformed_strict', status: 'failed', error: 'invalid_spawn_request' }),
+        expect.objectContaining({ id: 'inv_unrelated_expired', status: 'failed', error: 'never_dispatched_expired' }),
+      ]));
     });
 
     it('lets dispatch win a strict replay race without the sweep releasing its reservation', async () => {

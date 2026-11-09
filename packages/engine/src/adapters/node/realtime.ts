@@ -519,6 +519,7 @@ export class InProcessRealtime implements RealtimeBus, ConnectionRegistry, NodeC
         dispatchedProvider: providerName,
         providerAcceptedAttempt: acceptedAttempt,
         spawnReservedAt: authorization.reservationHeld ? new Date() : null,
+        spawnReservationToken: null,
         ...(authorization.recordAttempt ? {
           attemptedNodeIds: sqlx.jsonAppend(this.db, sql`COALESCE(${actionInvocations.attemptedNodeIds}, '[]')`, sql`${nodeId}`, 'text'),
           dispatchAttempts: acceptedAttempt,
