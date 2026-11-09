@@ -64,8 +64,9 @@ impl AgentClient {
         Ok(Self { client, ws: None })
     }
 
-    /// Create a new agent client from an existing HTTP client.
-    pub(crate) fn from_client(client: HttpClient) -> Self {
+    /// Create an agent client from an existing SDK HTTP client, preserving its
+    /// transport and authentication options. The API key must be an agent token.
+    pub fn from_client(client: HttpClient) -> Self {
         Self { client, ws: None }
     }
 

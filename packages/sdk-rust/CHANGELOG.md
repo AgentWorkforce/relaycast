@@ -19,6 +19,10 @@ The format is based on Keep a Changelog, and this project follows Semantic Versi
 
 ## [Unreleased - Major]
 
+### Added
+
+- `HttpClient::with_http_client`, `AgentClient::from_client` and `RelayCast::from_client` accept an application-configured HTTP transport. Token replacement preserves that transport, including its trust, redirect and timeout settings.
+
 - Workspace creation accepts arbitrary JSON metadata, and updates shallow merge metadata with top-level null values deleting keys.
 
 ### Fixed

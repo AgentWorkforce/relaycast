@@ -426,3 +426,26 @@ Rust SDK publishing is handled by `.github/workflows/publish-rust.yml`.
 ## License
 
 Apache-2.0
+
+### Application-configured HTTP transport
+
+Applications that manage their own TLS policy can supply a `reqwest::Client`:
+
+```rust,no_run
+use relaycast::{ClientOptions, HttpClient, RelayCast};
+
+# fn example(workspace_key: &str) -> Result<(), Box<dyn std::error::Error>> {
+let transport = reqwest::Client::builder()
+    .redirect(reqwest::redirect::Policy::none())
+    .build()?;
+let http = HttpClient::with_http_client(ClientOptions::new(workspace_key), transport);
+let relay = RelayCast::from_client(http)?;
+# Ok(())
+# }
+```
+
+The application owns the supplied client's TLS roots, redirects and timeouts.
+The SDK keeps its authentication headers, response decoding and retry policy.
+`with_api_key` and typed clients retain the supplied transport. This applies to
+requests through that client; standalone workspace bootstrap methods construct
+their own transport.
