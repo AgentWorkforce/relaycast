@@ -444,6 +444,8 @@ let relay = RelayCast::from_client(http)?;
 # }
 ```
 
+The supplied client must come from `reqwest` 0.12, the version this SDK uses, so
+add `reqwest = "0.12"` to your application's `Cargo.toml`.
 The application owns the supplied client's TLS roots, redirects and timeouts.
 The SDK keeps its authentication headers, response decoding and retry policy.
 `with_api_key` and typed clients retain the supplied transport. This applies to
