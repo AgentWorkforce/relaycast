@@ -2,7 +2,6 @@ import { createHash } from 'node:crypto';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { and, eq } from 'drizzle-orm';
 import { actionInvocations, nodes } from '../../db/tables.js';
-import type { EngineDb } from '../../ports/database.js';
 import {
   createWorkspace,
   FakeSocket,
@@ -468,7 +467,7 @@ describe('strict spawn replay-resume capability', () => {
       caller,
       nodeId,
       sock,
-      db: db as EngineDb,
+      db,
       logical,
       requestInput,
       storedInput,
