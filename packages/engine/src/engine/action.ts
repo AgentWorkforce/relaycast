@@ -4849,7 +4849,7 @@ export async function completeInvocation(
 
   if (!existing) return null;
 
-  if (existing.handlerNodeId || (!existing.handlerAgentId && existing.dispatchedNodeId)) {
+  if (!existing.handlerAgentId && (existing.handlerNodeId || existing.dispatchedNodeId)) {
     throw codedError('Node-owned invocations must be completed over the node control channel', 'node_owned_invocation', 403);
   }
 
