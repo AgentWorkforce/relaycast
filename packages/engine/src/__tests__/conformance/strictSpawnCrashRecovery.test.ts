@@ -14,6 +14,7 @@ import {
   placeStrictSpawn,
   restoreStrictSpawnDispatch,
 } from '../../engine/strictSpawnPlacement.js';
+import { settleNodeOffline } from '../../engine/node.js';
 import { configureNodeLiveness } from '../../engine/nodeLiveness.js';
 import type { NodeLivenessSnapshot } from '../../ports/nodeLiveness.js';
 import {
@@ -73,6 +74,36 @@ describe('strict spawn crash recovery', () => {
 
   beforeEach(() => { stack = makeNodeStack({ ttlMs: 60_000 }); });
   afterEach(() => stack.close());
+
+  it('refuses REST completion before a strict claim is placed', async () => {
+    const fixture = await setup();
+    const key = 'inserted-before-placement';
+    await insertStrictClaim(fixture, key);
+
+    const completion = await stack.app.request(
+      `/v1/actions/spawn/invocations/${fixture.invocationId(key)}/complete`,
+      {
+        method: 'POST',
+        headers: {
+          'content-type': 'application/json',
+          authorization: `Bearer ${fixture.caller.token}`,
+        },
+        body: JSON.stringify({ output: { agent: 'forged' } }),
+      },
+    );
+    expect(completion.status).toBe(403);
+    expect(await completion.json()).toMatchObject({ error: { code: 'node_owned_invocation' } });
+
+    const [invocation] = await fixture.db
+      .select({
+        status: actionInvocations.status,
+        handlerNodeId: actionInvocations.handlerNodeId,
+        dispatchedNodeId: actionInvocations.dispatchedNodeId,
+      })
+      .from(actionInvocations)
+      .where(eq(actionInvocations.id, fixture.invocationId(key)));
+    expect(invocation).toEqual({ status: 'pending', handlerNodeId: null, dispatchedNodeId: null });
+  });
 
   it('resumes an exact-node claim after a crash immediately after invocation insert', async () => {
     const fixture = await setup();
@@ -556,6 +587,7 @@ describe('strict spawn crash recovery', () => {
     });
 
     expect((await fixture.invoke('unknown-send')).status).toBe(201);
+    const callerNode = await attachDirectNodeSocket(stack, fixture.ws.workspaceId, fixture.caller);
     expect((await fixture.invoke('unknown-send')).status).toBe(201);
     expect(fixture.sock.ofType('action.invoke')).toHaveLength(1);
     const [row] = await fixture.db
@@ -568,9 +600,20 @@ describe('strict spawn crash recovery', () => {
       .where(eq(actionInvocations.id, fixture.invocationId('unknown-send')));
     expect(row).toEqual({ token: null, attempts: 1, nodeId: fixture.nodeId });
 
-    await sweepTimedOutInvocations(fixture.db, stack.runtime.realtime, { timeoutMs: 0 });
-    await sweepTimedOutInvocations(fixture.db, stack.runtime.realtime, { timeoutMs: 0 });
+    const sweep = () => sweepTimedOutInvocations(fixture.db, stack.runtime.realtime, {
+      timeoutMs: 0,
+      completionDeps: stack.runtime.deps,
+    });
+    await sweep();
+    await sweep();
+    await stack.settle();
     expect(fixture.sock.ofType('action.invoke')).toHaveLength(1);
+    const failed = deliverFramesOfType(callerNode.sock, 'action.failed');
+    expect(failed).toHaveLength(1);
+    expect((failed[0].payload as { data: Record<string, unknown> }).data).toMatchObject({
+      invocation_id: fixture.invocationId('unknown-send'),
+      error: 'handler_unavailable',
+    });
     const [settled] = await fixture.db
       .select({
         status: actionInvocations.status,
@@ -597,6 +640,7 @@ describe('strict spawn crash recovery', () => {
       throw new Error('process died after socket accepted the frame');
     });
     expect((await fixture.invoke('unknown-send-node-loss')).status).toBe(201);
+    const callerNode = await attachDirectNodeSocket(stack, fixture.ws.workspaceId, fixture.caller);
     const [before] = await fixture.db
       .select({ revision: actionInvocations.nodeLivenessRevision })
       .from(actionInvocations)
@@ -606,8 +650,9 @@ describe('strict spawn crash recovery', () => {
       fixture.db,
       fixture.ws.workspaceId,
       fixture.nodeId,
-      { claimRevision: before.revision + 1 },
+      { claimRevision: before.revision + 1, completionDeps: stack.runtime.deps },
     );
+    await stack.settle();
     expect(detached).toBe(0);
     expect(fixture.sock.ofType('action.invoke')).toHaveLength(1);
     const [settled] = await fixture.db
@@ -624,6 +669,42 @@ describe('strict spawn crash recovery', () => {
       .where(and(eq(nodes.workspaceId, fixture.ws.workspaceId), eq(nodes.id, fixture.nodeId)));
     expect(settled).toEqual({ status: 'failed', error: 'handler_unavailable', reservedAt: null });
     expect(node.reservedAgents).toBe(0);
+    const failed = deliverFramesOfType(callerNode.sock, 'action.failed');
+    expect(failed).toHaveLength(1);
+    expect((failed[0].payload as { data: Record<string, unknown> }).data).toMatchObject({
+      invocation_id: fixture.invocationId('unknown-send-node-loss'),
+      error: 'handler_unavailable',
+    });
+  });
+
+  it('emits action.failed once when offline settlement closes a strict send', async () => {
+    const fixture = await setup();
+    const key = 'unknown-send-offline-settlement';
+    expect((await fixture.invoke(key)).status).toBe(201);
+    const callerNode = await attachDirectNodeSocket(stack, fixture.ws.workspaceId, fixture.caller);
+
+    const settle = () => settleNodeOffline(
+      fixture.db,
+      stack.runtime.realtime,
+      fixture.ws.workspaceId,
+      fixture.nodeId,
+      { deps: stack.runtime.deps },
+    );
+    await settle();
+    await settle();
+    await stack.settle();
+
+    const failed = deliverFramesOfType(callerNode.sock, 'action.failed');
+    expect(failed).toHaveLength(1);
+    expect((failed[0].payload as { data: Record<string, unknown> }).data).toMatchObject({
+      invocation_id: fixture.invocationId(key),
+      error: 'handler_unavailable',
+    });
+    const [row] = await fixture.db
+      .select({ status: actionInvocations.status, error: actionInvocations.error })
+      .from(actionInvocations)
+      .where(eq(actionInvocations.id, fixture.invocationId(key)));
+    expect(row).toEqual({ status: 'failed', error: 'handler_unavailable' });
   });
 
   it('does not fail a newer strict redispatch restored after the detach snapshot', async () => {

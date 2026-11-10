@@ -4362,6 +4362,7 @@ export async function rescheduleNodeInvocation(
     allowAttemptedFallback?: boolean;
     retryAfterAt?: Date | null;
     expectedNodeLivenessRevision?: number;
+    completionDeps?: InvocationCompletionDeps;
   } = {},
 ) {
   // Strict built-in spawn owns its exact-node retry contract. Once an attempt
@@ -4372,7 +4373,7 @@ export async function rescheduleNodeInvocation(
   // never-dispatched expiry path.
   if (strictBuiltinSpawnContract(invocation)) {
     if ((invocation.dispatchAttempts ?? 0) > 0) {
-      await failExactStrictSpawnDispatch(db, {
+      const failed = await failExactStrictSpawnDispatch(db, {
         workspaceId: invocation.workspaceId,
         invocationId: invocation.id,
         status: invocation.status,
@@ -4383,6 +4384,9 @@ export async function rescheduleNodeInvocation(
         error: 'handler_unavailable',
         expectedNodeLivenessRevision: opts.expectedNodeLivenessRevision,
       });
+      if (failed && opts.completionDeps) {
+        await emitFailedInvocationEffects(opts.completionDeps, invocation.workspaceId, [failed]);
+      }
     }
     return false;
   }
@@ -4685,7 +4689,7 @@ export async function rescheduleInvocationsForLostNode(
   registry: NodeConnectionRegistry,
   workspaceId: string,
   nodeId: string,
-  opts: { claimRevision?: number } = {},
+  opts: { claimRevision?: number; completionDeps?: InvocationCompletionDeps } = {},
 ) {
   const rows = await db
     .select()
@@ -4710,6 +4714,7 @@ export async function rescheduleInvocationsForLostNode(
         ...(opts.claimRevision !== undefined
           ? { expectedNodeLivenessRevision: invocation.nodeLivenessRevision }
           : {}),
+        completionDeps: opts.completionDeps,
       })) {
         rescheduled++;
       }
@@ -4749,7 +4754,7 @@ export async function detachInvocationsFromLostNode(
   db: Db,
   workspaceId: string,
   nodeId: string,
-  opts: { claimRevision: number },
+  opts: { claimRevision: number; completionDeps?: InvocationCompletionDeps },
 ) {
   const rows = await db
     .select()
@@ -4764,7 +4769,7 @@ export async function detachInvocationsFromLostNode(
   let detached = 0;
   for (const invocation of rows) {
     if (strictBuiltinSpawnContract(invocation)) {
-      await failExactStrictSpawnDispatch(db, {
+      const failed = await failExactStrictSpawnDispatch(db, {
         workspaceId,
         invocationId: invocation.id,
         status: invocation.status,
@@ -4775,6 +4780,9 @@ export async function detachInvocationsFromLostNode(
         error: 'handler_unavailable',
         expectedNodeLivenessRevision: invocation.nodeLivenessRevision,
       });
+      if (failed && opts.completionDeps) {
+        await emitFailedInvocationEffects(opts.completionDeps, workspaceId, [failed]);
+      }
       continue;
     }
     // Work no retry could place stays attached, for the node's own cleanup to
@@ -4841,6 +4849,9 @@ export async function completeInvocation(
       // the invocation was claimed.
       handlerAgentId: actionInvocations.handlerAgentId,
       handlerNodeId: actionInvocations.handlerNodeId,
+      invocationOrigin: actionInvocations.invocationOrigin,
+      actionId: actionInvocations.actionId,
+      input: actionInvocations.input,
     })
     .from(actionInvocations)
     .leftJoin(actions, eq(actionInvocations.actionId, actions.id))
@@ -4854,7 +4865,10 @@ export async function completeInvocation(
 
   if (!existing) return null;
 
-  if (!existing.handlerAgentId && (existing.handlerNodeId || existing.dispatchedNodeId)) {
+  if (
+    strictBuiltinSpawnContract(existing)
+    || (!existing.handlerAgentId && (existing.handlerNodeId || existing.dispatchedNodeId))
+  ) {
     throw codedError('Node-owned invocations must be completed over the node control channel', 'node_owned_invocation', 403);
   }
 
@@ -5255,6 +5269,7 @@ async function sweepTimedOutInvocationsUnlabeled(
       if (await rescheduleNodeInvocation(db, registry, invocation, {
         allowAttemptedFallback: allowFallback,
         retryAfterAt: allowFallback ? null : nextRetryAfter(invocation.dispatchAttempts + 1),
+        completionDeps: sweepOpts.completionDeps,
       })) {
         rescheduled++;
       }
