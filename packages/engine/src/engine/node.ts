@@ -3183,6 +3183,7 @@ export async function reconcileInventory(
       input: actionInvocations.input,
       status: actionInvocations.status,
       dispatchedNodeId: actionInvocations.dispatchedNodeId,
+      dispatchedAt: actionInvocations.dispatchedAt,
       dispatchedProvider: actionInvocations.dispatchedProvider,
       providerAcceptedAttempt: actionInvocations.providerAcceptedAttempt,
       spawnReservedAt: actionInvocations.spawnReservedAt,

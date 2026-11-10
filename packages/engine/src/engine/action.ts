@@ -41,7 +41,7 @@ type ActionRow = typeof actions.$inferSelect;
 type InvocationRow = typeof actionInvocations.$inferSelect;
 type RetryableInvocationRow = Pick<
   InvocationRow,
-  'id' | 'workspaceId' | 'actionId' | 'actionName' | 'invocationOrigin' | 'callerId' | 'input' | 'status' | 'dispatchedNodeId' | 'providerAcceptedAttempt' | 'spawnReservedAt' | 'attemptedNodeIds' | 'dispatchAttempts' | 'retryAfterAt'
+  'id' | 'workspaceId' | 'actionId' | 'actionName' | 'invocationOrigin' | 'callerId' | 'input' | 'status' | 'dispatchedNodeId' | 'dispatchedAt' | 'providerAcceptedAttempt' | 'spawnReservedAt' | 'attemptedNodeIds' | 'dispatchAttempts' | 'retryAfterAt'
 >;
 
 const OPEN_INVOCATION_STATUSES = ['pending', 'dispatched', 'invoked'];
@@ -4379,6 +4379,7 @@ export async function rescheduleNodeInvocation(
         dispatchAttempts: invocation.dispatchAttempts ?? 0,
         nodeId: invocation.dispatchedNodeId,
         reservedAt: invocation.spawnReservedAt,
+        dispatchedAt: invocation.dispatchedAt,
         error: 'handler_unavailable',
         expectedNodeLivenessRevision: opts.expectedNodeLivenessRevision,
       });
@@ -4770,6 +4771,7 @@ export async function detachInvocationsFromLostNode(
         dispatchAttempts: invocation.dispatchAttempts ?? 0,
         nodeId: invocation.dispatchedNodeId,
         reservedAt: invocation.spawnReservedAt,
+        dispatchedAt: invocation.dispatchedAt,
         error: 'handler_unavailable',
         expectedNodeLivenessRevision: invocation.nodeLivenessRevision,
       });
@@ -4945,6 +4947,19 @@ export async function completeNodeInvocation(
       .update(nodes)
       .set({ handlersLive: false })
       .where(and(eq(nodes.workspaceId, workspaceId), eq(nodes.id, nodeId)));
+    if (strictBuiltinSpawnContract(existing) && existing.dispatchAttempts > 0) {
+      const failed = await failExactStrictSpawnDispatch(db, {
+        workspaceId,
+        invocationId,
+        status: existing.status,
+        dispatchAttempts: existing.dispatchAttempts,
+        nodeId: existing.dispatchedNodeId,
+        reservedAt: existing.spawnReservedAt,
+        dispatchedAt: existing.dispatchedAt,
+        error: 'handler_unavailable',
+      });
+      return failed ? publicInvocation(failed) : null;
+    }
     try {
       if (await rescheduleNodeInvocation(db, registry, existing, { retryAfterAt: nextRetryAfter(existing.dispatchAttempts + 1) })) {
         return null;

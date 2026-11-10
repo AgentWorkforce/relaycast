@@ -245,20 +245,25 @@ export async function failExactStrictSpawnDispatch(
     dispatchAttempts: number;
     nodeId: string | null;
     reservedAt: Date | null;
+    dispatchedAt: Date | null;
     error: string;
     expectedNodeLivenessRevision?: number;
   },
-): Promise<boolean> {
+): Promise<InvocationRow | undefined> {
   const nodeMatches = args.nodeId
     ? eq(actionInvocations.dispatchedNodeId, args.nodeId)
     : isNull(actionInvocations.dispatchedNodeId);
   const reservationMatches = args.reservedAt
     ? eq(actionInvocations.spawnReservedAt, args.reservedAt)
     : isNull(actionInvocations.spawnReservedAt);
+  const dispatchGenerationMatches = args.dispatchedAt
+    ? eq(actionInvocations.dispatchedAt, args.dispatchedAt)
+    : isNull(actionInvocations.dispatchedAt);
   const exactClaim = sql`${actionInvocations.status} = ${args.status}
     AND ${actionInvocations.dispatchAttempts} = ${args.dispatchAttempts}
     AND ${nodeMatches}
     AND ${reservationMatches}
+    AND ${dispatchGenerationMatches}
     ${args.expectedNodeLivenessRevision !== undefined
       ? sql`AND ${actionInvocations.nodeLivenessRevision} = ${args.expectedNodeLivenessRevision}`
       : sql``}`;
@@ -293,13 +298,13 @@ export async function failExactStrictSpawnDispatch(
           eq(actionInvocations.workspaceId, args.workspaceId),
           eq(actionInvocations.id, args.invocationId),
         ))
-        .returning({ id: actionInvocations.id }),
+        .returning(),
     ], { requireAtomic: true });
-    const failedRows = results.at(-1) as Array<{ id: string }>;
-    return !!failedRows[0];
+    const failedRows = results.at(-1) as InvocationRow[];
+    return failedRows[0];
   } catch (error) {
     const kind = databaseConstraintKind(error);
-    if (kind === 'spawn_claim_changed' || kind === 'node_capacity') return false;
+    if (kind === 'spawn_claim_changed' || kind === 'node_capacity') return undefined;
     throw error;
   }
 }
