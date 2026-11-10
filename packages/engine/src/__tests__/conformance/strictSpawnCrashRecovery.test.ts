@@ -3,7 +3,11 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { and, eq, sql } from 'drizzle-orm';
 import { actionInvocations, nodes } from '../../db/tables.js';
 import type { EngineDb } from '../../ports/database.js';
-import { detachInvocationsFromLostNode, sweepTimedOutInvocations } from '../../engine/action.js';
+import {
+  ACTION_DISPATCH_TIMEOUT_MS,
+  detachInvocationsFromLostNode,
+  sweepTimedOutInvocations,
+} from '../../engine/action.js';
 import { placeStrictSpawn } from '../../engine/strictSpawnPlacement.js';
 import {
   attachFakeBatch,
@@ -208,9 +212,9 @@ describe('strict spawn crash recovery', () => {
     },
   );
 
-  it('resumes a reserved definitely-unsent claim without taking a second slot', async () => {
+  it('stamps a fresh dispatch timeout when resuming a reserved definitely-unsent claim', async () => {
     const fixture = await setup();
-    const heldAt = new Date(Date.now() - 1_000);
+    const heldAt = new Date(Date.now() - ACTION_DISPATCH_TIMEOUT_MS - 1_000);
     await insertStrictClaim(fixture, 'reserved-crash', {
       handlerNodeId: fixture.nodeId,
       spawnPlacementToken: 'placement-owner',
@@ -221,11 +225,39 @@ describe('strict spawn crash recovery', () => {
       .update(nodes)
       .set({ reservedAgents: 1 })
       .where(and(eq(nodes.workspaceId, fixture.ws.workspaceId), eq(nodes.id, fixture.nodeId)));
+    const [persistedReservation] = await fixture.db
+      .select({ reservedAt: actionInvocations.spawnReservedAt })
+      .from(actionInvocations)
+      .where(eq(actionInvocations.id, fixture.invocationId('reserved-crash')));
 
+    const dispatchStartedAt = Date.now();
     const response = await fixture.invoke('reserved-crash');
     expect(response.status).toBe(201);
     expect(fixture.sock.ofType('action.invoke')).toHaveLength(1);
     await expectSingleOwnedReservation(fixture, 'reserved-crash');
+    const [dispatched] = await fixture.db
+      .select({
+        status: actionInvocations.status,
+        dispatchedAt: actionInvocations.dispatchedAt,
+        retryAfterAt: actionInvocations.retryAfterAt,
+        reservedAt: actionInvocations.spawnReservedAt,
+      })
+      .from(actionInvocations)
+      .where(eq(actionInvocations.id, fixture.invocationId('reserved-crash')));
+    expect(dispatched.reservedAt).toEqual(persistedReservation.reservedAt);
+    // SQLite stores timestamps to whole seconds; the dispatch claim must still
+    // be fresh rather than inheriting the much older reservation timestamp.
+    expect(dispatched.dispatchedAt?.getTime()).toBeGreaterThanOrEqual(dispatchStartedAt - 1_000);
+    expect(dispatched.retryAfterAt?.getTime()).toBeGreaterThan(dispatched.dispatchedAt?.getTime() ?? 0);
+
+    await sweepTimedOutInvocations(fixture.db, stack.runtime.realtime, {
+      timeoutMs: ACTION_DISPATCH_TIMEOUT_MS,
+    });
+    const [afterSweep] = await fixture.db
+      .select({ status: actionInvocations.status, reservedAt: actionInvocations.spawnReservedAt })
+      .from(actionInvocations)
+      .where(eq(actionInvocations.id, fixture.invocationId('reserved-crash')));
+    expect(afterSweep).toEqual({ status: 'dispatched', reservedAt: persistedReservation.reservedAt });
   });
 
   it('replay route resumes a reserved definitely-unsent claim without taking a second slot', async () => {

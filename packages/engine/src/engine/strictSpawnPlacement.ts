@@ -107,8 +107,9 @@ export async function claimStrictSpawnDispatch(
     dispatchTimeoutMs: number;
   },
 ): Promise<{ claimed: boolean; reservedAt?: Date }> {
-  const reservedAt = args.reservationHeldAt ?? new Date();
-  const retryAfterAt = new Date(Date.now() + args.dispatchTimeoutMs);
+  const dispatchedAt = new Date();
+  const reservedAt = args.reservationHeldAt ?? dispatchedAt;
+  const retryAfterAt = new Date(dispatchedAt.getTime() + args.dispatchTimeoutMs);
   const nodeDispatchable = args.reservationHeldAt
     ? sql`${nodes.status} = 'online'
         AND ${nodes.handlersLive} = ${sqlx.bool(db, true)}
@@ -144,7 +145,7 @@ export async function claimStrictSpawnDispatch(
           status: sql`CASE WHEN ${eligible} THEN 'dispatched' ELSE NULL END`,
           dispatchedNodeId: args.nodeId,
           dispatchedProvider: args.providerName,
-          dispatchedAt: reservedAt,
+          dispatchedAt,
           retryAfterAt,
           spawnReservedAt: reservedAt,
           spawnPlacementToken: null,
