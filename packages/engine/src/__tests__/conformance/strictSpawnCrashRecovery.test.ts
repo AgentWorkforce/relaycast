@@ -620,6 +620,75 @@ describe('strict spawn crash recovery', () => {
     expect(node.reservedAgents).toBe(0);
   });
 
+  it('does not fail a strict claim restored after the detach snapshot', async () => {
+    if (conformancePgDb()) return;
+    const fixture = await setup();
+    const key = 'restored-before-detach';
+    const heldAt = new Date('2026-11-10T00:00:00.000Z');
+    await insertStrictClaim(fixture, key, {
+      status: 'dispatched',
+      handlerNodeId: fixture.nodeId,
+      dispatchedNodeId: fixture.nodeId,
+      dispatchedProvider: 'default',
+      dispatchAttempts: 1,
+      spawnReservedAt: heldAt,
+      retryAfterAt: new Date('2026-11-10T00:00:30.000Z'),
+    });
+    await fixture.db
+      .update(nodes)
+      .set({ reservedAgents: 1 })
+      .where(and(eq(nodes.workspaceId, fixture.ws.workspaceId), eq(nodes.id, fixture.nodeId)));
+    const [beforeDetach] = await fixture.db
+      .select({ revision: actionInvocations.nodeLivenessRevision })
+      .from(actionInvocations)
+      .where(eq(actionInvocations.id, fixture.invocationId('restored-before-detach')));
+
+    let restoredDuringDetach = false;
+    attachFakeBatch(stack, fixture.db, async () => {
+      if (restoredDuringDetach) return;
+      restoredDuringDetach = true;
+      await restoreStrictSpawnDispatch(fixture.db, {
+        workspaceId: fixture.ws.workspaceId,
+        invocationId: fixture.invocationId(key),
+        nodeId: fixture.nodeId,
+        placementToken: 'restored-detach-owner',
+        reservedAt: heldAt,
+        preserveReservation: true,
+      });
+    });
+
+    expect(await detachInvocationsFromLostNode(
+      fixture.db,
+      fixture.ws.workspaceId,
+      fixture.nodeId,
+      { claimRevision: beforeDetach.revision + 1 },
+    )).toBe(0);
+    expect(restoredDuringDetach).toBe(true);
+
+    const [restored] = await fixture.db
+      .select({
+        status: actionInvocations.status,
+        attempts: actionInvocations.dispatchAttempts,
+        dispatchedNodeId: actionInvocations.dispatchedNodeId,
+        placementToken: actionInvocations.spawnPlacementToken,
+        reservedAt: actionInvocations.spawnReservedAt,
+      })
+      .from(actionInvocations)
+      .where(eq(actionInvocations.id, fixture.invocationId(key)));
+    const [node] = await fixture.db
+      .select({ reservedAgents: nodes.reservedAgents })
+      .from(nodes)
+      .where(and(eq(nodes.workspaceId, fixture.ws.workspaceId), eq(nodes.id, fixture.nodeId)));
+    expect(restored).toEqual({
+      status: 'pending',
+      attempts: 0,
+      dispatchedNodeId: null,
+      placementToken: 'restored-detach-owner',
+      reservedAt: heldAt,
+    });
+    expect(node.reservedAgents).toBe(1);
+  });
+
   it('expires a reserved unsent claim and releases its slot exactly once', async () => {
     const fixture = await setup();
     const heldAt = new Date(Date.now() - 5_000);

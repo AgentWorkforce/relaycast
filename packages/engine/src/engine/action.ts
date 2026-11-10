@@ -4763,13 +4763,16 @@ export async function detachInvocationsFromLostNode(
   let detached = 0;
   for (const invocation of rows) {
     if (strictBuiltinSpawnContract(invocation)) {
-      await failOpenInvocationRows(
-        db,
+      await failExactStrictSpawnDispatch(db, {
         workspaceId,
-        [invocation.id],
-        'handler_unavailable',
-        invocation.nodeLivenessRevision,
-      );
+        invocationId: invocation.id,
+        status: invocation.status,
+        dispatchAttempts: invocation.dispatchAttempts ?? 0,
+        nodeId: invocation.dispatchedNodeId,
+        reservedAt: invocation.spawnReservedAt,
+        error: 'handler_unavailable',
+        expectedNodeLivenessRevision: invocation.nodeLivenessRevision,
+      });
       continue;
     }
     // Work no retry could place stays attached, for the node's own cleanup to
