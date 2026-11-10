@@ -5800,10 +5800,13 @@ paths:
       description: >-
         Read an invocation previously accepted through the strict
         `relay.spawn.invoke.logical/1` contract. This route never creates an
-        invocation, selects a node, or dispatches a provider frame. The agent,
+        invocation or selects an alternate node. For a durable claim known to
+        be unplaced or reserved but unsent, it resumes the same exact-node state
+        machine as strict invoke and may dispatch that claim's one provider
+        frame. Unknown send outcomes remain fail-closed. The agent,
         Idempotency-Key, and logical request must match the durable claim exactly.
         Use it when a local path can no longer be safely rematerialized but the
-        caller must recover the result of an already accepted request.
+        caller must recover or resume an already accepted request.
         A successful response includes top-level
         `data.spawn_contract_applied: relay.spawn.invoke.logical/1`, proving the
         durable claim was accepted under the strict contract.
@@ -5831,7 +5834,7 @@ paths:
                   $ref: '#/components/schemas/SpawnLogicalRequest'
       responses:
         '200':
-          description: Existing invocation recovered without another dispatch.
+          description: Existing invocation recovered or safely resumed on its exact node.
           headers:
             Idempotency-Replayed:
               description: Always `true` for a recovered invocation.

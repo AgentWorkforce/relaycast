@@ -2433,15 +2433,23 @@ export async function invokeStrictSpawn(
   });
 }
 
-/** Read an existing keyed builtin-spawn claim without creating or dispatching. */
+/** Recover an existing keyed builtin-spawn claim and resume only definitely-unsent work. */
 export async function replaySpawnInvocation(
   db: Db,
   workspaceId: string,
   data: { logical_request: Record<string, unknown>; caller_id: string },
-  idempotencyKey: string,
+  options: { idempotencyKey: string; nodeConnections?: NodeConnectionRegistry },
 ) {
   const logical = spawnLogicalRequest(data.logical_request);
-  const invocationId = await idempotentInvocationId(workspaceId, data.caller_id, 'spawn', idempotencyKey);
+  if (!options.nodeConnections) {
+    throw codedError('Node dispatch is not available', 'node_dispatch_unavailable', 503);
+  }
+  const invocationId = await idempotentInvocationId(
+    workspaceId,
+    data.caller_id,
+    'spawn',
+    options.idempotencyKey,
+  );
   const [invocation] = await db
     .select()
     .from(actionInvocations)
@@ -2463,6 +2471,19 @@ export async function replaySpawnInvocation(
       'idempotency_key_reused',
       409,
     );
+  }
+  if (
+    invocation.status === 'pending'
+    && invocation.dispatchAttempts === 0
+    && !invocation.dispatchedNodeId
+  ) {
+    return dispatchStrictSpawnClaim({
+      db,
+      registry: options.nodeConnections,
+      workspaceId,
+      invocation,
+      replayed: true,
+    });
   }
   const settled = await replayInvocationClaim(db, workspaceId, invocation);
   return markInvocationReplay(invocationAck(settled, { actionName: 'spawn' }));

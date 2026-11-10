@@ -18,6 +18,43 @@ import { conformancePgDb } from './pgMode.js';
 
 const schema = 'relay.spawn.invoke.logical/1';
 
+function strictLogicalRequest(nodeId: string, nodeName: string) {
+  return {
+    schema,
+    target_node_id: nodeId,
+    target_node: nodeName,
+    name: 'worker',
+    cli: 'claude',
+    task: 'prove crash recovery',
+    directory: '/repo',
+    verify_ready: true,
+  };
+}
+
+function strictRequestInput(logical: ReturnType<typeof strictLogicalRequest>) {
+  return {
+    spawn_contract: schema,
+    target_node_id: logical.target_node_id,
+    target_node: logical.target_node,
+    name: logical.name,
+    cli: logical.cli,
+    task: logical.task,
+    worker_cwd: '/materialized/repo',
+    verify_ready: logical.verify_ready,
+    logical_request: logical,
+  };
+}
+
+function strictStoredInput(logical: ReturnType<typeof strictLogicalRequest>) {
+  return { ...strictRequestInput(logical), spawn_contract_applied: schema };
+}
+
+function strictInvocationId(workspaceId: string, callerId: string, key: string): string {
+  return `inv_idem_${createHash('sha256')
+    .update(['action-invoke-v1', workspaceId, callerId, 'spawn', key].join('\0'))
+    .digest('hex')}`;
+}
+
 describe('strict spawn crash recovery', () => {
   let stack: TestStack;
 
@@ -35,6 +72,117 @@ describe('strict spawn crash recovery', () => {
       expect.objectContaining({ action: 'spawn:claude', invocation_id: fixture.invocationId('insert-crash') }),
     ]);
     await expectSingleOwnedReservation(fixture, 'insert-crash');
+  });
+
+  it('replay route resumes an inserted exact-node claim without creating a replacement', async () => {
+    const fixture = await setup();
+    await insertStrictClaim(fixture, 'replay-insert-crash');
+
+    const response = await fixture.replay('replay-insert-crash');
+    expect(response.status).toBe(200);
+    expect(response.headers.get('Idempotency-Replayed')).toBe('true');
+    expect(fixture.sock.ofType('action.invoke')).toEqual([
+      expect.objectContaining({
+        action: 'spawn:claude',
+        invocation_id: fixture.invocationId('replay-insert-crash'),
+      }),
+    ]);
+    await expectSingleOwnedReservation(fixture, 'replay-insert-crash');
+  });
+
+  it('replay route refuses a missing key without creating an invocation or reservation', async () => {
+    const fixture = await setup();
+
+    const response = await fixture.replay('replay-missing');
+    expect(response.status).toBe(404);
+    expect(fixture.sock.ofType('action.invoke')).toHaveLength(0);
+    const [invocation] = await fixture.db
+      .select({ id: actionInvocations.id })
+      .from(actionInvocations)
+      .where(eq(actionInvocations.id, fixture.invocationId('replay-missing')));
+    const [node] = await fixture.db
+      .select({ reservedAgents: nodes.reservedAgents })
+      .from(nodes)
+      .where(and(eq(nodes.workspaceId, fixture.ws.workspaceId), eq(nodes.id, fixture.nodeId)));
+    expect(invocation).toBeUndefined();
+    expect(node.reservedAgents).toBe(0);
+  });
+
+  it('replay route never falls back when the claimed exact node is gone', async () => {
+    const fixture = await setup();
+    await insertStrictClaim(fixture, 'replay-no-fallback');
+    const alternateId = 'node_strict_alternate';
+    const created = await stack.app.request('/v1/nodes', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', authorization: `Bearer ${fixture.ws.workspaceKey}` },
+      body: JSON.stringify({
+        node_id: alternateId,
+        name: 'strict-alternate',
+        capabilities: ['spawn:claude'],
+        max_agents: 2,
+        tags: ['test'],
+        version: 'test-node',
+      }),
+    });
+    expect(created.status).toBe(201);
+    const alternateSocket = new FakeSocket();
+    const alternate = stack.runtime.realtime.attachNodeSocket(
+      fixture.ws.workspaceId,
+      alternateId,
+      alternateSocket,
+    );
+    await alternate.handleMessage(JSON.stringify({
+      v: 1,
+      id: 'register-strict-alternate',
+      type: 'node.register',
+      name: 'strict-alternate',
+      node_id: alternateId,
+      capabilities: [{ name: 'spawn:claude', kind: 'spawn', metadata: { agent: 'claude' } }],
+      max_agents: 2,
+      tags: ['test'],
+      version: 'test-node',
+      resume_cursor: null,
+    }));
+    await alternate.handleMessage(JSON.stringify({
+      v: 1,
+      type: 'node.heartbeat',
+      active_agents: 0,
+      handlers_live: true,
+    }));
+    await fixture.db
+      .delete(nodes)
+      .where(and(eq(nodes.workspaceId, fixture.ws.workspaceId), eq(nodes.id, fixture.nodeId)));
+
+    const response = await fixture.replay('replay-no-fallback');
+    expect(response.status).toBe(404);
+    expect(fixture.sock.ofType('action.invoke')).toHaveLength(0);
+    expect(alternateSocket.ofType('action.invoke')).toHaveLength(0);
+    const [alternateNode] = await fixture.db
+      .select({ reservedAgents: nodes.reservedAgents })
+      .from(nodes)
+      .where(and(eq(nodes.workspaceId, fixture.ws.workspaceId), eq(nodes.id, alternateId)));
+    expect(alternateNode.reservedAgents).toBe(0);
+  });
+
+  it('replay route preserves a dispatched snapshot after its exact node is renamed', async () => {
+    const fixture = await setup();
+    const first = await fixture.invoke('replay-dispatched-deleted-node');
+    expect(first.status).toBe(201);
+    expect(fixture.sock.ofType('action.invoke')).toHaveLength(1);
+    await fixture.db
+      .update(nodes)
+      .set({ name: 'strict-crash-renamed', capabilities: [] })
+      .where(and(eq(nodes.workspaceId, fixture.ws.workspaceId), eq(nodes.id, fixture.nodeId)));
+
+    const replay = await fixture.replay('replay-dispatched-deleted-node');
+    expect(replay.status).toBe(200);
+    expect(replay.headers.get('Idempotency-Replayed')).toBe('true');
+    expect((await replay.json() as { data: { invocation_id: string; dispatched_node_id: string } }).data)
+      .toMatchObject({
+        invocation_id: fixture.invocationId('replay-dispatched-deleted-node'),
+        dispatched_node_id: fixture.nodeId,
+      });
+    expect(fixture.sock.ofType('action.invoke')).toHaveLength(1);
   });
 
   it('resumes a reserved definitely-unsent claim without taking a second slot', async () => {
@@ -55,6 +203,26 @@ describe('strict spawn crash recovery', () => {
     expect(response.status).toBe(201);
     expect(fixture.sock.ofType('action.invoke')).toHaveLength(1);
     await expectSingleOwnedReservation(fixture, 'reserved-crash');
+  });
+
+  it('replay route resumes a reserved definitely-unsent claim without taking a second slot', async () => {
+    const fixture = await setup();
+    const heldAt = new Date(Date.now() - 1_000);
+    await insertStrictClaim(fixture, 'replay-reserved-crash', {
+      handlerNodeId: fixture.nodeId,
+      spawnPlacementToken: 'replay-placement-owner',
+      spawnReservedAt: heldAt,
+      handlerUnreachableSince: heldAt,
+    });
+    await fixture.db
+      .update(nodes)
+      .set({ reservedAgents: 1 })
+      .where(and(eq(nodes.workspaceId, fixture.ws.workspaceId), eq(nodes.id, fixture.nodeId)));
+
+    const response = await fixture.replay('replay-reserved-crash');
+    expect(response.status).toBe(200);
+    expect(fixture.sock.ofType('action.invoke')).toHaveLength(1);
+    await expectSingleOwnedReservation(fixture, 'replay-reserved-crash');
   });
 
   it('rolls back placement when the exact node vanished before reservation', async () => {
@@ -232,31 +400,10 @@ describe('strict spawn crash recovery', () => {
     }));
     await stack.settle();
 
-    const logical = {
-      schema,
-      target_node_id: nodeId,
-      target_node: 'strict-crash',
-      name: 'worker',
-      cli: 'claude',
-      task: 'prove crash recovery',
-      directory: '/repo',
-      verify_ready: true,
-    };
-    const requestInput = {
-      spawn_contract: schema,
-      target_node_id: logical.target_node_id,
-      target_node: logical.target_node,
-      name: logical.name,
-      cli: logical.cli,
-      task: logical.task,
-      worker_cwd: '/materialized/repo',
-      verify_ready: logical.verify_ready,
-      logical_request: logical,
-    };
-    const storedInput = { ...requestInput, spawn_contract_applied: schema };
-    const invocationId = (key: string) => `inv_idem_${createHash('sha256')
-      .update(['action-invoke-v1', ws.workspaceId, caller.agentId, 'spawn', key].join('\0'))
-      .digest('hex')}`;
+    const logical = strictLogicalRequest(nodeId, 'strict-crash');
+    const requestInput = strictRequestInput(logical);
+    const storedInput = strictStoredInput(logical);
+    const invocationId = (key: string) => strictInvocationId(ws.workspaceId, caller.agentId, key);
     const invoke = (key: string) => stack.app.request('/v1/actions/spawn/strict-invoke', {
       method: 'POST',
       headers: {
@@ -265,6 +412,15 @@ describe('strict spawn crash recovery', () => {
         'Idempotency-Key': key,
       },
       body: JSON.stringify({ input: requestInput }),
+    });
+    const replay = (key: string) => stack.app.request('/v1/actions/spawn/replay', {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        authorization: `Bearer ${caller.token}`,
+        'Idempotency-Key': key,
+      },
+      body: JSON.stringify({ logical_request: logical }),
     });
     return {
       ws,
@@ -275,19 +431,21 @@ describe('strict spawn crash recovery', () => {
       storedInput,
       invocationId,
       invoke,
+      replay,
     };
   }
 });
 
 interface StrictFixture {
   ws: { workspaceId: string; workspaceKey: string };
-  caller: { agentId: string; name: string };
+  caller: { agentId: string; name: string; token: string };
   nodeId: string;
   sock: FakeSocket;
   db: EngineDb;
   storedInput: Record<string, unknown>;
   invocationId(key: string): string;
   invoke(key: string): Promise<Response>;
+  replay(key: string): Promise<Response>;
 }
 
 async function insertStrictClaim(

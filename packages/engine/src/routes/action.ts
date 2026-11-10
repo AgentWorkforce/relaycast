@@ -221,7 +221,7 @@ actionRoutes.post('/actions/spawn/replay', requireAuth, rateLimit, async (c) => 
       c.get('db'),
       workspace.id,
       { logical_request: parsed.data.logical_request, caller_id: agent.id },
-      key,
+      { idempotencyKey: key, nodeConnections: c.get('engine').nodeConnections },
     );
     return jsonIdempotentOk(c, { status: 200, data: result, replayed: true });
   } catch (err: unknown) {
