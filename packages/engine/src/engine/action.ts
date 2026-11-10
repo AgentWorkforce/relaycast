@@ -33,6 +33,7 @@ import {
   claimStrictSpawnDispatch,
   failExactStrictSpawnDispatch,
   placeStrictSpawn,
+  releaseStrictSpawnPlacementReservation,
   restoreStrictSpawnDispatch,
 } from './strictSpawnPlacement.js';
 
@@ -2116,6 +2117,15 @@ async function dispatchStrictSpawnClaim(args: {
   if (!providerReady || !await nodeReady(args.db, placed.node)) {
     const input = recordInput(invocation.input);
     if (input.verify_ready === true) {
+      if (invocation.spawnReservedAt) {
+        await releaseStrictSpawnPlacementReservation(args.db, {
+          workspaceId: args.workspaceId,
+          invocationId: invocation.id,
+          nodeId,
+          placementToken,
+          reservedAt: invocation.spawnReservedAt,
+        });
+      }
       throw codedError(
         'Verified spawn target is not connected and ready to accept work; retry when it is available',
         'spawn_target_unavailable',
@@ -2173,9 +2183,10 @@ async function dispatchStrictSpawnClaim(args: {
     // The database claim committed before the socket call. The receiver has no
     // durable invocation-id dedupe, so the outcome is unknowable and must not
     // be automatically replayed. The timeout/liveness path settles it closed.
-    const unknown = spawnResult(invocation, nodeId, {
-      accepted: false,
-      pending: false,
+    const unknown = invocationAck(invocation, {
+      actionName: 'spawn',
+      handlerAgentId: null,
+      handlerNodeId: nodeId,
     });
     return args.replayed ? markInvocationReplay(unknown) : unknown;
   }

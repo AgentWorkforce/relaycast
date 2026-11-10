@@ -20,19 +20,12 @@ Packages without a separate changelog are covered by the cross-package notes bel
 
 ### Added
 
-- `POST /v1/actions/spawn/strict-invoke` binds builtin spawn to an exact node id and versioned logical request, with a server-owned response marker proving the contract was applied; `POST /v1/actions/spawn/replay` recovers that caller's existing keyed claim and safely resumes definitely-unsent work on the same exact node without creating another invocation.
+- `POST /v1/actions/spawn/strict-invoke` binds builtin spawn and definitely-unsent retries to an exact node id with atomic capacity ownership, a versioned logical request, and a server-owned response marker; `POST /v1/actions/spawn/replay` reads that caller's existing keyed claim without creating, placing, reserving, or dispatching work.
 - Self-hosted servers can run on PostgreSQL (its own database, schema `public`, single replica) with `relaycast-engine migrate` / `verify-db`; see `docs/self-host-postgres.md`.
 - Hosts can supply a message-search backend through the optional `search` engine dependency (`SearchIndex`); without it, existing SQLite search behavior is unchanged. Configured backend errors propagate without falling back to SQLite.
 
 ### Fixed
 
-- Strict exact-node spawn retries resume a durable, definitely-unsent placement
-  with atomic capacity ownership across SQLite, D1, and PostgreSQL; concurrent
-  retries cannot reserve twice or fall back to another node, and an unknown
-  socket-send outcome fails closed instead of being sent again automatically.
-  Recovery keeps an accepted dispatch in flight while its worker registers,
-  rejects action-only providers before reserving capacity, and fences stale
-  same-second retries with a durable dispatch generation.
 - Channel and thread realtime events retain arbitrary rich blocks across engine workspace frames and TypeScript node deliveries; DM transports preserve blocks when present.
 - Relayfile callbacks deliver events for embedded and internal path wildcards, including per-issue Linear files and Jira comment paths.
 - Relayfile deletion notifications reach subscribed agents, including typed provider removals without a record snapshot.

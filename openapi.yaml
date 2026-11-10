@@ -5835,7 +5835,7 @@ paths:
                   $ref: '#/components/schemas/SpawnLogicalRequest'
       responses:
         '200':
-          description: Existing invocation recovered or safely resumed on its exact node.
+          description: Stored snapshot of the existing strict claim. No placement, reservation, or dispatch occurs.
           headers:
             Idempotency-Replayed:
               description: Always `true` for a recovered invocation.
@@ -5871,7 +5871,7 @@ paths:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
         '503':
-          description: The existing claim has not yet reached a replayable dispatch outcome.
+          description: Service temporarily unavailable.
           content:
             application/json:
               schema:

@@ -241,6 +241,56 @@ export async function restoreStrictSpawnDispatch(
   ], { requireAtomic: true });
 }
 
+/**
+ * Drop only the capacity reservation owned by an unsent strict placement.
+ * The placement token remains durable so a same-key retry can revalidate the
+ * exact node and claim capacity again without choosing a different target.
+ */
+export async function releaseStrictSpawnPlacementReservation(
+  db: Db,
+  args: {
+    workspaceId: string;
+    invocationId: string;
+    nodeId: string;
+    placementToken: string;
+    reservedAt: Date;
+  },
+): Promise<boolean> {
+  const exactPlacement = sql`${actionInvocations.status} = 'pending'
+    AND ${actionInvocations.dispatchAttempts} = 0
+    AND ${actionInvocations.dispatchedNodeId} IS NULL
+    AND ${actionInvocations.handlerNodeId} = ${args.nodeId}
+    AND ${actionInvocations.spawnPlacementToken} = ${args.placementToken}
+    AND ${eq(actionInvocations.spawnReservedAt, args.reservedAt)}`;
+  try {
+    const [releasedRows] = await runAtomicWrites(db, (writeDb) => [
+      writeDb
+        .update(actionInvocations)
+        .set({
+          status: sql`CASE WHEN ${exactPlacement} THEN 'pending' ELSE NULL END`,
+          spawnReservedAt: null,
+          handlerUnreachableSince: new Date(),
+        })
+        .where(and(
+          eq(actionInvocations.workspaceId, args.workspaceId),
+          eq(actionInvocations.id, args.invocationId),
+        ))
+        .returning({ id: actionInvocations.id }),
+      writeDb
+        .update(nodes)
+        .set({
+          reservedAgents: sql`CASE WHEN COALESCE(${nodes.reservedAgents}, 0) > 0
+            THEN ${nodes.reservedAgents} - 1 ELSE 0 END`,
+        })
+        .where(and(eq(nodes.workspaceId, args.workspaceId), eq(nodes.id, args.nodeId))),
+    ], { requireAtomic: true });
+    return (releasedRows as Array<{ id: string }>).length > 0;
+  } catch (error) {
+    if (databaseConstraintKind(error) === 'spawn_claim_changed') return false;
+    throw error;
+  }
+}
+
 export async function failExactStrictSpawnDispatch(
   db: Db,
   args: {
