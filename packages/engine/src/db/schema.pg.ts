@@ -1362,6 +1362,10 @@ export const actionInvocations = pgTable(
     // rewrite the 201 acknowledgement for the invocation already dispatched.
     handlerAgentId: text('handler_agent_id'),
     handlerNodeId: text('handler_node_id'),
+    // Ownership token for a strict builtin spawn that is durably placed but
+    // has definitely not crossed the provider send boundary. A retry may
+    // claim only this exact token; the dispatch claim clears it before I/O.
+    spawnPlacementToken: text('spawn_placement_token'),
     input: jsonb('input').default({}),
     taskState: jsonb('task_state').$type<TaskInvocationState>(),
     output: jsonb('output'),

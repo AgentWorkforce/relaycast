@@ -845,6 +845,12 @@ export const ACTOR_MIGRATIONS: readonly (readonly [string, readonly string[]])[]
     [
       "CREATE INDEX IF NOT EXISTS idx_pending_events_settled_retention\n  ON pending_events(status, completed_at, id)"
     ]
+  ],
+  [
+    "0083_strict_spawn_placement_token.sql",
+    [
+      "ALTER TABLE action_invocations ADD COLUMN spawn_placement_token TEXT"
+    ]
   ]
 ];
 

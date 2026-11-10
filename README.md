@@ -1176,7 +1176,13 @@ fields through the legacy generic route. The request binds the target node ID
 and name plus the stable logical spawn fields; only the server-materialized
 `worker_cwd` may differ on a retry with the same key. A successful response
 includes the server-owned `spawn_contract_applied` marker, which callers must
-verify. If a caller can no longer materialize a safe local path,
+verify. Before provider I/O the engine durably binds the claim to that exact
+node and owns its capacity reservation atomically. A same-key retry resumes a
+definitely-unsent placement; it never falls back to another node. If the
+process loses the socket-send outcome, Relaycast fails closed instead of
+automatically sending a second frame, because providers do not yet persist a
+cross-restart invocation acknowledgement. If a caller can no longer
+materialize a safe local path,
 `POST /v1/actions/spawn/replay` reads the existing caller-scoped claim without
 creating, placing, or dispatching work.
 

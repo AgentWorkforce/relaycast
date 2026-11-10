@@ -1181,6 +1181,10 @@ export const actionInvocations = sqliteTable(
     // rewrite the 201 acknowledgement for the invocation already dispatched.
     handlerAgentId: text('handler_agent_id'),
     handlerNodeId: text('handler_node_id'),
+    // Ownership token for a strict builtin spawn that is durably placed but
+    // has definitely not crossed the provider send boundary. A retry may
+    // claim only this exact token; the dispatch claim clears it before I/O.
+    spawnPlacementToken: text('spawn_placement_token'),
     input: text('input', { mode: 'json' }).default({}),
     taskState: text('task_state', { mode: 'json' }).$type<TaskInvocationState>(),
     output: text('output', { mode: 'json' }),

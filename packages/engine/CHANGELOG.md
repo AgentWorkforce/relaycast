@@ -18,6 +18,10 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Fixed
 
+- Strict exact-node spawn persists pre-dispatch placement and reservation
+  ownership atomically on SQLite, D1, and PostgreSQL. Same-key retries resume
+  only definitely-unsent work on the selected node; concurrent retries cannot
+  reserve twice, and unknown socket-send outcomes are not auto-replayed.
 - Workspace WebSocket message, update, and thread frames preserve arbitrary rich blocks; DM transforms retain blocks when present without changing DM send/storage support.
 - Relayfile callbacks deliver valid Linear and Jira segment-glob events instead of dropping them with `path_mismatch`; matching resolves repeated slashes and dot segments while preserving case and percent escapes.
 - Relayfile inbound callbacks deliver authenticated `file.deleted` events, preserving metadata and paths when no snapshot is available.

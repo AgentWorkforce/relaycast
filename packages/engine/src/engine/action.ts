@@ -21,14 +21,19 @@ import {
   type InvocationCompletionDeps,
 } from './invocationCompletion.js';
 import type { NodeConnectionRegistry, NodeDrainOptions } from '../ports/realtime.js';
-import { runAtomic, runAtomicWrites, type AtomicWrite } from '../ports/database.js';
+import { databaseConstraintKind, runAtomic, runAtomicWrites, type AtomicWrite } from '../ports/database.js';
 import { exclusiveClaimWrite, retryAfterAtMatches, type InvocationClaimStatus } from './invocationClaim.js';
-import { claimSpawnNode, chooseNodeForAction, releaseNodeCapacity, reserveNodeCapacity } from './placement.js';
+import { claimSpawnNode, chooseNodeForAction, nodeHasCapability, releaseNodeCapacity, reserveNodeCapacity } from './placement.js';
 import { DEFAULT_PROVIDER_NAME, capacityProviderName, claimOrphanedGlobalAliases, getProvider } from './nodeProvider.js';
 import { AGENT_TOKEN_HASH_PATTERN } from '@relaycast/types';
 import { createTaskState, expireTaskInvocation, expireTaskInvocations, taskExecution } from './taskInvocation.js';
 import { withEngineOperation } from '../lib/engineDiagnostics.js';
 import * as sqlx from '../db/sqlx.js';
+import {
+  claimStrictSpawnDispatch,
+  placeStrictSpawn,
+  restoreStrictSpawnDispatch,
+} from './strictSpawnPlacement.js';
 
 type Db = ReturnType<typeof getDb>;
 type ActionRow = typeof actions.$inferSelect;
@@ -1038,9 +1043,72 @@ async function failNeverDispatchedInvocation(
   invocationId: string,
   error: string,
 ): Promise<boolean> {
+  const [strictHeld] = await db
+    .select({
+      nodeId: actionInvocations.handlerNodeId,
+      placementToken: actionInvocations.spawnPlacementToken,
+      reservedAt: actionInvocations.spawnReservedAt,
+    })
+    .from(actionInvocations)
+    .where(and(
+      eq(actionInvocations.workspaceId, workspaceId),
+      eq(actionInvocations.id, invocationId),
+      eq(actionInvocations.status, 'pending'),
+      eq(actionInvocations.dispatchAttempts, 0),
+      isNull(actionInvocations.dispatchedNodeId),
+      isNotNull(actionInvocations.spawnPlacementToken),
+      isNotNull(actionInvocations.spawnReservedAt),
+      isNotNull(actionInvocations.handlerNodeId),
+    ));
+  if (strictHeld?.nodeId && strictHeld.placementToken && strictHeld.reservedAt) {
+    const heldNodeId = strictHeld.nodeId;
+    const exactClaim = sql`${actionInvocations.status} = 'pending'
+      AND ${actionInvocations.dispatchAttempts} = 0
+      AND ${actionInvocations.dispatchedNodeId} IS NULL
+      AND ${actionInvocations.handlerNodeId} = ${strictHeld.nodeId}
+      AND ${actionInvocations.spawnPlacementToken} = ${strictHeld.placementToken}
+      AND ${eq(actionInvocations.spawnReservedAt, strictHeld.reservedAt)}`;
+    try {
+      const [failedResult] = await runAtomicWrites(db, (writeDb) => [
+        writeDb
+          .update(actionInvocations)
+          .set({
+            status: sql`CASE WHEN ${exactClaim} THEN 'failed' ELSE NULL END`,
+            error,
+            completedAt: new Date(),
+            spawnReservedAt: null,
+            spawnPlacementToken: null,
+            handlerUnreachableSince: null,
+          })
+          .where(and(
+            eq(actionInvocations.workspaceId, workspaceId),
+            eq(actionInvocations.id, invocationId),
+          ))
+          .returning({ id: actionInvocations.id }),
+        writeDb
+          .update(nodes)
+          .set({
+            reservedAgents: sql`CASE WHEN COALESCE(${nodes.reservedAgents}, 0) > 0
+              THEN ${nodes.reservedAgents} - 1 ELSE 0 END`,
+          })
+          .where(and(eq(nodes.workspaceId, workspaceId), eq(nodes.id, heldNodeId))),
+      ], { requireAtomic: true });
+      return (failedResult as Array<{ id: string }>).length > 0;
+    } catch (failure) {
+      if (databaseConstraintKind(failure) === 'spawn_claim_changed') return false;
+      throw failure;
+    }
+  }
   const failed = await db
     .update(actionInvocations)
-    .set({ status: 'failed', error, completedAt: new Date(), spawnReservedAt: null })
+    .set({
+      status: 'failed',
+      error,
+      completedAt: new Date(),
+      spawnReservedAt: null,
+      spawnPlacementToken: null,
+      handlerUnreachableSince: null,
+    })
     .where(and(
       eq(actionInvocations.workspaceId, workspaceId),
       eq(actionInvocations.id, invocationId),
@@ -1858,6 +1926,177 @@ function spawnResult(
   };
 }
 
+/**
+ * Bind a strict spawn to the node named by its signed logical request before
+ * any capacity or provider side effect. The token is the durable proof that no
+ * send claim has crossed the database boundary yet. A concurrent retry either
+ * wins this CAS or observes the winner; it never chooses another node.
+ */
+async function placeStrictSpawnClaim(
+  db: Db,
+  workspaceId: string,
+  invocation: InvocationRow,
+): Promise<{ invocation: InvocationRow; node: typeof nodes.$inferSelect; capability: string }> {
+  const input = recordInput(invocation.input);
+  const logical = strictBuiltinSpawnContract(invocation);
+  if (!logical) {
+    throw codedError('Stored strict spawn contract is invalid', 'invalid_spawn_request', 400);
+  }
+  const nodeId = String(logical.target_node_id);
+  const nodeName = String(logical.target_node);
+  const capability = dispatchActionNameForInvocation('spawn', input);
+  const [node] = await db
+    .select()
+    .from(nodes)
+    .where(and(eq(nodes.workspaceId, workspaceId), eq(nodes.id, nodeId)));
+  if (!node) throw codedError(`Node "${nodeId}" not found`, 'node_not_found', 404);
+  if (node.name !== nodeName) {
+    throw codedError(`Node id "${nodeId}" does not name "${nodeName}"`, 'node_target_mismatch', 409);
+  }
+  if (!nodeHasCapability(node, capability)) {
+    throw codedError(`Node "${node.name}" does not provide ${capability}`, 'capability_mismatch', 409);
+  }
+
+  if (invocation.spawnPlacementToken) return { invocation, node, capability };
+  const placed = await placeStrictSpawn(db, {
+    workspaceId,
+    invocationId: invocation.id,
+    nodeId,
+    placementToken: randomHex(16),
+    reserve: await nodeReady(db, node),
+  });
+  if (placed) return { invocation: placed, node, capability };
+
+  const [winner] = await db
+    .select()
+    .from(actionInvocations)
+    .where(and(eq(actionInvocations.workspaceId, workspaceId), eq(actionInvocations.id, invocation.id)));
+  if (!winner) throw codedError('Spawn invocation is no longer available', 'idempotency_unavailable', 503);
+  assertInvocationClaimMatches(winner, 'spawn', { input, caller_id: invocation.callerId });
+  return { invocation: winner, node, capability };
+}
+
+async function dispatchStrictSpawnClaim(args: {
+  db: Db;
+  registry: NodeConnectionRegistry;
+  workspaceId: string;
+  invocation: InvocationRow;
+  replayed: boolean;
+}) {
+  const placed = await placeStrictSpawnClaim(args.db, args.workspaceId, args.invocation);
+  let invocation = placed.invocation;
+  const nodeId = placed.node.id;
+  const placementToken = invocation.spawnPlacementToken;
+  if (!placementToken) {
+    const settled = await waitForInvocationReplayOutcome(args.db, args.workspaceId, invocation);
+    const result = spawnResult(settled, settled.handlerNodeId ?? nodeId, {
+      accepted: !!settled.dispatchedNodeId,
+      pending: settled.status === 'pending',
+    });
+    return args.replayed ? markInvocationReplay(result) : result;
+  }
+
+  const providerName = (await capacityProviderName(
+    args.db,
+    args.workspaceId,
+    nodeId,
+    placed.capability,
+  )) ?? DEFAULT_PROVIDER_NAME;
+  const providerReady = await isNodeProviderLive(
+    args.db,
+    args.registry,
+    args.workspaceId,
+    nodeId,
+    providerName,
+  );
+  if (!providerReady || !await nodeReady(args.db, placed.node)) {
+    const input = recordInput(invocation.input);
+    if (input.verify_ready === true) {
+      throw codedError(
+        'Verified spawn target is not connected and ready to accept work; retry when it is available',
+        'spawn_target_unavailable',
+        503,
+      );
+    }
+    const pending = spawnResult(invocation, nodeId, { accepted: false, pending: true });
+    return args.replayed ? markInvocationReplay(pending) : pending;
+  }
+
+  const claim = await claimStrictSpawnDispatch(args.db, {
+    workspaceId: args.workspaceId,
+    invocationId: invocation.id,
+    nodeId,
+    providerName,
+    placementToken,
+    reservationHeldAt: invocation.spawnReservedAt,
+    dispatchTimeoutMs: ACTION_DISPATCH_TIMEOUT_MS,
+  });
+  if (!claim.claimed || !claim.reservedAt) {
+    const [winner] = await args.db
+      .select()
+      .from(actionInvocations)
+      .where(and(
+        eq(actionInvocations.workspaceId, args.workspaceId),
+        eq(actionInvocations.id, invocation.id),
+      ));
+    if (!winner) throw codedError('Spawn invocation is no longer available', 'idempotency_unavailable', 503);
+    const settled = await waitForInvocationReplayOutcome(args.db, args.workspaceId, winner);
+    return markInvocationReplay(spawnResult(settled, settled.handlerNodeId ?? nodeId, {
+      accepted: !!settled.dispatchedNodeId,
+      pending: settled.status === 'pending',
+    }));
+  }
+
+  const frame = {
+    v: 1 as const,
+    type: 'action.invoke' as const,
+    invocation_id: invocation.id,
+    action: placed.capability,
+    input: toFleetWireJson(recordInput(invocation.input)),
+  };
+  let sent = false;
+  try {
+    sent = await args.registry.sendToProvider(
+      args.workspaceId,
+      nodeId,
+      providerName,
+      frame,
+    );
+  } catch {
+    // The database claim committed before the socket call. The receiver has no
+    // durable invocation-id dedupe, so the outcome is unknowable and must not
+    // be automatically replayed. The timeout/liveness path settles it closed.
+    const unknown = spawnResult(invocation, nodeId, {
+      accepted: false,
+      pending: false,
+    });
+    return args.replayed ? markInvocationReplay(unknown) : unknown;
+  }
+  if (!sent) {
+    await restoreStrictSpawnDispatch(args.db, {
+      workspaceId: args.workspaceId,
+      invocationId: invocation.id,
+      nodeId,
+      placementToken,
+      reservedAt: claim.reservedAt,
+      preserveReservation: invocation.spawnReservedAt !== null,
+    });
+    const [restored] = await args.db
+      .select()
+      .from(actionInvocations)
+      .where(and(
+        eq(actionInvocations.workspaceId, args.workspaceId),
+        eq(actionInvocations.id, invocation.id),
+      ));
+    invocation = restored ?? invocation;
+  }
+  const result = spawnResult(invocation, nodeId, {
+    accepted: sent,
+    pending: !sent,
+  });
+  return args.replayed ? markInvocationReplay(result) : result;
+}
+
 async function dispatchSpawn(args: {
   db: Db;
   registry?: NodeConnectionRegistry;
@@ -1905,6 +2144,15 @@ async function dispatchSpawn(args: {
     caller_name: data.caller_name,
     invocation_id: args.invocationId,
   });
+  if (logicalRequest) {
+    return dispatchStrictSpawnClaim({
+      db: args.db,
+      registry: args.registry,
+      workspaceId: args.workspaceId,
+      invocation,
+      replayed,
+    });
+  }
   if (replayed) {
     const dispatched = await waitForInvocationReplayOutcome(args.db, args.workspaceId, invocation);
     return markInvocationReplay(invocationAck(dispatched, { actionName: 'spawn' }));
@@ -3799,6 +4047,9 @@ function unsentNativeSpawnOn(workspaceId: string, invocationId: string | null, n
     eq(actionInvocations.status, 'pending'),
     isNull(actionInvocations.actionId),
     isNull(actionInvocations.dispatchedNodeId),
+    // Strict keyed spawns are resumed only by the caller-held idempotency key.
+    // The legacy node drain cannot prove the logical request or own this token.
+    isNull(actionInvocations.spawnPlacementToken),
     eq(actionInvocations.dispatchAttempts, 0),
     ...(nodeId ? [eq(actionInvocations.handlerNodeId, nodeId)] : []),
     or(eq(actionInvocations.actionName, 'spawn'), like(actionInvocations.actionName, 'spawn:%')),
@@ -4785,9 +5036,11 @@ async function failNeverDispatchedExpiredInvocations(
  * Terminally fail never-dispatched rows atomically: the UPDATE re-checks the
  * SELECT predicates (`status = 'pending'`, `dispatch_attempts = 0`, `created_at
  * <= cutoff`), so a row that was concurrently dispatched between the sweep's
- * SELECT and this UPDATE is skipped instead of being killed mid-flight. Never-
- * dispatched rows carry no spawn reservation (dispatch_attempts = 0 means no
- * node was ever chosen), so no capacity release is needed.
+ * SELECT and this UPDATE is skipped instead of being killed mid-flight.
+ * Legacy rows carry no reservation at attempt zero. Strict keyed spawns may
+ * already own an exact-node reservation while still definitely unsent; those
+ * are failed through the single-row atomic release path before the remaining
+ * rows are updated in bulk.
  */
 async function failNeverDispatchedInvocationRows(
   db: Db,
@@ -4797,17 +5050,50 @@ async function failNeverDispatchedInvocationRows(
   error: string,
 ): Promise<InvocationRow[]> {
   if (invocationIds.length === 0) return [];
-  return await db
-    .update(actionInvocations)
-    .set({ status: 'failed', error, completedAt: new Date(), spawnReservedAt: null })
+  const heldStrict = await db
+    .select({ id: actionInvocations.id })
+    .from(actionInvocations)
     .where(and(
       eq(actionInvocations.workspaceId, workspaceId),
       inArray(actionInvocations.id, invocationIds),
       eq(actionInvocations.status, 'pending'),
       eq(actionInvocations.dispatchAttempts, 0),
       lte(actionInvocations.createdAt, cutoff),
+      isNotNull(actionInvocations.spawnPlacementToken),
+      isNotNull(actionInvocations.spawnReservedAt),
+      isNotNull(actionInvocations.handlerNodeId),
+    ));
+  const failed: InvocationRow[] = [];
+  for (const row of heldStrict) {
+    if (!await failNeverDispatchedInvocation(db, workspaceId, row.id, error)) continue;
+    const [settled] = await db
+      .select()
+      .from(actionInvocations)
+      .where(and(eq(actionInvocations.workspaceId, workspaceId), eq(actionInvocations.id, row.id)));
+    if (settled) failed.push(settled);
+  }
+  const heldIds = new Set(heldStrict.map((row) => row.id));
+  const remainingIds = invocationIds.filter((id) => !heldIds.has(id));
+  if (remainingIds.length === 0) return failed;
+  const remaining = await db
+    .update(actionInvocations)
+    .set({
+      status: 'failed',
+      error,
+      completedAt: new Date(),
+      spawnReservedAt: null,
+      spawnPlacementToken: null,
+      handlerUnreachableSince: null,
+    })
+    .where(and(
+      eq(actionInvocations.workspaceId, workspaceId),
+      inArray(actionInvocations.id, remainingIds),
+      eq(actionInvocations.status, 'pending'),
+      eq(actionInvocations.dispatchAttempts, 0),
+      lte(actionInvocations.createdAt, cutoff),
     ))
     .returning();
+  return [...failed, ...remaining];
 }
 
 export async function sweepTimedOutInvocations(

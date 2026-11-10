@@ -5726,6 +5726,11 @@ paths:
         registered actions and shadow handlers, and binds placement and every
         retry to the exact target node id and name. The logical request and
         Idempotency-Key remain stable; only `worker_cwd` may be rematerialized.
+        Before provider I/O, placement and capacity ownership commit atomically.
+        A same-key retry resumes only a definitely-unsent exact-node placement;
+        it never falls back to another node. An indeterminate socket-send
+        outcome is not automatically resent until providers offer a durable
+        invocation acknowledgement.
         A successful response includes top-level
         `data.spawn_contract_applied: relay.spawn.invoke.logical/1`. Clients
         must verify that server-owned proof. Older servers lack this route and

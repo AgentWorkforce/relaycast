@@ -15,6 +15,13 @@
       "when": 1794168009366,
       "tag": "0001_triggers",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1794301109417,
+      "tag": "0002_even_silverclaw",
+      "breakpoints": true
     }
   ]
 }
