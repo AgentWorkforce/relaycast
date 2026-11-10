@@ -4,8 +4,9 @@
   "task": {
     "title": "Add explicit strict spawn replay-resume capability"
   },
-  "status": "active",
+  "status": "completed",
   "startedAt": "2026-11-10T14:48:48.895Z",
+  "completedAt": "2026-11-10T15:04:53.878Z",
   "agents": [
     {
       "name": "default",
@@ -19,6 +20,7 @@
       "title": "Work",
       "agentName": "default",
       "startedAt": "2026-11-10T14:49:48.523Z",
+      "endedAt": "2026-11-10T15:04:53.878Z",
       "events": [
         {
           "ts": 1794322188524,
@@ -56,12 +58,30 @@
       ]
     }
   ],
-  "commits": [],
-  "filesChanged": [],
+  "retrospective": {
+    "summary": "Added an explicit replay-resume schema and server-owned capability proof so only marked, definitely-unsent strict spawn claims can resume from persisted input; legacy claims remain lookup-only.",
+    "approach": "Standard approach",
+    "confidence": 0.9
+  },
+  "commits": [
+    "183d550c"
+  ],
+  "filesChanged": [
+    ".agentworkforce/trajectories/active/traj_08xoe6xnjwma/trajectory.json",
+    "CHANGELOG.md",
+    "README.md",
+    "openapi.yaml",
+    "packages/engine/CHANGELOG.md",
+    "packages/engine/src/__tests__/conformance/strictSpawnReplayRestart.test.ts",
+    "packages/engine/src/__tests__/conformance/strictSpawnReplayResume.test.ts",
+    "packages/engine/src/engine/action.ts",
+    "packages/engine/src/routes/action.ts"
+  ],
   "projectId": "AgentWorkforce/relaycast",
   "tags": [],
   "_trace": {
     "startRef": "f997fc8717bd4d62b40c5fea982824381dd69074",
-    "endRef": "f997fc8717bd4d62b40c5fea982824381dd69074"
+    "endRef": "183d550c56274c2eba67a98218af8b7b155e645d",
+    "traceId": "f7c42ccd-e047-4949-8b1d-03279ad60822"
   }
 }
