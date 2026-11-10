@@ -5,6 +5,7 @@ import { sql } from 'drizzle-orm';
 import * as sqlx from '../../../db/sqlx.js';
 import { createActorEngineDb } from '../database.js';
 import { ACTOR_MIGRATIONS_TABLE, actorMigrationsCurrent, applyActorMigrations } from '../migrations.js';
+import { ACTOR_MIGRATIONS } from '../migrations.generated.js';
 import { FakeActorDatabase } from './fakeActor.js';
 import { channels, messages, workspaces } from '../../../db/tables.js';
 import { desc, eq } from 'drizzle-orm';
@@ -126,15 +127,34 @@ describe('bundled actor migrations', () => {
     const fake = new FakeActorDatabase();
     const { applied } = applyActorMigrations(fake);
     expect(actorMigrationsCurrent(fake)).toBe(true);
-    // A database that recorded the two superseded files and lacks the newest
-    // one has more rows than the plan needs, and is not current.
-    const newest = applied[applied.length - 1];
-    fake.exec(`DELETE FROM ${ACTOR_MIGRATIONS_TABLE} WHERE name = ?`, newest);
+    // A database that recorded the two superseded files and lacks a required
+    // idempotent migration has more rows than the plan needs, and is not current.
+    const missing = '0082_pending_events_settled_retention.sql';
+    expect(applied).toContain(missing);
+    fake.exec(`DELETE FROM ${ACTOR_MIGRATIONS_TABLE} WHERE name = ?`, missing);
     for (const superseded of ['0048_bounded_maintenance.sql', '0049_redrive_review_hardening.sql']) {
       fake.exec(`INSERT OR IGNORE INTO ${ACTOR_MIGRATIONS_TABLE} (name, applied_at) VALUES (?, 0)`, superseded);
     }
     expect(actorMigrationsCurrent(fake)).toBe(false);
-    expect(applyActorMigrations(fake, { trackingTableExists: true }).applied).toEqual([newest]);
+    expect(applyActorMigrations(fake, { trackingTableExists: true }).applied).toEqual([missing]);
+    expect(actorMigrationsCurrent(fake)).toBe(true);
+  });
+
+  it('upgrades an existing actor database with strict spawn placement ownership', () => {
+    const fake = new FakeActorDatabase();
+    fake.exec(`CREATE TABLE ${ACTOR_MIGRATIONS_TABLE} (name TEXT PRIMARY KEY, applied_at INTEGER NOT NULL)`);
+    for (const [file, statements] of ACTOR_MIGRATIONS) {
+      if (file === '0083_strict_spawn_placement_token.sql') continue;
+      for (const statement of statements) fake.exec(statement);
+      fake.exec(`INSERT INTO ${ACTOR_MIGRATIONS_TABLE} (name, applied_at) VALUES (?, 0)`, file);
+    }
+    const before = fake.exec('PRAGMA table_info(action_invocations)') as Array<{ name: string }>;
+    expect(before.map((column) => column.name)).not.toContain('spawn_placement_token');
+
+    expect(applyActorMigrations(fake, { trackingTableExists: true }).applied)
+      .toEqual(['0083_strict_spawn_placement_token.sql']);
+    const after = fake.exec('PRAGMA table_info(action_invocations)') as Array<{ name: string }>;
+    expect(after.map((column) => column.name)).toContain('spawn_placement_token');
     expect(actorMigrationsCurrent(fake)).toBe(true);
   });
 });

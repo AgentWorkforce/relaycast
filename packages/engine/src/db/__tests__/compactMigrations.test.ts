@@ -150,7 +150,8 @@ function expectConstraintsPreserved(before: ReturnType<typeof constraints>, afte
           ...table,
           sql: table.sql
             .replace(', task_state TEXT', '')
-            .replace(', node_liveness_revision INTEGER NOT NULL DEFAULT 0', ''),
+            .replace(', node_liveness_revision INTEGER NOT NULL DEFAULT 0', '')
+            .replace(', spawn_placement_token TEXT', ''),
         };
       }
       if (table.name === 'event_subscriptions') {

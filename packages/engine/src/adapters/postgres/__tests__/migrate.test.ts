@@ -187,6 +187,7 @@ describe("loadBundledPostgresMigrations", () => {
     expect(bundled.map((m) => m.name)).toEqual([
       "0000_init.sql",
       "0001_triggers.sql",
+      "0002_even_silverclaw.sql",
     ]);
     expect(bundled.every((m) => m.statements.length > 0)).toBe(true);
   });
