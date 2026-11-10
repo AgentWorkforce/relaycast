@@ -80,6 +80,58 @@ describe('strict spawn crash recovery', () => {
     await expectSingleOwnedReservation(fixture, 'insert-crash');
   });
 
+  it('refuses REST completion while a strict claim is placed but not dispatched', async () => {
+    const fixture = await setup();
+    const key = 'placed-before-dispatch';
+    await insertStrictClaim(fixture, key);
+    const placed = await placeStrictSpawn(fixture.db, {
+      workspaceId: fixture.ws.workspaceId,
+      invocationId: fixture.invocationId(key),
+      nodeId: fixture.nodeId,
+      placementToken: 'placed-before-dispatch-owner',
+      reserve: true,
+    });
+    expect(placed).toMatchObject({
+      status: 'pending',
+      handlerNodeId: fixture.nodeId,
+      dispatchedNodeId: null,
+      dispatchAttempts: 0,
+    });
+
+    const completion = await stack.app.request(
+      `/v1/actions/spawn/invocations/${fixture.invocationId(key)}/complete`,
+      {
+        method: 'POST',
+        headers: {
+          'content-type': 'application/json',
+          authorization: `Bearer ${fixture.caller.token}`,
+        },
+        body: JSON.stringify({ output: { agent: 'forged' } }),
+      },
+    );
+    expect(completion.status).toBe(403);
+    expect(await completion.json()).toMatchObject({ error: { code: 'node_owned_invocation' } });
+
+    const [invocation] = await fixture.db
+      .select({
+        status: actionInvocations.status,
+        handlerNodeId: actionInvocations.handlerNodeId,
+        reservedAt: actionInvocations.spawnReservedAt,
+      })
+      .from(actionInvocations)
+      .where(eq(actionInvocations.id, fixture.invocationId(key)));
+    const [node] = await fixture.db
+      .select({ reservedAgents: nodes.reservedAgents })
+      .from(nodes)
+      .where(and(eq(nodes.workspaceId, fixture.ws.workspaceId), eq(nodes.id, fixture.nodeId)));
+    expect(invocation).toMatchObject({
+      status: 'pending',
+      handlerNodeId: fixture.nodeId,
+      reservedAt: expect.any(Date),
+    });
+    expect(node.reservedAgents).toBe(1);
+  });
+
   it('replay route returns an inserted exact-node claim without placing or dispatching it', async () => {
     const fixture = await setup();
     await insertStrictClaim(fixture, 'replay-insert-crash');

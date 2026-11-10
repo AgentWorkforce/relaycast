@@ -4827,8 +4827,11 @@ export async function completeInvocation(
       attemptedNodeIds: actionInvocations.attemptedNodeIds,
       dispatchAttempts: actionInvocations.dispatchAttempts,
       dispatchedNodeId: actionInvocations.dispatchedNodeId,
-      handlerAgentId: actions.handlerAgentId,
-      handlerNodeId: actions.handlerNodeId,
+      // Completion authority belongs to the immutable invocation snapshot.
+      // The action row may be absent for builtins or may have changed since
+      // the invocation was claimed.
+      handlerAgentId: actionInvocations.handlerAgentId,
+      handlerNodeId: actionInvocations.handlerNodeId,
     })
     .from(actionInvocations)
     .leftJoin(actions, eq(actionInvocations.actionId, actions.id))

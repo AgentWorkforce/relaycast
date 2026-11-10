@@ -1184,9 +1184,10 @@ automatically sending a second frame, because providers do not yet persist a
 cross-restart invocation acknowledgement. If a caller can no longer
 materialize a safe local path,
 `POST /v1/actions/spawn/replay` reads the existing caller-scoped claim without
-creating another invocation. If that claim is durably known to be unplaced or
-reserved but unsent, replay resumes the same exact-node state machine and may
-dispatch its one provider frame; unknown send outcomes still fail closed.
+creating another invocation. Replay is lookup-only: it validates the exact
+caller, key, and logical request, then returns the stored claim without placing,
+reserving, or dispatching it. Use a same-key strict-invoke request to resume a
+definitely-unsent claim; unknown send outcomes still fail closed.
 
 Long-running providers can register an action capability with
 `execution_mode: "task"` (for example `{name: "task.run", kind: "action", global:
