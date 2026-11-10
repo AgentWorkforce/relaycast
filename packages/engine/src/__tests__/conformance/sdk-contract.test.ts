@@ -227,6 +227,22 @@ describe('SDK v8 service contract', () => {
     }]);
     expect(kvPutAttempts).toBe(0);
 
+    const completed = await stack.app.request(
+      `/v1/actions/summarize/invocations/${invokeBody.data.invocation_id}/complete`,
+      {
+        method: 'POST',
+        headers: {
+          'content-type': 'application/json',
+          authorization: `Bearer ${handler.token}`,
+        },
+        body: JSON.stringify({ output: { summary: 'done' } }),
+      },
+    );
+    expect(completed.status).toBe(200);
+    expect(await completed.json()).toMatchObject({
+      data: { status: 'completed', output: { summary: 'done' } },
+    });
+
     const deniedNode = await attachDirectNodeSocket(stack, ws.workspaceId, denied);
     const deniedInvoke = await stack.app.request('/v1/actions/summarize/invoke', {
       method: 'POST',

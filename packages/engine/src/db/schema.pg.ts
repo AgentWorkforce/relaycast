@@ -1362,6 +1362,10 @@ export const actionInvocations = pgTable(
     // rewrite the 201 acknowledgement for the invocation already dispatched.
     handlerAgentId: text('handler_agent_id'),
     handlerNodeId: text('handler_node_id'),
+    // Ownership token for a strict builtin spawn that is durably placed but
+    // has definitely not crossed the provider send boundary. A retry may
+    // claim only this exact token; the dispatch claim clears it before I/O.
+    spawnPlacementToken: text('spawn_placement_token'),
     input: jsonb('input').default({}),
     taskState: jsonb('task_state').$type<TaskInvocationState>(),
     output: jsonb('output'),
@@ -1370,6 +1374,10 @@ export const actionInvocations = pgTable(
     durationMs: bigint('duration_ms', { mode: 'number' }),
     dispatchedNodeId: text('dispatched_node_id').references(() => nodes.id, { onDelete: 'set null' }),
     dispatchedAt: epochSeconds('dispatched_at'),
+    // Monotonic identity for each strict spawn dispatch claim. Timestamps are
+    // stored at second precision, so they cannot fence a restored redispatch
+    // that lands within the same second as the stale attempt.
+    spawnDispatchGeneration: integer('spawn_dispatch_generation').notNull().default(0),
     // Generation of the node liveness epoch that accepted this dispatch.
     // A lost-node settle only reschedules attempts older than its claim.
     nodeLivenessRevision: bigint('node_liveness_revision', { mode: 'number' }).notNull().default(0),

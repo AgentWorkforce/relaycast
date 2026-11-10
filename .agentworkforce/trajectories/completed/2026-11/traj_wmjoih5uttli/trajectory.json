@@ -1,0 +1,138 @@
+{
+  "id": "traj_wmjoih5uttli",
+  "version": 1,
+  "task": {
+    "title": "Address exact-head strict spawn replay findings for Relaycast PR 644",
+    "source": {
+      "system": "plain",
+      "id": "AgentWorkforce/relaycast#644"
+    }
+  },
+  "status": "completed",
+  "startedAt": "2026-11-10T13:25:08.490Z",
+  "completedAt": "2026-11-10T13:40:53.443Z",
+  "agents": [
+    {
+      "name": "default",
+      "role": "lead",
+      "joinedAt": "2026-11-10T13:40:12.049Z"
+    }
+  ],
+  "chapters": [
+    {
+      "id": "chap_cj5zbut9eo98",
+      "title": "Work",
+      "agentName": "default",
+      "startedAt": "2026-11-10T13:40:12.049Z",
+      "endedAt": "2026-11-10T13:40:53.443Z",
+      "events": [
+        {
+          "ts": 1794318012050,
+          "type": "decision",
+          "content": "Fence strict dispatch recovery with a durable monotonic generation: Fence strict dispatch recovery with a durable monotonic generation",
+          "raw": {
+            "question": "Fence strict dispatch recovery with a durable monotonic generation",
+            "chosen": "Fence strict dispatch recovery with a durable monotonic generation",
+            "alternatives": [],
+            "reasoning": "Second-resolution timestamps can collide across restore and redispatch; the generation makes stale terminalization CAS exact."
+          },
+          "significance": "high"
+        },
+        {
+          "ts": 1794318012335,
+          "type": "decision",
+          "content": "Resolve the exact capacity provider before strict spawn placement: Resolve the exact capacity provider before strict spawn placement",
+          "raw": {
+            "question": "Resolve the exact capacity provider before strict spawn placement",
+            "chosen": "Resolve the exact capacity provider before strict spawn placement",
+            "alternatives": [],
+            "reasoning": "Action-kind capability advertisements must fail closed and must never fall back to the default capacity provider after placement."
+          },
+          "significance": "high"
+        },
+        {
+          "ts": 1794318012603,
+          "type": "decision",
+          "content": "Keep strict spawns in flight across empty inventory snapshots: Keep strict spawns in flight across empty inventory snapshots",
+          "raw": {
+            "question": "Keep strict spawns in flight across empty inventory snapshots",
+            "chosen": "Keep strict spawns in flight across empty inventory snapshots",
+            "alternatives": [],
+            "reasoning": "Worker registration may lag dispatch even when verify_ready is false; timeout, provider failure, or node loss remain the authoritative terminal paths."
+          },
+          "significance": "high"
+        },
+        {
+          "ts": 1794318012867,
+          "type": "decision",
+          "content": "Backfill immutable registered-action handler snapshots in both databases: Backfill immutable registered-action handler snapshots in both databases",
+          "raw": {
+            "question": "Backfill immutable registered-action handler snapshots in both databases",
+            "chosen": "Backfill immutable registered-action handler snapshots in both databases",
+            "alternatives": [],
+            "reasoning": "Pre-snapshot invocations otherwise reject their original handler after upgrade; migration-time repair preserves the immutable runtime authority boundary."
+          },
+          "significance": "high"
+        },
+        {
+          "ts": 1794318013192,
+          "type": "reflection",
+          "content": "All four exact-head blockers now have red/green mutation evidence; affected, full engine, root test, lint, build, migration generation, and diff checks pass.",
+          "raw": {
+            "focalPoints": [
+              "strict-spawn-replay",
+              "migrations",
+              "verification"
+            ],
+            "confidence": 0.9
+          },
+          "significance": "high",
+          "tags": [
+            "focal:strict-spawn-replay",
+            "focal:migrations",
+            "focal:verification",
+            "confidence:0.9"
+          ]
+        }
+      ]
+    }
+  ],
+  "retrospective": {
+    "summary": "Closed four strict spawn replay gaps: capacity-kind fail-closed placement, registration-lag-safe inventory reconciliation, monotonic dispatch-generation fencing, and legacy immutable handler-authority backfill across SQLite/actor/PostgreSQL.",
+    "approach": "Added one regression per review finding, proved each by reverting its production guard and restoring it byte-for-byte, then ran affected suites, the full engine and root test suites, lint, build, migration generation checks, and diff validation.",
+    "confidence": 0.92
+  },
+  "commits": [
+    "407366e9"
+  ],
+  "filesChanged": [
+    ".agentworkforce/trajectories/active/traj_wmjoih5uttli/trajectory.json",
+    "CHANGELOG.md",
+    "packages/engine/CHANGELOG.md",
+    "packages/engine/src/__tests__/conformance/strictSpawnCrashRecovery.test.ts",
+    "packages/engine/src/adapters/actor/migrations.generated.ts",
+    "packages/engine/src/adapters/postgres/__tests__/migrate.test.ts",
+    "packages/engine/src/db/__tests__/compactMigrations.test.ts",
+    "packages/engine/src/db/__tests__/dmReadCursorMigration.test.ts",
+    "packages/engine/src/db/__tests__/handlerSnapshotBackfillMigration.test.ts",
+    "packages/engine/src/db/__tests__/taskMigration.test.ts",
+    "packages/engine/src/db/migrations-pg/0003_previous_lila_cheney.sql",
+    "packages/engine/src/db/migrations-pg/0004_handler_snapshot_backfill.sql",
+    "packages/engine/src/db/migrations-pg/meta/0003_snapshot.json",
+    "packages/engine/src/db/migrations-pg/meta/0004_snapshot.json",
+    "packages/engine/src/db/migrations-pg/meta/_journal.json",
+    "packages/engine/src/db/migrations/0084_strict_spawn_dispatch_generation.sql",
+    "packages/engine/src/db/schema.pg.ts",
+    "packages/engine/src/db/schema.ts",
+    "packages/engine/src/engine/action.ts",
+    "packages/engine/src/engine/node.ts",
+    "packages/engine/src/engine/strictSpawnPlacement.ts"
+  ],
+  "projectId": "AgentWorkforce/relaycast",
+  "tags": [],
+  "_trace": {
+    "startRef": "423ee3ad54ff643ef8aff57f4ef57f8d9ca8253b",
+    "endRef": "407366e95956fabe7c630d556333c84e05019905",
+    "traceId": "0e91c822-4f74-4f09-827f-aeba42ea7c6b"
+  }
+}

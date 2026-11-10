@@ -573,6 +573,44 @@ components:
         dispatch_id: { type: string, minLength: 1, maxLength: 512 }
         timeout_ms: { type: integer, minimum: 1, maximum: 86400000 }
 
+    SpawnLogicalRequest:
+      type: object
+      additionalProperties: false
+      required: [schema, target_node_id, target_node, name, cli, task, directory, verify_ready]
+      properties:
+        schema:
+          type: string
+          enum: [relay.spawn.invoke.logical/1]
+        target_node_id: { type: string, minLength: 1 }
+        target_node: { type: string, minLength: 1 }
+        name: { type: string, minLength: 1 }
+        cli: { type: string, minLength: 1 }
+        task: { type: string, minLength: 1 }
+        directory:
+          type: string
+          minLength: 1
+          description: The caller's stable requested directory, before local canonicalization.
+        verify_ready: { type: boolean }
+
+    StrictSpawnInput:
+      type: object
+      additionalProperties: false
+      required:
+        [spawn_contract, target_node_id, target_node, name, cli, task, worker_cwd, verify_ready, logical_request]
+      properties:
+        spawn_contract:
+          type: string
+          enum: [relay.spawn.invoke.logical/1]
+        target_node_id: { type: string, minLength: 1 }
+        target_node: { type: string, minLength: 1 }
+        name: { type: string, minLength: 1 }
+        cli: { type: string, minLength: 1 }
+        task: { type: string, minLength: 1 }
+        worker_cwd: { type: string, minLength: 1 }
+        verify_ready: { type: boolean }
+        logical_request:
+          $ref: '#/components/schemas/SpawnLogicalRequest'
+
     TaskExecution:
       type: object
       required: [execution_id, run_id, step_id, dispatch_id, deadline]
@@ -5596,7 +5634,8 @@ paths:
         and obsolete attempts/generations return stale_task_execution. Providers
         persist launch state before acceptance and reconcile ambiguous replies
         without launching a second worker. Node-addressed and unkeyed invokes of
-        task actions fail task_idempotency_required.
+        task actions fail task_idempotency_required. Exact-node builtin spawn
+        callers use the dedicated `/actions/spawn/strict-invoke` route.
       tags:
         - Actions
       security:
@@ -5640,13 +5679,22 @@ paths:
               schema:
                 $ref: '#/components/schemas/SuccessResponse'
         '400':
-          description: Invalid Idempotency-Key, task_idempotency_required, or invalid_task_context.
+          description: >-
+            Invalid Idempotency-Key, task_idempotency_required,
+            invalid_task_context, or a strict spawn contract sent to this
+            generic route instead of `/actions/spawn/strict-invoke`.
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
         '409':
           description: The idempotency key was reused with different input.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: No action has this name.
           content:
             application/json:
               schema:
@@ -5664,8 +5712,166 @@ paths:
             a handler that cannot answer; or `idempotency_unavailable` — the
             durable idempotency claim cannot be read, or a keyed invocation
             replay cannot yet observe its durable placement/dispatch outcome.
-            Retry
-            the same logical request with the same key.
+            Retry the same logical request with the same key.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /actions/spawn/strict-invoke:
+    post:
+      summary: Invoke builtin spawn with an exact-node logical contract
+      description: >-
+        Accepts only the `relay.spawn.invoke.logical/1` contract, bypasses
+        registered actions and shadow handlers, and binds placement and every
+        retry to the exact target node id and name. The logical request and
+        Idempotency-Key remain stable; only `worker_cwd` may be rematerialized.
+        Before provider I/O, placement and capacity ownership commit atomically.
+        A same-key retry resumes only a definitely-unsent exact-node placement;
+        it never falls back to another node. An indeterminate socket-send
+        outcome is not automatically resent until providers offer a durable
+        invocation acknowledgement.
+        A successful response includes top-level
+        `data.spawn_contract_applied: relay.spawn.invoke.logical/1`. Clients
+        must verify that server-owned proof. Older servers lack this route and
+        therefore fail before any spawn side effect.
+      tags:
+        - Actions
+      security:
+        - agentToken: []
+      parameters:
+        - name: Idempotency-Key
+          in: header
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [input]
+              properties:
+                input:
+                  $ref: '#/components/schemas/StrictSpawnInput'
+      responses:
+        '201':
+          description: Strict builtin spawn accepted or replayed.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SuccessResponse'
+        '400':
+          description: Missing key, malformed body, or invalid strict contract.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '403':
+          description: Agent token required.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: Exact target node id does not exist.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '409':
+          description: Node identity/capability mismatch or key reused for another request.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '503':
+          description: Exact target is unavailable or durable replay is not ready.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /actions/spawn/replay:
+    post:
+      summary: Recover an existing strict spawn invocation
+      description: >-
+        Read an invocation previously accepted through the strict
+        `relay.spawn.invoke.logical/1` contract. This route never creates an
+        invocation, selects an alternate node, places or reserves capacity, or
+        dispatches provider work. It validates the agent, Idempotency-Key, and
+        exact logical request, then returns the stored snapshot. Resume a
+        definitely-unsent claim through a same-key strict-invoke request.
+        Unknown send outcomes remain fail-closed. The agent,
+        Idempotency-Key, and logical request must match the durable claim exactly.
+        Use it when a local path can no longer be safely rematerialized but the
+        caller must inspect an already accepted request without creating work.
+        A successful response includes top-level
+        `data.spawn_contract_applied: relay.spawn.invoke.logical/1`, proving the
+        durable claim was accepted under the strict contract.
+      tags:
+        - Actions
+      security:
+        - agentToken: []
+      parameters:
+        - name: Idempotency-Key
+          in: header
+          required: true
+          description: The key persisted for the original strict spawn request.
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [logical_request]
+              properties:
+                logical_request:
+                  $ref: '#/components/schemas/SpawnLogicalRequest'
+      responses:
+        '200':
+          description: Stored snapshot of the existing strict claim. No placement, reservation, or dispatch occurs.
+          headers:
+            Idempotency-Replayed:
+              description: Always `true` for a recovered invocation.
+              schema:
+                type: string
+                enum: ['true']
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SuccessResponse'
+        '400':
+          description: Invalid key or malformed strict logical request.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '403':
+          description: Agent token required.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: No matching invocation exists for this workspace, agent, action, and key.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '409':
+          description: The key belongs to a different strict logical request.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '503':
+          description: Service temporarily unavailable.
           content:
             application/json:
               schema:

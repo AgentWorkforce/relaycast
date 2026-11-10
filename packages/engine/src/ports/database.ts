@@ -207,7 +207,7 @@ export async function runAtomicWrites(
  * PostgreSQL reports SQLSTATE fields). Keep driver-specific error decoding at
  * this port boundary; engine callers use a stable kind.
  */
-export type DatabaseConstraintKind = 'mailbox_capacity' | 'workspace_delivery_capacity' | 'a2a_registration_changed' | 'address_changed' | 'node_capacity';
+export type DatabaseConstraintKind = 'mailbox_capacity' | 'workspace_delivery_capacity' | 'a2a_registration_changed' | 'address_changed' | 'node_capacity' | 'spawn_claim_changed';
 
 /** The schema every PostgreSQL engine table lives in (db/schema.pg.ts). */
 const PG_ENGINE_SCHEMA = 'public';
@@ -226,6 +226,7 @@ export const PG_NOT_NULL_SENTINELS: Readonly<Record<string, DatabaseConstraintKi
   'deliveries.status': 'workspace_delivery_capacity',
   'messages.body': 'address_changed',
   'nodes.active_agents': 'node_capacity',
+  'action_invocations.status': 'spawn_claim_changed',
 });
 
 /** The fields node-postgres' DatabaseError carries (all optional on the wire). */
@@ -287,6 +288,9 @@ export function databaseConstraintKind(error: unknown): DatabaseConstraintKind |
     // registration aborts its whole atomic group instead of committing an
     // agent row whose slot was never granted.
     if (/NOT NULL constraint failed: nodes\.active_agents/i.test(message)) return 'node_capacity';
+    // Strict-spawn placement/dispatch uses status as a CAS sentinel. A losing
+    // retry writes NULL so every sibling reservation write rolls back too.
+    if (/NOT NULL constraint failed: action_invocations\.status/i.test(message)) return 'spawn_claim_changed';
     return undefined;
   });
 }

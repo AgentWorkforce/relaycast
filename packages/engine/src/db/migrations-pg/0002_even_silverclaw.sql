@@ -1,0 +1,1 @@
+ALTER TABLE "action_invocations" ADD COLUMN "spawn_placement_token" text;

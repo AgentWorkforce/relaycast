@@ -11,12 +11,21 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Added
 
+- `POST /v1/actions/spawn/strict-invoke` accepts the `relay.spawn.invoke.logical/1` contract, pins builtin placement and retries to the exact node id, and permits only `worker_cwd` rematerialization for the same logical request and key. A server-owned response marker proves the contract was applied. `POST /v1/actions/spawn/replay` performs a lookup-only read of an existing caller-scoped claim without creating, placing, reserving, or dispatching work; a same-key strict-invoke retry resumes definitely-unsent work.
 - New `@relaycast/engine/adapters/postgres` connection layer and `relaycast-engine migrate` / `verify-db` CLI for self-hosted PostgreSQL, with verify-full TLS and a pinned CA; neither creates schemas or roles. Targets schema `public` of a dedicated database; the CA file may also come from `NODE_EXTRA_CA_CERTS`.  See `docs/self-host-postgres.md`.
 - The server serves from PostgreSQL when any `RELAYCAST_DATABASE_*` variable is set, including message, directory, skill and routing search; the container image adds `migrate` and `verify-db` subcommands. Single-replica only.
 - Hosts can supply a message-search backend through the optional `search` engine dependency (`SearchIndex`); without it, existing SQLite search behavior is unchanged. Configured backend errors propagate without falling back to SQLite.
 
 ### Fixed
 
+- Strict exact-node spawn persists pre-dispatch placement and reservation
+  ownership atomically on SQLite, D1, and PostgreSQL. Same-key retries resume
+  only definitely-unsent work on the selected node; concurrent retries cannot
+  reserve twice, and unknown socket-send outcomes are not auto-replayed.
+  Recovery retains accepted dispatches while workers register, rejects
+  action-only providers before reservation, fences stale same-second retries
+  with a monotonic generation, and backfills immutable handler authority for
+  registered invocations created before the snapshot migration.
 - Workspace WebSocket message, update, and thread frames preserve arbitrary rich blocks; DM transforms retain blocks when present without changing DM send/storage support.
 - Relayfile callbacks deliver valid Linear and Jira segment-glob events instead of dropping them with `path_mismatch`; matching resolves repeated slashes and dot segments while preserving case and percent escapes.
 - Relayfile inbound callbacks deliver authenticated `file.deleted` events, preserving metadata and paths when no snapshot is available.

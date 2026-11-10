@@ -62,6 +62,7 @@ import {
   detachInvocationsFromLostNode,
   dispatchCapacitySpawn,
   emitFailedInvocationEffects,
+  isStrictBuiltinSpawnInvocation,
   rescheduleInvocationsForLostNode,
   rescheduleNodeInvocation,
 } from './action.js';
@@ -1343,9 +1344,15 @@ export async function settleNodeOffline(
     ));
 
   if (opts.detachOnly && claimRevision !== undefined) {
-    await detachInvocationsFromLostNode(db, workspaceId, nodeId, { claimRevision });
+    await detachInvocationsFromLostNode(db, workspaceId, nodeId, {
+      claimRevision,
+      completionDeps: opts.deps,
+    });
   } else {
-    await rescheduleInvocationsForLostNode(db, registry, workspaceId, nodeId, { claimRevision });
+    await rescheduleInvocationsForLostNode(db, registry, workspaceId, nodeId, {
+      claimRevision,
+      completionDeps: opts.deps,
+    });
   }
 
   if (opts.deps && opts.before && opts.before.status === 'online') {
@@ -2360,6 +2367,7 @@ export async function deleteNode(
     await settleNodeOffline(db, registry, workspaceId, current.id, {
       claimRevision: current.livenessRevision,
       detachOnly: true,
+      deps,
     });
     await emitNodeStatusEffects(deps, workspaceId, {
       status: 'offline',
@@ -3183,6 +3191,8 @@ export async function reconcileInventory(
       input: actionInvocations.input,
       status: actionInvocations.status,
       dispatchedNodeId: actionInvocations.dispatchedNodeId,
+      dispatchedAt: actionInvocations.dispatchedAt,
+      spawnDispatchGeneration: actionInvocations.spawnDispatchGeneration,
       dispatchedProvider: actionInvocations.dispatchedProvider,
       providerAcceptedAttempt: actionInvocations.providerAcceptedAttempt,
       spawnReservedAt: actionInvocations.spawnReservedAt,
@@ -3416,9 +3426,13 @@ export async function reconcileInventory(
       // A live broker owns the bounded readiness wait and cleanup. A transient
       // empty inventory during launch/teardown must not redispatch this spawn.
       // Actual provider disconnect and invocation expiry retain their own recovery.
-      if (liveInvocationIds.has(invocation.id) || requiresSpawnReadiness(invocation.input)) continue;
+      if (
+        liveInvocationIds.has(invocation.id)
+        || requiresSpawnReadiness(invocation.input)
+        || isStrictBuiltinSpawnInvocation(invocation)
+      ) continue;
       try {
-        if (await rescheduleNodeInvocation(db, registry, invocation)) {
+        if (await rescheduleNodeInvocation(db, registry, invocation, { completionDeps })) {
           rescheduledInvocations++;
         }
       } catch {
