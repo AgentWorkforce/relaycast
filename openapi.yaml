@@ -580,7 +580,13 @@ components:
       properties:
         schema:
           type: string
-          enum: [relay.spawn.invoke.logical/1]
+          enum:
+            - relay.spawn.invoke.logical/1
+            - relay.spawn.invoke.logical-replay-resume/1
+          description: >-
+            `logical/1` keeps replay lookup-only. The explicit
+            `logical-replay-resume/1` variant permits replay to resume only an
+            originally marked, definitely-unsent claim from persisted input.
         target_node_id: { type: string, minLength: 1 }
         target_node: { type: string, minLength: 1 }
         name: { type: string, minLength: 1 }
@@ -600,7 +606,9 @@ components:
       properties:
         spawn_contract:
           type: string
-          enum: [relay.spawn.invoke.logical/1]
+          enum:
+            - relay.spawn.invoke.logical/1
+            - relay.spawn.invoke.logical-replay-resume/1
         target_node_id: { type: string, minLength: 1 }
         target_node: { type: string, minLength: 1 }
         name: { type: string, minLength: 1 }
@@ -5722,7 +5730,8 @@ paths:
     post:
       summary: Invoke builtin spawn with an exact-node logical contract
       description: >-
-        Accepts only the `relay.spawn.invoke.logical/1` contract, bypasses
+        Accepts the lookup-only `relay.spawn.invoke.logical/1` contract or the
+        explicit `relay.spawn.invoke.logical-replay-resume/1` variant, bypasses
         registered actions and shadow handlers, and binds placement and every
         retry to the exact target node id and name. The logical request and
         Idempotency-Key remain stable; only `worker_cwd` may be rematerialized.
@@ -5732,9 +5741,12 @@ paths:
         outcome is not automatically resent until providers offer a durable
         invocation acknowledgement.
         A successful response includes top-level
-        `data.spawn_contract_applied: relay.spawn.invoke.logical/1`. Clients
-        must verify that server-owned proof. Older servers lack this route and
-        therefore fail before any spawn side effect.
+        `data.spawn_contract_applied` matching the exact request schema. For
+        `logical-replay-resume/1`, it also includes the independent server-owned
+        `data.spawn_replay_capability_applied: relay.spawn.replay-resume/1`.
+        Clients must verify both proofs before relying on replay-side resume.
+        Older servers lack this route and therefore fail before any spawn side
+        effect.
       tags:
         - Actions
       security:
@@ -5798,19 +5810,22 @@ paths:
     post:
       summary: Recover an existing strict spawn invocation
       description: >-
-        Read an invocation previously accepted through the strict
-        `relay.spawn.invoke.logical/1` contract. This route never creates an
-        invocation, selects an alternate node, places or reserves capacity, or
-        dispatches provider work. It validates the agent, Idempotency-Key, and
-        exact logical request, then returns the stored snapshot. Resume a
-        definitely-unsent claim through a same-key strict-invoke request.
-        Unknown send outcomes remain fail-closed. The agent,
+        Recover an invocation previously accepted through a strict logical
+        contract. `relay.spawn.invoke.logical/1` remains lookup-only: replay
+        returns its stored snapshot without placement, reservation, or provider
+        dispatch. Only an original
+        `relay.spawn.invoke.logical-replay-resume/1` claim carrying the persisted
+        server-owned `spawn_replay_capability_applied: relay.spawn.replay-resume/1`
+        proof may resume a definitely-unsent dispatch from its original stored
+        materialized input. Replay never creates a claim, selects another node,
+        or falls back to strict-invoke, generic invoke, registered actions, or
+        legacy spawn. Dispatched, terminal, and indeterminate-send snapshots are
+        returned without another send. The agent,
         Idempotency-Key, and logical request must match the durable claim exactly.
-        Use it when a local path can no longer be safely rematerialized but the
-        caller must inspect an already accepted request without creating work.
-        A successful response includes top-level
-        `data.spawn_contract_applied: relay.spawn.invoke.logical/1`, proving the
-        durable claim was accepted under the strict contract.
+        Use the explicit variant when a local path cannot be safely
+        rematerialized after a pre-dispatch crash. A successful response includes
+        `data.spawn_contract_applied` matching the accepted schema; explicit
+        replay-resume claims also include the separate replay capability proof.
       tags:
         - Actions
       security:
@@ -5835,7 +5850,10 @@ paths:
                   $ref: '#/components/schemas/SpawnLogicalRequest'
       responses:
         '200':
-          description: Stored snapshot of the existing strict claim. No placement, reservation, or dispatch occurs.
+          description: >-
+            Existing strict-claim snapshot. Lookup-only claims never dispatch;
+            an explicitly marked replay-resume claim may resume one
+            definitely-unsent dispatch from persisted input.
           headers:
             Idempotency-Replayed:
               description: Always `true` for a recovered invocation.

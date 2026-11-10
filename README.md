@@ -1170,13 +1170,16 @@ logical request with the same key rather than minting a replacement.
 
 Builtin spawn callers that require exact node identity use
 `POST /v1/actions/spawn/strict-invoke` with the
-`relay.spawn.invoke.logical/1` contract. The dedicated route is absent on older
+`relay.spawn.invoke.logical/1` contract, or explicitly opt in to replay-side
+resume with `relay.spawn.invoke.logical-replay-resume/1`. The dedicated route is absent on older
 servers, so an unsupported client fails before dispatch instead of sending new
 fields through the legacy generic route. The request binds the target node ID
 and name plus the stable logical spawn fields; only the server-materialized
 `worker_cwd` may differ on a retry with the same key. A successful response
 includes the server-owned `spawn_contract_applied` marker, which callers must
-verify. Before provider I/O the engine durably binds the claim to that exact
+verify. The replay-resume variant also returns the independent server-owned
+`spawn_replay_capability_applied: relay.spawn.replay-resume/1` proof; clients
+must verify both before relying on replay-side resume. Before provider I/O the engine durably binds the claim to that exact
 node and owns its capacity reservation atomically. A same-key retry resumes a
 definitely-unsent placement; it never falls back to another node. If the
 process loses the socket-send outcome, Relaycast fails closed instead of
@@ -1184,10 +1187,14 @@ automatically sending a second frame, because providers do not yet persist a
 cross-restart invocation acknowledgement. If a caller can no longer
 materialize a safe local path,
 `POST /v1/actions/spawn/replay` reads the existing caller-scoped claim without
-creating another invocation. Replay is lookup-only: it validates the exact
-caller, key, and logical request, then returns the stored claim without placing,
-reserving, or dispatching it. Use a same-key strict-invoke request to resume a
-definitely-unsent claim; unknown send outcomes still fail closed.
+creating another invocation. For `logical/1`, replay stays lookup-only: it
+validates the exact caller, key, and logical request, then returns the stored
+claim without placing, reserving, or dispatching it. Only a claim originally
+accepted and marked under `logical-replay-resume/1` may resume a definitely-unsent
+dispatch, using its persisted task, target, `worker_cwd`, caller, and key. Replay
+never selects another node or falls back to strict-invoke, generic invoke,
+registered actions, or legacy spawn. Dispatched, terminal, and unknown-send
+snapshots never resend.
 
 Long-running providers can register an action capability with
 `execution_mode: "task"` (for example `{name: "task.run", kind: "action", global:
