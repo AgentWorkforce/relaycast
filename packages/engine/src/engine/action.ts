@@ -2620,6 +2620,9 @@ export async function replaySpawnInvocation(
     );
   }
   if (stored.schema === SPAWN_REPLAY_RESUME_REQUEST_SCHEMA) {
+    if (!OPEN_INVOCATION_STATUSES.some((status) => status === invocation.status)) {
+      return markInvocationReplay(invocationAck(invocation, { actionName: 'spawn' }));
+    }
     if (!options.nodeConnections) {
       throw codedError('Node dispatch is not available', 'node_dispatch_unavailable', 503);
     }

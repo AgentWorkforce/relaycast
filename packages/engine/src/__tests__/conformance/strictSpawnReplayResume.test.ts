@@ -251,6 +251,30 @@ describe('strict spawn replay-resume capability', () => {
     expect(fixture.sock.ofType('action.invoke')).toEqual([]);
   });
 
+  it('returns a terminal pre-dispatch failure instead of retrying it', async () => {
+    const fixture = await setup();
+    const key = 'failed-before-dispatch';
+    await fixture.insert(key, {
+      status: 'failed',
+      error: 'never_dispatched_expired',
+      completedAt: new Date(),
+    });
+
+    const response = await fixture.replay(key);
+
+    expect(response.status).toBe(200);
+    expect(response.headers.get('Idempotency-Replayed')).toBe('true');
+    await expect(response.json()).resolves.toMatchObject({
+      data: {
+        invocation_id: fixture.invocationId(key),
+        status: 'failed',
+        spawn_contract_applied: replayResumeSchema,
+        spawn_replay_capability_applied: replayResumeCapability,
+      },
+    });
+    expect(fixture.sock.ofType('action.invoke')).toEqual([]);
+  });
+
   it('fences a restored send attempt with a fresh generation without leaking its slot', async () => {
     const fixture = await setup();
     const key = 'restored-generation';
