@@ -3,6 +3,7 @@ import type { getDb } from '../db/index.js';
 import { actionInvocations, nodes } from '../db/tables.js';
 import { codedError } from '../lib/httpError.js';
 import { databaseConstraintKind, runAtomicWrites } from '../ports/database.js';
+import { nodeLivenessAuthority } from '../ports/nodeLiveness.js';
 import * as sqlx from '../db/sqlx.js';
 
 type Db = ReturnType<typeof getDb>;
@@ -19,14 +20,16 @@ export async function placeStrictSpawn(
   },
 ): Promise<InvocationRow | undefined> {
   const placedAt = new Date();
+  const projectedReady = nodeLivenessAuthority(db)
+    ? sql`1 = 1`
+    : sql`${nodes.status} = 'online' AND ${nodes.handlersLive} = ${sqlx.bool(db, true)}`;
   const eligible = sql`${actionInvocations.status} = 'pending'
     AND ${actionInvocations.dispatchAttempts} = 0
     AND ${actionInvocations.dispatchedNodeId} IS NULL
     AND ${actionInvocations.spawnReservedAt} IS NULL
     AND ${actionInvocations.spawnPlacementToken} IS NULL
     AND (${actionInvocations.handlerNodeId} IS NULL OR ${actionInvocations.handlerNodeId} = ${args.nodeId})`;
-  const capacityAvailable = sql`${nodes.status} = 'online'
-    AND ${nodes.handlersLive} = ${sqlx.bool(db, true)}
+  const capacityAvailable = sql`${projectedReady}
     AND (${nodes.maxAgents} = 0
       OR ${nodes.activeAgents} + COALESCE(${nodes.reservedAgents}, 0) < ${nodes.maxAgents})`;
   if (args.reserve) {
@@ -110,12 +113,12 @@ export async function claimStrictSpawnDispatch(
   const dispatchedAt = new Date();
   const reservedAt = args.reservationHeldAt ?? dispatchedAt;
   const retryAfterAt = new Date(dispatchedAt.getTime() + args.dispatchTimeoutMs);
+  const projectedReady = nodeLivenessAuthority(db)
+    ? sql`1 = 1`
+    : sql`${nodes.status} = 'online' AND ${nodes.handlersLive} = ${sqlx.bool(db, true)}`;
   const nodeDispatchable = args.reservationHeldAt
-    ? sql`${nodes.status} = 'online'
-        AND ${nodes.handlersLive} = ${sqlx.bool(db, true)}
-        AND COALESCE(${nodes.reservedAgents}, 0) > 0`
-    : sql`${nodes.status} = 'online'
-        AND ${nodes.handlersLive} = ${sqlx.bool(db, true)}
+    ? sql`${projectedReady} AND COALESCE(${nodes.reservedAgents}, 0) > 0`
+    : sql`${projectedReady}
         AND (${nodes.maxAgents} = 0
           OR ${nodes.activeAgents} + COALESCE(${nodes.reservedAgents}, 0) < ${nodes.maxAgents})`;
   const reservationMatches = args.reservationHeldAt
@@ -133,8 +136,7 @@ export async function claimStrictSpawnDispatch(
         AND ${nodes.id} = ${args.nodeId}
         AND ${nodeDispatchable}
     )`;
-  const capacityAvailable = sql`${nodes.status} = 'online'
-    AND ${nodes.handlersLive} = ${sqlx.bool(db, true)}
+  const capacityAvailable = sql`${projectedReady}
     AND (${nodes.maxAgents} = 0
       OR ${nodes.activeAgents} + COALESCE(${nodes.reservedAgents}, 0) < ${nodes.maxAgents})`;
   try {

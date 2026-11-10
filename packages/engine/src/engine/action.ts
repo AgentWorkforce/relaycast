@@ -2007,6 +2007,30 @@ async function dispatchStrictSpawnClaim(args: {
   invocation: InvocationRow;
   replayed: boolean;
 }) {
+  if (
+    args.invocation.dispatchedNodeId !== null
+    || args.invocation.dispatchAttempts > 0
+    || !OPEN_INVOCATION_STATUSES.some((status) => status === args.invocation.status)
+  ) {
+    const settled = await waitForInvocationReplayOutcome(
+      args.db,
+      args.workspaceId,
+      args.invocation,
+    );
+    const logical = strictBuiltinSpawnContract(settled);
+    if (!logical) {
+      throw codedError('Stored strict spawn contract is invalid', 'invalid_spawn_request', 400);
+    }
+    const nodeId = settled.dispatchedNodeId
+      ?? settled.handlerNodeId
+      ?? String(logical.target_node_id);
+    const result = spawnResult(settled, nodeId, {
+      accepted: settled.dispatchedNodeId !== null,
+      pending: settled.status === 'pending',
+    });
+    return args.replayed ? markInvocationReplay(result) : result;
+  }
+
   const placed = await placeStrictSpawnClaim(args.db, args.workspaceId, args.invocation);
   let invocation = placed.invocation;
   const nodeId = placed.node.id;

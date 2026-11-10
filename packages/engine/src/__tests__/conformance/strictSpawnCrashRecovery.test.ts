@@ -9,6 +9,8 @@ import {
   sweepTimedOutInvocations,
 } from '../../engine/action.js';
 import { placeStrictSpawn } from '../../engine/strictSpawnPlacement.js';
+import { configureNodeLiveness } from '../../engine/nodeLiveness.js';
+import type { NodeLivenessSnapshot } from '../../ports/nodeLiveness.js';
 import {
   attachFakeBatch,
   createWorkspace,
@@ -187,6 +189,45 @@ describe('strict spawn crash recovery', () => {
         dispatched_node_id: fixture.nodeId,
       });
     expect(fixture.sock.ofType('action.invoke')).toHaveLength(1);
+
+    const strictReplay = await fixture.invoke('replay-dispatched-deleted-node');
+    expect(strictReplay.status).toBe(201);
+    expect(strictReplay.headers.get('Idempotency-Replayed')).toBe('true');
+    expect((await strictReplay.json() as { data: { invocation_id: string; dispatched_node_id: string } }).data)
+      .toMatchObject({
+        invocation_id: fixture.invocationId('replay-dispatched-deleted-node'),
+        dispatched_node_id: fixture.nodeId,
+      });
+    expect(fixture.sock.ofType('action.invoke')).toHaveLength(1);
+  });
+
+  it('claims strict spawn capacity from external liveness authority despite a stale SQL projection', async () => {
+    const fixture = await setup();
+    const liveSnapshot = (): NodeLivenessSnapshot => ({
+      status: 'online',
+      providers: [{
+        name: 'default',
+        connection_id: 'strict-authority',
+        last_received_at: Date.now(),
+        expires_at: Date.now() + 45_000,
+        live: true,
+        handlers_live: true,
+      }],
+    });
+    configureNodeLiveness(fixture.db, { inspect: async () => liveSnapshot() });
+    await fixture.db
+      .update(nodes)
+      .set({
+        status: 'offline',
+        handlersLive: false,
+        lastHeartbeatAt: new Date(Date.now() - 300_000),
+      })
+      .where(and(eq(nodes.workspaceId, fixture.ws.workspaceId), eq(nodes.id, fixture.nodeId)));
+
+    const response = await fixture.invoke('external-liveness-stale-projection');
+    expect(response.status).toBe(201);
+    expect(fixture.sock.ofType('action.invoke')).toHaveLength(1);
+    await expectSingleOwnedReservation(fixture, 'external-liveness-stale-projection');
   });
 
   it.each(['completed', 'failed'] as const)(
@@ -203,6 +244,10 @@ describe('strict spawn crash recovery', () => {
           ...(status === 'failed' ? { error: 'agent_failed' } : { output: { ok: true } }),
         })
         .where(eq(actionInvocations.id, fixture.invocationId(`terminal-${status}`)));
+      await fixture.db
+        .update(nodes)
+        .set({ name: 'strict-crash-renamed', capabilities: [] })
+        .where(and(eq(nodes.workspaceId, fixture.ws.workspaceId), eq(nodes.id, fixture.nodeId)));
 
       const replay = await fixture.invoke(`terminal-${status}`);
       expect(replay.status).toBe(201);
