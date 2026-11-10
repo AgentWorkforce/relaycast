@@ -6,9 +6,10 @@ import type { EngineDb } from '../../ports/database.js';
 import {
   ACTION_DISPATCH_TIMEOUT_MS,
   detachInvocationsFromLostNode,
+  rescheduleNodeInvocation,
   sweepTimedOutInvocations,
 } from '../../engine/action.js';
-import { placeStrictSpawn } from '../../engine/strictSpawnPlacement.js';
+import { placeStrictSpawn, restoreStrictSpawnDispatch } from '../../engine/strictSpawnPlacement.js';
 import { configureNodeLiveness } from '../../engine/nodeLiveness.js';
 import type { NodeLivenessSnapshot } from '../../ports/nodeLiveness.js';
 import {
@@ -128,6 +129,66 @@ describe('strict spawn crash recovery', () => {
       status: 'pending',
       handlerNodeId: fixture.nodeId,
       reservedAt: expect.any(Date),
+    });
+    expect(node.reservedAgents).toBe(1);
+  });
+
+  it('does not fail a claim restored after a stale dispatched recovery snapshot', async () => {
+    const fixture = await setup();
+    const key = 'restored-before-recovery';
+    const heldAt = new Date('2026-11-10T00:00:00.000Z');
+    await insertStrictClaim(fixture, key, {
+      status: 'dispatched',
+      handlerNodeId: fixture.nodeId,
+      dispatchedNodeId: fixture.nodeId,
+      dispatchedProvider: 'default',
+      dispatchAttempts: 1,
+      spawnReservedAt: heldAt,
+      retryAfterAt: new Date('2026-11-10T00:00:30.000Z'),
+    });
+    await fixture.db
+      .update(nodes)
+      .set({ reservedAgents: 1 })
+      .where(and(eq(nodes.workspaceId, fixture.ws.workspaceId), eq(nodes.id, fixture.nodeId)));
+    const [staleDispatched] = await fixture.db
+      .select()
+      .from(actionInvocations)
+      .where(eq(actionInvocations.id, fixture.invocationId(key)));
+    await restoreStrictSpawnDispatch(fixture.db, {
+      workspaceId: fixture.ws.workspaceId,
+      invocationId: fixture.invocationId(key),
+      nodeId: fixture.nodeId,
+      placementToken: 'restored-placement-owner',
+      reservedAt: heldAt,
+      preserveReservation: true,
+    });
+
+    expect(await rescheduleNodeInvocation(
+      fixture.db,
+      stack.runtime.realtime,
+      staleDispatched,
+    )).toBe(false);
+
+    const [restored] = await fixture.db
+      .select({
+        status: actionInvocations.status,
+        attempts: actionInvocations.dispatchAttempts,
+        dispatchedNodeId: actionInvocations.dispatchedNodeId,
+        placementToken: actionInvocations.spawnPlacementToken,
+        reservedAt: actionInvocations.spawnReservedAt,
+      })
+      .from(actionInvocations)
+      .where(eq(actionInvocations.id, fixture.invocationId(key)));
+    const [node] = await fixture.db
+      .select({ reservedAgents: nodes.reservedAgents })
+      .from(nodes)
+      .where(and(eq(nodes.workspaceId, fixture.ws.workspaceId), eq(nodes.id, fixture.nodeId)));
+    expect(restored).toEqual({
+      status: 'pending',
+      attempts: 0,
+      dispatchedNodeId: null,
+      placementToken: 'restored-placement-owner',
+      reservedAt: heldAt,
     });
     expect(node.reservedAgents).toBe(1);
   });

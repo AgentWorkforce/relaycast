@@ -31,6 +31,7 @@ import { withEngineOperation } from '../lib/engineDiagnostics.js';
 import * as sqlx from '../db/sqlx.js';
 import {
   claimStrictSpawnDispatch,
+  failExactStrictSpawnDispatch,
   placeStrictSpawn,
   restoreStrictSpawnDispatch,
 } from './strictSpawnPlacement.js';
@@ -4371,13 +4372,16 @@ export async function rescheduleNodeInvocation(
   // never-dispatched expiry path.
   if (strictBuiltinSpawnContract(invocation)) {
     if ((invocation.dispatchAttempts ?? 0) > 0) {
-      await failOpenInvocationRows(
-        db,
-        invocation.workspaceId,
-        [invocation.id],
-        'handler_unavailable',
-        opts.expectedNodeLivenessRevision,
-      );
+      await failExactStrictSpawnDispatch(db, {
+        workspaceId: invocation.workspaceId,
+        invocationId: invocation.id,
+        status: invocation.status,
+        dispatchAttempts: invocation.dispatchAttempts ?? 0,
+        nodeId: invocation.dispatchedNodeId,
+        reservedAt: invocation.spawnReservedAt,
+        error: 'handler_unavailable',
+        expectedNodeLivenessRevision: opts.expectedNodeLivenessRevision,
+      });
     }
     return false;
   }

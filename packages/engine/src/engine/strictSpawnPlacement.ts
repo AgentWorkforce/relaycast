@@ -235,3 +235,71 @@ export async function restoreStrictSpawnDispatch(
       .where(and(eq(nodes.workspaceId, args.workspaceId), eq(nodes.id, args.nodeId)))] : []),
   ], { requireAtomic: true });
 }
+
+export async function failExactStrictSpawnDispatch(
+  db: Db,
+  args: {
+    workspaceId: string;
+    invocationId: string;
+    status: InvocationRow['status'];
+    dispatchAttempts: number;
+    nodeId: string | null;
+    reservedAt: Date | null;
+    error: string;
+    expectedNodeLivenessRevision?: number;
+  },
+): Promise<boolean> {
+  const nodeMatches = args.nodeId
+    ? eq(actionInvocations.dispatchedNodeId, args.nodeId)
+    : isNull(actionInvocations.dispatchedNodeId);
+  const reservationMatches = args.reservedAt
+    ? eq(actionInvocations.spawnReservedAt, args.reservedAt)
+    : isNull(actionInvocations.spawnReservedAt);
+  const exactClaim = sql`${actionInvocations.status} = ${args.status}
+    AND ${actionInvocations.dispatchAttempts} = ${args.dispatchAttempts}
+    AND ${nodeMatches}
+    AND ${reservationMatches}
+    ${args.expectedNodeLivenessRevision !== undefined
+      ? sql`AND ${actionInvocations.nodeLivenessRevision} = ${args.expectedNodeLivenessRevision}`
+      : sql``}`;
+  const failedAt = new Date();
+  try {
+    const results = await runAtomicWrites(db, (writeDb) => [
+      ...(args.nodeId && args.reservedAt ? [writeDb
+        .update(nodes)
+        .set({
+          // Force the atomic group to roll back if the exact dispatch claim
+          // changed or its recorded reservation has no matching node slot.
+          activeAgents: sql`CASE WHEN COALESCE(${nodes.reservedAgents}, 0) > 0 AND EXISTS (
+            SELECT 1 FROM ${actionInvocations}
+            WHERE ${actionInvocations.workspaceId} = ${args.workspaceId}
+              AND ${actionInvocations.id} = ${args.invocationId}
+              AND ${exactClaim}
+          ) THEN ${nodes.activeAgents} ELSE NULL END`,
+          reservedAgents: sql`CASE WHEN COALESCE(${nodes.reservedAgents}, 0) > 0
+            THEN ${nodes.reservedAgents} - 1 ELSE ${nodes.reservedAgents} END`,
+        })
+        .where(and(eq(nodes.workspaceId, args.workspaceId), eq(nodes.id, args.nodeId)))
+        .returning({ id: nodes.id })] : []),
+      writeDb
+        .update(actionInvocations)
+        .set({
+          status: sql`CASE WHEN ${exactClaim} THEN 'failed' ELSE NULL END`,
+          error: args.error,
+          completedAt: failedAt,
+          spawnReservedAt: null,
+        })
+        .where(and(
+          eq(actionInvocations.workspaceId, args.workspaceId),
+          eq(actionInvocations.id, args.invocationId),
+        ))
+        .returning({ id: actionInvocations.id }),
+    ], { requireAtomic: true });
+    const failedRows = results.at(-1) as Array<{ id: string }>;
+    return !!failedRows[0];
+  } catch (error) {
+    const kind = databaseConstraintKind(error);
+    if (kind === 'spawn_claim_changed' || kind === 'node_capacity') return false;
+    throw error;
+  }
+}
