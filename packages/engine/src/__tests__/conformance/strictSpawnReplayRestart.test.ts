@@ -12,7 +12,7 @@ import { conformancePgDb } from './pgMode.js';
 
 const schema = 'relay.spawn.invoke.logical/1';
 
-it('replay route resumes a pre-dispatch claim after an actual SQLite runtime restart', async () => {
+it('replay stays lookup-only while strict-invoke resumes a pre-dispatch claim after restart', async () => {
   if (conformancePgDb()) return;
   const dir = mkdtempSync(join(tmpdir(), 'relaycast-strict-spawn-restart-'));
   const dbPath = join(dir, 'relaycast.db');
@@ -55,7 +55,7 @@ it('replay route resumes a pre-dispatch claim after an actual SQLite runtime res
       directory: '/repo',
       verify_ready: true,
     };
-    const input = {
+    const requestInput = {
       spawn_contract: schema,
       target_node_id: nodeId,
       target_node: logical.target_node,
@@ -65,6 +65,9 @@ it('replay route resumes a pre-dispatch claim after an actual SQLite runtime res
       worker_cwd: '/materialized/repo',
       verify_ready: logical.verify_ready,
       logical_request: logical,
+    };
+    const storedInput = {
+      ...requestInput,
       spawn_contract_applied: schema,
     };
     const key = 'persisted-replay-crash';
@@ -78,7 +81,7 @@ it('replay route resumes a pre-dispatch claim after an actual SQLite runtime res
       invocationOrigin: 'builtin',
       callerId: caller.agentId,
       callerName: caller.name,
-      input,
+      input: storedInput,
       status: 'pending',
     });
     first.close();
@@ -117,14 +120,32 @@ it('replay route resumes a pre-dispatch claim after an actual SQLite runtime res
     });
     expect(replay.status).toBe(200);
     expect(replay.headers.get('Idempotency-Replayed')).toBe('true');
-    expect(sock.ofType('action.invoke')).toEqual([
-      expect.objectContaining({ action: 'spawn:claude', invocation_id: invocationId }),
-    ]);
-    const [node] = await restarted.deps.db
+    expect(sock.ofType('action.invoke')).toEqual([]);
+    const [nodeAfterReplay] = await restarted.deps.db
       .select({ reservedAgents: nodes.reservedAgents })
       .from(nodes)
       .where(and(eq(nodes.workspaceId, ws.workspaceId), eq(nodes.id, nodeId)));
-    expect(node.reservedAgents).toBe(1);
+    expect(nodeAfterReplay.reservedAgents).toBe(0);
+
+    const resumed = await createEngine(restarted.deps).request('/v1/actions/spawn/strict-invoke', {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        authorization: `Bearer ${caller.token}`,
+        'Idempotency-Key': key,
+      },
+      body: JSON.stringify({ input: requestInput }),
+    });
+    expect(resumed.status).toBe(201);
+    expect(resumed.headers.get('Idempotency-Replayed')).toBe('true');
+    expect(sock.ofType('action.invoke')).toEqual([
+      expect.objectContaining({ action: 'spawn:claude', invocation_id: invocationId }),
+    ]);
+    const [nodeAfterResume] = await restarted.deps.db
+      .select({ reservedAgents: nodes.reservedAgents })
+      .from(nodes)
+      .where(and(eq(nodes.workspaceId, ws.workspaceId), eq(nodes.id, nodeId)));
+    expect(nodeAfterResume.reservedAgents).toBe(1);
   } finally {
     restarted?.close();
     first?.close();
