@@ -452,6 +452,52 @@ describe('strict spawn crash recovery', () => {
     await expectSingleOwnedReservation(fixture, 'external-liveness-stale-projection');
   });
 
+  it('releases capacity acquired by the dispatch claim when its provider send misses', async () => {
+    const fixture = await setup();
+    const online = (): NodeLivenessSnapshot => ({
+      status: 'online',
+      providers: [{
+        name: 'default',
+        connection_id: 'strict-readiness-transition',
+        last_received_at: Date.now(),
+        expires_at: Date.now() + 45_000,
+        live: true,
+        handlers_live: true,
+      }],
+    });
+    let inspections = 0;
+    configureNodeLiveness(fixture.db, {
+      inspect: async () => inspections++ === 0
+        ? { status: 'offline', providers: [] }
+        : online(),
+    });
+    vi.spyOn(stack.runtime.realtime, 'sendToProvider').mockResolvedValueOnce(false);
+
+    const response = await fixture.invoke('claim-acquired-reservation-send-miss');
+    expect(response.status).toBe(201);
+    expect(fixture.sock.ofType('action.invoke')).toEqual([]);
+    const [invocation] = await fixture.db
+      .select({
+        status: actionInvocations.status,
+        attempts: actionInvocations.dispatchAttempts,
+        reservedAt: actionInvocations.spawnReservedAt,
+        placementToken: actionInvocations.spawnPlacementToken,
+      })
+      .from(actionInvocations)
+      .where(eq(actionInvocations.id, fixture.invocationId('claim-acquired-reservation-send-miss')));
+    const [node] = await fixture.db
+      .select({ reservedAgents: nodes.reservedAgents })
+      .from(nodes)
+      .where(and(eq(nodes.workspaceId, fixture.ws.workspaceId), eq(nodes.id, fixture.nodeId)));
+    expect(invocation).toMatchObject({
+      status: 'pending',
+      attempts: 0,
+      reservedAt: null,
+      placementToken: expect.any(String),
+    });
+    expect(node.reservedAgents).toBe(0);
+  });
+
   it.each(['completed', 'failed'] as const)(
     'strict-invoke replay preserves the durable %s status',
     async (status) => {

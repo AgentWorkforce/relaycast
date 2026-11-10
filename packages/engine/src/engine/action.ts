@@ -2112,6 +2112,7 @@ async function dispatchStrictSpawnClaim(args: {
     return args.replayed ? markInvocationReplay(pending) : pending;
   }
 
+  const reservationWasHeld = invocation.spawnReservedAt !== null;
   const claim = await claimStrictSpawnDispatch(args.db, {
     workspaceId: args.workspaceId,
     invocationId: invocation.id,
@@ -2171,7 +2172,7 @@ async function dispatchStrictSpawnClaim(args: {
       nodeId,
       placementToken,
       reservedAt: claim.reservedAt,
-      preserveReservation: invocation.spawnReservedAt !== null,
+      preserveReservation: reservationWasHeld,
     });
     const [restored] = await args.db
       .select()
