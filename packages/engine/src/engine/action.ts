@@ -4373,17 +4373,25 @@ export async function rescheduleNodeInvocation(
   // never-dispatched expiry path.
   if (strictBuiltinSpawnContract(invocation)) {
     if ((invocation.dispatchAttempts ?? 0) > 0) {
-      const failed = await failExactStrictSpawnDispatch(db, {
-        workspaceId: invocation.workspaceId,
-        invocationId: invocation.id,
-        status: invocation.status,
-        dispatchAttempts: invocation.dispatchAttempts ?? 0,
-        nodeId: invocation.dispatchedNodeId,
-        reservedAt: invocation.spawnReservedAt,
-        dispatchedAt: invocation.dispatchedAt,
-        error: 'handler_unavailable',
-        expectedNodeLivenessRevision: opts.expectedNodeLivenessRevision,
-      });
+      let failed: InvocationRow | undefined;
+      try {
+        failed = await failExactStrictSpawnDispatch(db, {
+          workspaceId: invocation.workspaceId,
+          invocationId: invocation.id,
+          status: invocation.status,
+          dispatchAttempts: invocation.dispatchAttempts ?? 0,
+          nodeId: invocation.dispatchedNodeId,
+          reservedAt: invocation.spawnReservedAt,
+          dispatchedAt: invocation.dispatchedAt,
+          error: 'handler_unavailable',
+          expectedNodeLivenessRevision: opts.expectedNodeLivenessRevision,
+        });
+      } catch {
+        // A settlement write failure leaves this indeterminate attempt exactly
+        // where it is. Let a later recovery retry the terminal CAS; legacy
+        // callers must never reopen it for a second provider send.
+        return false;
+      }
       if (failed && opts.completionDeps) {
         await emitFailedInvocationEffects(opts.completionDeps, invocation.workspaceId, [failed]);
       }

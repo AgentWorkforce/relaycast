@@ -7,6 +7,7 @@ import {
   ACTION_DISPATCH_TIMEOUT_MS,
   detachInvocationsFromLostNode,
   rescheduleNodeInvocation,
+  rescheduleInvocationsForLostNode,
   sweepTimedOutInvocations,
 } from '../../engine/action.js';
 import {
@@ -705,6 +706,52 @@ describe('strict spawn crash recovery', () => {
       .from(actionInvocations)
       .where(eq(actionInvocations.id, fixture.invocationId(key)));
     expect(row).toEqual({ status: 'failed', error: 'handler_unavailable' });
+  });
+
+  it('keeps an indeterminate strict send closed to retry when node-loss settlement fails', async () => {
+    const fixture = await setup();
+    const key = 'node-loss-settlement-write-failure';
+    expect((await fixture.invoke(key)).status).toBe(201);
+    const restore = injectUpdateFailure(
+      fixture.db,
+      actionInvocations,
+      'injected exact strict settlement failure',
+      { times: 1 },
+    );
+
+    expect(await rescheduleInvocationsForLostNode(
+      fixture.db,
+      stack.runtime.realtime,
+      fixture.ws.workspaceId,
+      fixture.nodeId,
+    )).toBe(0);
+    restore();
+
+    const [row] = await fixture.db
+      .select({
+        status: actionInvocations.status,
+        attempts: actionInvocations.dispatchAttempts,
+        dispatchedNodeId: actionInvocations.dispatchedNodeId,
+        reservedAt: actionInvocations.spawnReservedAt,
+      })
+      .from(actionInvocations)
+      .where(eq(actionInvocations.id, fixture.invocationId(key)));
+    const [node] = await fixture.db
+      .select({ reservedAgents: nodes.reservedAgents })
+      .from(nodes)
+      .where(and(eq(nodes.workspaceId, fixture.ws.workspaceId), eq(nodes.id, fixture.nodeId)));
+    expect(row).toEqual({
+      status: 'dispatched',
+      attempts: 1,
+      dispatchedNodeId: fixture.nodeId,
+      reservedAt: expect.any(Date),
+    });
+    expect(node.reservedAgents).toBe(1);
+
+    const replay = await fixture.invoke(key);
+    expect(replay.status).toBe(201);
+    expect(replay.headers.get('Idempotency-Replayed')).toBe('true');
+    expect(fixture.sock.ofType('action.invoke')).toHaveLength(1);
   });
 
   it('does not fail a newer strict redispatch restored after the detach snapshot', async () => {
