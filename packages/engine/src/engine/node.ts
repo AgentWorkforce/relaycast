@@ -62,6 +62,7 @@ import {
   detachInvocationsFromLostNode,
   dispatchCapacitySpawn,
   emitFailedInvocationEffects,
+  isStrictBuiltinSpawnInvocation,
   rescheduleInvocationsForLostNode,
   rescheduleNodeInvocation,
 } from './action.js';
@@ -3191,6 +3192,7 @@ export async function reconcileInventory(
       status: actionInvocations.status,
       dispatchedNodeId: actionInvocations.dispatchedNodeId,
       dispatchedAt: actionInvocations.dispatchedAt,
+      spawnDispatchGeneration: actionInvocations.spawnDispatchGeneration,
       dispatchedProvider: actionInvocations.dispatchedProvider,
       providerAcceptedAttempt: actionInvocations.providerAcceptedAttempt,
       spawnReservedAt: actionInvocations.spawnReservedAt,
@@ -3424,7 +3426,11 @@ export async function reconcileInventory(
       // A live broker owns the bounded readiness wait and cleanup. A transient
       // empty inventory during launch/teardown must not redispatch this spawn.
       // Actual provider disconnect and invocation expiry retain their own recovery.
-      if (liveInvocationIds.has(invocation.id) || requiresSpawnReadiness(invocation.input)) continue;
+      if (
+        liveInvocationIds.has(invocation.id)
+        || requiresSpawnReadiness(invocation.input)
+        || isStrictBuiltinSpawnInvocation(invocation)
+      ) continue;
       try {
         if (await rescheduleNodeInvocation(db, registry, invocation, { completionDeps })) {
           rescheduledInvocations++;

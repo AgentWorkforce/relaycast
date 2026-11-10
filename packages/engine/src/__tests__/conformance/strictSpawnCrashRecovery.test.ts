@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { and, eq, sql } from 'drizzle-orm';
-import { actionInvocations, nodes } from '../../db/tables.js';
+import { actionInvocations, nodeProviders, nodes } from '../../db/tables.js';
 import type { EngineDb } from '../../ports/database.js';
 import {
   ACTION_DISPATCH_TIMEOUT_MS,
@@ -211,6 +211,108 @@ describe('strict spawn crash recovery', () => {
       reservedAt: expect.any(Date),
     });
     expect(node.reservedAgents).toBe(1);
+  });
+
+  it('rejects an action-kind spawn name before placement instead of falling back to default capacity', async () => {
+    const fixture = await setup();
+    await fixture.db
+      .update(nodeProviders)
+      .set({ capabilities: [{ name: 'spawn:claude', kind: 'action' }] })
+      .where(and(
+        eq(nodeProviders.workspaceId, fixture.ws.workspaceId),
+        eq(nodeProviders.nodeId, fixture.nodeId),
+        eq(nodeProviders.name, 'default'),
+      ));
+
+    const response = await fixture.invoke('action-kind-is-not-capacity');
+    expect(response.status).toBe(409);
+    await expect(response.json()).resolves.toMatchObject({ error: { code: 'capability_mismatch' } });
+    expect(fixture.sock.ofType('action.invoke')).toHaveLength(0);
+
+    const [invocation] = await fixture.db
+      .select({
+        handlerNodeId: actionInvocations.handlerNodeId,
+        placementToken: actionInvocations.spawnPlacementToken,
+        reservedAt: actionInvocations.spawnReservedAt,
+        attempts: actionInvocations.dispatchAttempts,
+      })
+      .from(actionInvocations)
+      .where(eq(actionInvocations.id, fixture.invocationId('action-kind-is-not-capacity')));
+    const [node] = await fixture.db
+      .select({ reservedAgents: nodes.reservedAgents })
+      .from(nodes)
+      .where(and(eq(nodes.workspaceId, fixture.ws.workspaceId), eq(nodes.id, fixture.nodeId)));
+    expect(invocation).toEqual({
+      handlerNodeId: null,
+      placementToken: null,
+      reservedAt: null,
+      attempts: 0,
+    });
+    expect(node.reservedAgents).toBe(0);
+  });
+
+  it('keeps a false-ready strict spawn in flight across empty inventory until its worker appears', async () => {
+    const fixture = await setup();
+    const key = 'inventory-before-worker-registration';
+    const logical = { ...strictLogicalRequest(fixture.nodeId, 'strict-crash'), verify_ready: false };
+    const callerNode = await attachDirectNodeSocket(stack, fixture.ws.workspaceId, fixture.caller);
+    const response = await stack.app.request('/v1/actions/spawn/strict-invoke', {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        authorization: `Bearer ${fixture.caller.token}`,
+        'Idempotency-Key': key,
+      },
+      body: JSON.stringify({ input: strictRequestInput(logical) }),
+    });
+    expect(response.status).toBe(201);
+    expect(fixture.sock.ofType('action.invoke')).toHaveLength(1);
+
+    await fixture.handle.handleMessage(JSON.stringify({
+      v: 1,
+      type: 'inventory.sync',
+      agents: [],
+    }));
+    await stack.settle();
+
+    const [inFlight] = await fixture.db
+      .select({
+        status: actionInvocations.status,
+        reservedAt: actionInvocations.spawnReservedAt,
+        attempts: actionInvocations.dispatchAttempts,
+      })
+      .from(actionInvocations)
+      .where(eq(actionInvocations.id, fixture.invocationId(key)));
+    expect(inFlight).toEqual({
+      status: 'dispatched',
+      reservedAt: expect.any(Date),
+      attempts: 1,
+    });
+    expect(deliverFramesOfType(callerNode.sock, 'action.failed')).toHaveLength(0);
+
+    await fixture.handle.handleMessage(JSON.stringify({
+      v: 1,
+      type: 'inventory.sync',
+      agents: [{
+        agent_id: 'agt_inventory_after_spawn',
+        name: 'worker',
+        invocation_id: fixture.invocationId(key),
+        session_ref: 'agent://inventory-after-spawn',
+      }],
+    }));
+    await stack.settle();
+
+    const [completed] = await fixture.db
+      .select({ status: actionInvocations.status, reservedAt: actionInvocations.spawnReservedAt })
+      .from(actionInvocations)
+      .where(eq(actionInvocations.id, fixture.invocationId(key)));
+    const [node] = await fixture.db
+      .select({ reservedAgents: nodes.reservedAgents })
+      .from(nodes)
+      .where(and(eq(nodes.workspaceId, fixture.ws.workspaceId), eq(nodes.id, fixture.nodeId)));
+    expect(completed).toEqual({ status: 'completed', reservedAt: null });
+    expect(node.reservedAgents).toBe(0);
+    expect(deliverFramesOfType(callerNode.sock, 'action.completed')).toHaveLength(1);
   });
 
   it('does not fail a claim restored after a stale dispatched recovery snapshot', async () => {
@@ -854,6 +956,7 @@ describe('strict spawn crash recovery', () => {
       dispatchedNodeId: fixture.nodeId,
       dispatchedProvider: 'default',
       dispatchAttempts: 1,
+      spawnDispatchGeneration: 1,
       dispatchedAt: firstDispatchedAt,
       spawnReservedAt: heldAt,
       retryAfterAt: new Date('2026-11-10T00:00:30.000Z'),
@@ -867,37 +970,43 @@ describe('strict spawn crash recovery', () => {
       .from(actionInvocations)
       .where(eq(actionInvocations.id, fixture.invocationId('restored-before-detach')));
 
+    vi.useFakeTimers();
+    vi.setSystemTime(firstDispatchedAt);
     let restoredDuringDetach = false;
-    attachFakeBatch(stack, fixture.db, async () => {
-      if (restoredDuringDetach) return;
-      restoredDuringDetach = true;
-      await restoreStrictSpawnDispatch(fixture.db, {
-        workspaceId: fixture.ws.workspaceId,
-        invocationId: fixture.invocationId(key),
-        nodeId: fixture.nodeId,
-        placementToken: 'restored-detach-owner',
-        reservedAt: heldAt,
-        preserveReservation: true,
+    try {
+      attachFakeBatch(stack, fixture.db, async () => {
+        if (restoredDuringDetach) return;
+        restoredDuringDetach = true;
+        await restoreStrictSpawnDispatch(fixture.db, {
+          workspaceId: fixture.ws.workspaceId,
+          invocationId: fixture.invocationId(key),
+          nodeId: fixture.nodeId,
+          placementToken: 'restored-detach-owner',
+          reservedAt: heldAt,
+          preserveReservation: true,
+        });
+        const claimed = await claimStrictSpawnDispatch(fixture.db, {
+          workspaceId: fixture.ws.workspaceId,
+          invocationId: fixture.invocationId(key),
+          nodeId: fixture.nodeId,
+          providerName: 'default',
+          placementToken: 'restored-detach-owner',
+          reservationHeldAt: heldAt,
+          dispatchTimeoutMs: ACTION_DISPATCH_TIMEOUT_MS,
+        });
+        expect(claimed.claimed).toBe(true);
       });
-      const claimed = await claimStrictSpawnDispatch(fixture.db, {
-        workspaceId: fixture.ws.workspaceId,
-        invocationId: fixture.invocationId(key),
-        nodeId: fixture.nodeId,
-        providerName: 'default',
-        placementToken: 'restored-detach-owner',
-        reservationHeldAt: heldAt,
-        dispatchTimeoutMs: ACTION_DISPATCH_TIMEOUT_MS,
-      });
-      expect(claimed.claimed).toBe(true);
-    });
 
-    expect(await detachInvocationsFromLostNode(
-      fixture.db,
-      fixture.ws.workspaceId,
-      fixture.nodeId,
-      { claimRevision: beforeDetach.revision + 1 },
-    )).toBe(0);
-    expect(restoredDuringDetach).toBe(true);
+      expect(await detachInvocationsFromLostNode(
+        fixture.db,
+        fixture.ws.workspaceId,
+        fixture.nodeId,
+        { claimRevision: beforeDetach.revision + 1 },
+      )).toBe(0);
+      expect(restoredDuringDetach).toBe(true);
+    } finally {
+      vi.useRealTimers();
+    }
 
     const [restored] = await fixture.db
       .select({
@@ -907,6 +1016,7 @@ describe('strict spawn crash recovery', () => {
         placementToken: actionInvocations.spawnPlacementToken,
         reservedAt: actionInvocations.spawnReservedAt,
         dispatchedAt: actionInvocations.dispatchedAt,
+        generation: actionInvocations.spawnDispatchGeneration,
       })
       .from(actionInvocations)
       .where(eq(actionInvocations.id, fixture.invocationId(key)));
@@ -920,10 +1030,26 @@ describe('strict spawn crash recovery', () => {
       dispatchedNodeId: fixture.nodeId,
       placementToken: null,
       reservedAt: heldAt,
-      dispatchedAt: expect.any(Date),
+      dispatchedAt: firstDispatchedAt,
+      generation: 2,
     });
-    expect(restored.dispatchedAt).not.toEqual(firstDispatchedAt);
     expect(node.reservedAgents).toBe(1);
+
+    const [current] = await fixture.db
+      .select()
+      .from(actionInvocations)
+      .where(eq(actionInvocations.id, fixture.invocationId(key)));
+    expect(await rescheduleNodeInvocation(fixture.db, stack.runtime.realtime, current)).toBe(false);
+    const [failed] = await fixture.db
+      .select({ status: actionInvocations.status, reservedAt: actionInvocations.spawnReservedAt })
+      .from(actionInvocations)
+      .where(eq(actionInvocations.id, fixture.invocationId(key)));
+    const [released] = await fixture.db
+      .select({ reservedAgents: nodes.reservedAgents })
+      .from(nodes)
+      .where(and(eq(nodes.workspaceId, fixture.ws.workspaceId), eq(nodes.id, fixture.nodeId)));
+    expect(failed).toEqual({ status: 'failed', reservedAt: null });
+    expect(released.reservedAgents).toBe(0);
   });
 
   it('emits action.failed when a strict provider reports handler_unavailable', async () => {
@@ -1177,6 +1303,7 @@ interface StrictFixture {
   caller: { agentId: string; name: string; token: string };
   nodeId: string;
   sock: FakeSocket;
+  handle: { handleMessage(data: string): Promise<void> };
   db: EngineDb;
   storedInput: Record<string, unknown>;
   invocationId(key: string): string;

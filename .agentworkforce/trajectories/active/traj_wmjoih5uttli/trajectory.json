@@ -1,0 +1,106 @@
+{
+  "id": "traj_wmjoih5uttli",
+  "version": 1,
+  "task": {
+    "title": "Address exact-head strict spawn replay findings for Relaycast PR 644",
+    "source": {
+      "system": "plain",
+      "id": "AgentWorkforce/relaycast#644"
+    }
+  },
+  "status": "active",
+  "startedAt": "2026-11-10T13:25:08.490Z",
+  "agents": [
+    {
+      "name": "default",
+      "role": "lead",
+      "joinedAt": "2026-11-10T13:40:12.049Z"
+    }
+  ],
+  "chapters": [
+    {
+      "id": "chap_cj5zbut9eo98",
+      "title": "Work",
+      "agentName": "default",
+      "startedAt": "2026-11-10T13:40:12.049Z",
+      "events": [
+        {
+          "ts": 1794318012050,
+          "type": "decision",
+          "content": "Fence strict dispatch recovery with a durable monotonic generation: Fence strict dispatch recovery with a durable monotonic generation",
+          "raw": {
+            "question": "Fence strict dispatch recovery with a durable monotonic generation",
+            "chosen": "Fence strict dispatch recovery with a durable monotonic generation",
+            "alternatives": [],
+            "reasoning": "Second-resolution timestamps can collide across restore and redispatch; the generation makes stale terminalization CAS exact."
+          },
+          "significance": "high"
+        },
+        {
+          "ts": 1794318012335,
+          "type": "decision",
+          "content": "Resolve the exact capacity provider before strict spawn placement: Resolve the exact capacity provider before strict spawn placement",
+          "raw": {
+            "question": "Resolve the exact capacity provider before strict spawn placement",
+            "chosen": "Resolve the exact capacity provider before strict spawn placement",
+            "alternatives": [],
+            "reasoning": "Action-kind capability advertisements must fail closed and must never fall back to the default capacity provider after placement."
+          },
+          "significance": "high"
+        },
+        {
+          "ts": 1794318012603,
+          "type": "decision",
+          "content": "Keep strict spawns in flight across empty inventory snapshots: Keep strict spawns in flight across empty inventory snapshots",
+          "raw": {
+            "question": "Keep strict spawns in flight across empty inventory snapshots",
+            "chosen": "Keep strict spawns in flight across empty inventory snapshots",
+            "alternatives": [],
+            "reasoning": "Worker registration may lag dispatch even when verify_ready is false; timeout, provider failure, or node loss remain the authoritative terminal paths."
+          },
+          "significance": "high"
+        },
+        {
+          "ts": 1794318012867,
+          "type": "decision",
+          "content": "Backfill immutable registered-action handler snapshots in both databases: Backfill immutable registered-action handler snapshots in both databases",
+          "raw": {
+            "question": "Backfill immutable registered-action handler snapshots in both databases",
+            "chosen": "Backfill immutable registered-action handler snapshots in both databases",
+            "alternatives": [],
+            "reasoning": "Pre-snapshot invocations otherwise reject their original handler after upgrade; migration-time repair preserves the immutable runtime authority boundary."
+          },
+          "significance": "high"
+        },
+        {
+          "ts": 1794318013192,
+          "type": "reflection",
+          "content": "All four exact-head blockers now have red/green mutation evidence; affected, full engine, root test, lint, build, migration generation, and diff checks pass.",
+          "raw": {
+            "focalPoints": [
+              "strict-spawn-replay",
+              "migrations",
+              "verification"
+            ],
+            "confidence": 0.9
+          },
+          "significance": "high",
+          "tags": [
+            "focal:strict-spawn-replay",
+            "focal:migrations",
+            "focal:verification",
+            "confidence:0.9"
+          ]
+        }
+      ]
+    }
+  ],
+  "commits": [],
+  "filesChanged": [],
+  "projectId": "AgentWorkforce/relaycast",
+  "tags": [],
+  "_trace": {
+    "startRef": "423ee3ad54ff643ef8aff57f4ef57f8d9ca8253b",
+    "endRef": "423ee3ad54ff643ef8aff57f4ef57f8d9ca8253b"
+  }
+}

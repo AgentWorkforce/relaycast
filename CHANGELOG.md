@@ -30,6 +30,9 @@ Packages without a separate changelog are covered by the cross-package notes bel
   with atomic capacity ownership across SQLite, D1, and PostgreSQL; concurrent
   retries cannot reserve twice or fall back to another node, and an unknown
   socket-send outcome fails closed instead of being sent again automatically.
+  Recovery keeps an accepted dispatch in flight while its worker registers,
+  rejects action-only providers before reserving capacity, and fences stale
+  same-second retries with a durable dispatch generation.
 - Channel and thread realtime events retain arbitrary rich blocks across engine workspace frames and TypeScript node deliveries; DM transports preserve blocks when present.
 - Relayfile callbacks deliver events for embedded and internal path wildcards, including per-issue Linear files and Jira comment paths.
 - Relayfile deletion notifications reach subscribed agents, including typed provider removals without a record snapshot.

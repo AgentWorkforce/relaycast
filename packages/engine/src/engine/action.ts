@@ -41,7 +41,7 @@ type ActionRow = typeof actions.$inferSelect;
 type InvocationRow = typeof actionInvocations.$inferSelect;
 type RetryableInvocationRow = Pick<
   InvocationRow,
-  'id' | 'workspaceId' | 'actionId' | 'actionName' | 'invocationOrigin' | 'callerId' | 'input' | 'status' | 'dispatchedNodeId' | 'dispatchedAt' | 'providerAcceptedAttempt' | 'spawnReservedAt' | 'attemptedNodeIds' | 'dispatchAttempts' | 'retryAfterAt'
+  'id' | 'workspaceId' | 'actionId' | 'actionName' | 'invocationOrigin' | 'callerId' | 'input' | 'status' | 'dispatchedNodeId' | 'dispatchedAt' | 'spawnDispatchGeneration' | 'providerAcceptedAttempt' | 'spawnReservedAt' | 'attemptedNodeIds' | 'dispatchAttempts' | 'retryAfterAt'
 >;
 
 const OPEN_INVOCATION_STATUSES = ['pending', 'dispatched', 'invoked'];
@@ -793,6 +793,12 @@ function strictBuiltinSpawnContract(
 ): Record<string, unknown> | null {
   if (invocation.invocationOrigin !== 'builtin' || invocation.actionId !== null) return null;
   return materializedSpawnLogicalRequest(recordInput(invocation.input), true);
+}
+
+export function isStrictBuiltinSpawnInvocation(
+  invocation: Pick<InvocationRow, 'invocationOrigin' | 'actionId' | 'input'>,
+): boolean {
+  return strictBuiltinSpawnContract(invocation) !== null;
 }
 
 async function refreshUnsentStrictSpawnWorkerCwd(
@@ -1985,7 +1991,12 @@ async function placeStrictSpawnClaim(
   db: Db,
   workspaceId: string,
   invocation: InvocationRow,
-): Promise<{ invocation: InvocationRow; node: typeof nodes.$inferSelect; capability: string }> {
+): Promise<{
+  invocation: InvocationRow;
+  node: typeof nodes.$inferSelect;
+  capability: string;
+  providerName: string;
+}> {
   const input = recordInput(invocation.input);
   const logical = strictBuiltinSpawnContract(invocation);
   if (!logical) {
@@ -2005,8 +2016,16 @@ async function placeStrictSpawnClaim(
   if (!nodeHasCapability(node, capability)) {
     throw codedError(`Node "${node.name}" does not provide ${capability}`, 'capability_mismatch', 409);
   }
+  const providerName = await capacityProviderName(db, workspaceId, nodeId, capability);
+  if (!providerName) {
+    throw codedError(
+      `Node "${node.name}" does not provide ${capability} as capacity`,
+      'capability_mismatch',
+      409,
+    );
+  }
 
-  if (invocation.spawnPlacementToken) return { invocation, node, capability };
+  if (invocation.spawnPlacementToken) return { invocation, node, capability, providerName };
   const placed = await placeStrictSpawn(db, {
     workspaceId,
     invocationId: invocation.id,
@@ -2014,7 +2033,7 @@ async function placeStrictSpawnClaim(
     placementToken: randomHex(16),
     reserve: await nodeReady(db, node),
   });
-  if (placed) return { invocation: placed, node, capability };
+  if (placed) return { invocation: placed, node, capability, providerName };
 
   const [winner] = await db
     .select()
@@ -2039,7 +2058,7 @@ async function placeStrictSpawnClaim(
       503,
     );
   }
-  return { invocation: winner, node, capability };
+  return { invocation: winner, node, capability, providerName };
 }
 
 async function dispatchStrictSpawnClaim(args: {
@@ -2086,12 +2105,7 @@ async function dispatchStrictSpawnClaim(args: {
     return args.replayed ? markInvocationReplay(result) : result;
   }
 
-  const providerName = (await capacityProviderName(
-    args.db,
-    args.workspaceId,
-    nodeId,
-    placed.capability,
-  )) ?? DEFAULT_PROVIDER_NAME;
+  const providerName = placed.providerName;
   const providerReady = await isNodeProviderLive(
     args.db,
     args.registry,
@@ -4429,6 +4443,7 @@ export async function rescheduleNodeInvocation(
           invocationId: invocation.id,
           status: invocation.status,
           dispatchAttempts: invocation.dispatchAttempts ?? 0,
+          dispatchGeneration: invocation.spawnDispatchGeneration,
           nodeId: invocation.dispatchedNodeId,
           reservedAt: invocation.spawnReservedAt,
           dispatchedAt: invocation.dispatchedAt,
@@ -4831,6 +4846,7 @@ export async function detachInvocationsFromLostNode(
         invocationId: invocation.id,
         status: invocation.status,
         dispatchAttempts: invocation.dispatchAttempts ?? 0,
+        dispatchGeneration: invocation.spawnDispatchGeneration,
         nodeId: invocation.dispatchedNodeId,
         reservedAt: invocation.spawnReservedAt,
         dispatchedAt: invocation.dispatchedAt,
@@ -4988,6 +5004,7 @@ export async function completeNodeInvocation(
       durationMs: actionInvocations.durationMs,
       dispatchedNodeId: actionInvocations.dispatchedNodeId,
       dispatchedAt: actionInvocations.dispatchedAt,
+      spawnDispatchGeneration: actionInvocations.spawnDispatchGeneration,
       providerAcceptedAttempt: actionInvocations.providerAcceptedAttempt,
       spawnReservedAt: actionInvocations.spawnReservedAt,
       attemptedNodeIds: actionInvocations.attemptedNodeIds,
@@ -5024,6 +5041,7 @@ export async function completeNodeInvocation(
         invocationId,
         status: existing.status,
         dispatchAttempts: existing.dispatchAttempts,
+        dispatchGeneration: existing.spawnDispatchGeneration,
         nodeId: existing.dispatchedNodeId,
         reservedAt: existing.spawnReservedAt,
         dispatchedAt: existing.dispatchedAt,

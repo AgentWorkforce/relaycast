@@ -148,6 +148,7 @@ export async function claimStrictSpawnDispatch(
           dispatchedNodeId: args.nodeId,
           dispatchedProvider: args.providerName,
           dispatchedAt,
+          spawnDispatchGeneration: sql`${actionInvocations.spawnDispatchGeneration} + 1`,
           retryAfterAt,
           spawnReservedAt: reservedAt,
           spawnPlacementToken: null,
@@ -247,6 +248,7 @@ export async function failExactStrictSpawnDispatch(
     invocationId: string;
     status: InvocationRow['status'];
     dispatchAttempts: number;
+    dispatchGeneration: number;
     nodeId: string | null;
     reservedAt: Date | null;
     dispatchedAt: Date | null;
@@ -260,14 +262,15 @@ export async function failExactStrictSpawnDispatch(
   const reservationMatches = args.reservedAt
     ? eq(actionInvocations.spawnReservedAt, args.reservedAt)
     : isNull(actionInvocations.spawnReservedAt);
-  const dispatchGenerationMatches = args.dispatchedAt
+  const dispatchedAtMatches = args.dispatchedAt
     ? eq(actionInvocations.dispatchedAt, args.dispatchedAt)
     : isNull(actionInvocations.dispatchedAt);
   const exactClaim = sql`${actionInvocations.status} = ${args.status}
     AND ${actionInvocations.dispatchAttempts} = ${args.dispatchAttempts}
+    AND ${actionInvocations.spawnDispatchGeneration} = ${args.dispatchGeneration}
     AND ${nodeMatches}
     AND ${reservationMatches}
-    AND ${dispatchGenerationMatches}
+    AND ${dispatchedAtMatches}
     ${args.expectedNodeLivenessRevision !== undefined
       ? sql`AND ${actionInvocations.nodeLivenessRevision} = ${args.expectedNodeLivenessRevision}`
       : sql``}`;

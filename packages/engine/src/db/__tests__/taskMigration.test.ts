@@ -46,11 +46,12 @@ it('upgrades existing actions and results additively, preserving rows and every 
       '0080_nodes_context_reachable_index.sql',
       '0082_pending_events_settled_retention.sql',
       '0083_strict_spawn_placement_token.sql',
+      '0084_strict_spawn_dispatch_generation.sql',
     ]);
     for (const table of before) {
       const columns = db.pragma(`table_info(${table.name})`) as { name: string }[];
       expect(columns.slice(0, table.columns.length)).toEqual(table.columns);
-      expect(columns).toHaveLength(table.columns.length + (table.name === 'action_invocations' ? 3 : 1));
+      expect(columns).toHaveLength(table.columns.length + (table.name === 'action_invocations' ? 4 : 1));
       expect(db.pragma(`foreign_key_list(${table.name})`)).toEqual(table.fks);
       expect(db.prepare(`SELECT ${table.columns.map(c => c.name).join(',')} FROM ${table.name}`).all()).toEqual(table.rows);
     }
@@ -58,6 +59,8 @@ it('upgrades existing actions and results additively, preserving rows and every 
     expect(db.prepare('SELECT task_state FROM action_invocations').get()).toEqual({ task_state: null });
     expect(db.prepare('SELECT spawn_placement_token FROM action_invocations').get())
       .toEqual({ spawn_placement_token: null });
+    expect(db.prepare('SELECT spawn_dispatch_generation FROM action_invocations').get())
+      .toEqual({ spawn_dispatch_generation: 0 });
     expect(db.pragma('foreign_key_check')).toEqual([]);
     expect(runMigrations(handle).applied).toEqual([]);
     expect(db.prepare("SELECT name FROM sqlite_master WHERE type='index' AND name='idx_action_invocations_task_deadline'").get()).toBeDefined();

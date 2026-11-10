@@ -851,6 +851,13 @@ export const ACTOR_MIGRATIONS: readonly (readonly [string, readonly string[]])[]
     [
       "ALTER TABLE action_invocations ADD COLUMN spawn_placement_token TEXT"
     ]
+  ],
+  [
+    "0084_strict_spawn_dispatch_generation.sql",
+    [
+      "ALTER TABLE action_invocations\n  ADD COLUMN spawn_dispatch_generation INTEGER NOT NULL DEFAULT 0",
+      "UPDATE action_invocations\nSET handler_agent_id = (\n      SELECT actions.handler_agent_id\n      FROM actions\n      WHERE actions.id = action_invocations.action_id\n        AND actions.workspace_id = action_invocations.workspace_id\n    ),\n    handler_node_id = (\n      SELECT actions.handler_node_id\n      FROM actions\n      WHERE actions.id = action_invocations.action_id\n        AND actions.workspace_id = action_invocations.workspace_id\n    )\nWHERE invocation_origin = 'registered_action'\n  AND action_id IS NOT NULL\n  AND handler_agent_id IS NULL\n  AND handler_node_id IS NULL"
+    ]
   ]
 ];
 
