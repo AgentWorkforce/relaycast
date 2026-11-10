@@ -795,6 +795,47 @@ function strictBuiltinSpawnContract(
   return materializedSpawnLogicalRequest(recordInput(invocation.input), true);
 }
 
+async function refreshUnsentStrictSpawnWorkerCwd(
+  db: Db,
+  invocation: InvocationRow,
+  incomingInput: Record<string, unknown>,
+): Promise<InvocationRow> {
+  if (!strictBuiltinSpawnContract(invocation)) return invocation;
+  const workerCwd = incomingInput.worker_cwd;
+  const storedInput = recordInput(invocation.input);
+  if (typeof workerCwd !== 'string' || workerCwd === storedInput.worker_cwd) return invocation;
+
+  const [refreshed] = await db
+    .update(actionInvocations)
+    .set({ input: { ...storedInput, worker_cwd: workerCwd } })
+    .where(and(
+      eq(actionInvocations.workspaceId, invocation.workspaceId),
+      eq(actionInvocations.id, invocation.id),
+      eq(actionInvocations.status, 'pending'),
+      eq(actionInvocations.dispatchAttempts, 0),
+      isNull(actionInvocations.dispatchedNodeId),
+      isNull(actionInvocations.dispatchedAt),
+    ))
+    .returning();
+  if (refreshed) return refreshed;
+
+  const [current] = await db
+    .select()
+    .from(actionInvocations)
+    .where(and(
+      eq(actionInvocations.workspaceId, invocation.workspaceId),
+      eq(actionInvocations.id, invocation.id),
+    ));
+  if (!current) {
+    throw codedError('Spawn invocation is no longer available', 'idempotency_unavailable', 503);
+  }
+  assertInvocationClaimMatches(current, 'spawn', {
+    input: incomingInput,
+    caller_id: invocation.callerId,
+  });
+  return current;
+}
+
 async function idempotentInvocationId(
   workspaceId: string,
   callerId: string,
@@ -2096,6 +2137,8 @@ async function dispatchStrictSpawnClaim(args: {
     }));
   }
 
+  invocation = claim.invocation ?? invocation;
+
   const frame = {
     v: 1 as const,
     type: 'action.invoke' as const,
@@ -2187,13 +2230,18 @@ async function dispatchSpawn(args: {
   const targetNodeId = args.targetNodeId ?? (inputTargetNodeId || undefined);
   const bypassShadow = args.bypassShadow || logicalRequest !== null;
 
-  const { invocation, replayed } = await createInvocation(args.db, args.workspaceId, null, {
+  const claim = await createInvocation(args.db, args.workspaceId, null, {
     input,
     caller_id: data.caller_id,
     caller_name: data.caller_name,
     invocation_id: args.invocationId,
   });
+  let { invocation } = claim;
+  const { replayed } = claim;
   if (logicalRequest) {
+    if (replayed) {
+      invocation = await refreshUnsentStrictSpawnWorkerCwd(args.db, invocation, input);
+    }
     return dispatchStrictSpawnClaim({
       db: args.db,
       registry: args.registry,

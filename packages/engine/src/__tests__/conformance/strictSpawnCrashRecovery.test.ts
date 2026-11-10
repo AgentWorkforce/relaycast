@@ -46,7 +46,10 @@ function strictLogicalRequest(nodeId: string, nodeName: string) {
   };
 }
 
-function strictRequestInput(logical: ReturnType<typeof strictLogicalRequest>) {
+function strictRequestInput(
+  logical: ReturnType<typeof strictLogicalRequest>,
+  workerCwd = '/materialized/repo',
+) {
   return {
     spawn_contract: schema,
     target_node_id: logical.target_node_id,
@@ -54,7 +57,7 @@ function strictRequestInput(logical: ReturnType<typeof strictLogicalRequest>) {
     name: logical.name,
     cli: logical.cli,
     task: logical.task,
-    worker_cwd: '/materialized/repo',
+    worker_cwd: workerCwd,
     verify_ready: logical.verify_ready,
     logical_request: logical,
   };
@@ -117,6 +120,45 @@ describe('strict spawn crash recovery', () => {
       expect.objectContaining({ action: 'spawn:claude', invocation_id: fixture.invocationId('insert-crash') }),
     ]);
     await expectSingleOwnedReservation(fixture, 'insert-crash');
+  });
+
+  it('refreshes a rematerialized cwd before dispatching an unsent strict claim', async () => {
+    const fixture = await setup();
+    const key = 'rematerialized-cwd';
+    await insertStrictClaim(fixture, key);
+
+    const response = await fixture.invoke(key, '/materialized/repo-after-retry');
+    expect(response.status).toBe(201);
+    expect(fixture.sock.ofType('action.invoke')).toEqual([
+      expect.objectContaining({
+        invocation_id: fixture.invocationId(key),
+        input: expect.objectContaining({ worker_cwd: '/materialized/repo-after-retry' }),
+      }),
+    ]);
+    const [invocation] = await fixture.db
+      .select({ input: actionInvocations.input })
+      .from(actionInvocations)
+      .where(eq(actionInvocations.id, fixture.invocationId(key)));
+    expect(invocation.input).toMatchObject({ worker_cwd: '/materialized/repo-after-retry' });
+  });
+
+  it('does not change a strict cwd after dispatch has begun', async () => {
+    const fixture = await setup();
+    const key = 'immutable-dispatched-cwd';
+
+    expect((await fixture.invoke(key, '/materialized/original')).status).toBe(201);
+    expect((await fixture.invoke(key, '/materialized/retry')).status).toBe(201);
+    expect(fixture.sock.ofType('action.invoke')).toEqual([
+      expect.objectContaining({
+        invocation_id: fixture.invocationId(key),
+        input: expect.objectContaining({ worker_cwd: '/materialized/original' }),
+      }),
+    ]);
+    const [invocation] = await fixture.db
+      .select({ input: actionInvocations.input })
+      .from(actionInvocations)
+      .where(eq(actionInvocations.id, fixture.invocationId(key)));
+    expect(invocation.input).toMatchObject({ worker_cwd: '/materialized/original' });
   });
 
   it('refuses REST completion while a strict claim is placed but not dispatched', async () => {
@@ -1049,17 +1091,16 @@ describe('strict spawn crash recovery', () => {
     await stack.settle();
 
     const logical = strictLogicalRequest(nodeId, 'strict-crash');
-    const requestInput = strictRequestInput(logical);
     const storedInput = strictStoredInput(logical);
     const invocationId = (key: string) => strictInvocationId(ws.workspaceId, caller.agentId, key);
-    const invoke = (key: string) => stack.app.request('/v1/actions/spawn/strict-invoke', {
+    const invoke = (key: string, workerCwd = '/materialized/repo') => stack.app.request('/v1/actions/spawn/strict-invoke', {
       method: 'POST',
       headers: {
         'content-type': 'application/json',
         authorization: `Bearer ${caller.token}`,
         'Idempotency-Key': key,
       },
-      body: JSON.stringify({ input: requestInput }),
+      body: JSON.stringify({ input: strictRequestInput(logical, workerCwd) }),
     });
     const replay = (key: string) => stack.app.request('/v1/actions/spawn/replay', {
       method: 'POST',
@@ -1093,7 +1134,7 @@ interface StrictFixture {
   db: EngineDb;
   storedInput: Record<string, unknown>;
   invocationId(key: string): string;
-  invoke(key: string): Promise<Response>;
+  invoke(key: string, workerCwd?: string): Promise<Response>;
   replay(key: string): Promise<Response>;
 }
 

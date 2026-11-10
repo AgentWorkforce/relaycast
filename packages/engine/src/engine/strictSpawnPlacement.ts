@@ -109,7 +109,7 @@ export async function claimStrictSpawnDispatch(
     reservationHeldAt: Date | null;
     dispatchTimeoutMs: number;
   },
-): Promise<{ claimed: boolean; reservedAt?: Date }> {
+): Promise<{ claimed: boolean; reservedAt?: Date; invocation?: InvocationRow }> {
   const dispatchedAt = new Date();
   const reservedAt = args.reservationHeldAt ?? dispatchedAt;
   const retryAfterAt = new Date(dispatchedAt.getTime() + args.dispatchTimeoutMs);
@@ -164,7 +164,7 @@ export async function claimStrictSpawnDispatch(
           eq(actionInvocations.workspaceId, args.workspaceId),
           eq(actionInvocations.id, args.invocationId),
         ))
-        .returning({ id: actionInvocations.id }),
+        .returning(),
       ...(!args.reservationHeldAt ? [writeDb
         .update(nodes)
         .set({
@@ -176,10 +176,14 @@ export async function claimStrictSpawnDispatch(
         .where(and(eq(nodes.workspaceId, args.workspaceId), eq(nodes.id, args.nodeId)))
         .returning({ id: nodes.id })] : []),
     ], { requireAtomic: true });
-    const invocationRows = results[0] as Array<{ id: string }>;
+    const invocationRows = results[0] as InvocationRow[];
     const nodeRows = args.reservationHeldAt ? [{ id: args.nodeId }] : results[1] as Array<{ id: string }>;
     return invocationRows[0] && nodeRows[0]
-      ? { claimed: true, reservedAt }
+      ? {
+          claimed: true,
+          reservedAt: invocationRows[0].spawnReservedAt ?? reservedAt,
+          invocation: invocationRows[0],
+        }
       : { claimed: false };
   } catch (error) {
     const kind = databaseConstraintKind(error);

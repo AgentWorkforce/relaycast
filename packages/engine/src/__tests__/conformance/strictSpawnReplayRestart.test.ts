@@ -127,6 +127,10 @@ it('replay stays lookup-only while strict-invoke resumes a pre-dispatch claim af
       .where(and(eq(nodes.workspaceId, ws.workspaceId), eq(nodes.id, nodeId)));
     expect(nodeAfterReplay.reservedAgents).toBe(0);
 
+    const rematerializedInput = {
+      ...requestInput,
+      worker_cwd: '/materialized/repo-after-restart',
+    };
     const resumed = await createEngine(restarted.deps).request('/v1/actions/spawn/strict-invoke', {
       method: 'POST',
       headers: {
@@ -134,12 +138,16 @@ it('replay stays lookup-only while strict-invoke resumes a pre-dispatch claim af
         authorization: `Bearer ${caller.token}`,
         'Idempotency-Key': key,
       },
-      body: JSON.stringify({ input: requestInput }),
+      body: JSON.stringify({ input: rematerializedInput }),
     });
     expect(resumed.status).toBe(201);
     expect(resumed.headers.get('Idempotency-Replayed')).toBe('true');
     expect(sock.ofType('action.invoke')).toEqual([
-      expect.objectContaining({ action: 'spawn:claude', invocation_id: invocationId }),
+      expect.objectContaining({
+        action: 'spawn:claude',
+        invocation_id: invocationId,
+        input: expect.objectContaining({ worker_cwd: '/materialized/repo-after-restart' }),
+      }),
     ]);
     const [nodeAfterResume] = await restarted.deps.db
       .select({ reservedAgents: nodes.reservedAgents })
