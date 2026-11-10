@@ -80,20 +80,42 @@ describe('strict spawn crash recovery', () => {
     await expectSingleOwnedReservation(fixture, 'insert-crash');
   });
 
-  it('replay route resumes an inserted exact-node claim without creating a replacement', async () => {
+  it('replay route returns an inserted exact-node claim without placing or dispatching it', async () => {
     const fixture = await setup();
     await insertStrictClaim(fixture, 'replay-insert-crash');
 
     const response = await fixture.replay('replay-insert-crash');
     expect(response.status).toBe(200);
     expect(response.headers.get('Idempotency-Replayed')).toBe('true');
-    expect(fixture.sock.ofType('action.invoke')).toEqual([
-      expect.objectContaining({
-        action: 'spawn:claude',
-        invocation_id: fixture.invocationId('replay-insert-crash'),
-      }),
-    ]);
-    await expectSingleOwnedReservation(fixture, 'replay-insert-crash');
+    expect((await response.json() as { data: Record<string, unknown> }).data).toMatchObject({
+      invocation_id: fixture.invocationId('replay-insert-crash'),
+      status: 'pending',
+      handler_node_id: null,
+      dispatched_node_id: null,
+    });
+    expect(fixture.sock.ofType('action.invoke')).toHaveLength(0);
+    const [invocation] = await fixture.db
+      .select({
+        status: actionInvocations.status,
+        attempts: actionInvocations.dispatchAttempts,
+        token: actionInvocations.spawnPlacementToken,
+        reservedAt: actionInvocations.spawnReservedAt,
+        dispatchedNodeId: actionInvocations.dispatchedNodeId,
+      })
+      .from(actionInvocations)
+      .where(eq(actionInvocations.id, fixture.invocationId('replay-insert-crash')));
+    const [node] = await fixture.db
+      .select({ reservedAgents: nodes.reservedAgents })
+      .from(nodes)
+      .where(and(eq(nodes.workspaceId, fixture.ws.workspaceId), eq(nodes.id, fixture.nodeId)));
+    expect(invocation).toEqual({
+      status: 'pending',
+      attempts: 0,
+      token: null,
+      reservedAt: null,
+      dispatchedNodeId: null,
+    });
+    expect(node.reservedAgents).toBe(0);
   });
 
   it('replay route refuses a missing key without creating an invocation or reservation', async () => {
@@ -114,7 +136,7 @@ describe('strict spawn crash recovery', () => {
     expect(node.reservedAgents).toBe(0);
   });
 
-  it('replay route never falls back when the claimed exact node is gone', async () => {
+  it('replay route returns an existing claim without dispatching after its exact node is gone', async () => {
     const fixture = await setup();
     await insertStrictClaim(fixture, 'replay-no-fallback');
     const alternateId = 'node_strict_alternate';
@@ -160,7 +182,14 @@ describe('strict spawn crash recovery', () => {
       .where(and(eq(nodes.workspaceId, fixture.ws.workspaceId), eq(nodes.id, fixture.nodeId)));
 
     const response = await fixture.replay('replay-no-fallback');
-    expect(response.status).toBe(404);
+    expect(response.status).toBe(200);
+    expect(response.headers.get('Idempotency-Replayed')).toBe('true');
+    expect((await response.json() as { data: Record<string, unknown> }).data).toMatchObject({
+      invocation_id: fixture.invocationId('replay-no-fallback'),
+      status: 'pending',
+      handler_node_id: null,
+      dispatched_node_id: null,
+    });
     expect(fixture.sock.ofType('action.invoke')).toHaveLength(0);
     expect(alternateSocket.ofType('action.invoke')).toHaveLength(0);
     const [alternateNode] = await fixture.db
@@ -305,7 +334,7 @@ describe('strict spawn crash recovery', () => {
     expect(afterSweep).toEqual({ status: 'dispatched', reservedAt: persistedReservation.reservedAt });
   });
 
-  it('replay route resumes a reserved definitely-unsent claim without taking a second slot', async () => {
+  it('replay route returns a reserved definitely-unsent claim without dispatching it', async () => {
     const fixture = await setup();
     const heldAt = new Date(Date.now() - 1_000);
     await insertStrictClaim(fixture, 'replay-reserved-crash', {
@@ -318,11 +347,43 @@ describe('strict spawn crash recovery', () => {
       .update(nodes)
       .set({ reservedAgents: 1 })
       .where(and(eq(nodes.workspaceId, fixture.ws.workspaceId), eq(nodes.id, fixture.nodeId)));
+    const [persistedReservation] = await fixture.db
+      .select({ reservedAt: actionInvocations.spawnReservedAt })
+      .from(actionInvocations)
+      .where(eq(actionInvocations.id, fixture.invocationId('replay-reserved-crash')));
 
     const response = await fixture.replay('replay-reserved-crash');
     expect(response.status).toBe(200);
-    expect(fixture.sock.ofType('action.invoke')).toHaveLength(1);
-    await expectSingleOwnedReservation(fixture, 'replay-reserved-crash');
+    expect(response.headers.get('Idempotency-Replayed')).toBe('true');
+    expect((await response.json() as { data: Record<string, unknown> }).data).toMatchObject({
+      invocation_id: fixture.invocationId('replay-reserved-crash'),
+      status: 'pending',
+      handler_node_id: fixture.nodeId,
+      dispatched_node_id: null,
+    });
+    expect(fixture.sock.ofType('action.invoke')).toHaveLength(0);
+    const [invocation] = await fixture.db
+      .select({
+        status: actionInvocations.status,
+        attempts: actionInvocations.dispatchAttempts,
+        token: actionInvocations.spawnPlacementToken,
+        reservedAt: actionInvocations.spawnReservedAt,
+        dispatchedNodeId: actionInvocations.dispatchedNodeId,
+      })
+      .from(actionInvocations)
+      .where(eq(actionInvocations.id, fixture.invocationId('replay-reserved-crash')));
+    const [node] = await fixture.db
+      .select({ reservedAgents: nodes.reservedAgents })
+      .from(nodes)
+      .where(and(eq(nodes.workspaceId, fixture.ws.workspaceId), eq(nodes.id, fixture.nodeId)));
+    expect(invocation).toEqual({
+      status: 'pending',
+      attempts: 0,
+      token: 'replay-placement-owner',
+      reservedAt: persistedReservation.reservedAt,
+      dispatchedNodeId: null,
+    });
+    expect(node.reservedAgents).toBe(1);
   });
 
   it('rolls back placement when the exact node vanished before reservation', async () => {

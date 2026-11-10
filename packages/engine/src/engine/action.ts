@@ -2464,17 +2464,14 @@ export async function invokeStrictSpawn(
   });
 }
 
-/** Recover an existing keyed builtin-spawn claim and resume only definitely-unsent work. */
+/** Look up an existing keyed builtin-spawn claim without placing or dispatching it. */
 export async function replaySpawnInvocation(
   db: Db,
   workspaceId: string,
   data: { logical_request: Record<string, unknown>; caller_id: string },
-  options: { idempotencyKey: string; nodeConnections?: NodeConnectionRegistry },
+  options: { idempotencyKey: string },
 ) {
   const logical = spawnLogicalRequest(data.logical_request);
-  if (!options.nodeConnections) {
-    throw codedError('Node dispatch is not available', 'node_dispatch_unavailable', 503);
-  }
   const invocationId = await idempotentInvocationId(
     workspaceId,
     data.caller_id,
@@ -2503,21 +2500,7 @@ export async function replaySpawnInvocation(
       409,
     );
   }
-  if (
-    invocation.status === 'pending'
-    && invocation.dispatchAttempts === 0
-    && !invocation.dispatchedNodeId
-  ) {
-    return dispatchStrictSpawnClaim({
-      db,
-      registry: options.nodeConnections,
-      workspaceId,
-      invocation,
-      replayed: true,
-    });
-  }
-  const settled = await replayInvocationClaim(db, workspaceId, invocation);
-  return markInvocationReplay(invocationAck(settled, { actionName: 'spawn' }));
+  return markInvocationReplay(invocationAck(invocation, { actionName: 'spawn' }));
 }
 
 export async function invokeAction(
