@@ -3,7 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { and, eq, sql } from 'drizzle-orm';
 import { actionInvocations, nodes } from '../../db/tables.js';
 import type { EngineDb } from '../../ports/database.js';
-import { sweepTimedOutInvocations } from '../../engine/action.js';
+import { detachInvocationsFromLostNode, sweepTimedOutInvocations } from '../../engine/action.js';
 import { placeStrictSpawn } from '../../engine/strictSpawnPlacement.js';
 import {
   attachFakeBatch,
@@ -185,6 +185,29 @@ describe('strict spawn crash recovery', () => {
     expect(fixture.sock.ofType('action.invoke')).toHaveLength(1);
   });
 
+  it.each(['completed', 'failed'] as const)(
+    'strict-invoke replay preserves the durable %s status',
+    async (status) => {
+      const fixture = await setup();
+      const first = await fixture.invoke(`terminal-${status}`);
+      expect(first.status).toBe(201);
+      await fixture.db
+        .update(actionInvocations)
+        .set({
+          status,
+          completedAt: new Date(),
+          ...(status === 'failed' ? { error: 'agent_failed' } : { output: { ok: true } }),
+        })
+        .where(eq(actionInvocations.id, fixture.invocationId(`terminal-${status}`)));
+
+      const replay = await fixture.invoke(`terminal-${status}`);
+      expect(replay.status).toBe(201);
+      expect(replay.headers.get('Idempotency-Replayed')).toBe('true');
+      expect((await replay.json() as { data: { status: string } }).data.status).toBe(status);
+      expect(fixture.sock.ofType('action.invoke')).toHaveLength(1);
+    },
+  );
+
   it('resumes a reserved definitely-unsent claim without taking a second slot', async () => {
     const fixture = await setup();
     const heldAt = new Date(Date.now() - 1_000);
@@ -287,6 +310,63 @@ describe('strict spawn crash recovery', () => {
       .from(actionInvocations)
       .where(eq(actionInvocations.id, fixture.invocationId('unknown-send')));
     expect(row).toEqual({ token: null, attempts: 1, nodeId: fixture.nodeId });
+
+    await sweepTimedOutInvocations(fixture.db, stack.runtime.realtime, { timeoutMs: 0 });
+    await sweepTimedOutInvocations(fixture.db, stack.runtime.realtime, { timeoutMs: 0 });
+    expect(fixture.sock.ofType('action.invoke')).toHaveLength(1);
+    const [settled] = await fixture.db
+      .select({
+        status: actionInvocations.status,
+        error: actionInvocations.error,
+        reservedAt: actionInvocations.spawnReservedAt,
+      })
+      .from(actionInvocations)
+      .where(eq(actionInvocations.id, fixture.invocationId('unknown-send')));
+    const [node] = await fixture.db
+      .select({ reservedAgents: nodes.reservedAgents })
+      .from(nodes)
+      .where(and(eq(nodes.workspaceId, fixture.ws.workspaceId), eq(nodes.id, fixture.nodeId)));
+    expect(settled).toEqual({ status: 'failed', error: 'handler_unavailable', reservedAt: null });
+    expect(node.reservedAgents).toBe(0);
+  });
+
+  it('settles an indeterminate strict send instead of detaching it on node loss', async () => {
+    const fixture = await setup();
+    await insertStrictClaim(fixture, 'unknown-send-node-loss');
+    const realtime = stack.runtime.realtime;
+    const send = realtime.sendToProvider.bind(realtime);
+    vi.spyOn(realtime, 'sendToProvider').mockImplementationOnce(async (...args) => {
+      await send(...args);
+      throw new Error('process died after socket accepted the frame');
+    });
+    expect((await fixture.invoke('unknown-send-node-loss')).status).toBe(201);
+    const [before] = await fixture.db
+      .select({ revision: actionInvocations.nodeLivenessRevision })
+      .from(actionInvocations)
+      .where(eq(actionInvocations.id, fixture.invocationId('unknown-send-node-loss')));
+
+    const detached = await detachInvocationsFromLostNode(
+      fixture.db,
+      fixture.ws.workspaceId,
+      fixture.nodeId,
+      { claimRevision: before.revision + 1 },
+    );
+    expect(detached).toBe(0);
+    expect(fixture.sock.ofType('action.invoke')).toHaveLength(1);
+    const [settled] = await fixture.db
+      .select({
+        status: actionInvocations.status,
+        error: actionInvocations.error,
+        reservedAt: actionInvocations.spawnReservedAt,
+      })
+      .from(actionInvocations)
+      .where(eq(actionInvocations.id, fixture.invocationId('unknown-send-node-loss')));
+    const [node] = await fixture.db
+      .select({ reservedAgents: nodes.reservedAgents })
+      .from(nodes)
+      .where(and(eq(nodes.workspaceId, fixture.ws.workspaceId), eq(nodes.id, fixture.nodeId)));
+    expect(settled).toEqual({ status: 'failed', error: 'handler_unavailable', reservedAt: null });
+    expect(node.reservedAgents).toBe(0);
   });
 
   it('expires a reserved unsent claim and releases its slot exactly once', async () => {
@@ -331,6 +411,76 @@ describe('strict spawn crash recovery', () => {
       reservedAt: null,
     });
     expect(node.reservedAgents).toBe(0);
+  });
+
+  it('does not clear a reservation acquired after the expiry snapshot', async () => {
+    if (conformancePgDb()) return;
+    const fixture = await setup();
+    const heldAt = new Date(Date.now() - 5_000);
+    await insertStrictClaim(fixture, 'expiry-held-first', {
+      handlerNodeId: fixture.nodeId,
+      spawnPlacementToken: 'first-expiry-owner',
+      spawnReservedAt: heldAt,
+      handlerUnreachableSince: heldAt,
+      createdAt: heldAt,
+    });
+    await insertStrictClaim(fixture, 'expiry-race', { createdAt: heldAt });
+    await fixture.db
+      .update(nodes)
+      .set({ reservedAgents: 1 })
+      .where(and(eq(nodes.workspaceId, fixture.ws.workspaceId), eq(nodes.id, fixture.nodeId)));
+
+    let raced = false;
+    attachFakeBatch(stack, fixture.db, async () => {
+      if (raced) return;
+      raced = true;
+      const placed = await placeStrictSpawn(fixture.db, {
+        workspaceId: fixture.ws.workspaceId,
+        invocationId: fixture.invocationId('expiry-race'),
+        nodeId: fixture.nodeId,
+        placementToken: 'racing-expiry-owner',
+        reserve: true,
+      });
+      expect(placed?.spawnReservedAt).toBeInstanceOf(Date);
+    });
+
+    const sweep = () => sweepTimedOutInvocations(fixture.db, stack.runtime.realtime, {
+      pendingInvocationMaxAgeMs: 0,
+      neverDispatchedSweepGraceMs: 0,
+    });
+    await sweep();
+    expect(raced).toBe(true);
+    const [stillOwned] = await fixture.db
+      .select({
+        status: actionInvocations.status,
+        token: actionInvocations.spawnPlacementToken,
+        reservedAt: actionInvocations.spawnReservedAt,
+      })
+      .from(actionInvocations)
+      .where(eq(actionInvocations.id, fixture.invocationId('expiry-race')));
+    const [afterRace] = await fixture.db
+      .select({ reservedAgents: nodes.reservedAgents })
+      .from(nodes)
+      .where(and(eq(nodes.workspaceId, fixture.ws.workspaceId), eq(nodes.id, fixture.nodeId)));
+    expect(stillOwned).toMatchObject({ status: 'pending', token: 'racing-expiry-owner' });
+    expect(stillOwned.reservedAt).toBeInstanceOf(Date);
+    expect(afterRace.reservedAgents).toBe(1);
+
+    await sweep();
+    const [expired] = await fixture.db
+      .select({
+        status: actionInvocations.status,
+        token: actionInvocations.spawnPlacementToken,
+        reservedAt: actionInvocations.spawnReservedAt,
+      })
+      .from(actionInvocations)
+      .where(eq(actionInvocations.id, fixture.invocationId('expiry-race')));
+    const [released] = await fixture.db
+      .select({ reservedAgents: nodes.reservedAgents })
+      .from(nodes)
+      .where(and(eq(nodes.workspaceId, fixture.ws.workspaceId), eq(nodes.id, fixture.nodeId)));
+    expect(expired).toEqual({ status: 'failed', token: null, reservedAt: null });
+    expect(released.reservedAgents).toBe(0);
   });
 
   it('rolls back handler snapshot and reservation when a D1 batch statement fails', async () => {

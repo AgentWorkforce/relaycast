@@ -787,7 +787,9 @@ function sameSpawnLogicalRequest(
     && canonicalJson(existingLogical) === canonicalJson(incomingLogical);
 }
 
-function strictBuiltinSpawnContract(invocation: InvocationRow): Record<string, unknown> | null {
+function strictBuiltinSpawnContract(
+  invocation: Pick<InvocationRow, 'invocationOrigin' | 'actionId' | 'input'>,
+): Record<string, unknown> | null {
   if (invocation.invocationOrigin !== 'builtin' || invocation.actionId !== null) return null;
   return materializedSpawnLogicalRequest(recordInput(invocation.input), true);
 }
@@ -1115,6 +1117,7 @@ async function failNeverDispatchedInvocation(
       inArray(actionInvocations.status, OPEN_INVOCATION_STATUSES),
       eq(actionInvocations.dispatchAttempts, 0),
       isNull(actionInvocations.dispatchedNodeId),
+      isNull(actionInvocations.spawnReservedAt),
     ))
     .returning({ id: actionInvocations.id });
   return failed.length > 0;
@@ -1911,6 +1914,10 @@ function spawnResult(
 ) {
   const input = recordInput(invocation.input);
   const strictSpawn = strictBuiltinSpawnContract(invocation);
+  const status = strictSpawn !== null
+    && !OPEN_INVOCATION_STATUSES.some((value) => value === invocation.status)
+    ? invocation.status
+    : dispatched.accepted ? (dispatched.pending ? 'pending' : 'dispatched') : 'pending';
   return {
     invocation_id: invocation.id,
     action_name: 'spawn',
@@ -1921,7 +1928,7 @@ function spawnResult(
     ...(strictSpawn
       ? { spawn_contract_applied: SPAWN_LOGICAL_REQUEST_SCHEMA }
       : {}),
-    status: dispatched.accepted ? (dispatched.pending ? 'pending' : 'dispatched') : 'pending',
+    status,
     created_at: invocation.createdAt.toISOString(),
   };
 }
@@ -4349,6 +4356,24 @@ export async function rescheduleNodeInvocation(
     expectedNodeLivenessRevision?: number;
   } = {},
 ) {
+  // Strict built-in spawn owns its exact-node retry contract. Once an attempt
+  // started, a socket error is indeterminate because providers do not durably
+  // deduplicate invocation ids; legacy timeout or node-loss rescheduling must
+  // therefore settle the row closed instead of sending a second frame. An
+  // attempt-zero claim remains available only to strict-invoke/replay or its
+  // never-dispatched expiry path.
+  if (strictBuiltinSpawnContract(invocation)) {
+    if ((invocation.dispatchAttempts ?? 0) > 0) {
+      await failOpenInvocationRows(
+        db,
+        invocation.workspaceId,
+        [invocation.id],
+        'handler_unavailable',
+        opts.expectedNodeLivenessRevision,
+      );
+    }
+    return false;
+  }
   // Once the exact provider accepted this generation, pruning only clears its
   // materialized action FK. It must not make timeout, disconnect, or inventory
   // recovery move the invocation to a same-name replacement and invalidate the
@@ -4726,6 +4751,16 @@ export async function detachInvocationsFromLostNode(
 
   let detached = 0;
   for (const invocation of rows) {
+    if (strictBuiltinSpawnContract(invocation)) {
+      await failOpenInvocationRows(
+        db,
+        workspaceId,
+        [invocation.id],
+        'handler_unavailable',
+        invocation.nodeLivenessRevision,
+      );
+      continue;
+    }
     // Work no retry could place stays attached, for the node's own cleanup to
     // fail: a release is pinned to its agent's node, and an orphaned
     // registered action is never rebound by name.
@@ -5128,6 +5163,7 @@ async function failNeverDispatchedInvocationRows(
       inArray(actionInvocations.id, remainingIds),
       eq(actionInvocations.status, 'pending'),
       eq(actionInvocations.dispatchAttempts, 0),
+      isNull(actionInvocations.spawnReservedAt),
       lte(actionInvocations.createdAt, cutoff),
     ))
     .returning();
