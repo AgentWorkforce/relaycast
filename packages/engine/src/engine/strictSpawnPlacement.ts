@@ -31,21 +31,9 @@ export async function placeStrictSpawn(
       OR ${nodes.activeAgents} + COALESCE(${nodes.reservedAgents}, 0) < ${nodes.maxAgents})`;
   if (args.reserve) {
     try {
-      const [invocationResult] = await runAtomicWrites(db, (writeDb) => [
-        writeDb
-          .update(actionInvocations)
-          .set({
-            status: sql`CASE WHEN ${eligible} THEN 'pending' ELSE NULL END`,
-            handlerNodeId: args.nodeId,
-            spawnPlacementToken: args.placementToken,
-            spawnReservedAt: placedAt,
-            handlerUnreachableSince: placedAt,
-          })
-          .where(and(
-            eq(actionInvocations.workspaceId, args.workspaceId),
-            eq(actionInvocations.id, args.invocationId),
-          ))
-          .returning(),
+      const results = await runAtomicWrites(db, (writeDb) => [
+        // Reserve first. PostgreSQL holds this row lock through the following
+        // invocation CAS; SQLite and D1 execute the same pair atomically.
         writeDb
           .update(nodes)
           .set({
@@ -56,8 +44,30 @@ export async function placeStrictSpawn(
           })
           .where(and(eq(nodes.workspaceId, args.workspaceId), eq(nodes.id, args.nodeId)))
           .returning({ id: nodes.id }),
+        writeDb
+          .update(actionInvocations)
+          .set({
+            // A missing exact node makes this sibling write violate status NOT
+            // NULL, rolling the full atomic group back on every adapter.
+            status: sql`CASE WHEN ${eligible} AND EXISTS (
+              SELECT 1 FROM ${nodes}
+              WHERE ${nodes.workspaceId} = ${args.workspaceId}
+                AND ${nodes.id} = ${args.nodeId}
+            ) THEN 'pending' ELSE NULL END`,
+            handlerNodeId: args.nodeId,
+            spawnPlacementToken: args.placementToken,
+            spawnReservedAt: placedAt,
+            handlerUnreachableSince: placedAt,
+          })
+          .where(and(
+            eq(actionInvocations.workspaceId, args.workspaceId),
+            eq(actionInvocations.id, args.invocationId),
+          ))
+          .returning(),
       ], { requireAtomic: true });
-      return (invocationResult as InvocationRow[])[0];
+      const nodeRows = results[0] as Array<{ id: string }>;
+      const invocationRows = results[1] as InvocationRow[];
+      return nodeRows[0] && invocationRows[0] ? invocationRows[0] : undefined;
     } catch (error) {
       const kind = databaseConstraintKind(error);
       if (kind === 'spawn_claim_changed') return undefined;

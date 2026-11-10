@@ -1973,6 +1973,23 @@ async function placeStrictSpawnClaim(
     .where(and(eq(actionInvocations.workspaceId, workspaceId), eq(actionInvocations.id, invocation.id)));
   if (!winner) throw codedError('Spawn invocation is no longer available', 'idempotency_unavailable', 503);
   assertInvocationClaimMatches(winner, 'spawn', { input, caller_id: invocation.callerId });
+  if (
+    winner.status === 'pending'
+    && winner.dispatchAttempts === 0
+    && !winner.dispatchedNodeId
+    && !winner.spawnPlacementToken
+  ) {
+    const [exactNode] = await db
+      .select({ id: nodes.id })
+      .from(nodes)
+      .where(and(eq(nodes.workspaceId, workspaceId), eq(nodes.id, nodeId)));
+    if (!exactNode) throw codedError(`Node "${nodeId}" not found`, 'node_not_found', 404);
+    throw codedError(
+      'Strict spawn placement changed before its durable claim committed; retry the same key',
+      'idempotency_unavailable',
+      503,
+    );
+  }
   return { invocation: winner, node, capability };
 }
 

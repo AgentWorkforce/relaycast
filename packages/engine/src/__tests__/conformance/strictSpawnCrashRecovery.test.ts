@@ -4,6 +4,7 @@ import { and, eq, sql } from 'drizzle-orm';
 import { actionInvocations, nodes } from '../../db/tables.js';
 import type { EngineDb } from '../../ports/database.js';
 import { sweepTimedOutInvocations } from '../../engine/action.js';
+import { placeStrictSpawn } from '../../engine/strictSpawnPlacement.js';
 import {
   attachFakeBatch,
   createWorkspace,
@@ -54,6 +55,33 @@ describe('strict spawn crash recovery', () => {
     expect(response.status).toBe(201);
     expect(fixture.sock.ofType('action.invoke')).toHaveLength(1);
     await expectSingleOwnedReservation(fixture, 'reserved-crash');
+  });
+
+  it('rolls back placement when the exact node vanished before reservation', async () => {
+    const fixture = await setup();
+    await insertStrictClaim(fixture, 'deleted-node-race');
+    await fixture.db
+      .delete(nodes)
+      .where(and(eq(nodes.workspaceId, fixture.ws.workspaceId), eq(nodes.id, fixture.nodeId)));
+
+    const placed = await placeStrictSpawn(fixture.db, {
+      workspaceId: fixture.ws.workspaceId,
+      invocationId: fixture.invocationId('deleted-node-race'),
+      nodeId: fixture.nodeId,
+      placementToken: 'must-not-commit',
+      reserve: true,
+    });
+
+    expect(placed).toBeUndefined();
+    const [row] = await fixture.db
+      .select({
+        handlerNodeId: actionInvocations.handlerNodeId,
+        token: actionInvocations.spawnPlacementToken,
+        reservedAt: actionInvocations.spawnReservedAt,
+      })
+      .from(actionInvocations)
+      .where(eq(actionInvocations.id, fixture.invocationId('deleted-node-race')));
+    expect(row).toEqual({ handlerNodeId: null, token: null, reservedAt: null });
   });
 
   it('lets one concurrent retry own placement, capacity, and the provider frame', async () => {
