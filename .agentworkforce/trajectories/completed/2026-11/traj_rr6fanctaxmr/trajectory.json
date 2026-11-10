@@ -1,0 +1,57 @@
+{
+  "id": "traj_rr6fanctaxmr",
+  "version": 1,
+  "task": {
+    "title": "Release unready strict-spawn capacity reservation",
+    "source": {
+      "system": "plain",
+      "id": "relaycast#644 discussion_r4526195204"
+    }
+  },
+  "status": "completed",
+  "startedAt": "2026-11-10T15:44:36.219Z",
+  "completedAt": "2026-11-10T15:46:47.553Z",
+  "agents": [
+    {
+      "name": "default",
+      "role": "lead",
+      "joinedAt": "2026-11-10T15:46:29.029Z"
+    }
+  ],
+  "chapters": [
+    {
+      "id": "chap_09lsqtfx4uhu",
+      "title": "Work",
+      "agentName": "default",
+      "startedAt": "2026-11-10T15:46:29.029Z",
+      "endedAt": "2026-11-10T15:46:47.553Z",
+      "events": [
+        {
+          "ts": 1794325589030,
+          "type": "decision",
+          "content": "Release unsent strict reservations on every unready return, not only verify_ready refusals: Release unsent strict reservations on every unready return, not only verify_ready refusals",
+          "raw": {
+            "question": "Release unsent strict reservations on every unready return, not only verify_ready refusals",
+            "chosen": "Release unsent strict reservations on every unready return, not only verify_ready refusals",
+            "alternatives": [],
+            "reasoning": "A false-ready request returns pending without dispatch; keeping its capacity reservation until the 72-hour expiry can starve a small node. The exact placement token remains durable, so a same-key retry can atomically reacquire capacity on the same node without weakening exact-node binding."
+          },
+          "significance": "high"
+        }
+      ]
+    }
+  ],
+  "retrospective": {
+    "summary": "Released false-ready unsent strict-spawn reservations while preserving exact placement tokens; added same-key reconnect regression and captured mutation fail/pass evidence.",
+    "approach": "Standard approach",
+    "confidence": 0.94
+  },
+  "commits": [],
+  "filesChanged": [],
+  "projectId": "AgentWorkforce/relaycast",
+  "tags": [],
+  "_trace": {
+    "startRef": "f997fc8717bd4d62b40c5fea982824381dd69074",
+    "endRef": "f997fc8717bd4d62b40c5fea982824381dd69074"
+  }
+}

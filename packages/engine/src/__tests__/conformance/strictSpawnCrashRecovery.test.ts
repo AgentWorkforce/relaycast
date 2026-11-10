@@ -252,6 +252,51 @@ describe('strict spawn crash recovery', () => {
     expect(node.reservedAgents).toBe(0);
   });
 
+  it('releases an unready false-ready placement until its same-key retry can dispatch', async () => {
+    const fixture = await setup();
+    const key = 'false-ready-provider-reconnect';
+    const logical = { ...strictLogicalRequest(fixture.nodeId, 'strict-crash'), verify_ready: false };
+    const invoke = () => stack.app.request('/v1/actions/spawn/strict-invoke', {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        authorization: `Bearer ${fixture.caller.token}`,
+        'Idempotency-Key': key,
+      },
+      body: JSON.stringify({ input: strictRequestInput(logical) }),
+    });
+    const connected = vi.spyOn(stack.runtime.realtime, 'isProviderConnected').mockReturnValue(false);
+
+    const pending = await invoke();
+    expect(pending.status).toBe(201);
+    await expect(pending.json()).resolves.toMatchObject({ data: { status: 'pending' } });
+    expect(fixture.sock.ofType('action.invoke')).toHaveLength(0);
+
+    const [placed] = await fixture.db
+      .select({
+        token: actionInvocations.spawnPlacementToken,
+        reservedAt: actionInvocations.spawnReservedAt,
+        attempts: actionInvocations.dispatchAttempts,
+      })
+      .from(actionInvocations)
+      .where(eq(actionInvocations.id, fixture.invocationId(key)));
+    const [releasedNode] = await fixture.db
+      .select({ reservedAgents: nodes.reservedAgents })
+      .from(nodes)
+      .where(and(eq(nodes.workspaceId, fixture.ws.workspaceId), eq(nodes.id, fixture.nodeId)));
+    expect(placed).toEqual({ token: expect.any(String), reservedAt: null, attempts: 0 });
+    expect(releasedNode.reservedAgents).toBe(0);
+
+    connected.mockRestore();
+    const retried = await invoke();
+    expect(retried.status).toBe(201);
+    expect(retried.headers.get('Idempotency-Replayed')).toBe('true');
+    expect(fixture.sock.ofType('action.invoke')).toEqual([
+      expect.objectContaining({ invocation_id: fixture.invocationId(key) }),
+    ]);
+    await expectSingleOwnedReservation(fixture, key);
+  });
+
   it('keeps a false-ready strict spawn in flight across empty inventory until its worker appears', async () => {
     const fixture = await setup();
     const key = 'inventory-before-worker-registration';
