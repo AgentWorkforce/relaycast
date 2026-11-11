@@ -1,0 +1,87 @@
+{
+  "id": "traj_08xoe6xnjwma",
+  "version": 1,
+  "task": {
+    "title": "Add explicit strict spawn replay-resume capability"
+  },
+  "status": "completed",
+  "startedAt": "2026-11-10T14:48:48.895Z",
+  "completedAt": "2026-11-10T15:04:53.878Z",
+  "agents": [
+    {
+      "name": "default",
+      "role": "lead",
+      "joinedAt": "2026-11-10T14:49:48.523Z"
+    }
+  ],
+  "chapters": [
+    {
+      "id": "chap_aym3n5z7p04n",
+      "title": "Work",
+      "agentName": "default",
+      "startedAt": "2026-11-10T14:49:48.523Z",
+      "endedAt": "2026-11-10T15:04:53.878Z",
+      "events": [
+        {
+          "ts": 1794322188524,
+          "type": "decision",
+          "content": "Added a distinct logical-replay-resume schema and server-owned replay proof: Added a distinct logical-replay-resume schema and server-owned replay proof",
+          "raw": {
+            "question": "Added a distinct logical-replay-resume schema and server-owned replay proof",
+            "chosen": "Added a distinct logical-replay-resume schema and server-owned replay proof",
+            "alternatives": [],
+            "reasoning": "Preserve logical/1 lookup-only semantics; only claims originally accepted under the new schema may authorize replay-side dispatch."
+          },
+          "significance": "high"
+        },
+        {
+          "ts": 1794322619405,
+          "type": "reflection",
+          "content": "Implemented explicit replay-resume schema and proof on f997; focused route, restart, isolation, concurrency, unknown-send, terminal, and generation tests pass.",
+          "raw": {
+            "focalPoints": [
+              "wire compatibility",
+              "fail-closed replay",
+              "stored input identity"
+            ],
+            "adjustments": "Kept logical/1 lookup-only and reused the existing placement-token/dispatch-generation path instead of adding a second dispatcher.",
+            "confidence": 0.9
+          },
+          "significance": "high",
+          "tags": [
+            "focal:wire compatibility",
+            "focal:fail-closed replay",
+            "focal:stored input identity",
+            "confidence:0.9"
+          ]
+        }
+      ]
+    }
+  ],
+  "retrospective": {
+    "summary": "Added an explicit replay-resume schema and server-owned capability proof so only marked, definitely-unsent strict spawn claims can resume from persisted input; legacy claims remain lookup-only.",
+    "approach": "Standard approach",
+    "confidence": 0.9
+  },
+  "commits": [
+    "183d550c"
+  ],
+  "filesChanged": [
+    ".agentworkforce/trajectories/active/traj_08xoe6xnjwma/trajectory.json",
+    "CHANGELOG.md",
+    "README.md",
+    "openapi.yaml",
+    "packages/engine/CHANGELOG.md",
+    "packages/engine/src/__tests__/conformance/strictSpawnReplayRestart.test.ts",
+    "packages/engine/src/__tests__/conformance/strictSpawnReplayResume.test.ts",
+    "packages/engine/src/engine/action.ts",
+    "packages/engine/src/routes/action.ts"
+  ],
+  "projectId": "AgentWorkforce/relaycast",
+  "tags": [],
+  "_trace": {
+    "startRef": "f997fc8717bd4d62b40c5fea982824381dd69074",
+    "endRef": "183d550c56274c2eba67a98218af8b7b155e645d",
+    "traceId": "f7c42ccd-e047-4949-8b1d-03279ad60822"
+  }
+}

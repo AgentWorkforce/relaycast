@@ -704,6 +704,8 @@ function assertInvocationClaimMatches(
 }
 
 const SPAWN_LOGICAL_REQUEST_SCHEMA = 'relay.spawn.invoke.logical/1';
+const SPAWN_REPLAY_RESUME_REQUEST_SCHEMA = 'relay.spawn.invoke.logical-replay-resume/1';
+const SPAWN_REPLAY_RESUME_CAPABILITY = 'relay.spawn.replay-resume/1';
 const SPAWN_LOGICAL_REQUEST_KEYS = [
   'schema', 'target_node_id', 'target_node', 'name', 'cli', 'task', 'directory', 'verify_ready',
 ] as const;
@@ -714,6 +716,14 @@ const SPAWN_MATERIALIZED_INPUT_KEYS = [
 const SPAWN_STORED_INPUT_KEYS = [
   ...SPAWN_MATERIALIZED_INPUT_KEYS, 'spawn_contract_applied',
 ] as const;
+const SPAWN_REPLAY_RESUME_STORED_INPUT_KEYS = [
+  ...SPAWN_STORED_INPUT_KEYS, 'spawn_replay_capability_applied',
+] as const;
+
+function isSupportedSpawnLogicalRequestSchema(value: unknown): value is string {
+  return value === SPAWN_LOGICAL_REQUEST_SCHEMA
+    || value === SPAWN_REPLAY_RESUME_REQUEST_SCHEMA;
+}
 
 function spawnLogicalRequest(value: unknown): Record<string, unknown> {
   if (!value || typeof value !== 'object' || Array.isArray(value)) {
@@ -723,7 +733,7 @@ function spawnLogicalRequest(value: unknown): Record<string, unknown> {
   if (canonicalJson(Object.keys(logical).sort()) !== canonicalJson([...SPAWN_LOGICAL_REQUEST_KEYS].sort())) {
     throw codedError('spawn logical_request has unknown or missing fields', 'invalid_spawn_request', 400);
   }
-  if (logical.schema !== SPAWN_LOGICAL_REQUEST_SCHEMA) {
+  if (!isSupportedSpawnLogicalRequestSchema(logical.schema)) {
     throw codedError('spawn logical_request schema is unsupported', 'invalid_spawn_request', 400);
   }
   for (const field of ['target_node_id', 'target_node', 'name', 'cli', 'task', 'directory'] as const) {
@@ -741,15 +751,25 @@ function materializedSpawnLogicalRequest(
   input: Record<string, unknown>,
   stored: boolean,
 ): Record<string, unknown> | null {
-  if (input.spawn_contract !== SPAWN_LOGICAL_REQUEST_SCHEMA) return null;
-  const expectedKeys = stored ? SPAWN_STORED_INPUT_KEYS : SPAWN_MATERIALIZED_INPUT_KEYS;
+  if (!isSupportedSpawnLogicalRequestSchema(input.spawn_contract)) return null;
+  const logical = spawnLogicalRequest(input.logical_request);
+  if (input.spawn_contract !== logical.schema) {
+    throw codedError('spawn input.spawn_contract does not match logical_request', 'invalid_spawn_request', 400);
+  }
+  const replayResume = logical.schema === SPAWN_REPLAY_RESUME_REQUEST_SCHEMA;
+  const expectedKeys = stored
+    ? replayResume ? SPAWN_REPLAY_RESUME_STORED_INPUT_KEYS : SPAWN_STORED_INPUT_KEYS
+    : SPAWN_MATERIALIZED_INPUT_KEYS;
   if (canonicalJson(Object.keys(input).sort()) !== canonicalJson([...expectedKeys].sort())) {
     throw codedError('fingerprinted spawn input has unknown or missing fields', 'invalid_spawn_request', 400);
   }
-  if (stored && input.spawn_contract_applied !== SPAWN_LOGICAL_REQUEST_SCHEMA) {
+  if (stored && input.spawn_contract_applied !== logical.schema) {
     throw codedError('stored spawn contract was not applied', 'invalid_spawn_request', 400);
   }
-  const logical = spawnLogicalRequest(input.logical_request);
+  if (stored && replayResume
+    && input.spawn_replay_capability_applied !== SPAWN_REPLAY_RESUME_CAPABILITY) {
+    throw codedError('stored spawn replay capability was not applied', 'invalid_spawn_request', 400);
+  }
   for (const field of ['target_node_id', 'target_node', 'name', 'cli', 'task', 'verify_ready'] as const) {
     if (input[field] !== logical[field]) {
       throw codedError(`spawn input.${field} does not match logical_request`, 'invalid_spawn_request', 400);
@@ -765,14 +785,26 @@ function rejectClientSpawnContractProof(input: Record<string, unknown>): void {
   if (Object.prototype.hasOwnProperty.call(input, 'spawn_contract_applied')) {
     throw codedError('spawn_contract_applied is server-owned', 'invalid_spawn_request', 400);
   }
+  if (Object.prototype.hasOwnProperty.call(input, 'spawn_replay_capability_applied')) {
+    throw codedError(
+      'spawn_replay_capability_applied is server-owned',
+      'invalid_spawn_request',
+      400,
+    );
+  }
 }
 
 function prepareSpawnClaimInput(input: Record<string, unknown>): Record<string, unknown> {
   rejectClientSpawnContractProof(input);
   const logical = materializedSpawnLogicalRequest(input, false);
-  return logical
-    ? { ...input, spawn_contract_applied: SPAWN_LOGICAL_REQUEST_SCHEMA }
-    : input;
+  if (!logical) return input;
+  return {
+    ...input,
+    spawn_contract_applied: logical.schema,
+    ...(logical.schema === SPAWN_REPLAY_RESUME_REQUEST_SCHEMA
+      ? { spawn_replay_capability_applied: SPAWN_REPLAY_RESUME_CAPABILITY }
+      : {}),
+  };
 }
 
 function sameSpawnLogicalRequest(
@@ -780,7 +812,7 @@ function sameSpawnLogicalRequest(
   incoming: Record<string, unknown>,
 ): boolean {
   const existingLogical = materializedSpawnLogicalRequest(existing, true);
-  const preparedIncoming = incoming.spawn_contract_applied === SPAWN_LOGICAL_REQUEST_SCHEMA
+  const preparedIncoming = isSupportedSpawnLogicalRequestSchema(incoming.spawn_contract_applied)
     ? incoming
     : prepareSpawnClaimInput(incoming);
   const incomingLogical = materializedSpawnLogicalRequest(preparedIncoming, true);
@@ -794,6 +826,17 @@ function strictBuiltinSpawnContract(
 ): Record<string, unknown> | null {
   if (invocation.invocationOrigin !== 'builtin' || invocation.actionId !== null) return null;
   return materializedSpawnLogicalRequest(recordInput(invocation.input), true);
+}
+
+function strictSpawnAppliedProof(
+  invocation: Pick<InvocationRow, 'invocationOrigin' | 'actionId' | 'input'>,
+): Record<string, string> | null {
+  const logical = strictBuiltinSpawnContract(invocation);
+  if (!logical) return null;
+  const proof = { spawn_contract_applied: String(logical.schema) };
+  return logical.schema === SPAWN_REPLAY_RESUME_REQUEST_SCHEMA
+    ? { ...proof, spawn_replay_capability_applied: SPAWN_REPLAY_RESUME_CAPABILITY }
+    : proof;
 }
 
 export function isStrictBuiltinSpawnInvocation(
@@ -997,7 +1040,7 @@ function invocationAck(
   } = {},
 ) {
   const input = recordInput(invocation.input);
-  const strictSpawn = strictBuiltinSpawnContract(invocation);
+  const strictSpawnProof = strictSpawnAppliedProof(invocation);
   return {
     invocation_id: invocation.id,
     action_name: actionName,
@@ -1007,9 +1050,7 @@ function invocationAck(
     handler_node_id: handlerNodeId ?? invocation.dispatchedNodeId,
     dispatched_node_id: invocation.dispatchedNodeId,
     input,
-    ...(strictSpawn
-      ? { spawn_contract_applied: SPAWN_LOGICAL_REQUEST_SCHEMA }
-      : {}),
+    ...(strictSpawnProof ?? {}),
     status: invocation.status,
     created_at: invocation.createdAt.toISOString(),
   };
@@ -1963,6 +2004,7 @@ function spawnResult(
 ) {
   const input = recordInput(invocation.input);
   const strictSpawn = strictBuiltinSpawnContract(invocation);
+  const strictSpawnProof = strictSpawnAppliedProof(invocation);
   const status = strictSpawn !== null
     && !OPEN_INVOCATION_STATUSES.some((value) => value === invocation.status)
     ? invocation.status
@@ -1974,9 +2016,7 @@ function spawnResult(
     handler_node_id: nodeId,
     dispatched_node_id: dispatched.accepted ? nodeId : null,
     input,
-    ...(strictSpawn
-      ? { spawn_contract_applied: SPAWN_LOGICAL_REQUEST_SCHEMA }
-      : {}),
+    ...(strictSpawnProof ?? {}),
     status,
     created_at: invocation.createdAt.toISOString(),
   };
@@ -2539,12 +2579,16 @@ export async function invokeStrictSpawn(
   });
 }
 
-/** Look up an existing keyed builtin-spawn claim without placing or dispatching it. */
+/**
+ * Recover an existing keyed builtin-spawn claim. Logical/1 remains lookup-only;
+ * only an originally persisted replay-resume claim may resume definitely-unsent
+ * dispatch from its stored materialized input.
+ */
 export async function replaySpawnInvocation(
   db: Db,
   workspaceId: string,
   data: { logical_request: Record<string, unknown>; caller_id: string },
-  options: { idempotencyKey: string },
+  options: { idempotencyKey: string; nodeConnections?: NodeConnectionRegistry },
 ) {
   const logical = spawnLogicalRequest(data.logical_request);
   const invocationId = await idempotentInvocationId(
@@ -2574,6 +2618,21 @@ export async function replaySpawnInvocation(
       'idempotency_key_reused',
       409,
     );
+  }
+  if (stored.schema === SPAWN_REPLAY_RESUME_REQUEST_SCHEMA) {
+    if (!OPEN_INVOCATION_STATUSES.some((status) => status === invocation.status)) {
+      return markInvocationReplay(invocationAck(invocation, { actionName: 'spawn' }));
+    }
+    if (!options.nodeConnections) {
+      throw codedError('Node dispatch is not available', 'node_dispatch_unavailable', 503);
+    }
+    return dispatchStrictSpawnClaim({
+      db,
+      registry: options.nodeConnections,
+      workspaceId,
+      invocation,
+      replayed: true,
+    });
   }
   return markInvocationReplay(invocationAck(invocation, { actionName: 'spawn' }));
 }

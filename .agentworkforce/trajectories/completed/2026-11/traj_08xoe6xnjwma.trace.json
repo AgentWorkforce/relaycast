@@ -1,0 +1,271 @@
+{
+  "version": "1.0.0",
+  "id": "f7c42ccd-e047-4949-8b1d-03279ad60822",
+  "timestamp": "2026-11-10T15:04:53.905Z",
+  "trajectory": "traj_08xoe6xnjwma",
+  "files": [
+    {
+      "path": ".agentworkforce/trajectories/active/traj_08xoe6xnjwma/trajectory.json",
+      "conversations": [
+        {
+          "contributor": {
+            "type": "ai"
+          },
+          "ranges": [
+            {
+              "start_line": 1,
+              "end_line": 67,
+              "revision": "183d550c56274c2eba67a98218af8b7b155e645d"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "path": "CHANGELOG.md",
+      "conversations": [
+        {
+          "contributor": {
+            "type": "ai"
+          },
+          "ranges": [
+            {
+              "start_line": 21,
+              "end_line": 27,
+              "revision": "183d550c56274c2eba67a98218af8b7b155e645d"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "path": "README.md",
+      "conversations": [
+        {
+          "contributor": {
+            "type": "ai"
+          },
+          "ranges": [
+            {
+              "start_line": 1170,
+              "end_line": 1185,
+              "revision": "183d550c56274c2eba67a98218af8b7b155e645d"
+            },
+            {
+              "start_line": 1187,
+              "end_line": 1200,
+              "revision": "183d550c56274c2eba67a98218af8b7b155e645d"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "path": "openapi.yaml",
+      "conversations": [
+        {
+          "contributor": {
+            "type": "ai"
+          },
+          "ranges": [
+            {
+              "start_line": 580,
+              "end_line": 592,
+              "revision": "183d550c56274c2eba67a98218af8b7b155e645d"
+            },
+            {
+              "start_line": 606,
+              "end_line": 614,
+              "revision": "183d550c56274c2eba67a98218af8b7b155e645d"
+            },
+            {
+              "start_line": 5730,
+              "end_line": 5737,
+              "revision": "183d550c56274c2eba67a98218af8b7b155e645d"
+            },
+            {
+              "start_line": 5741,
+              "end_line": 5752,
+              "revision": "183d550c56274c2eba67a98218af8b7b155e645d"
+            },
+            {
+              "start_line": 5810,
+              "end_line": 5831,
+              "revision": "183d550c56274c2eba67a98218af8b7b155e645d"
+            },
+            {
+              "start_line": 5850,
+              "end_line": 5859,
+              "revision": "183d550c56274c2eba67a98218af8b7b155e645d"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "path": "packages/engine/CHANGELOG.md",
+      "conversations": [
+        {
+          "contributor": {
+            "type": "ai"
+          },
+          "ranges": [
+            {
+              "start_line": 12,
+              "end_line": 18,
+              "revision": "183d550c56274c2eba67a98218af8b7b155e645d"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "path": "packages/engine/src/__tests__/conformance/strictSpawnReplayRestart.test.ts",
+      "conversations": [
+        {
+          "contributor": {
+            "type": "ai"
+          },
+          "ranges": [
+            {
+              "start_line": 11,
+              "end_line": 18,
+              "revision": "183d550c56274c2eba67a98218af8b7b155e645d"
+            },
+            {
+              "start_line": 86,
+              "end_line": 113,
+              "revision": "183d550c56274c2eba67a98218af8b7b155e645d"
+            },
+            {
+              "start_line": 151,
+              "end_line": 183,
+              "revision": "183d550c56274c2eba67a98218af8b7b155e645d"
+            },
+            {
+              "start_line": 194,
+              "end_line": 200,
+              "revision": "183d550c56274c2eba67a98218af8b7b155e645d"
+            },
+            {
+              "start_line": 205,
+              "end_line": 211,
+              "revision": "183d550c56274c2eba67a98218af8b7b155e645d"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "path": "packages/engine/src/__tests__/conformance/strictSpawnReplayResume.test.ts",
+      "conversations": [
+        {
+          "contributor": {
+            "type": "ai"
+          },
+          "ranges": [
+            {
+              "start_line": 1,
+              "end_line": 459,
+              "revision": "183d550c56274c2eba67a98218af8b7b155e645d"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "path": "packages/engine/src/engine/action.ts",
+      "conversations": [
+        {
+          "contributor": {
+            "type": "ai"
+          },
+          "ranges": [
+            {
+              "start_line": 704,
+              "end_line": 711,
+              "revision": "183d550c56274c2eba67a98218af8b7b155e645d"
+            },
+            {
+              "start_line": 716,
+              "end_line": 729,
+              "revision": "183d550c56274c2eba67a98218af8b7b155e645d"
+            },
+            {
+              "start_line": 733,
+              "end_line": 739,
+              "revision": "183d550c56274c2eba67a98218af8b7b155e645d"
+            },
+            {
+              "start_line": 751,
+              "end_line": 775,
+              "revision": "183d550c56274c2eba67a98218af8b7b155e645d"
+            },
+            {
+              "start_line": 785,
+              "end_line": 810,
+              "revision": "183d550c56274c2eba67a98218af8b7b155e645d"
+            },
+            {
+              "start_line": 812,
+              "end_line": 818,
+              "revision": "183d550c56274c2eba67a98218af8b7b155e645d"
+            },
+            {
+              "start_line": 828,
+              "end_line": 844,
+              "revision": "183d550c56274c2eba67a98218af8b7b155e645d"
+            },
+            {
+              "start_line": 1040,
+              "end_line": 1046,
+              "revision": "183d550c56274c2eba67a98218af8b7b155e645d"
+            },
+            {
+              "start_line": 1050,
+              "end_line": 1056,
+              "revision": "183d550c56274c2eba67a98218af8b7b155e645d"
+            },
+            {
+              "start_line": 2004,
+              "end_line": 2010,
+              "revision": "183d550c56274c2eba67a98218af8b7b155e645d"
+            },
+            {
+              "start_line": 2016,
+              "end_line": 2022,
+              "revision": "183d550c56274c2eba67a98218af8b7b155e645d"
+            },
+            {
+              "start_line": 2579,
+              "end_line": 2594,
+              "revision": "183d550c56274c2eba67a98218af8b7b155e645d"
+            },
+            {
+              "start_line": 2619,
+              "end_line": 2636,
+              "revision": "183d550c56274c2eba67a98218af8b7b155e645d"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "path": "packages/engine/src/routes/action.ts",
+      "conversations": [
+        {
+          "contributor": {
+            "type": "ai"
+          },
+          "ranges": [
+            {
+              "start_line": 221,
+              "end_line": 227,
+              "revision": "183d550c56274c2eba67a98218af8b7b155e645d"
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

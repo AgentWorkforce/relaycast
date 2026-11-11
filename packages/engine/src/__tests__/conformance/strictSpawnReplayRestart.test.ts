@@ -11,6 +11,8 @@ import { createWorkspace, FakeSocket, registerAgent } from './harness.js';
 import { conformancePgDb } from './pgMode.js';
 
 const schema = 'relay.spawn.invoke.logical/1';
+const replayResumeSchema = 'relay.spawn.invoke.logical-replay-resume/1';
+const replayResumeCapability = 'relay.spawn.replay-resume/1';
 
 it('replay stays lookup-only while strict-invoke resumes a pre-dispatch claim after restart', async () => {
   if (conformancePgDb()) return;
@@ -84,6 +86,28 @@ it('replay stays lookup-only while strict-invoke resumes a pre-dispatch claim af
       input: storedInput,
       status: 'pending',
     });
+    const replayResumeKey = 'persisted-replay-resume-crash';
+    const replayResumeId = `inv_idem_${createHash('sha256')
+      .update(['action-invoke-v1', ws.workspaceId, caller.agentId, 'spawn', replayResumeKey].join('\0'))
+      .digest('hex')}`;
+    const replayResumeLogical = { ...logical, schema: replayResumeSchema, task: 'resume stored input' };
+    await first.deps.db.insert(actionInvocations).values({
+      id: replayResumeId,
+      workspaceId: ws.workspaceId,
+      actionName: 'spawn',
+      invocationOrigin: 'builtin',
+      callerId: caller.agentId,
+      callerName: caller.name,
+      input: {
+        ...requestInput,
+        spawn_contract: replayResumeSchema,
+        task: replayResumeLogical.task,
+        logical_request: replayResumeLogical,
+        spawn_contract_applied: replayResumeSchema,
+        spawn_replay_capability_applied: replayResumeCapability,
+      },
+      status: 'pending',
+    });
     first.close();
     first = undefined;
 
@@ -127,6 +151,33 @@ it('replay stays lookup-only while strict-invoke resumes a pre-dispatch claim af
       .where(and(eq(nodes.workspaceId, ws.workspaceId), eq(nodes.id, nodeId)));
     expect(nodeAfterReplay.reservedAgents).toBe(0);
 
+    const replayResume = await createEngine(restarted.deps).request('/v1/actions/spawn/replay', {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        authorization: `Bearer ${caller.token}`,
+        'Idempotency-Key': replayResumeKey,
+      },
+      body: JSON.stringify({ logical_request: replayResumeLogical }),
+    });
+    expect(replayResume.status).toBe(200);
+    await expect(replayResume.json()).resolves.toMatchObject({
+      data: {
+        invocation_id: replayResumeId,
+        spawn_contract_applied: replayResumeSchema,
+        spawn_replay_capability_applied: replayResumeCapability,
+      },
+    });
+    expect(sock.ofType('action.invoke')).toEqual([
+      expect.objectContaining({
+        invocation_id: replayResumeId,
+        input: expect.objectContaining({
+          task: 'resume stored input',
+          worker_cwd: '/materialized/repo',
+        }),
+      }),
+    ]);
+
     const rematerializedInput = {
       ...requestInput,
       worker_cwd: '/materialized/repo-after-restart',
@@ -143,6 +194,7 @@ it('replay stays lookup-only while strict-invoke resumes a pre-dispatch claim af
     expect(resumed.status).toBe(201);
     expect(resumed.headers.get('Idempotency-Replayed')).toBe('true');
     expect(sock.ofType('action.invoke')).toEqual([
+      expect.objectContaining({ invocation_id: replayResumeId }),
       expect.objectContaining({
         action: 'spawn:claude',
         invocation_id: invocationId,
@@ -153,7 +205,7 @@ it('replay stays lookup-only while strict-invoke resumes a pre-dispatch claim af
       .select({ reservedAgents: nodes.reservedAgents })
       .from(nodes)
       .where(and(eq(nodes.workspaceId, ws.workspaceId), eq(nodes.id, nodeId)));
-    expect(nodeAfterResume.reservedAgents).toBe(1);
+    expect(nodeAfterResume.reservedAgents).toBe(2);
   } finally {
     restarted?.close();
     first?.close();
