@@ -65,6 +65,45 @@ export { createCredentialTagSigner, parseCredentialKeyring } from './auth/creden
 export type { CredentialKeyring, CredentialTagSigner, CredentialTagger } from './auth/credentialTags.js';
 export { NoopTelemetrySink } from './providers/noop-telemetry.js';
 export {
+  CollectorTelemetrySink,
+  createCollectorTelemetrySink,
+  COLLECTOR_TELEMETRY_DEFAULTS,
+  CollectorConfigError,
+  validateCollectorIdentity,
+  resolveTelemetryDestination,
+  TELEMETRY_DESTINATIONS,
+  BEARER_TOKEN_PATTERN,
+  type CollectorConfigErrorCode,
+  type CollectorTelemetrySinkOptions,
+  type CollectorTelemetryStats,
+  type TelemetryDestination,
+} from './providers/collector-telemetry.js';
+export {
+  EXPORT_ENVELOPE_VERSION,
+  ANALYTICS_FIELD_RULES,
+  ANALYTICS_EVENT_FIELDS,
+  ANALYTICS_DROPPED_FIELDS,
+  REGISTERED_ORIGIN_APPS,
+  REGISTERED_ORIGIN_ACTOR_TYPES,
+  REGISTERED_ORIGIN_CLIENTS,
+  REGISTERED_ERROR_NAMES,
+  REGISTERED_ERROR_CODES,
+  isOpaqueId,
+  projectObservation,
+  projectException,
+  validateExportEvent,
+  workspaceIdOf,
+  exportProperties,
+  EXPORT_EVENT_SCOPES,
+  type AnalyticsFieldRule,
+  type ExportEvent,
+  type ExportEventScope,
+  type ExportEventInvalidReason,
+  type ExportIdentity,
+  type ExportOrigin,
+} from './telemetry/exportEnvelope.js';
+export { utf8Bytes, wireEventBytes, WIRE_BATCH_FRAME_BYTES } from './telemetry/httpTransport.js';
+export {
   configureEngineDiagnostics,
   currentEngineOperation,
   engineOperationOf,

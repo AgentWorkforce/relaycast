@@ -1,11 +1,17 @@
 import { safeTelemetrySink } from '../../ports/telemetry.js';
 import { randomBytes } from 'node:crypto';
+import { hostname } from 'node:os';
 import type { EngineDeps, EngineConfig, EngineDb } from '../../ports/index.js';
 import type { AuthProvider } from '../../ports/auth.js';
 import type { AdmissionHooks } from '../../ports/admission.js';
 import type { TelemetrySink } from '../../ports/telemetry.js';
 import { SqliteApiKeyAuthProvider } from '../../auth/index.js';
 import { NoopTelemetrySink } from '../../providers/noop-telemetry.js';
+import {
+  CollectorTelemetrySink,
+  resolveTelemetryDestination,
+  type TelemetryDestination,
+} from '../../providers/collector-telemetry.js';
 import { getSqliteDb, runMigrations, type SqliteDbHandle } from './database.js';
 import { InProcessRealtime } from './realtime.js';
 import { InProcessPresence, type InProcessPresenceOptions } from './presence.js';
@@ -41,6 +47,40 @@ export type { SqliteDbHandle } from './database.js';
 export type { InProcessPresenceOptions } from './presence.js';
 export type { DurableEventQueueOptions, InProcessEventQueueOptions } from './event-queue.js';
 
+/** Opt-in self-host analytics producer (see `CollectorTelemetrySink`). */
+export interface NodeTelemetryCollectorOptions {
+  /** Collector ingest URL: https, or http to localhost / `*.svc` / a single-label host. */
+  url: string;
+  /** Per-producer bearer token for the collector (required; read it from a Secret file; never log it). */
+  bearerToken: string;
+  /** Explicit, stable installation/deployment id on every exported event (required; no hostname default). */
+  deployment: string;
+  /** Default 1000. */
+  queueMax?: number;
+  /** Default 50. */
+  batchMax?: number;
+  /** Default 2000. */
+  flushIntervalMs?: number;
+  /** Transport attempts per batch, first try included. Default 3. */
+  maxAttempts?: number;
+  /** Local retry backoff, ms (retry n waits n * backoffMs). Default 500. */
+  backoffMs?: number;
+  /** Longest honored Retry-After, ms (0 ignores it, at most 30000). Default 30000. */
+  retryAfterMaxMs?: number;
+  /** Per-attempt request timeout, ms. Default 5000. */
+  requestTimeoutMs?: number;
+  /** Total delivery deadline per event from enqueue, ms. Default 60000. */
+  deliveryDeadlineMs?: number;
+  /** Longest shutdown drain, ms. Default 5000. */
+  shutdownTimeoutMs?: number;
+  /** Largest serialized event, UTF-8 bytes. Default 8192. */
+  eventMaxBytes?: number;
+  /** Largest serialized batch body, UTF-8 bytes. Default 262144. */
+  batchMaxBytes?: number;
+  /** Queue byte budget, UTF-8 bytes. Default 1048576. */
+  queueMaxBytes?: number;
+}
+
 export interface NodeRuntimeOptions {
   /** SQLite file path, or ':memory:' for tests. */
   dbPath: string;
@@ -56,8 +96,17 @@ export interface NodeRuntimeOptions {
   auth?: AuthProvider;
   /** Host admission and metering hooks (default: none, every request is admitted). */
   admission?: AdmissionHooks;
-  /** Override the telemetry sink (default: no-op). */
+  /** Override the telemetry sink (default: no-op). Wins over `telemetryCollector`. */
   telemetry?: TelemetrySink;
+  /** Export observations to a self-host collector. Ignored when `telemetry` is set. Default: off. */
+  telemetryCollector?: NodeTelemetryCollectorOptions;
+  /**
+   * Explicit analytics destination: `none` (no export) or `collector`
+   * (requires `telemetryCollector`, else startup fails). Any other value is
+   * refused; there is no PostHog fallback. Unset: `telemetryCollector` alone
+   * selects the collector.
+   */
+  telemetryDestination?: TelemetryDestination;
   /** Engine config (environment, version, workspace-stream default, etc.). Persist `workspaceBootstrapSecret` for replay across restarts. */
   config?: EngineConfig;
   /** Presence TTL / sweep tuning (tests use short windows). */
@@ -80,8 +129,10 @@ export interface NodeRuntime {
   /** `fetch`-style handler for the `${FILE_ROUTE_PREFIX}` upload/download routes. */
   fileHandler: (request: Request) => Promise<Response>;
   handle: SqliteDbHandle;
-  /** Release timers + the database connection. */
+  /** Release timers + the database connection. Starts the telemetry drain (see `closeTelemetry`). */
   close(): void;
+  /** Drain the built-in collector sink, bounded by its shutdown timeout; resolves at once without one. Idempotent. */
+  closeTelemetry(): Promise<void>;
 }
 
 /**
@@ -90,24 +141,52 @@ export interface NodeRuntime {
  * everything `createEngine` and the entrypoint need.
  */
 export function createNodeRuntime(options: NodeRuntimeOptions): NodeRuntime {
-  const handle = getSqliteDb(options.dbPath);
-  if (options.migrate !== false) {
-    try {
-      runMigrations(handle);
-    } catch (err) {
-      // Don't leak the open file handle if startup migrations fail.
-      try { handle.sqlite.close(); } catch { /* ignore */ }
-      throw err;
-    }
+  const telemetry = createRuntimeTelemetry(options);
+  let handle: SqliteDbHandle | undefined;
+  try {
+    const opened = getSqliteDb(options.dbPath);
+    handle = opened;
+    if (options.migrate !== false) runMigrations(opened);
+    const runtime = assembleRuntime(opened.db, options, telemetry, () => {
+      try { opened.sqlite.close(); } catch { /* already closed */ }
+    });
+    return { ...runtime, handle: opened };
+  } catch (error) {
+    try { handle?.sqlite.close(); } catch { /* already closed */ }
+    void telemetry.closeTelemetry();
+    throw error;
   }
-  const runtime = createNodeRuntimeWithDb(handle.db, options, () => {
-    try {
-      handle.sqlite.close();
-    } catch {
-      // already closed
-    }
-  });
-  return { ...runtime, handle };
+}
+
+function createRuntimeTelemetry(options: NodeRuntimeWithDbOptions) {
+  const collectorOptions = resolveTelemetryDestination(options.telemetryDestination, options.telemetryCollector);
+  const collector = !options.telemetry && collectorOptions
+    ? new CollectorTelemetrySink({
+        url: collectorOptions.url,
+        bearerToken: collectorOptions.bearerToken,
+        deployment: collectorOptions.deployment,
+        // A deployment id equal to this pod's hostname is per-replica, not stable.
+        replicaHostnames: [hostname(), process.env.HOSTNAME],
+        queueMax: collectorOptions.queueMax,
+        batchMax: collectorOptions.batchMax,
+        flushIntervalMs: collectorOptions.flushIntervalMs,
+        maxAttempts: collectorOptions.maxAttempts,
+        backoffMs: collectorOptions.backoffMs,
+        retryAfterMaxMs: collectorOptions.retryAfterMaxMs,
+        requestTimeoutMs: collectorOptions.requestTimeoutMs,
+        deliveryDeadlineMs: collectorOptions.deliveryDeadlineMs,
+        shutdownTimeoutMs: collectorOptions.shutdownTimeoutMs,
+        eventMaxBytes: collectorOptions.eventMaxBytes,
+        batchMaxBytes: collectorOptions.batchMaxBytes,
+        queueMaxBytes: collectorOptions.queueMaxBytes,
+      })
+    : undefined;
+  let telemetryClosed: Promise<void> | undefined;
+  const closeTelemetry = (): Promise<void> => {
+    telemetryClosed ??= collector ? collector.close().catch(() => {}) : Promise.resolve();
+    return telemetryClosed;
+  };
+  return { telemetry: safeTelemetrySink(options.telemetry ?? collector ?? new NoopTelemetrySink()), closeTelemetry };
 }
 
 /** Options for {@link createNodeRuntimeWithDb}: everything but opening the database. */
@@ -117,18 +196,30 @@ export type NodeRuntimeWithDbOptions = Omit<NodeRuntimeOptions, 'dbPath' | 'migr
 export type NodeRuntimeWithDb = Omit<NodeRuntime, 'handle'>;
 
 /**
- * Assemble the in-process runtime over an already opened, migrated and branded
- * engine database. {@link createNodeRuntime} uses this for SQLite; the
- * PostgreSQL conformance mode uses it with the verified PostgreSQL handle (the
- * server does not serve PostgreSQL yet). `closeDb` runs last in `close()` and
- * owns releasing the database; it must not throw.
+ * Assemble the in-process runtime over an opened, migrated and branded
+ * engine database. The caller owns the database until assembly succeeds.
+ * `closeDb` releases it on shutdown and must not throw.
  */
 export function createNodeRuntimeWithDb(
   db: EngineDb,
   options: NodeRuntimeWithDbOptions,
   closeDb: () => void,
 ): NodeRuntimeWithDb {
-  const telemetry = safeTelemetrySink(options.telemetry ?? new NoopTelemetrySink());
+  const telemetry = createRuntimeTelemetry(options);
+  try {
+    return assembleRuntime(db, options, telemetry, closeDb);
+  } catch (error) {
+    void telemetry.closeTelemetry();
+    throw error;
+  }
+}
+
+function assembleRuntime(
+  db: EngineDb,
+  options: NodeRuntimeWithDbOptions,
+  { telemetry, closeTelemetry }: ReturnType<typeof createRuntimeTelemetry>,
+  closeDb: () => void,
+): NodeRuntimeWithDb {
   const testEnvironment = options.config?.environment === 'test';
   const testFetch: typeof globalThis.fetch = (input, init) => globalThis.fetch(input, init);
   const outboundWebhookFetch = options.config?.outboundWebhookFetch
@@ -252,6 +343,8 @@ export function createNodeRuntimeWithDb(
       webhookQueue.stop();
       kv.dispose();
       closeDb();
+      void closeTelemetry();
     },
+    closeTelemetry,
   };
 }

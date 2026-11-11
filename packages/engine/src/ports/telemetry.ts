@@ -73,6 +73,12 @@ interface ObservationFor<K extends EngineObservationKind> {
   /** Domain sender, which may differ from the authenticated principal (node posting as). */
   sender?: { id: string; name: string; type: 'human' | 'agent' | 'system' };
   origin: { actor: string; client: string; version: string };
+  /**
+   * Opaque correlation id of the request that produced the observation (the
+   * engine request id). Analytics export requires it: an observation without
+   * one is rejected by the export projector, never exported with an invented id.
+   */
+  traceId?: string;
   facts: EngineObservationFacts<K>;
 }
 export type EngineObservation<K extends EngineObservationKind = EngineObservationKind> = K extends EngineObservationKind ? ObservationFor<K> : never;

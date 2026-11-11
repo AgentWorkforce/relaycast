@@ -85,6 +85,8 @@ export function emitServerEvent<E extends EngineObservationKind>(
   // neither possession of its token nor any external ownership.
   const scopedActor = contextAgent?.workspaceId === workspaceId ? contextAgent : undefined;
 
+  const requestId: unknown = c.get("requestId");
+
   // Neither synchronous throws nor asynchronous rejections may change a domain outcome.
   try {
     const pending = c.get("engine").telemetry.capture({
@@ -98,6 +100,8 @@ export function emitServerEvent<E extends EngineObservationKind>(
       } } : {}),
       ...(sender ? { sender } : {}),
       origin: { actor: originActor, client: origin.origin_client, version: origin.origin_version },
+      // The logger middleware's request id is the analytics trace id.
+      ...(typeof requestId === "string" && requestId !== "" ? { traceId: requestId } : {}),
 
       facts: normalizedProperties as EngineObservationFacts<E>,
     } as EngineObservation);
