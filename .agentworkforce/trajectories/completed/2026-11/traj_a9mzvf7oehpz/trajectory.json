@@ -1,0 +1,57 @@
+{
+  "id": "traj_a9mzvf7oehpz",
+  "version": 1,
+  "task": {
+    "title": "Return terminal strict spawn replay snapshots",
+    "source": {
+      "system": "plain",
+      "id": "relaycast#647 review feedback"
+    }
+  },
+  "status": "completed",
+  "startedAt": "2026-11-10T15:30:26.903Z",
+  "completedAt": "2026-11-10T15:30:27.375Z",
+  "agents": [
+    {
+      "name": "default",
+      "role": "lead",
+      "joinedAt": "2026-11-10T15:30:27.148Z"
+    }
+  ],
+  "chapters": [
+    {
+      "id": "chap_3b0rls4n3nm6",
+      "title": "Work",
+      "agentName": "default",
+      "startedAt": "2026-11-10T15:30:27.148Z",
+      "endedAt": "2026-11-10T15:30:27.375Z",
+      "events": [
+        {
+          "ts": 1794324627149,
+          "type": "decision",
+          "content": "Return terminal replay-resume claims before dispatch recovery: Return terminal replay-resume claims before dispatch recovery",
+          "raw": {
+            "question": "Return terminal replay-resume claims before dispatch recovery",
+            "chosen": "Return terminal replay-resume claims before dispatch recovery",
+            "alternatives": [],
+            "reasoning": "Settled failed claims are immutable terminal snapshots; routing them through the live dispatcher converts their durable failure into a retryable 503."
+          },
+          "significance": "high"
+        }
+      ]
+    }
+  ],
+  "retrospective": {
+    "summary": "Returned failed pre-dispatch replay-resume snapshots and added a regression that mutation-verifies the prior 503.",
+    "approach": "Standard approach",
+    "confidence": 0.95
+  },
+  "commits": [],
+  "filesChanged": [],
+  "projectId": "AgentWorkforce/relaycast",
+  "tags": [],
+  "_trace": {
+    "startRef": "ee53ade6789d84df036afa92cb3aa976a1171c09",
+    "endRef": "ee53ade6789d84df036afa92cb3aa976a1171c09"
+  }
+}

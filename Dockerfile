@@ -45,7 +45,7 @@ FROM node:22.23.2-bookworm-slim@sha256:d649c27dae7ba0137b3cef5dd75baa422c08dc3d9
 ARG RELAYCAST_ENGINE_VERSION
 
 LABEL org.opencontainers.image.title="Relaycast self-host engine" \
-      org.opencontainers.image.description="Single-process Relaycast engine with SQLite persistence" \
+      org.opencontainers.image.description="Single-process Relaycast engine with SQLite or PostgreSQL persistence" \
       org.opencontainers.image.source="https://github.com/AgentWorkforce/relaycast" \
       org.opencontainers.image.version="${RELAYCAST_ENGINE_VERSION}" \
       io.relaycast.engine.version="${RELAYCAST_ENGINE_VERSION}"

@@ -2,7 +2,7 @@ import { nodeLivenessAuthority } from './nodeLiveness.js';
 import { parseMessageMentions } from './mentions.js';
 import { eq, and, asc, exists, isNull, isNotNull, inArray, lt, ne, not, notInArray, lte, gt, sql, getTableColumns, type SQL } from 'drizzle-orm';
 import type { getDb } from '../db/index.js';
-import { deliveries, messages, agents, nodes, readReceipts, channelMembers, channels, dmConversations } from '../db/schema.js';
+import { deliveries, messages, agents, nodes, readReceipts, channelMembers, channels, dmConversations } from '../db/tables.js';
 import type { DeliveryStatus } from '@relaycast/types';
 import { runAtomicWrites, type AtomicWrite } from '../ports/database.js';
 import type { NodeConnectionRegistry } from '../ports/realtime.js';
@@ -25,6 +25,7 @@ import { withEngineOperation } from '../lib/engineDiagnostics.js';
 import { advanceDmParticipantReadCursor } from './receipt.js';
 import { notifySenderDeliveryReceipts } from './deliveryReceipts.js';
 import type { EventDispatchEngine } from './eventDispatch.js';
+import * as sqlx from '../db/sqlx.js';
 
 type Db = ReturnType<typeof getDb>;
 
@@ -40,9 +41,13 @@ export type DeliveryReplayDeps = Pick<EventDispatchEngine, 'realtime' | 'nodeCon
 type DeliveryRow = typeof deliveries.$inferSelect;
 // SQL-wrapped columns retain Drizzle's timestamp/boolean decoders when FROM
 // includes an explicit SQLite INDEXED BY clause rather than a table object.
-const indexedDeliveryColumns = Object.fromEntries(
-  Object.entries(getTableColumns(deliveries)).map(([name, column]) => [name, sql`${column}`.mapWith(column)]),
-) as { [K in keyof DeliveryRow]: SQL<DeliveryRow[K]> };
+// Memoised on first use: table bindings are resolved at runtime (db/tables.ts).
+let indexedDeliveryColumnsCache: { [K in keyof DeliveryRow]: SQL<DeliveryRow[K]> } | undefined;
+function indexedDeliveryColumns(): { [K in keyof DeliveryRow]: SQL<DeliveryRow[K]> } {
+  return indexedDeliveryColumnsCache ??= Object.fromEntries(
+    Object.entries(getTableColumns(deliveries)).map(([name, column]) => [name, sql`${column}`.mapWith(column)]),
+  ) as { [K in keyof DeliveryRow]: SQL<DeliveryRow[K]> };
+}
 type DeliveryWithChannel = DeliveryRow & { channelId: string };
 type PendingDeliveryRow = {
   delivery: DeliveryRow;
@@ -341,7 +346,7 @@ export async function deferDelivery(
   // Delta=0 transitions (queued→queued, repeated/no-op defers) stay allowed
   // even at/over cap, and terminal failures are never blocked from draining.
   const workspaceCapacityOk = opts.workspacePolicy
-    ? sql`(${deliveries.status} <> 'failed' OR ${deliveries.expiresAt} <= unixepoch() OR (${workspaceActiveDepthSql(workspaceId)}) < ${workspaceGrowthLimit(opts.workspacePolicy, 'targeted')})`
+    ? sql`(${deliveries.status} <> 'failed' OR ${deliveries.expiresAt} <= ${sqlx.now(db)} OR (${workspaceActiveDepthSql(workspaceId)}) < ${workspaceGrowthLimit(opts.workspacePolicy, 'targeted')})`
     : undefined;
   const [updated] = await db
     .update(deliveries)
@@ -387,27 +392,27 @@ function readCursorWrites(
   // after it, the row is already `acked` and this predicate would match nothing.
   const ackable = deliveryStillAckable(workspaceId, row.id);
   return [
-    tx
-      .insert(readReceipts)
-      .select(
+    sqlx.insertSelect(
+      tx,
+      readReceipts,
         tx.select({
           messageId: sql<string>`${row.messageId}`.as('message_id'),
           agentId: sql<string>`${agentId}`.as('agent_id'),
-          readAt: sql<Date>`unixepoch()`.as('read_at'),
+          readAt: sql<Date>`${sqlx.now(tx)}`.as('read_at'),
         }).from(deliveries).where(and(
           eq(deliveries.id, row.id),
           eq(deliveries.workspaceId, workspaceId),
           notInArray(deliveries.status, ['acked', 'dead_lettered']),
         )),
-      )
-      .onConflictDoNothing(),
+      { onConflictDoNothing: true },
+    ),
     tx
       .update(channelMembers)
       .set({ lastReadId: row.messageId })
       .where(and(
         eq(channelMembers.channelId, row.channelId),
         eq(channelMembers.agentId, agentId),
-        sql`(${channelMembers.lastReadId} IS NULL OR CAST(${channelMembers.lastReadId} AS BIGINT) < CAST(${row.messageId} AS BIGINT))`,
+        sql`(${channelMembers.lastReadId} IS NULL OR ${sqlx.castNumeric(tx, channelMembers.lastReadId)} < ${sqlx.castNumeric(tx, sql`${row.messageId}`)})`,
         ackable,
       )),
     advanceDmParticipantReadCursor(tx, agentId, row.channelId, row.messageId, ackable),
@@ -546,8 +551,8 @@ export async function markDeliveriesDelivered(
   // status UPDATE chooses a workspace/status index and scans retained history.
   for (let offset = 0; offset < ids.length; offset += 50) {
     const page = ids.slice(offset, offset + 50);
-    const updated = await db.all<{ id: string }>(sql`
-      UPDATE deliveries INDEXED BY idx_deliveries_id_lookup
+    const updated = await sqlx.all<{ id: string }>(db, sql`
+      UPDATE deliveries ${sqlx.indexedBy(db, 'idx_deliveries_id_lookup')}
       SET status = 'delivered', next_attempt_at = NULL, last_dispatch_error = NULL,
           delivered_at = ${now}, updated_at = ${now}
       WHERE workspace_id = ${workspaceId}
@@ -792,11 +797,11 @@ export async function deadLetterUnreachableDeliveryBatch(
   // still active, and stalled the shared D1 for every tenant while it ran.
   const due = await db
     .select({
-      delivery: indexedDeliveryColumns,
+      delivery: indexedDeliveryColumns(),
       senderAgentId: messages.agentId,
       targetAgentName: agents.name,
     })
-    .from(sql`${deliveries} INDEXED BY idx_deliveries_active_location_node`)
+    .from(sql`${deliveries} ${sqlx.indexedBy(db, 'idx_deliveries_active_location_node')}`)
     .innerJoin(nodes, staleNodePredicate)
     .innerJoin(messages, eq(deliveries.messageId, messages.id))
     .innerJoin(agents, eq(deliveries.agentId, agents.id))
@@ -1009,7 +1014,7 @@ export async function fetchDueNodeDeliveryEvents(
 
   const fetchRows = (ids: string[]) => db
     .select({
-      delivery: indexedDeliveryColumns,
+      delivery: indexedDeliveryColumns(),
       recipientAgentName: agents.name,
       body: messages.body,
       blocks: messages.blocks,
@@ -1026,7 +1031,7 @@ export async function fetchDueNodeDeliveryEvents(
         SELECT a.name FROM agents a WHERE a.id = ${messages.agentId}
       )`,
     })
-    .from(sql`${deliveries} INDEXED BY idx_deliveries_id_lookup`)
+    .from(sql`${deliveries} ${sqlx.indexedBy(db, 'idx_deliveries_id_lookup')}`)
     .innerJoin(agents, eq(deliveries.agentId, agents.id))
     .innerJoin(messages, eq(deliveries.messageId, messages.id))
     .innerJoin(channels, eq(messages.channelId, channels.id))
@@ -1311,7 +1316,7 @@ async function replayPendingToNode(
     name: sql`${agents.name}`.mapWith(agents.name),
     providerName: sql`${agents.providerName}`.mapWith(agents.providerName),
     ackSeq: sql`${agents.deliveryAckSeq}`.mapWith(agents.deliveryAckSeq),
-  }).from(ids === undefined ? sql`${agents} INDEXED BY idx_agents_location_node_fk` : sql`${agents}`).where(and(
+  }).from(ids === undefined ? sql`${agents} ${sqlx.indexedBy(db, 'idx_agents_location_node_fk')}` : sql`${agents}`).where(and(
     eq(agents.workspaceId, workspaceId),
     eq(agents.locationType, 'via_node'),
     eq(agents.locationNodeId, nodeId),
@@ -1343,7 +1348,7 @@ async function replayPendingToNode(
       // The literal predicate is essential: SQLite must prove that this
       // query qualifies for the partial index even with bound parameters.
       const page = await db.select({ id: sql<string>`${deliveries.id}`, seq: sql<number>`${deliveries.seq}` })
-        .from(sql`${deliveries} INDEXED BY idx_deliveries_agent_active_seq`)
+        .from(sql`${deliveries} ${sqlx.indexedBy(db, 'idx_deliveries_agent_active_seq')}`)
         .where(and(
           eq(deliveries.workspaceId, workspaceId), eq(deliveries.agentId, recipient.id),
           sql`${deliveries.status} IN ('queued', 'delivered')`,
@@ -1354,7 +1359,7 @@ async function replayPendingToNode(
       // Hydrate only this bounded ID page. Re-check ownership, ACK, expiry and
       // status here because each await can race a handoff or cumulative ACK.
       const rows = await db.select({
-        delivery: indexedDeliveryColumns,
+        delivery: indexedDeliveryColumns(),
         recipientAgentName: agents.name,
         recipientProviderName: agents.providerName,
         ackSeq: agents.deliveryAckSeq,
@@ -1366,7 +1371,7 @@ async function replayPendingToNode(
         senderAgentName: sql<string | null>`(
           SELECT a.name FROM agents a WHERE a.id = ${messages.agentId}
         )`,
-      }).from(sql`${deliveries} INDEXED BY idx_deliveries_id_lookup`)
+      }).from(sql`${deliveries} ${sqlx.indexedBy(db, 'idx_deliveries_id_lookup')}`)
         .innerJoin(agents, eq(deliveries.agentId, agents.id))
         .innerJoin(messages, eq(deliveries.messageId, messages.id))
         .innerJoin(channels, eq(messages.channelId, channels.id))
@@ -1390,7 +1395,7 @@ async function replayPendingToNode(
         // ACKs and handoffs can race attachment hydration or an earlier send.
         // Revalidate one exact ID without scanning mailbox history.
         const [current] = await db.select({ id: sql<string>`${deliveries.id}` })
-          .from(sql`${deliveries} INDEXED BY idx_deliveries_id_lookup`)
+          .from(sql`${deliveries} ${sqlx.indexedBy(db, 'idx_deliveries_id_lookup')}`)
           .innerJoin(agents, eq(deliveries.agentId, agents.id))
           .where(and(
             eq(deliveries.id, row.delivery.id), eq(deliveries.workspaceId, workspaceId),

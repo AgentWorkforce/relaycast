@@ -43,7 +43,7 @@ import {
   parseQueryParams,
 } from '../lib/httpResponse.js';
 import { positiveIntQueryParam } from '../lib/httpQuery.js';
-import { agents } from '../db/schema.js';
+import { agents } from '../db/tables.js';
 import type { EngineDb } from '../ports/database.js';
 
 export const agentRoutes = new Hono<AppEnv>();

@@ -4,7 +4,7 @@ import { Hono } from 'hono';
 import { z } from 'zod';
 import { and, eq } from 'drizzle-orm';
 import type { AppEnv } from '../env.js';
-import { channels } from '../db/schema.js';
+import { channels } from '../db/tables.js';
 import { requireWorkspaceKey } from '../middleware/auth.js';
 import { rateLimit } from '../middleware/rateLimit.js';
 import { jsonCreated, jsonError, jsonNotFound, jsonOk, parseJsonBody } from '../lib/httpResponse.js';

@@ -1,6 +1,7 @@
-import { drizzle } from 'drizzle-orm/sqlite-proxy';
+import { drizzle, type SqliteRemoteDatabase } from 'drizzle-orm/sqlite-proxy';
 import * as schema from '../../db/schema.js';
 import type { EngineDb, TransactionCapability } from '../../ports/database.js';
+import { brandSqliteEngineDb, type SqliteBranded } from '../sqlite-handle.js';
 
 /** A value SQLite can bind or return through a durable actor's database. */
 export type SqliteValue = string | number | bigint | Uint8Array | null;
@@ -31,7 +32,7 @@ export interface ActorSql extends ActorDatabase {
 }
 
 /** Engine handle over an actor's database. `withTransaction` is a runtime savepoint. */
-export type ActorEngineDb = EngineDb & TransactionCapability;
+export type ActorEngineDb = SqliteBranded<SqliteRemoteDatabase<typeof schema>> & TransactionCapability;
 
 /**
  * SQLite extended result codes for constraint failures, by the names
@@ -101,7 +102,7 @@ export function createActorEngineDb(
   sql: ActorSql,
   options: { onGroupStart?: () => void; onGroupFailure?: (error: unknown) => void } = {},
 ): ActorEngineDb {
-  const db = drizzle(
+  const db = brandSqliteEngineDb(drizzle(
     async (statement, params, method) => {
       const { columns, rows } = query(sql, statement, params);
       if (method === 'run') return { rows: [] };
@@ -111,13 +112,14 @@ export function createActorEngineDb(
       return { rows: named };
     },
     { schema },
-  ) as unknown as ActorEngineDb;
-  db.withTransaction = <T>(fn: (tx: EngineDb) => Promise<T>): Promise<T> => {
-    options.onGroupStart?.();
-    return sql.transaction(() => fn(db)).catch((error: unknown) => {
-      options.onGroupFailure?.(error);
-      throw error;
-    });
-  };
-  return db;
+  ));
+  return Object.assign(db, {
+    withTransaction: <T>(fn: (tx: EngineDb) => Promise<T>): Promise<T> => {
+      options.onGroupStart?.();
+      return sql.transaction(() => fn(db)).catch((error: unknown) => {
+        options.onGroupFailure?.(error);
+        throw error;
+      });
+    },
+  });
 }

@@ -2,7 +2,7 @@ import { nodeReady, filterAsync, nodeLivenessAuthority } from './nodeLiveness.js
 import { and, eq, sql } from 'drizzle-orm';
 import type { FleetCapability } from '@relaycast/types';
 import type { getDb } from '../db/index.js';
-import { agents, nodes } from '../db/schema.js';
+import { agents, nodes } from '../db/tables.js';
 import { codedError } from '../lib/httpError.js';
 import { runAtomic } from '../ports/database.js';
 
@@ -234,14 +234,25 @@ export async function claimSpawnNode(
         .select()
         .from(nodes)
         .where(and(eq(nodes.workspaceId, workspaceId), eq(nodes.id, request.preferredNodeId)));
-      const claimed = await chooseLiveCandidate(node ?? undefined);
+      if (!node) {
+        throw codedError(`Node "${request.preferredNodeId}" not found`, 'node_not_found', 404);
+      }
+      if (target && target !== 'self' && node.name !== target) {
+        throw codedError(
+          `Node id "${request.preferredNodeId}" does not name "${target}"`,
+          'node_target_mismatch',
+          409,
+        );
+      }
+      const claimed = await chooseLiveCandidate(node);
       if (claimed) return claimed;
-      if (node && excluded.has(node.id)) {
+      if (excluded.has(node.id)) {
         throw codedError(`Node "${node.name}" is unavailable for retry`, 'handler_unavailable', 503);
       }
-      if (node && nodeHasCapability(node, capability)) {
-        return { node, capability, queued: !(await nodeReady(db, node)) };
+      if (!nodeHasCapability(node, capability)) {
+        throw codedError(`Node "${node.name}" does not provide ${capability}`, 'capability_mismatch', 409);
       }
+      return { node, capability, queued: !(await nodeReady(db, node)) };
     }
 
     if (target === 'self') {

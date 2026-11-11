@@ -1,7 +1,9 @@
 import { readFileSync } from 'node:fs';
 
 /** A configuration the server refuses to run with (exit EX_USAGE). */
-export class ConfigError extends Error {}
+export class ConfigError extends Error {
+  override name = 'ConfigError';
+}
 
 /**
  * `NAME`, or the contents of the file named by `NAME_FILE`; empty →

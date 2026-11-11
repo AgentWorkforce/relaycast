@@ -127,6 +127,22 @@ describe('createBatcher', () => {
     expect(batcher.shutdown()).toBe(batcher.shutdown());
   });
 
+  it('finishes flushing an entirely expired queue and accepts later events', async () => {
+    const transport = recorder();
+    let time = 0;
+    const batcher = createBatcher<number>(transport, { ...base, deliveryDeadlineMs: 50 }, {
+      now: () => time, log: () => {},
+    });
+    batcher.enqueue(1);
+    time += 50;
+    await batcher.flush();
+    expect(transport.send).not.toHaveBeenCalled();
+    expect(batcher.stats()).toMatchObject({ expired: 1, dropped: 1, queued: 0, inFlight: 0 });
+    batcher.enqueue(2);
+    await batcher.shutdown();
+    expect(transport.batches).toEqual([[2]]);
+  });
+
   it('gives up at the shutdown deadline when the collector hangs', async () => {
     const transport = { send: vi.fn(() => new Promise<void>(() => {})) };
     const batcher = createBatcher<number>(transport, { ...base, batchMax: 2 }, { log: () => {} });
@@ -596,15 +612,13 @@ describe('review repairs (#636 re-review): shutdown cancels in-flight work (F10)
     expect(calls[0]!.attempt!.timeoutMs).toBeGreaterThan(1000);
     const signal = calls[0]!.attempt!.signal!;
     expect(signal.aborted).toBe(false);
-    let closed = false;
-    void batcher.shutdown().then(() => { closed = true; });
+    let settled: ReturnType<typeof batcher.stats> | undefined;
+    void batcher.shutdown().then(() => { settled = batcher.stats(); });
     await vi.advanceTimersByTimeAsync(19);
-    expect(closed).toBe(false);
+    expect(settled).toBeUndefined();
     expect(signal.aborted).toBe(false);
     await vi.advanceTimersByTimeAsync(1);
-    expect(closed).toBe(true);
     expect(signal.aborted).toBe(true);
-    const settled = batcher.stats();
     expect(settled).toMatchObject({ enqueued: 2, exported: 0, dropped: 2, failedBatches: 1, queued: 0, inFlight: 0, inFlightBytes: 0 });
     // A late 204 released after close resolved changes nothing.
     calls[0]!.release();

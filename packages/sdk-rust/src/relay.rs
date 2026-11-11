@@ -130,6 +130,17 @@ pub struct RelayCast {
 }
 
 impl RelayCast {
+    /// Create a workspace client from an existing SDK HTTP client, preserving
+    /// its transport and origin options. The API key must be a workspace key.
+    pub fn from_client(client: HttpClient) -> Result<Self> {
+        if client.api_key().trim().is_empty() {
+            return Err(RelayError::InvalidResponse(
+                "RelayCast api_key is required".to_string(),
+            ));
+        }
+        Ok(Self { client })
+    }
+
     /// Create a new RelayCast client with the given options.
     pub fn new(options: RelayCastOptions) -> Result<Self> {
         if options.api_key.trim().is_empty() {

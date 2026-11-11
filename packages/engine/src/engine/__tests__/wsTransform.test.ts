@@ -665,3 +665,53 @@ describe('transformForClient - default (passthrough) branch', () => {
     expect(out.created_at).toBe('2020-01-01T00:00:00.000Z');
   });
 });
+
+
+describe('transformForClient - rich message blocks', () => {
+  it.each([
+    'message.created',
+    'message.updated',
+    'thread.reply',
+    'dm.received',
+    'group_dm.received',
+  ])('preserves arbitrary blocks and absent/null/empty values for %s', (type) => {
+    const opaque = [{ kind: 'test', payload: { signed_value: 'abc' } }];
+    for (const blocks of [undefined, null, [], opaque]) {
+      const data = {
+        id: 'm_blocks',
+        agent_id: 'a1',
+        from_name: 'alice',
+        text: 'proof',
+        channel_name: 'general',
+        thread_id: 'parent',
+        conversation_id: 'dm1',
+        ...(blocks === undefined ? {} : { blocks }),
+      };
+      const frame = transformForClient(ev({ type, data }));
+      expect((frame.message as Record<string, unknown>).blocks).toEqual(blocks);
+    }
+  });
+
+  it.each(['dm.received', 'group_dm.received'])(
+    'keeps nested DM blocks authoritative over flat blocks for %s',
+    (type) => {
+      for (const blocks of [null, [], [{ kind: 'test', payload: 'abc' }]]) {
+        const frame = transformForClient(
+          ev({
+            type,
+            data: {
+              id: 'm_blocks',
+              agent_id: 'a1',
+              from_name: 'alice',
+              text: 'proof',
+              conversation_id: 'dm1',
+              blocks: [{ type: 'text', text: 'flat' }],
+              message: { blocks },
+            },
+          }),
+        );
+        expect((frame.message as Record<string, unknown>).blocks).toEqual(blocks);
+      }
+    },
+  );
+});

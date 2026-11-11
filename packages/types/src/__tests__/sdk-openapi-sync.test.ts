@@ -44,6 +44,10 @@ const NON_SDK_OPENAPI_PATHS = new Set([
   // node-providers work; the engine surface ships first.
   '/v1/nodes/{param}/actions/{param}/invoke',
   '/v1/nodes/{param}/providers/{param}',
+  // Service-caller spawn transport: consumed by Relay's node/core bridge for
+  // exact-node invocation and receipt recovery, not by the public agent SDKs.
+  '/v1/actions/spawn/strict-invoke',
+  '/v1/actions/spawn/replay',
   // Operator-only, one-time recovery for legacy registrations. Agent SDKs do
   // not expose it because normal registration establishes the verifier.
   '/v1/agents/{param}/legacy-identity',

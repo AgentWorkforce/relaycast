@@ -1,7 +1,6 @@
 import { and, eq, exists, gt, lt, ne, notExists, or, sql, type SQL } from 'drizzle-orm';
-import { alias } from 'drizzle-orm/sqlite-core';
 import type { getDb } from '../db/index.js';
-import { channels, workspaces } from '../db/schema.js';
+import { alias, channels, workspaces } from '../db/tables.js';
 import { sha256Hex } from '../lib/crypto.js';
 import { issueCredential } from '../auth/credentials.js';
 import { codedError } from '../lib/httpError.js';
@@ -137,7 +136,7 @@ function isUniqueConstraintError(err: unknown): boolean {
   while (cause && typeof cause === 'object' && !seen.has(cause)) {
     seen.add(cause);
     const e = cause as { code?: string; message?: string; cause?: unknown };
-    if (e.code === 'SQLITE_CONSTRAINT_UNIQUE' || e.code === 'SQLITE_CONSTRAINT_PRIMARYKEY') return true;
+    if (e.code === 'SQLITE_CONSTRAINT_UNIQUE' || e.code === 'SQLITE_CONSTRAINT_PRIMARYKEY' || e.code === '23505') return true;
     if (typeof e.message === 'string' && e.message.toLowerCase().includes('unique constraint failed')) return true;
     cause = e.cause;
   }

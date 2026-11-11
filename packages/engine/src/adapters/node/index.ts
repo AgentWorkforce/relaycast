@@ -1,7 +1,7 @@
 import { safeTelemetrySink } from '../../ports/telemetry.js';
 import { randomBytes } from 'node:crypto';
 import { hostname } from 'node:os';
-import type { EngineDeps, EngineConfig } from '../../ports/index.js';
+import type { EngineDeps, EngineConfig, EngineDb } from '../../ports/index.js';
 import type { AuthProvider } from '../../ports/auth.js';
 import type { AdmissionHooks } from '../../ports/admission.js';
 import type { TelemetrySink } from '../../ports/telemetry.js';
@@ -141,7 +141,24 @@ export interface NodeRuntime {
  * everything `createEngine` and the entrypoint need.
  */
 export function createNodeRuntime(options: NodeRuntimeOptions): NodeRuntime {
-  // Built before the database opens so a bad collector config leaks nothing.
+  const telemetry = createRuntimeTelemetry(options);
+  let handle: SqliteDbHandle | undefined;
+  try {
+    const opened = getSqliteDb(options.dbPath);
+    handle = opened;
+    if (options.migrate !== false) runMigrations(opened);
+    const runtime = assembleRuntime(opened.db, options, telemetry, () => {
+      try { opened.sqlite.close(); } catch { /* already closed */ }
+    });
+    return { ...runtime, handle: opened };
+  } catch (error) {
+    try { handle?.sqlite.close(); } catch { /* already closed */ }
+    void telemetry.closeTelemetry();
+    throw error;
+  }
+}
+
+function createRuntimeTelemetry(options: NodeRuntimeWithDbOptions) {
   const collectorOptions = resolveTelemetryDestination(options.telemetryDestination, options.telemetryCollector);
   const collector = !options.telemetry && collectorOptions
     ? new CollectorTelemetrySink({
@@ -169,20 +186,40 @@ export function createNodeRuntime(options: NodeRuntimeOptions): NodeRuntime {
     telemetryClosed ??= collector ? collector.close().catch(() => {}) : Promise.resolve();
     return telemetryClosed;
   };
-  const handle = getSqliteDb(options.dbPath);
-  if (options.migrate !== false) {
-    try {
-      runMigrations(handle);
-    } catch (err) {
-      // Don't leak the open file handle if startup migrations fail.
-      try { handle.sqlite.close(); } catch { /* ignore */ }
-      void closeTelemetry();
-      throw err;
-    }
-  }
-  const db = handle.db;
+  return { telemetry: safeTelemetrySink(options.telemetry ?? collector ?? new NoopTelemetrySink()), closeTelemetry };
+}
 
-  const telemetry = safeTelemetrySink(options.telemetry ?? collector ?? new NoopTelemetrySink());
+/** Options for {@link createNodeRuntimeWithDb}: everything but opening the database. */
+export type NodeRuntimeWithDbOptions = Omit<NodeRuntimeOptions, 'dbPath' | 'migrate'>;
+
+/** {@link NodeRuntime} without the SQLite handle, for a runtime over an injected database. */
+export type NodeRuntimeWithDb = Omit<NodeRuntime, 'handle'>;
+
+/**
+ * Assemble the in-process runtime over an opened, migrated and branded
+ * engine database. The caller owns the database until assembly succeeds.
+ * `closeDb` releases it on shutdown and must not throw.
+ */
+export function createNodeRuntimeWithDb(
+  db: EngineDb,
+  options: NodeRuntimeWithDbOptions,
+  closeDb: () => void,
+): NodeRuntimeWithDb {
+  const telemetry = createRuntimeTelemetry(options);
+  try {
+    return assembleRuntime(db, options, telemetry, closeDb);
+  } catch (error) {
+    void telemetry.closeTelemetry();
+    throw error;
+  }
+}
+
+function assembleRuntime(
+  db: EngineDb,
+  options: NodeRuntimeWithDbOptions,
+  { telemetry, closeTelemetry }: ReturnType<typeof createRuntimeTelemetry>,
+  closeDb: () => void,
+): NodeRuntimeWithDb {
   const testEnvironment = options.config?.environment === 'test';
   const testFetch: typeof globalThis.fetch = (input, init) => globalThis.fetch(input, init);
   const outboundWebhookFetch = options.config?.outboundWebhookFetch
@@ -298,7 +335,6 @@ export function createNodeRuntime(options: NodeRuntimeOptions): NodeRuntime {
     presence,
     webhookQueue,
     fileHandler: createFileRouteHandler(fileStorage),
-    handle,
     close() {
       clearInterval(sweepTimer);
       // Parked long-polls answer now instead of holding their connections open.
@@ -306,11 +342,7 @@ export function createNodeRuntime(options: NodeRuntimeOptions): NodeRuntime {
       presence.stop();
       webhookQueue.stop();
       kv.dispose();
-      try {
-        handle.sqlite.close();
-      } catch {
-        // already closed
-      }
+      closeDb();
       void closeTelemetry();
     },
     closeTelemetry,

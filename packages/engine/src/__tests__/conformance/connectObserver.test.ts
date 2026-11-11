@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { eq } from 'drizzle-orm';
-import { messages, observerTokens } from '../../db/schema.js';
+import { messages, observerTokens } from '../../db/tables.js';
 import { dmFilteredCountConversationChunkSize, dmMessagePageLimit } from '../../engine/dmAll.js';
 import { createWorkspace, makeNodeStack, registerAgent, type TestStack } from './harness.js';
 

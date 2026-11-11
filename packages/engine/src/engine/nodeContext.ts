@@ -1,7 +1,7 @@
 import { and, eq, inArray, or, sql } from 'drizzle-orm';
 import type { EngineDb } from '../ports/database.js';
 import type { NodeConnectionRegistry, RealtimeBus } from '../ports/realtime.js';
-import { agents, agentNodeBindings, channelMembers, nodes } from '../db/schema.js';
+import { agents, agentNodeBindings, channelMembers, nodes } from '../db/tables.js';
 import { toFleetWireJson } from './deliveryWire.js';
 import { postEphemeralEventToHttpPushNode, strictHttpPushDispatch, type HttpPushProxyConfig } from './httpPushDispatch.js';
 

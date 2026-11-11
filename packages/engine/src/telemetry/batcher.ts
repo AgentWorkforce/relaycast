@@ -500,28 +500,28 @@ export function createBatcher<T>(transport: BatchTransport<T>, opts: BatcherOpti
 
   const pump = (): Promise<void> => {
     if (pumping) return pumping;
-    pumping = (async () => {
-      try {
-        while (queue.length > 0 && !abandoned) {
-          expireQueued();
-          if (queue.length === 0) break;
-          const batch = takeBatch();
-          const bytes = batch.reduce((sum, entry) => sum + entry.bytes, 0);
-          inFlight = batch.length;
-          inFlightBytes = bytes;
-          try {
-            await sendWithRetry(batch);
-          } finally {
-            inFlight = 0;
-            inFlightBytes = 0;
-          }
+    const running = (async () => {
+      while (queue.length > 0 && !abandoned) {
+        expireQueued();
+        if (queue.length === 0) break;
+        const batch = takeBatch();
+        const bytes = batch.reduce((sum, entry) => sum + entry.bytes, 0);
+        inFlight = batch.length;
+        inFlightBytes = bytes;
+        try {
+          await sendWithRetry(batch);
+        } finally {
+          inFlight = 0;
+          inFlightBytes = 0;
         }
-      } finally {
-        pumping = undefined;
-        // Events that arrived during the last send wait for the next tick.
-        if (queue.length > 0 && !abandoned) schedule();
       }
     })();
+    // Expiring the entire queue can finish synchronously. Register cleanup
+    // after creating the promise so it cannot clear an unassigned pump.
+    pumping = running.finally(() => {
+      pumping = undefined;
+      if (queue.length > 0 && !abandoned) schedule();
+    });
     return pumping;
   };
 
@@ -627,6 +627,8 @@ export function createBatcher<T>(transport: BatchTransport<T>, opts: BatcherOpti
           if (queue.length > 0) report(`shutdown deadline; dropped ${queue.length} queued event(s)`);
           queue.length = 0;
           queuedBytes = 0;
+          inFlight = 0;
+          inFlightBytes = 0;
           finish();
         }, shutdownTimeoutMs);
         void batcher.flush().then(() => {

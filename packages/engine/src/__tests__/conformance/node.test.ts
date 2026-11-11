@@ -11,7 +11,7 @@ import {
   deliverFramesOfType,
   type TestStack,
 } from './harness.js';
-import { actionInvocations, actions, agentNodeBindings, agents, channelMembers, deliveries, nodeProviders, nodes } from '../../db/schema.js';
+import { actionInvocations, actions, agentNodeBindings, agents, channelMembers, deliveries, nodeProviders, nodes } from '../../db/tables.js';
 import { handleNodeControlMessage } from '../../node-control.js';
 import type { NodeConnectionRegistry } from '../../ports/realtime.js';
 import type { EngineDb, TransactionCapability } from '../../ports/database.js';
@@ -1124,7 +1124,7 @@ describe('node adapter conformance', () => {
         capabilities: [capability('spawn:claude', 'spawn')],
         maxAgents: 1,
       });
-      const db = stack.runtime.handle.db as unknown as EngineDb;
+      const db = stack.runtime.handle.db;
       await db.insert(actionInvocations).values({
         id: 'inv_d1_reserved_spawn',
         workspaceId: ws.workspaceId,
@@ -1182,7 +1182,7 @@ describe('node adapter conformance', () => {
         capabilities: [],
         maxAgents: 1,
       });
-      const db = stack.runtime.handle.db as unknown as EngineDb;
+      const db = stack.runtime.handle.db;
       delete (db as Partial<TransactionCapability>).withTransaction;
       stack.runtime.handle.sqlite.exec(`
         CREATE TRIGGER fail_d1_agent_binding
@@ -2607,13 +2607,13 @@ describe('node adapter conformance', () => {
               return value.call(target, table);
             };
           },
-        }) as EngineDb;
+        });
       }
 
       it('re-marks a claimed spawn when the drain throws before any send', async () => {
         const { ws, alpha, db, readRow } = await setupMarkedSpawn('fleet-spawn-presend-throw-ws', 'inv_presend_throw');
         // reserveNodeCapacity is the drain's first nodes update.
-        const broken = failingUpdates(db as unknown as EngineDb, (table) => table === nodes);
+        const broken = failingUpdates(db, (table) => table === nodes);
         expect(await drainNodeInvocations(broken as never, stack.runtime.realtime, ws.workspaceId, 'node_alpha', { includeDeferred: true })).toBe(0);
         expect(alpha.sock.ofType('action.invoke')).toHaveLength(0);
         expect((await readRow()).handlerUnreachableSince).toBeInstanceOf(Date);
@@ -2640,7 +2640,7 @@ describe('node adapter conformance', () => {
         // actionInvocations updates in order: unsent claim, handler snapshot,
         // pre-send claim, restore after the rejected send, re-mark.
         let invocationUpdates = 0;
-        const broken = failingUpdates(db as unknown as EngineDb, (table) => table === actionInvocations && ++invocationUpdates === 5);
+        const broken = failingUpdates(db, (table) => table === actionInvocations && ++invocationUpdates === 5);
         expect(await drainNodeInvocations(broken as never, stack.runtime.realtime, ws.workspaceId, 'node_alpha', { includeDeferred: true })).toBe(0);
         expect(send).toHaveBeenCalledTimes(1);
         expect(invocationUpdates).toBe(5);
@@ -2776,6 +2776,263 @@ describe('node adapter conformance', () => {
         .from(nodes)
         .where(and(eq(nodes.workspaceId, ws.workspaceId), eq(nodes.id, 'node_alpha')));
       expect(node.reservedAgents).toBe(1);
+    });
+
+    it('binds logical spawn replay to the exact node while ignoring only rematerialized cwd', async () => {
+      const ws = await createWorkspace(stack.app, 'fleet-spawn-logical-replay-ws');
+      const caller = await registerAgent(stack.app, ws.workspaceKey, 'caller');
+      const alpha = await enrollAndAttachNode(ws, {
+        id: 'node_alpha', name: 'alpha',
+        capabilities: [capability('spawn:claude', 'spawn', { agent: 'claude' })],
+        load: 0, maxAgents: 2,
+      });
+      const logical = {
+        schema: 'relay.spawn.invoke.logical/1', target_node_id: 'node_alpha', target_node: 'alpha',
+        name: 'worker', cli: 'claude', task: 'review', directory: '/requested/repo', verify_ready: true,
+      };
+      const input = (worker_cwd: string, request = logical) => ({
+        spawn_contract: 'relay.spawn.invoke.logical/1',
+        target_node_id: request.target_node_id, target_node: request.target_node,
+        name: request.name, cli: request.cli, task: request.task, worker_cwd,
+        verify_ready: request.verify_ready, logical_request: request,
+      });
+      const invoke = (key: string, body: Record<string, unknown>) => stack.app.request('/v1/actions/spawn/strict-invoke', {
+        method: 'POST',
+        headers: {
+          'content-type': 'application/json', authorization: `Bearer ${caller.token}`, 'Idempotency-Key': key,
+        },
+        body: JSON.stringify({ input: body }),
+      });
+
+      const missingStrictKey = await stack.app.request('/v1/actions/spawn/strict-invoke', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', authorization: `Bearer ${caller.token}` },
+        body: JSON.stringify({ input: input('/materialized') }),
+      });
+      expect(missingStrictKey.status).toBe(400);
+      const extraStrictField = await stack.app.request('/v1/actions/spawn/strict-invoke', {
+        method: 'POST',
+        headers: {
+          'content-type': 'application/json', authorization: `Bearer ${caller.token}`,
+          'Idempotency-Key': 'strict-extra-field',
+        },
+        body: JSON.stringify({ input: input('/materialized'), allow_fallback: true }),
+      });
+      expect(extraStrictField.status).toBe(400);
+      const workspaceStrictCall = await stack.app.request('/v1/actions/spawn/strict-invoke', {
+        method: 'POST',
+        headers: {
+          'content-type': 'application/json', authorization: `Bearer ${ws.workspaceKey}`,
+          'Idempotency-Key': 'strict-workspace-caller',
+        },
+        body: JSON.stringify({ input: input('/materialized') }),
+      });
+      expect(workspaceStrictCall.status).toBe(403);
+      expect(alpha.sock.ofType('action.invoke')).toHaveLength(0);
+
+      const genericStrictCall = await stack.app.request('/v1/actions/spawn/invoke', {
+        method: 'POST',
+        headers: {
+          'content-type': 'application/json', authorization: `Bearer ${caller.token}`,
+          'Idempotency-Key': 'strict-on-generic-route',
+        },
+        body: JSON.stringify({ input: input('/materialized') }),
+      });
+      expect(genericStrictCall.status).toBe(400);
+      const nodeStrictCall = await stack.app.request('/v1/nodes/alpha/actions/spawn/invoke', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', authorization: `Bearer ${caller.token}` },
+        body: JSON.stringify({ input: input('/materialized') }),
+      });
+      expect(nodeStrictCall.status).toBe(400);
+      expect(alpha.sock.ofType('action.invoke')).toHaveLength(0);
+
+      // Neither a node-addressed public route nor a registered action may mint
+      // the server-owned proof from caller input.
+      const spoof = await stack.app.request('/v1/nodes/alpha/actions/spawn/invoke', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', authorization: `Bearer ${caller.token}` },
+        body: JSON.stringify({ input: {
+          name: 'spoof', cli: 'claude', target_node: 'alpha',
+          spawn_contract_applied: 'relay.spawn.invoke.logical/1',
+        } }),
+      });
+      expect(spoof.status).toBe(400);
+      expect(alpha.sock.ofType('action.invoke')).toHaveLength(0);
+
+      await alpha.handle.handleMessage(JSON.stringify({
+        v: 1, id: 'register-spawn-handler', type: 'agent.register',
+        name: 'spawn-handler', session_ref: 'pty://alpha/spawn-handler',
+      }));
+      const registeredAction = await stack.app.request('/v1/actions', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', authorization: `Bearer ${ws.workspaceKey}` },
+        body: JSON.stringify({
+          name: 'spawn', description: 'must not shadow strict builtin spawn',
+          handler_agent: 'spawn-handler',
+        }),
+      });
+      expect(registeredAction.status).toBe(201);
+
+      const first = await invoke('logical-spawn', input('/first/materialization'));
+      expect(first.status).toBe(201);
+      const firstBody = (await first.json()) as {
+        data: { invocation_id: string; spawn_contract_applied?: string };
+      };
+      const firstId = firstBody.data.invocation_id;
+      expect(firstBody.data.spawn_contract_applied).toBe('relay.spawn.invoke.logical/1');
+      const strictFrames = alpha.sock.ofType('action.invoke');
+      expect(strictFrames.filter((event) => event.action === 'spawn:claude')).toHaveLength(1);
+      expect(strictFrames.filter((event) => event.action === 'spawn')).toHaveLength(0);
+      const [strictOrigin] = await stack.runtime.handle.db
+        .select({ actionId: actionInvocations.actionId, invocationOrigin: actionInvocations.invocationOrigin })
+        .from(actionInvocations)
+        .where(eq(actionInvocations.id, firstId));
+      expect(strictOrigin).toEqual({ actionId: null, invocationOrigin: 'builtin' });
+      await stack.runtime.handle.db
+        .update(nodes)
+        .set({ status: 'offline', handlersLive: false })
+        .where(and(eq(nodes.workspaceId, ws.workspaceId), eq(nodes.id, 'node_alpha')));
+      const beta = await enrollAndAttachNode(ws, {
+        id: 'node_beta', name: 'beta',
+        capabilities: [capability('spawn:codex', 'spawn', { agent: 'codex' })],
+        load: 0, maxAgents: 2,
+      });
+      const gamma = await enrollAndAttachNode(ws, {
+        id: 'node_gamma', name: 'gamma',
+        capabilities: [capability('spawn:claude', 'spawn', { agent: 'claude' })],
+        load: 0, maxAgents: 2,
+      });
+
+      const rematerialized = await invoke('logical-spawn', input('/second/materialization'));
+      expect(rematerialized.status).toBe(201);
+      expect(rematerialized.headers.get('Idempotency-Replayed')).toBe('true');
+      const rematerializedBody = (await rematerialized.json()) as {
+        data: { invocation_id: string; spawn_contract_applied?: string };
+      };
+      expect(rematerializedBody.data.invocation_id).toBe(firstId);
+      expect(rematerializedBody.data.spawn_contract_applied).toBe('relay.spawn.invoke.logical/1');
+      expect(alpha.sock.ofType('action.invoke').filter((event) => event.action === 'spawn:claude')).toHaveLength(1);
+
+      const replay = (token: string, key: string, request = logical) => stack.app.request('/v1/actions/spawn/replay', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', authorization: `Bearer ${token}`, 'Idempotency-Key': key },
+        body: JSON.stringify({ logical_request: request }),
+      });
+      const recovered = await replay(caller.token, 'logical-spawn');
+      expect(recovered.status).toBe(200);
+      expect(recovered.headers.get('Idempotency-Replayed')).toBe('true');
+      const recoveredBody = (await recovered.json()) as {
+        data: { invocation_id: string; spawn_contract_applied?: string };
+      };
+      expect(recoveredBody.data.invocation_id).toBe(firstId);
+      expect(recoveredBody.data.spawn_contract_applied).toBe('relay.spawn.invoke.logical/1');
+      expect((await replay(ws.workspaceKey, 'logical-spawn')).status).toBe(403);
+      expect((await replay(caller.token, 'never-dispatched')).status).toBe(404);
+      expect((await replay(caller.token, 'logical-spawn', { ...logical, task: 'different' })).status).toBe(409);
+      expect((await replay(caller.token, 'logical-spawn', {
+        ...logical, unexpected: 'field',
+      } as typeof logical)).status).toBe(400);
+      const missingReplayKey = await stack.app.request('/v1/actions/spawn/replay', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', authorization: `Bearer ${caller.token}` },
+        body: JSON.stringify({ logical_request: logical }),
+      });
+      expect(missingReplayKey.status).toBe(400);
+      const extraReplayField = await stack.app.request('/v1/actions/spawn/replay', {
+        method: 'POST',
+        headers: {
+          'content-type': 'application/json', authorization: `Bearer ${caller.token}`,
+          'Idempotency-Key': 'logical-spawn',
+        },
+        body: JSON.stringify({ logical_request: logical, create_if_missing: true }),
+      });
+      expect(extraReplayField.status).toBe(400);
+      const otherCaller = await registerAgent(stack.app, ws.workspaceKey, 'other-caller');
+      expect((await replay(otherCaller.token, 'logical-spawn')).status).toBe(404);
+
+      const changedTask = { ...logical, task: 'different' };
+      expect((await invoke('logical-spawn', input('/third/materialization', changedTask))).status).toBe(409);
+      expect((await invoke('logical-spawn-forged', {
+        ...input('/materialized'), task: 'does-not-match-logical-request',
+      })).status).toBe(400);
+      expect((await invoke('logical-spawn-ack-spoof', {
+        ...input('/materialized'), spawn_contract_applied: 'relay.spawn.invoke.logical/1',
+      })).status).toBe(400);
+      const missingId = { ...logical, target_node_id: 'node_missing' };
+      expect((await invoke('logical-spawn-missing', input('/materialized', missingId))).status).toBe(404);
+      const wrongName = { ...logical, target_node: 'not-alpha' };
+      expect((await invoke('logical-spawn-mismatch', input('/materialized', wrongName))).status).toBe(409);
+      const unavailable = { ...logical };
+      expect((await invoke('logical-spawn-offline', input('/materialized', unavailable))).status).toBe(503);
+      const wrongCapability = { ...logical, target_node_id: 'node_beta', target_node: 'beta' };
+      expect((await invoke('logical-spawn-capability', input('/materialized', wrongCapability))).status).toBe(409);
+      expect(alpha.sock.ofType('action.invoke').filter((event) => event.action === 'spawn:claude')).toHaveLength(1);
+      expect(beta.sock.ofType('action.invoke')).toHaveLength(0);
+      expect(gamma.sock.ofType('action.invoke')).toHaveLength(0);
+
+      // A retry must remain bound to the original node identity even if a new
+      // live node later takes its old display name. Name reuse cannot redirect
+      // an already accepted strict spawn.
+      await stack.runtime.handle.db
+        .update(nodes)
+        .set({ name: 'alpha-retired' })
+        .where(and(eq(nodes.workspaceId, ws.workspaceId), eq(nodes.id, 'node_alpha')));
+      const replacement = await enrollAndAttachNode(ws, {
+        id: 'node_alpha_replacement', name: 'alpha',
+        capabilities: [capability('spawn:claude', 'spawn', { agent: 'claude' })],
+        load: 0, maxAgents: 2,
+      });
+      replacement.sock.received.length = 0;
+      await sweepTimedOutInvocations(stack.runtime.handle.db, stack.runtime.realtime, { timeoutMs: 0 });
+      expect(replacement.sock.ofType('action.invoke')).toHaveLength(0);
+      const [strictInvocation] = await stack.runtime.handle.db
+        .select({ handlerNodeId: actionInvocations.handlerNodeId })
+        .from(actionInvocations)
+        .where(eq(actionInvocations.id, firstId));
+      expect(strictInvocation.handlerNodeId).toBe('node_alpha');
+
+      // A row accepted by an older server may contain the requested marker as
+      // inert input, but lacks the new server-owned proof. It cannot be
+      // upgraded into a strict claim merely by retrying after deployment.
+      await stack.runtime.handle.db
+        .update(actionInvocations)
+        .set({ input: input('/first/materialization') })
+        .where(eq(actionInvocations.id, firstId));
+      expect((await replay(caller.token, 'logical-spawn')).status).toBe(400);
+    });
+
+    it('keeps legacy target_node_id and logical_request metadata backward compatible', async () => {
+      const ws = await createWorkspace(stack.app, 'fleet-spawn-legacy-logical-fields-ws');
+      const caller = await registerAgent(stack.app, ws.workspaceKey, 'caller');
+      const alpha = await enrollAndAttachNode(ws, {
+        id: 'node_alpha', name: 'alpha',
+        capabilities: [capability('spawn:claude', 'spawn', { agent: 'claude' })],
+        load: 0, maxAgents: 2,
+      });
+      const body = {
+        input: {
+          name: 'worker', cli: 'claude', task: 'review', target_node: 'alpha',
+          target_node_id: 'legacy-ignored-id', logical_request: { application_metadata: true },
+        },
+      };
+      const invoke = () => stack.app.request('/v1/actions/spawn/invoke', {
+        method: 'POST',
+        headers: {
+          'content-type': 'application/json', authorization: `Bearer ${caller.token}`,
+          'Idempotency-Key': 'legacy-logical-fields',
+        },
+        body: JSON.stringify(body),
+      });
+      const first = await invoke();
+      const retry = await invoke();
+      expect([first.status, retry.status]).toEqual([201, 201]);
+      expect(retry.headers.get('Idempotency-Replayed')).toBe('true');
+      expect(((await first.json()) as { data: Record<string, unknown> }).data)
+        .not.toHaveProperty('spawn_contract_applied');
+      expect(((await retry.json()) as { data: Record<string, unknown> }).data)
+        .not.toHaveProperty('spawn_contract_applied');
+      expect(alpha.sock.ofType('action.invoke').filter((event) => event.action === 'spawn:claude')).toHaveLength(1);
     });
 
     it('answers a concurrent spawn replay from the claim recorded before the frame', async () => {

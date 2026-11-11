@@ -6,10 +6,13 @@ See the [root changelog](../../CHANGELOG.md) for cross-package release highlight
 
 The format is based on Keep a Changelog, and this project follows Semantic Versioning.
 
-## [Unreleased - Minor]
+## [Unreleased]
+
+## [12.1.0] - 2026-11-09
 
 ### Added
 
+- `HttpClient::with_http_client`, `AgentClient::from_client` and `RelayCast::from_client` accept an application-configured HTTP transport. Token replacement preserves that transport, including its trust, redirect and timeout settings.
 - `AgentClient::wait_for_deliveries(opts, wait_ms)` long-polls `GET /v1/deliveries?wait=`. `ListDeliveriesOptions` is unchanged.
 
 ## [12.0.0] - 2026-10-31

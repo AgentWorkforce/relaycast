@@ -7,7 +7,7 @@ import {
   messageAttachments,
   messages,
   workspaces,
-} from '../../db/schema.js';
+} from '../../db/tables.js';
 import { fetchAttachmentsBatch } from '../attachments.js';
 
 const D1_MAX_BIND_PARAMETERS = 100;

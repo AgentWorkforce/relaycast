@@ -23,6 +23,8 @@ function makeDeps(opts: { callerId?: string | null; outboxThrows?: boolean } = {
   const publishToWorkspaceStream = vi.fn(async () => {});
   const webhookSend = vi.fn(async () => {});
   const db = {
+    // Sequence allocation dispatches on the handle's dialect brand (sqlx).
+    engineDialect: 'sqlite',
     select: () => ({
       from: () => ({
         where: async () => (opts.callerId === undefined ? [] : [{ callerId: opts.callerId }]),

@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { and, eq } from 'drizzle-orm';
-import { agents, nodes, workspaceEvents } from '../../../db/schema.js';
+import { agents, nodes, workspaceEvents } from '../../../db/tables.js';
 import {
   FakeSocket,
   attachDirectNodeSocket,

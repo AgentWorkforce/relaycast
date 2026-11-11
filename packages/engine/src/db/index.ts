@@ -1,5 +1,6 @@
 import { sql } from 'drizzle-orm';
 import type { EngineDb } from '../ports/database.js';
+import * as sqlx from './sqlx.js';
 
 /**
  * The engine never constructs a database driver itself — an adapter does, and
@@ -20,7 +21,7 @@ export type Db = EngineDb;
 /** Health check — run a trivial query to verify connectivity. */
 export async function healthCheck(db: EngineDb): Promise<boolean> {
   try {
-    await db.run(sql`SELECT 1`);
+    await sqlx.run(db, sql`SELECT 1`);
     return true;
   } catch {
     return false;

@@ -1,9 +1,11 @@
 import { and, asc, desc, eq, inArray, sql } from 'drizzle-orm';
 import type { getDb } from '../db/index.js';
-import { agents, directoryAgents, directoryRatings, directorySkills } from '../db/schema.js';
+import { agents, directoryAgents, directoryRatings, directorySkills } from '../db/tables.js';
 import { buildFtsQuery } from './searchQuery.js';
 import { generateId } from './snowflake.js';
 import { codedError } from '../lib/httpError.js';
+import * as sqlx from '../db/sqlx.js';
+import * as sqliteFts from '../adapters/sqlite/fts.js';
 
 type Db = ReturnType<typeof getDb>;
 
@@ -552,21 +554,8 @@ export async function searchDirectory(
 
   if (ftsQuery) {
     const [agentMatches, skillMatches] = await Promise.all([
-      db.all<{ directory_agent_id: string; rank: number }>(sql`
-        SELECT da.id AS directory_agent_id, bm25(directory_agents_fts) AS rank
-        FROM directory_agents_fts
-        JOIN directory_agents da ON da.rowid = directory_agents_fts.rowid
-        WHERE directory_agents_fts MATCH ${ftsQuery}
-          AND da.workspace_id = ${workspaceId}
-      `),
-      db.all<{ directory_agent_id: string; rank: number }>(sql`
-        SELECT ds.directory_agent_id AS directory_agent_id, bm25(directory_skills_fts) AS rank
-        FROM directory_skills_fts
-        JOIN directory_skills ds ON ds.rowid = directory_skills_fts.rowid
-        JOIN directory_agents da ON da.id = ds.directory_agent_id
-        WHERE directory_skills_fts MATCH ${ftsQuery}
-          AND da.workspace_id = ${workspaceId}
-      `),
+      sqlx.all<{ directory_agent_id: string; rank: number }>(db, sqliteFts.directoryAgentFtsRanks(db, ftsQuery, workspaceId)),
+      sqlx.all<{ directory_agent_id: string; rank: number }>(db, sqliteFts.directorySkillFtsRanks(db, ftsQuery, workspaceId)),
     ]);
     for (const m of agentMatches) {
       const cur = agentRankMap.get(m.directory_agent_id);
@@ -582,7 +571,7 @@ export async function searchDirectory(
 
   const rows: SearchRow[] = ftsQuery && matchedIds.size === 0
     ? []
-    : (await db.all<Omit<SearchRow, 'agent_rank' | 'skill_rank'>>(sql`
+    : (await sqlx.all<Omit<SearchRow, 'agent_rank' | 'skill_rank'>>(db, sql`
         SELECT
           da.id,
           da.workspace_id,
@@ -625,9 +614,9 @@ export async function searchDirectory(
     endpointUrl: row.endpoint_url,
     documentationUrl: row.documentation_url,
     version: row.version,
-    tags: JSON.parse(row.tags || '[]'),
-    capabilities: JSON.parse(row.capabilities || '{}'),
-    metadata: JSON.parse(row.metadata || '{}'),
+    tags: sqlx.parseJsonColumn(row.tags, []),
+    capabilities: sqlx.parseJsonColumn(row.capabilities, {}),
+    metadata: sqlx.parseJsonColumn(row.metadata, {}),
     status: row.status,
     ratingSum: row.rating_sum,
     ratingCount: row.rating_count,
