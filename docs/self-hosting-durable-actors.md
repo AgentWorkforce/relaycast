@@ -32,11 +32,15 @@ clients ──HTTP/WS──▶ gateway replicas (Node, stateless)
   (GKE) control plane.
 - **Workspace actor** (`packages/actors-workspace`): `@relaycast/engine`'s actor
   adapter on the actor's database. `create` for `POST /v1/workspaces`, `handle`
-  for every other request, `onConnect`/`onMessage`/`onDisconnect` for realtime,
+  for every other request, `fileStored` when the gateway stored an upload, `onConnect`/`onMessage`/`onDisconnect` for realtime,
   `onAlarm` for webhooks, A2A egress and maintenance.
 - **Files**: actors never see file bytes. They sign `/_relayfiles` URLs against
   `RELAYCAST_PUBLIC_URL` with `RELAYCAST_FILE_SIGNING_SECRET`; whichever gateway
   replica receives the PUT/GET verifies the token and talks to the file store.
+  After storing an upload, the gateway reports its size to the workspace actor
+  (`fileStored`), so completing the upload needs no call from the actor back to
+  `RELAYCAST_PUBLIC_URL`. Blob deletes from actor maintenance still go to that
+  origin, so the actor must reach it for deleted files' bytes to be removed.
 
 Credentials are the `ar_` family only (`ar_ws_` workspace keys, `ar_ag_` agent
 tokens, `ar_nd_` node tokens, `ar_ob_` observer tokens, `ar_wh_` webhooks).

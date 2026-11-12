@@ -35,6 +35,14 @@ export interface FileRouteContext {
   /** `RELAYCAST_MAX_UPLOAD_BYTES`: a signed size past it is refused before any byte is read. */
   maxUploadBytes: number;
   logger: Logger;
+  /**
+   * Report a stored upload to the actor of the workspace in its key
+   * (`fileStored`), so its completion needs no call back to this gateway.
+   * Awaited before the PUT is answered (the client completes right after);
+   * a failure is logged and the upload still succeeds, since completion
+   * falls back to a signed `stat`.
+   */
+  recordStored?: (key: string, size: number) => Promise<unknown>;
 }
 
 /** The engine's error envelope with the file route's CORS set. */
@@ -85,6 +93,15 @@ export async function serveFile(req: IncomingMessage, res: ServerResponse, url: 
         return fileError(res, 400, 'size_mismatch', 'Body size does not match the upload');
       }
       await ctx.store.put(payload.key, bytes, { size: payload.size!, contentType: payload.type! });
+      // The size reported is the byte count just stored, which equals the
+      // signed size (checked above): nothing the client declared.
+      if (ctx.recordStored) {
+        try {
+          await ctx.recordStored(payload.key, bytes.byteLength);
+        } catch (error) {
+          ctx.logger.warn('files.record_stored_failed', { workspace_id: payload.key.split('/')[0], error: errorText(error) });
+        }
+      }
       const body = Buffer.from(JSON.stringify({ ok: true }));
       res.writeHead(200, { ...FILE_CORS_HEADERS, 'content-type': 'application/json', 'content-length': String(body.byteLength) });
       res.end(body);

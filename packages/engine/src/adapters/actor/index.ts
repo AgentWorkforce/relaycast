@@ -1,3 +1,4 @@
+import { z } from 'zod';
 import { createEngine } from '../../engine.js';
 import { safeTelemetrySink } from '../../ports/telemetry.js';
 import type { EngineConfig, EngineDeps } from '../../ports/index.js';
@@ -27,7 +28,8 @@ import { isArWorkspaceId } from '@relaycast/types';
 import { ensureActorSchema } from './schema.js';
 import { ActorKeyValueStore } from './kv.js';
 import { ActorEventQueue } from './event-queue.js';
-import { SignedUrlFileStorage } from './files.js';
+import { FILE_STORED_TTL_SECONDS, SignedUrlFileStorage } from './files.js';
+import { isContainedStorageKey } from '../../lib/fileTokens.js';
 import { ActorEphemeralOutbox } from './ephemeral-outbox.js';
 import { isSafeExternalUrl } from '../../lib/ssrf.js';
 import { assertInternalSecretStrength } from '../../engine/internalAdmin.js';
@@ -66,6 +68,15 @@ export {
   type SocketPrincipal,
 } from './socket-grant.js';
 import type { ActorHttpRequest, ActorHttpResponse } from './http.js';
+
+/** `_actor_kv` key prefix of the gateway's stored-size records (`fileStored`). */
+export const FILE_STORED_KV_PREFIX = 'file-stored:';
+
+/** `fileStored` arguments: a contained storage key and the positive byte count stored under it. */
+const FileStoredArgsSchema = z.object({
+  key: z.string().refine(isContainedStorageKey, 'not a <workspace>/<file>/<name> storage key'),
+  size: z.number().int().positive().max(Number.MAX_SAFE_INTEGER),
+});
 
 /** Liveness sweeps for connected nodes run on the self-host sweep cadence. */
 const MAINTENANCE_INTERVAL_MS = 15_000;
@@ -145,6 +156,16 @@ export interface ActorRuntime {
    * `workspace_importing` and maintenance does nothing.
    */
   importData(body: unknown, credentialTag: string): Promise<ActorHttpResponse>;
+  /**
+   * The gateway stored `size` bytes under `key` for a signed upload (`PUT
+   * /_relayfiles`, which already enforced the signed size). The actor keeps
+   * the size so upload completion verifies it without calling the gateway
+   * back (an actor pod may be unable to reach the public origin). Records
+   * only for a pending upload of this workspace: a key of another workspace
+   * or an invalid size throws; a key with no pending file answers
+   * `{ recorded: false }`.
+   */
+  fileStored(key: string, size: number): Promise<{ recorded: boolean }>;
   /**
    * Run maintenance from the actor alarm: deliver the webhook outbox and
    * queued ephemeral events, redrive node deliveries and A2A egress, delete
@@ -280,6 +301,26 @@ export function createActorRuntime(options: ActorRuntimeOptions): ActorRuntime {
   const presence = new InProcessPresence(realtime, { db, sweepIntervalMs: 0 });
   realtime.setPresenceTracker(presence);
   const kv = new ActorKeyValueStore(sql);
+  // The gateway's stored-size records (`fileStored`). Trust and freshness:
+  // - Only the gateway writes them: actor methods are invoked through the
+  //   control plane with the gateway's credential, and the gateway records
+  //   only after its blob store accepted a PUT whose signed size it verified,
+  //   with the byte count it stored. Nothing a client sends reaches here.
+  // - A record exists only for a key of this workspace with a `pending` file
+  //   row, and is read only by upload completion of a `pending` file.
+  // - Relaycast deletes a blob only after its file row is gone (the
+  //   `files_enqueue_object_cleanup` trigger queues it on row delete), and a
+  //   file without a pending row never completes, so a record cannot vouch for
+  //   bytes relaycast deleted. Bytes removed outside relaycast (a bucket
+  //   lifecycle rule, an operator) could be vouched for until the record
+  //   expires; the TTL bounds that window to the upload URL's lifetime plus a
+  //   margin, after which completion asks the gateway again. A re-PUT within
+  //   the URL's lifetime stores the same signed size and refreshes the record.
+  const storedSize = async (storageKey: string): Promise<number | null> => {
+    const value = await kv.get(`${FILE_STORED_KV_PREFIX}${storageKey}`);
+    const size = value === null ? NaN : Number(value);
+    return Number.isSafeInteger(size) && size > 0 ? size : null;
+  };
   // Blob deletes share one time budget per maintenance pass, so a gateway that
   // hangs can hold the mailbox for at most that long.
   let blobDeadline = 0;
@@ -297,6 +338,7 @@ export function createActorRuntime(options: ActorRuntimeOptions): ActorRuntime {
     secret: options.fileSigningSecret,
     fetch: maintenanceOnly(blobDeleteFetch),
     statFetch,
+    storedSize,
   });
   const messageTtlDays = options.config?.retention?.messageTtlDays ?? null;
   const webhookQueue = new ActorEventQueue(
@@ -445,6 +487,27 @@ export function createActorRuntime(options: ActorRuntimeOptions): ActorRuntime {
           ? await importer.run(parsed.data, tag)
           : { status: 400, body: { ok: false, error: { code: 'invalid_request', message: parsed.error.issues[0]?.message ?? 'Invalid import request' } } };
         return { status: result.status, headers: [['content-type', 'application/json']], body: JSON.stringify(result.body) };
+      });
+    },
+
+    fileStored(key, size) {
+      const args = FileStoredArgsSchema.safeParse({ key, size });
+      if (!args.success) return Promise.reject(new Error(`fileStored: ${args.error.issues[0]?.message ?? 'invalid arguments'}`));
+      const [keyWorkspace, fileId] = args.data.key.split('/');
+      if (keyWorkspace !== options.workspaceId) {
+        return Promise.reject(new Error('fileStored: the storage key belongs to another workspace'));
+      }
+      ensureSchema();
+      return finish(async () => {
+        const [pending] = sql.exec(
+          "SELECT 1 AS found FROM files WHERE id = ? AND workspace_id = ? AND storage_key = ? AND status = 'pending'",
+          fileId,
+          options.workspaceId,
+          args.data.key,
+        );
+        if (!pending) return { recorded: false };
+        await kv.put(`${FILE_STORED_KV_PREFIX}${args.data.key}`, String(args.data.size), { expirationTtl: FILE_STORED_TTL_SECONDS });
+        return { recorded: true };
       });
     },
 

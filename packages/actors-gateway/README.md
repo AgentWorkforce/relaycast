@@ -142,11 +142,16 @@ a `FileStore` (`src/files/store.ts`):
 - `PUT` + `put` token: `content-type` must equal the signed type (400
   `content_type_mismatch`); `content-length` (if present) and the bytes read
   must equal the signed size (400 `size_mismatch`; reading stops past it).
-  The content type is stored with the object.
+  The content type is stored with the object. Once stored, the gateway calls
+  `fileStored(key, size)` on the key's workspace actor (5s budget) before
+  answering, so the actor completes the upload from that record without
+  calling the gateway back; if the call fails the PUT still succeeds (logged as
+  `files.record_stored_failed`) and completion falls back to `stat`.
 - `GET` + `get`: streams with the stored `content-type`, `content-length`,
   `x-content-type-options: nosniff`, and `content-security-policy: sandbox`
   for active types (HTML, SVG, XML, scripts, PDF).
-- `HEAD` + `stat`: 200 with `x-relaycast-object-size`, or 404.
+- `HEAD` + `stat`: 200 with `x-relaycast-object-size`, or 404. Completion's
+  fallback when the actor holds no `fileStored` record.
 - `DELETE` + `delete`: 204; already gone is success; any failure is 500
   `delete_failed` so the engine's cleanup queue retries.
 - 403 `forbidden` for a bad or expired token, 405 `method_not_allowed` for a

@@ -155,6 +155,46 @@ describe.each(STORES)('/_relayfiles with the %s store', (kind, fileStore) => {
 
 });
 
+describe('/_relayfiles reports stored uploads to the workspace actor', () => {
+  const unused = () => { throw new Error('handle is not expected here'); };
+
+  it("calls fileStored on the key's workspace actor with the stored size before answering the PUT", async () => {
+    const stored: { key: string; size: number }[] = [];
+    harness = await startFileHarness({
+      workspace: (id) => (id === WORKSPACE_ID ? { handle: unused, fileStored: (key, size) => { stored.push({ key, size }); return { recorded: true }; } } : undefined),
+    });
+    const put = await fetch(await signed({ key: KEY, op: 'put', size: BYTES.byteLength, type: 'text/html' }), { method: 'PUT', headers: { 'content-type': 'text/html' }, body: BYTES });
+    expect(put.status).toBe(200);
+    expect(stored).toEqual([{ key: KEY, size: BYTES.byteLength }]);
+    expect(harness.controlPlane.invocations.map(({ actorId, method, args }) => ({ actorId, method, args })))
+      .toEqual([{ actorId: WORKSPACE_ID, method: 'fileStored', args: [KEY, BYTES.byteLength] }]);
+
+    // A refused upload stores nothing and reports nothing.
+    const refused = await fetch(await signed({ key: KEY, op: 'put', size: BYTES.byteLength, type: 'text/html' }), { method: 'PUT', headers: { 'content-type': 'text/html' }, body: BYTES.subarray(0, 3) });
+    expect(refused.status).toBe(400);
+    expect(stored).toHaveLength(1);
+  });
+
+  it('still answers the PUT when fileStored fails, and logs a warning', async () => {
+    harness = await startFileHarness({
+      workspace: () => ({ handle: unused, fileStored: () => { throw new Error('actor fell over'); } }),
+    });
+    const put = await fetch(await signed({ key: KEY, op: 'put', size: BYTES.byteLength, type: 'text/html' }), { method: 'PUT', headers: { 'content-type': 'text/html' }, body: BYTES });
+    expect(put.status).toBe(200);
+    expect(await readJson(put)).toEqual({ ok: true });
+    expect(harness.logs).toContainEqual(expect.objectContaining({ level: 'warn', event: 'files.record_stored_failed', workspace_id: WORKSPACE_ID }));
+    // The bytes are stored: completion's fallback stat finds them.
+    const head = await fetch(await signed({ key: KEY, op: 'stat' }), { method: 'HEAD' });
+    expect(head.headers.get(OBJECT_SIZE_HEADER)).toBe(String(BYTES.byteLength));
+
+    // A control plane that cannot be reached is the same.
+    harness.controlPlane.interceptInvoke = () => ({ status: 503, body: { error: { code: 'unavailable', message: 'down' } } });
+    const again = await fetch(await signed({ key: KEY, op: 'put', size: BYTES.byteLength, type: 'text/html' }), { method: 'PUT', headers: { 'content-type': 'text/html' }, body: BYTES });
+    expect(again.status).toBe(200);
+    expect(harness.logs.filter((line) => line.event === 'files.record_stored_failed')).toHaveLength(2);
+  });
+});
+
 describe('/_relayfiles with a failing store', () => {
   it('answers 500 delete_failed when the store cannot delete', async () => {
     harness = await startFileHarness({

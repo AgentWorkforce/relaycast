@@ -8,6 +8,7 @@
  *
  *   POST {origin}/v1/projects/{project}/actors/Workspace/{id}/invoke
  *        {requestId, method, args, homeRegion?} → {outcome}
+ *        (method `create`, `handle` or `fileStored`)
  *   POST {origin}/v1/projects/{project}/actors/Workspace/{id}/find-websocket
  *        {metadata, homeRegion?} → {websocketUrl, homeRegion, connectByMs}
  *   GET  {origin}/healthz
@@ -27,6 +28,11 @@ const DEFAULT_INVOKE_TIMEOUT_MS = 60_000;
  * host claim plus the first schema commit, so it gets its own, longer budget.
  */
 const DEFAULT_CREATE_TIMEOUT_MS = 180_000;
+/**
+ * `fileStored` holds a signed upload's answer, so it gets a short budget: past
+ * it the upload still succeeds and completion falls back to asking the gateway.
+ */
+const DEFAULT_FILE_STORED_TIMEOUT_MS = 5_000;
 const FIND_WEBSOCKET_TIMEOUT_MS = 15_000;
 const HEALTH_TIMEOUT_MS = 3_000;
 /** The control plane caps socket metadata at 16 KiB. */
@@ -57,6 +63,8 @@ export interface ActorClient {
   handle(workspaceId: string, request: ActorHttpRequest, options?: CallOptions): Promise<ActorHttpResponse>;
   /** One migration import step (`migration/protocol.ts`); the body is the parsed JSON request. */
   importData(workspaceId: string, body: unknown, credentialTag: string, options?: CallOptions): Promise<ActorHttpResponse>;
+  /** Tell the workspace actor the gateway stored `size` bytes under `key` (a signed upload). */
+  fileStored(workspaceId: string, key: string, size: number, options?: CallOptions): Promise<{ recorded: boolean }>;
   findWebsocket(workspaceId: string, metadata: unknown): Promise<SocketGrant>;
   /** Whether the control plane answers its health check. */
   healthy(): Promise<boolean>;
@@ -72,6 +80,8 @@ export interface ActorClientOptions {
   invokeTimeoutMs?: number;
   /** Budget for one `create` call (RELAYCAST_ACTOR_CREATE_TIMEOUT_MS). */
   createTimeoutMs?: number;
+  /** Budget for one `fileStored` call. Default 5s. */
+  fileStoredTimeoutMs?: number;
 }
 
 const ActorHttpResponseSchema = z.object({
@@ -79,6 +89,7 @@ const ActorHttpResponseSchema = z.object({
   headers: z.array(z.tuple([z.string(), z.string()])),
   body: z.string(),
 });
+const FileStoredResultSchema = z.object({ recorded: z.boolean() });
 
 const OutcomeSchema = z.discriminatedUnion('type', [
   z.object({ type: z.literal('completed'), result: z.unknown() }),
@@ -133,6 +144,7 @@ export function createActorClient(options: ActorClientOptions): ActorClient {
   const fetchImpl = options.fetch ?? globalThis.fetch;
   const invokeTimeoutMs = options.invokeTimeoutMs ?? DEFAULT_INVOKE_TIMEOUT_MS;
   const createTimeoutMs = options.createTimeoutMs ?? DEFAULT_CREATE_TIMEOUT_MS;
+  const fileStoredTimeoutMs = options.fileStoredTimeoutMs ?? DEFAULT_FILE_STORED_TIMEOUT_MS;
   const authHeaders: Record<string, string> = options.secret ? { authorization: `Bearer ${options.secret}` } : {};
 
   async function post(path: string, body: unknown, requestId: string, signal: AbortSignal): Promise<Response> {
@@ -185,16 +197,22 @@ export function createActorClient(options: ActorClientOptions): ActorClient {
     return parsed.data.outcome;
   }
 
-  async function invoke(actorId: string, method: 'create' | 'handle' | 'importData', args: unknown[], callOptions?: CallOptions): Promise<ActorHttpResponse> {
-    // An import's first step activates a brand-new actor, like `create`.
-    const signal = withTimeout(method === 'handle' ? invokeTimeoutMs : createTimeoutMs, callOptions?.signal);
+  async function invoke<T>(
+    actorId: string,
+    method: 'create' | 'handle' | 'importData' | 'fileStored',
+    args: unknown[],
+    timeoutMs: number,
+    resultSchema: z.ZodType<T>,
+    callOptions?: CallOptions,
+  ): Promise<T> {
+    const signal = withTimeout(timeoutMs, callOptions?.signal);
     // A `not_executed` outcome means the host never ran the call; one retry, as the SDK does.
     let outcome = await invokeOnce(actorId, method, args, signal);
     if (outcome.type === 'not_executed') outcome = await invokeOnce(actorId, method, args, signal);
     switch (outcome.type) {
       case 'completed': {
-        const result = ActorHttpResponseSchema.safeParse(outcome.result);
-        if (!result.success) throw new ActorCallError('protocol', `actor ${method} returned no HTTP response`);
+        const result = resultSchema.safeParse(outcome.result);
+        if (!result.success) throw new ActorCallError('protocol', `actor ${method} returned an unexpected result`);
         return result.data;
       }
       case 'failed':
@@ -207,9 +225,15 @@ export function createActorClient(options: ActorClientOptions): ActorClient {
   }
 
   return {
-    create: (workspaceId, request, credentialTag, callOptions) => invoke(workspaceId, 'create', [request, credentialTag], callOptions),
-    handle: (workspaceId, request, callOptions) => invoke(workspaceId, 'handle', [request], callOptions),
-    importData: (workspaceId, body, credentialTag, callOptions) => invoke(workspaceId, 'importData', [body, credentialTag], callOptions),
+    create: (workspaceId, request, credentialTag, callOptions) =>
+      invoke(workspaceId, 'create', [request, credentialTag], createTimeoutMs, ActorHttpResponseSchema, callOptions),
+    handle: (workspaceId, request, callOptions) =>
+      invoke(workspaceId, 'handle', [request], invokeTimeoutMs, ActorHttpResponseSchema, callOptions),
+    fileStored: (workspaceId, key, size, callOptions) =>
+      invoke(workspaceId, 'fileStored', [key, size], fileStoredTimeoutMs, FileStoredResultSchema, callOptions),
+    // An import's first step activates a brand-new actor, like `create`.
+    importData: (workspaceId, body, credentialTag, callOptions) =>
+      invoke(workspaceId, 'importData', [body, credentialTag], createTimeoutMs, ActorHttpResponseSchema, callOptions),
 
     async findWebsocket(workspaceId, metadata) {
       const encoded = JSON.stringify(metadata);
