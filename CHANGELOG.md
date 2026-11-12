@@ -31,9 +31,6 @@ Packages without a separate changelog are covered by the cross-package notes bel
 - Channel and thread realtime events retain arbitrary rich blocks across engine workspace frames and TypeScript node deliveries; DM transports preserve blocks when present.
 - Relayfile callbacks deliver events for embedded and internal path wildcards, including per-issue Linear files and Jira comment paths.
 - Relayfile deletion notifications reach subscribed agents, including typed provider removals without a record snapshot.
-
-### Fixed
-
 - Self-hosted servers on PostgreSQL no longer return `500 deadlock detected` when several agents post to the same channel at once; concurrent channel posts now serialize per recipient without lock cycles.
 
 ## [12.8.0] - 2026-11-04
