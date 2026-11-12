@@ -30,6 +30,15 @@ export interface GatewayConfig {
   port: number;
   /** Control plane origin (`http://127.0.0.1:7100` for `durable-actors dev`). */
   controlPlaneUrl: string;
+  /**
+   * Where the gateway dials actor sockets (DURABLE_ACTORS_SOCKET_ORIGIN): the
+   * control plane hands out socket URLs on its public URL, which the gateway
+   * cannot always resolve or reach from inside the cluster (no hairpin or
+   * split DNS). Set, the grant's path and query are dialled at this origin
+   * instead (http -> ws, https -> wss), with the grant's Host header and TLS
+   * server name. Unset: the grant URL as given.
+   */
+  socketOrigin?: string;
   projectId: string;
   /** Application credential for the control plane; a local runtime needs none. */
   controlPlaneSecret: string | undefined;
@@ -119,6 +128,7 @@ const integer = (min: number) => z.string().regex(/^[0-9]+$/, 'must be a non-neg
 const EnvSchema = z.object({
   PORT: integer(0).pipe(z.number().max(65535)).default(8787),
   DURABLE_ACTORS_CONTROL_PLANE_URL: origin,
+  DURABLE_ACTORS_SOCKET_ORIGIN: origin.optional(),
   DURABLE_ACTORS_PROJECT_ID: component('DURABLE_ACTORS_PROJECT_ID'),
   DURABLE_ACTORS_HOME_REGION: component('DURABLE_ACTORS_HOME_REGION').optional(),
   RELAYCAST_PUBLIC_WORKSPACE_CREATE: z.enum(['true', 'false']).default('true'),
@@ -225,6 +235,7 @@ export function loadConfig(env: Env = process.env, readFile?: (path: string) => 
   return {
     port: settings.PORT,
     controlPlaneUrl: settings.DURABLE_ACTORS_CONTROL_PLANE_URL,
+    ...(settings.DURABLE_ACTORS_SOCKET_ORIGIN === undefined ? {} : { socketOrigin: settings.DURABLE_ACTORS_SOCKET_ORIGIN }),
     projectId: settings.DURABLE_ACTORS_PROJECT_ID,
     controlPlaneSecret,
     homeRegion: settings.DURABLE_ACTORS_HOME_REGION,

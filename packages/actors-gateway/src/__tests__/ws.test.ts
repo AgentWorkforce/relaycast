@@ -264,4 +264,27 @@ describe('WebSocket bridge', () => {
     expect(harness.gateway.socketCount).toBe(0);
     expect(harness.logs.find((entry) => entry.event === 'socket.client_gone')).toMatchObject({ path: '/v1/ws', workspace_id: WORKSPACE_ID });
   });
+
+  it('dials actor sockets through DURABLE_ACTORS_SOCKET_ORIGIN when the public socket host cannot be reached', async () => {
+    const unreachable = 'actors.unresolvable.invalid:443';
+    // Without a socket origin the gateway dials the public URL, which does not
+    // resolve: the client is closed with 1011 (what relaycast-actors-bench saw).
+    harness = await startHarness({ workspace: grantingWorkspace, controlPlane: { socketHost: unreachable } });
+    const refused = await connect(`${harness.baseUrl.replace('http', 'ws')}/v1/ws?token=${await harness.credential()}`);
+    const [failedCode] = await once<[number, Buffer]>(refused, 'close');
+    expect(failedCode).toBe(1011);
+    expect(harness.logs.find((entry) => entry.event === 'socket.upstream_failed')).toBeDefined();
+    expect(harness.controlPlane.socketHosts).toEqual([]);
+    await harness.close();
+
+    harness = await startHarness({ workspace: grantingWorkspace, controlPlane: { socketHost: unreachable }, socketOriginIsControlPlane: true });
+    const client = await connect(`${harness.baseUrl.replace('http', 'ws')}/v1/ws?token=${await harness.credential()}`);
+    await waitFor(() => harness!.controlPlane.sessions.length === 1);
+    // Dialled at the in-cluster origin, with the public host the control plane signed.
+    expect(harness.controlPlane.socketHosts).toEqual([unreachable]);
+    const echoed = once<[Buffer]>(client, 'message');
+    client.send('{"type":"ping"}');
+    expect(JSON.parse((await echoed)[0].toString())).toEqual({ echo: '{"type":"ping"}' });
+    client.close();
+  });
 });

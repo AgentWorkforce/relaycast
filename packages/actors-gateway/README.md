@@ -37,6 +37,7 @@ so the gateway does not depend on it; replies are validated with zod.
 | `DURABLE_ACTORS_PROJECT_ID` | required | Project id (`local` for the dev runtime) |
 | `DURABLE_ACTORS_SECRET` (alias `DURABLE_ACTORS_API_KEY`, or `_FILE`) | unset | Application credential sent as `Authorization: Bearer`; a local runtime needs none |
 | `DURABLE_ACTORS_HOME_REGION` | unset | Passed as `homeRegion` on every call |
+| `DURABLE_ACTORS_SOCKET_ORIGIN` | unset | Origin to dial actor sockets at, e.g. the in-cluster control plane (`http://<release>-durable-actors.<ns>.svc:7100`). The control plane hands out socket URLs on its public URL; without split-horizon DNS or hairpin routing the gateway cannot reach that host and every `/v1/ws` and `/v1/node/ws` client is closed with 1011. Set, the grant's path and query are dialled here (`http`→`ws`, `https`→`wss`) with the grant's host as `Host` and TLS server name. |
 | `RELAYCAST_FILE_SIGNING_SECRET` (or `_FILE`) | required | HMAC secret shared with the actors, which sign `/_relayfiles` URLs; at least 32 characters |
 | `RELAYCAST_CREDENTIAL_KEYRING` (or `_FILE`) | required | `{"current":"a","keys":{"a":"<secret ≥16 chars>"}}`; signs new workspaces' tags, verifies every credential's tag. Rotate by adding a version and making it current; removing a version locks out its credentials |
 | `RELAYCAST_INTERNAL_SECRET` (or `_FILE`) | unset | Enables `/internal/*`; at least 32 characters, and the actors must be configured with the same value |
