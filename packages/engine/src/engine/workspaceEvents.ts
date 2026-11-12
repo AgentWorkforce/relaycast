@@ -79,6 +79,7 @@ export async function appendWorkspaceEvent(
   workspaceId: string,
   input: WorkspaceEventInput,
 ): Promise<number | null> {
+  if (coalesces(db)) return (await coalescedAppend(db, [{ workspaceId, input }]))[0];
   try {
     const [row] = await withSeqLock(db, workspaceSeqLock(workspaceId), (tx) => buildWorkspaceEventWrite(tx, workspaceId, input));
     return row?.seq ?? null;
@@ -102,6 +103,7 @@ export async function appendWorkspaceEventBatch(
   db: EngineDb,
   inputs: readonly ScopedWorkspaceEventInput[],
 ): Promise<Array<number | null>> {
+  if (coalesces(db)) return coalescedAppend(db, inputs);
   const assigned: Array<number | null> = [];
 
   for (let offset = 0; offset < inputs.length; offset += WORKSPACE_EVENT_APPEND_BATCH_SIZE) {
@@ -178,6 +180,129 @@ export async function appendWorkspaceEventBatch(
   }
 
   return assigned;
+}
+
+// --- PostgreSQL append coalescing ---------------------------------------------
+//
+// Every append holds the workspace's sequence lock through its commit, so one
+// workspace's log takes about one commit per append (relaycast#658). On a
+// PostgreSQL pool handle, appends to the same workspace are group-committed
+// instead: while one flush transaction runs, later appends queue, and the next
+// flush writes all of them in one transaction under the same lock. Seq stays
+// commit-ordered and gapless (each flush allocates MAX + 1.. under the lock),
+// queue order is seq order, and each caller still receives its own seq.
+// Transaction handles and SQLite/D1 keep the direct path.
+
+/** Rows per INSERT inside a flush (4 bound parameters each, far below PostgreSQL's limit). */
+const COALESCED_STATEMENT_ROWS = 200;
+/** Events per flush transaction; the rest wait for the next flush. */
+const COALESCED_FLUSH_MAX = 1000;
+
+interface PendingAppend {
+  input: WorkspaceEventInput;
+  resolve: (seq: number | null) => void;
+}
+
+interface WorkspaceAppendQueue {
+  pending: PendingAppend[];
+  flushing: boolean;
+}
+
+const appendQueues = new WeakMap<object, Map<string, WorkspaceAppendQueue>>();
+
+/** True for a PostgreSQL pool handle (not a transaction): appends there are coalesced. */
+function coalesces(db: EngineDb): boolean {
+  try {
+    return !sqlx.isNoopLock(db) && !sqlx.inPgTransaction(db);
+  } catch {
+    // A handle without a known dialect takes the direct, best-effort path.
+    return false;
+  }
+}
+
+/** Enqueue each event on its workspace's queue; resolves to seqs aligned with `inputs`. */
+function coalescedAppend(db: EngineDb, inputs: readonly ScopedWorkspaceEventInput[]): Promise<Array<number | null>> {
+  let queues = appendQueues.get(db);
+  if (!queues) appendQueues.set(db, queues = new Map());
+  const byQueue = queues;
+  return Promise.all(inputs.map(({ workspaceId, input }) => new Promise<number | null>((resolve) => {
+    let queue = byQueue.get(workspaceId);
+    if (!queue) byQueue.set(workspaceId, queue = { pending: [], flushing: false });
+    queue.pending.push({ input, resolve });
+    if (!queue.flushing) void drainAppendQueue(db, byQueue, workspaceId, queue);
+  })));
+}
+
+async function drainAppendQueue(
+  db: EngineDb,
+  queues: Map<string, WorkspaceAppendQueue>,
+  workspaceId: string,
+  queue: WorkspaceAppendQueue,
+): Promise<void> {
+  queue.flushing = true;
+  try {
+    // Let appends issued in the same tick join the first flush.
+    await Promise.resolve();
+    while (queue.pending.length > 0) {
+      const batch = queue.pending.splice(0, COALESCED_FLUSH_MAX);
+      const seqs = await flushAppends(db, workspaceId, batch.map((item) => item.input));
+      batch.forEach((item, index) => item.resolve(seqs[index]));
+    }
+  } finally {
+    queue.flushing = false;
+    if (queue.pending.length === 0) queues.delete(workspaceId);
+    else void drainAppendQueue(db, queues, workspaceId, queue);
+  }
+}
+
+/** Append `inputs` in order in one transaction; per-event fallback if that fails. Never throws. */
+async function flushAppends(db: EngineDb, workspaceId: string, inputs: readonly WorkspaceEventInput[]): Promise<Array<number | null>> {
+  try {
+    return await withSeqLock(db, workspaceSeqLock(workspaceId), async (tx) => {
+      const seqs: number[] = [];
+      for (let offset = 0; offset < inputs.length; offset += COALESCED_STATEMENT_ROWS) {
+        const chunk = inputs.slice(offset, offset + COALESCED_STATEMENT_ROWS);
+        const values = sql.join(chunk.map((input, index) => sql`(
+          ${sql.raw(String(index + 1))}, ${input.type}, ${input.channelId ?? null}, ${JSON.stringify(input.payload)}
+        )`), sql`, `);
+        const rows = await sqlx.all<{ seq: number }>(tx, sql`
+          WITH
+            input_events(ord, type, channel_id, payload) AS (VALUES ${values}),
+            base AS MATERIALIZED (
+              SELECT COALESCE((
+                SELECT we.seq FROM workspace_events we
+                WHERE we.workspace_id = ${workspaceId}
+                ORDER BY we.seq DESC
+                LIMIT 1
+              ), 0) AS seq
+            )
+          INSERT INTO workspace_events (workspace_id, seq, type, channel_id, payload)
+          SELECT ${workspaceId}, base.seq + input_events.ord::int, input_events.type, input_events.channel_id, input_events.payload
+          FROM input_events CROSS JOIN base
+          ORDER BY input_events.ord
+          RETURNING seq
+        `);
+        if (rows.length !== chunk.length) {
+          throw new Error(`expected ${chunk.length} appended events, received ${rows.length}`);
+        }
+        seqs.push(...rows.map((row) => Number(row.seq)).sort((a, b) => a - b));
+      }
+      return seqs;
+    });
+  } catch (err) {
+    if (inputs.length === 1) {
+      console.warn('[workspace.events] append failed', {
+        workspace_id: workspaceId,
+        event_type: inputs[0].type,
+        error: err instanceof Error ? err.message : String(err),
+      });
+      return [null];
+    }
+    // One bad event must not drop the events coalesced with it.
+    const seqs: Array<number | null> = [];
+    for (const input of inputs) seqs.push(...await flushAppends(db, workspaceId, [input]));
+    return seqs;
+  }
 }
 
 export async function appendWorkspaceEvents(
