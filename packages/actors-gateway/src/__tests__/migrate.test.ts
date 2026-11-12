@@ -91,6 +91,8 @@ describe('relaycast-migrate import', () => {
     expect(await main(['import', '--dir', '/nowhere', '--gateway', 'http://127.0.0.1:1'], {}, (line) => out.push(line))).toBe(64);
     expect(await main(['import', '--dir', '/nowhere'], {}, (line) => out.push(line))).toBe(64);
     expect(await main(['bogus'], {}, (line) => out.push(line))).toBe(64);
+    expect(await main(['verify-realtime'], {}, (line) => out.push(line))).toBe(64);
+    expect(await main(['verify-realtime', '--gateway', 'http://127.0.0.1:1'], {}, (line) => out.push(line))).toBe(64);
   });
 });
 

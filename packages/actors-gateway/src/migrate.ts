@@ -16,6 +16,12 @@
  *       workspace finished with the manifest's counts and digests.
  *   relaycast-migrate abort  --dir <export> --gateway <url> --workspace <id>
  *       Remove a failed import's rows so the actor is empty again.
+ *   relaycast-migrate verify-realtime --gateway <url>
+ *       Realtime through the gateway, end to end: create a throwaway
+ *       workspace, stream it over /v1/ws with an observer token, post, wait
+ *       for the event, delete the workspace. Fails (exit 1) when the gateway
+ *       cannot bridge actor sockets (e.g. an unreachable control plane
+ *       public URL: see DURABLE_ACTORS_SOCKET_ORIGIN).
  *
  * Copy files first: a workspace serves as soon as its import finishes.
  * Output is counts, ids and digests only; no credential or file content.
@@ -38,7 +44,7 @@ interface ManifestTable { name: string; columns: string[]; count: number; sha256
 interface Manifest { format: number; run_id: string; workspace_id: string; tables: ManifestTable[] }
 
 export interface MigrateArgs {
-  command: 'files' | 'import' | 'abort';
+  command: 'files' | 'import' | 'abort' | 'verify-realtime';
   dir: string;
   workspaces: string[];
   gateway?: string;
@@ -47,8 +53,8 @@ export interface MigrateArgs {
 
 export function parseArgs(argv: readonly string[]): MigrateArgs {
   const [command, ...rest] = argv;
-  if (command !== 'files' && command !== 'import' && command !== 'abort') {
-    throw new UsageError('usage: relaycast-migrate files|import|abort --dir <export> ...');
+  if (command !== 'files' && command !== 'import' && command !== 'abort' && command !== 'verify-realtime') {
+    throw new UsageError('usage: relaycast-migrate files|import|abort|verify-realtime ...');
   }
   const args: Partial<MigrateArgs> & { workspaces: string[] } = { command, workspaces: [] };
   for (let i = 0; i < rest.length; i += 1) {
@@ -62,7 +68,7 @@ export function parseArgs(argv: readonly string[]): MigrateArgs {
     else if (flag === '--workspace') args.workspaces.push(value);
     else throw new UsageError(`unknown argument ${flag}`);
   }
-  if (!args.dir) throw new UsageError('--dir is required');
+  if (!args.dir && command !== 'verify-realtime') throw new UsageError('--dir is required');
   if (command !== 'files' && !args.gateway) throw new UsageError('--gateway is required');
   if (command === 'files' && !args.from) throw new UsageError('--from is required');
   if (command === 'abort' && args.workspaces.length !== 1) throw new UsageError('abort takes exactly one --workspace');
@@ -236,6 +242,54 @@ export async function abortImport(args: MigrateArgs, secret: string, out: Out): 
   return result.status === 200;
 }
 
+export async function verifyRealtime(args: MigrateArgs, secret: string, out: Out, timeoutMs = 30_000): Promise<boolean> {
+  const call = async (method: string, path: string, token: string, body?: unknown) => {
+    const response = await fetch(`${args.gateway}${path}`, {
+      method,
+      headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
+      ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+      redirect: 'manual',
+    });
+    const json = (await response.json().catch(() => ({}))) as Envelope;
+    if (!response.ok) throw new Error(`${method} ${path}: HTTP ${response.status} ${json.error?.code ?? ''}`);
+    return (json.data ?? {}) as Record<string, string>;
+  };
+  let workspaceId: string | undefined;
+  try {
+    const workspace = await call('POST', '/internal/workspaces', secret, { name: 'relaycast-migrate-verify-realtime' });
+    workspaceId = workspace.workspace_id;
+    const key = workspace.api_key!;
+    const agent = await call('POST', '/v1/agents', key, { name: 'verify-realtime' });
+    const observer = await call('POST', '/v1/observer-tokens', key, { name: 'verify-realtime', scopes: ['stream:read', 'messages:read', 'channels:read'] });
+    const text = `verify-realtime ${Date.now()}`;
+    const socket = new WebSocket(`${args.gateway!.replace(/^http/, 'ws')}/v1/ws?token=${encodeURIComponent(observer.token!)}`);
+    const opened = new Promise<void>((resolve, reject) => {
+      socket.addEventListener('open', () => resolve());
+      socket.addEventListener('error', () => reject(new Error('the /v1/ws upgrade failed')));
+    });
+    const received = new Promise<void>((resolve, reject) => {
+      const timer = setTimeout(() => reject(new Error(`no realtime event within ${timeoutMs} ms`)), timeoutMs);
+      socket.addEventListener('message', (event) => { if (String(event.data).includes(text)) { clearTimeout(timer); resolve(); } });
+      socket.addEventListener('close', (event) => { clearTimeout(timer); reject(new Error(`the socket closed (${event.code}${event.reason ? ` ${event.reason}` : ''})`)); });
+    });
+    received.catch(() => {});
+    await call('POST', '/v1/channels', agent.token!, { name: 'verify-realtime' });
+    await opened;
+    socket.send(JSON.stringify({ type: 'subscribe', channels: ['verify-realtime'] }));
+    await new Promise((resolve) => setTimeout(resolve, 1000));
+    await call('POST', '/v1/channels/verify-realtime/messages', agent.token!, { text });
+    await received;
+    socket.close();
+    out('verify-realtime: a new post streamed over /v1/ws through the gateway');
+    return true;
+  } catch (error) {
+    out(`verify-realtime: FAILED: ${(error as Error).message}`);
+    return false;
+  } finally {
+    if (workspaceId) await call('DELETE', `/internal/workspaces/${workspaceId}`, secret).catch(() => out('verify-realtime: could not delete the throwaway workspace'));
+  }
+}
+
 export async function main(argv: readonly string[], env: NodeJS.ProcessEnv = process.env, out: Out = (line) => process.stdout.write(`${line}\n`)): Promise<number> {
   let args: MigrateArgs;
   try {
@@ -253,6 +307,7 @@ export async function main(argv: readonly string[], env: NodeJS.ProcessEnv = pro
     }
     const secret = secretFromEnv(env, 'RELAYCAST_INTERNAL_SECRET');
     if (!secret) throw new UsageError('RELAYCAST_INTERNAL_SECRET (or _FILE) is required');
+    if (args.command === 'verify-realtime') return (await verifyRealtime(args, secret, out)) ? 0 : 1;
     return (await (args.command === 'import' ? importWorkspaces(args, secret, out) : abortImport(args, secret, out))) ? 0 : 1;
   } catch (error) {
     out(`relaycast-migrate: ${(error as Error).message}`);
