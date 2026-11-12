@@ -4,6 +4,7 @@ import { alias, channels, workspaces } from '../db/tables.js';
 import { sha256Hex } from '../lib/crypto.js';
 import { issueCredential } from '../auth/credentials.js';
 import { codedError } from '../lib/httpError.js';
+import * as sqlx from '../db/sqlx.js';
 import { runAtomicWrites } from '../ports/database.js';
 import { generateId } from './snowflake.js';
 
@@ -432,7 +433,15 @@ export async function setWorkspaceExpiry(
   const updated = await db
     .update(workspaces)
     .set({ expiresAt })
-    .where(and(eq(workspaces.id, workspaceId), or(sql`${workspaces.expiresAt} IS NULL`, gt(workspaces.expiresAt, now))))
+    // Still live by the request's clock and by the database's own at the write: a deletion that
+    // pulled the deadline to now between the two is never undone.
+    .where(and(
+      eq(workspaces.id, workspaceId),
+      or(
+        sql`${workspaces.expiresAt} IS NULL`,
+        and(gt(workspaces.expiresAt, now), sql`${workspaces.expiresAt} > ${sqlx.now(db)}`),
+      ),
+    ))
     .returning({ id: workspaces.id, expiresAt: workspaces.expiresAt });
   const [row] = updated;
   if (row) return { ok: true, workspaceId: row.id, expiresAt: row.expiresAt ?? null };
