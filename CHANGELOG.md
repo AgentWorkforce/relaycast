@@ -30,7 +30,7 @@ Packages without a separate changelog are covered by the cross-package notes bel
 ### Fixed
 
 - Durable-actors workspaces answer `GET /v1/inbox` `unread_channels` and `recent_reactions` (and every other raw-SQL read) as objects instead of positional arrays.
-- Self-hosting on durable-actors: completing a file upload (`POST /v1/files/:id/complete`) no longer needs the workspace actor to reach `RELAYCAST_PUBLIC_URL`. The gateway reports each stored upload to the actor, which verifies the size from that record and falls back to asking the gateway only without one; this fixes 500s where the public name does not resolve or route from actor pods (e.g. a customer VPC).
+- Self-hosting on durable-actors: completing a file upload (`POST /v1/files/:id/complete`) no longer needs the workspace actor to reach `RELAYCAST_PUBLIC_URL`. The gateway reports each stored upload to the actor and acknowledges the PUT only once the actor recorded it (503 `workspace_unavailable` with `Retry-After` otherwise; retry the same signed URL), and completion verifies the size from that record; this fixes 500s where the public name does not resolve or route from actor pods (e.g. a customer VPC).
 - Channel and thread realtime events retain arbitrary rich blocks across engine workspace frames and TypeScript node deliveries; DM transports preserve blocks when present.
 - Relayfile callbacks deliver events for embedded and internal path wildcards, including per-issue Linear files and Jira comment paths.
 - Relayfile deletion notifications reach subscribed agents, including typed provider removals without a record snapshot.

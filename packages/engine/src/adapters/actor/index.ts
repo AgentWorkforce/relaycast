@@ -160,7 +160,9 @@ export interface ActorRuntime {
    * The gateway stored `size` bytes under `key` for a signed upload (`PUT
    * /_relayfiles`, which already enforced the signed size). The actor keeps
    * the size so upload completion verifies it without calling the gateway
-   * back (an actor pod may be unable to reach the public origin). Records
+   * back (an actor pod may be unable to reach the public origin). The
+   * gateway acknowledges the PUT only once this succeeds; a retried PUT calls
+   * it again and refreshes the record. Records
    * only for a pending upload of this workspace: a key of another workspace
    * or an invalid size throws; a key with no pending file answers
    * `{ recorded: false }`.
@@ -301,7 +303,10 @@ export function createActorRuntime(options: ActorRuntimeOptions): ActorRuntime {
   const presence = new InProcessPresence(realtime, { db, sweepIntervalMs: 0 });
   realtime.setPresenceTracker(presence);
   const kv = new ActorKeyValueStore(sql);
-  // The gateway's stored-size records (`fileStored`). Trust and freshness:
+  // The gateway's stored-size records (`fileStored`). A current gateway
+  // answers a PUT only after recording it, so completion reads the record;
+  // the signed HTTP stat behind it is kept only for gateways that predate
+  // `fileStored` during a rolling deploy. Trust and freshness:
   // - Only the gateway writes them: actor methods are invoked through the
   //   control plane with the gateway's credential, and the gateway records
   //   only after its blob store accepted a PUT whose signed size it verified,

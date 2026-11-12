@@ -30,7 +30,7 @@ const DEFAULT_INVOKE_TIMEOUT_MS = 60_000;
 const DEFAULT_CREATE_TIMEOUT_MS = 180_000;
 /**
  * `fileStored` holds a signed upload's answer, so it gets a short budget: past
- * it the upload still succeeds and completion falls back to asking the gateway.
+ * it the PUT answers 503 and the client retries it.
  */
 const DEFAULT_FILE_STORED_TIMEOUT_MS = 5_000;
 const FIND_WEBSOCKET_TIMEOUT_MS = 15_000;

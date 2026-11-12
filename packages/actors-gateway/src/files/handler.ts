@@ -13,15 +13,19 @@ import { BodyTooLarge, CLOSE_AFTER, readBody, sendError } from '../http.js';
 import type { Logger } from '../log.js';
 import { errorText } from '../log.js';
 import { InvalidStorageKeyError, type FileStore } from './store.js';
+import { ActorCallError } from '../actors.js';
 
 // The signed URL is the credential (no cookies), so any origin may use it.
 const FILE_CORS_HEADERS: Readonly<Record<string, string>> = {
   'access-control-allow-origin': '*',
   'access-control-allow-methods': 'GET, PUT, OPTIONS',
   'access-control-allow-headers': 'content-type',
-  'access-control-expose-headers': 'content-length, content-type, content-disposition',
+  'access-control-expose-headers': 'content-length, content-type, content-disposition, retry-after',
   'access-control-max-age': '86400',
 };
+
+/** `Retry-After` on a PUT whose bytes were stored but not reported to the workspace actor. */
+const RECORD_STORED_RETRY_AFTER_SECONDS = 1;
 
 // Content types a browser may run script from when rendered inline: HTML,
 // any XML (an XHTML or SVG document can hide under any `+xml` type), script
@@ -38,11 +42,11 @@ export interface FileRouteContext {
   /**
    * Report a stored upload to the actor of the workspace in its key
    * (`fileStored`), so its completion needs no call back to this gateway.
-   * Awaited before the PUT is answered (the client completes right after);
-   * a failure is logged and the upload still succeeds, since completion
-   * falls back to a signed `stat`.
+   * The PUT is acknowledged only once the actor has the record: an actor
+   * may be unable to reach this gateway, so an upload it was not told about
+   * might never complete.
    */
-  recordStored?: (key: string, size: number) => Promise<unknown>;
+  recordStored: (key: string, size: number) => Promise<unknown>;
 }
 
 /** The engine's error envelope with the file route's CORS set. */
@@ -95,12 +99,21 @@ export async function serveFile(req: IncomingMessage, res: ServerResponse, url: 
       await ctx.store.put(payload.key, bytes, { size: payload.size!, contentType: payload.type! });
       // The size reported is the byte count just stored, which equals the
       // signed size (checked above): nothing the client declared.
-      if (ctx.recordStored) {
-        try {
-          await ctx.recordStored(payload.key, bytes.byteLength);
-        } catch (error) {
-          ctx.logger.warn('files.record_stored_failed', { workspace_id: payload.key.split('/')[0], error: errorText(error) });
-        }
+      // A failed or timed-out report fails the PUT with a retryable 503: the
+      // bytes are stored, and retrying the same signed URL overwrites them
+      // with the same signed size and reports again (the actor's record is
+      // an upsert), so a retry within the URL's lifetime succeeds.
+      try {
+        await ctx.recordStored(payload.key, bytes.byteLength);
+      } catch (error) {
+        ctx.logger.warn('files.record_stored_failed', {
+          workspace_id: payload.key.split('/')[0],
+          code: error instanceof ActorCallError ? error.code : null,
+          error: errorText(error),
+        });
+        return fileError(res, 503, 'workspace_unavailable', 'The upload was stored but the workspace could not be told; retry the PUT', {
+          'retry-after': String(RECORD_STORED_RETRY_AFTER_SECONDS),
+        });
       }
       const body = Buffer.from(JSON.stringify({ ok: true }));
       res.writeHead(200, { ...FILE_CORS_HEADERS, 'content-type': 'application/json', 'content-length': String(body.byteLength) });

@@ -37,7 +37,7 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 - Workspace WebSocket message, update, and thread frames preserve arbitrary rich blocks; DM transforms retain blocks when present without changing DM send/storage support.
 - Relayfile callbacks deliver valid Linear and Jira segment-glob events instead of dropping them with `path_mismatch`; matching resolves repeated slashes and dot segments while preserving case and percent escapes.
 - Relayfile inbound callbacks deliver authenticated `file.deleted` events, preserving metadata and paths when no snapshot is available.
-- Actor adapter: `ActorRuntime.fileStored(key, size)` records the size a gateway stored for a pending upload of the actor's workspace (in `_actor_kv`, kept for the upload URL's lifetime plus 15 minutes), and `SignedUrlFileStorage` takes an optional `storedSize` that `statObject` consults before its `statFetch` call, so upload completion no longer requires actor egress to the public origin.
+- Actor adapter: `ActorRuntime.fileStored(key, size)` records the size a gateway stored for a pending upload of the actor's workspace (in `_actor_kv`, kept for the upload URL's lifetime plus 15 minutes), and `SignedUrlFileStorage` takes an optional `storedSize` that `statObject` consults before its `statFetch` call (kept for gateways that predate `fileStored`), so upload completion no longer requires actor egress to the public origin.
 
 ## [12.8.0] - 2026-11-04
 

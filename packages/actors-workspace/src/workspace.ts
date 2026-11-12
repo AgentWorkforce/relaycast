@@ -129,7 +129,8 @@ export class Workspace extends Actor {
     /**
      * The gateway stored `size` bytes for the signed upload of `key`; the
      * actor keeps the size so completing the upload needs no call back to the
-     * gateway's public origin, which the actor's egress may not reach.
+     * gateway's public origin, which the actor's egress may not reach. The
+     * gateway acknowledges the PUT only once this call succeeded.
      */
     async fileStored(key: string, size: number): Promise<{ recorded: boolean }> {
         return this.db.transaction(() => this.runtime.fileStored(key, size))

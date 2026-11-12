@@ -8,6 +8,7 @@ import { LocalFileStore } from '../files/local.js';
 import { S3FileStore } from '../files/s3.js';
 import { InvalidStorageKeyError, type FileStore } from '../files/store.js';
 import { createFileStore } from '../files/index.js';
+import { createActorClient } from '../actors.js';
 import { fakeGcsStorage, fakeS3Client } from './fakeObjectStores.js';
 import { FILE_SECRET, WORKSPACE_ID, readJson, startHarness as startFileHarness, type Harness, type HarnessOptions } from './harness.js';
 
@@ -34,8 +35,15 @@ const STORES: [string, () => FileStore | undefined][] = [
   ['s3', () => new S3FileStore({ bucket: 'bkt', prefix: 'relay', region: 'us-east-1', forcePathStyle: false, client: fakeS3Client().client })],
 ];
 
+const unusedHandle = () => { throw new Error('handle is not expected here'); };
+
 describe.each(STORES)('/_relayfiles with the %s store', (kind, fileStore) => {
-  const startHarness = (options: HarnessOptions = {}) => startFileHarness({ ...options, gateway: { fileStore: fileStore(), ...options.gateway } });
+  // By default every workspace actor records stored uploads.
+  const startHarness = (options: HarnessOptions = {}) => startFileHarness({
+    workspace: () => ({ handle: unusedHandle, fileStored: () => ({ recorded: true }) }),
+    ...options,
+    gateway: { fileStore: fileStore(), ...options.gateway },
+  });
 
   it('stores an upload that matches its signed size and type, then serves, stats and deletes it', async () => {
     harness = await startHarness();
@@ -134,6 +142,95 @@ describe.each(STORES)('/_relayfiles with the %s store', (kind, fileStore) => {
     expect(within.status).toBe(200);
   });
 
+  it("answers the PUT only after fileStored recorded the stored size on the key's workspace actor", async () => {
+    const order: string[] = [];
+    const stored: { key: string; size: number }[] = [];
+    harness = await startHarness({
+      workspace: (id) => (id === WORKSPACE_ID
+        ? {
+            handle: unusedHandle,
+            fileStored: async (key, size) => {
+              await new Promise((resolve) => setTimeout(resolve, 150));
+              stored.push({ key, size });
+              order.push('recorded');
+              return { recorded: true };
+            },
+          }
+        : undefined),
+    });
+    const put = await fetch(await signed({ key: KEY, op: 'put', size: BYTES.byteLength, type: 'text/html' }), { method: 'PUT', headers: { 'content-type': 'text/html' }, body: BYTES });
+    order.push('answered');
+    expect(put.status).toBe(200);
+    expect(order).toEqual(['recorded', 'answered']);
+    expect(stored).toEqual([{ key: KEY, size: BYTES.byteLength }]);
+    expect(harness.controlPlane.invocations.map(({ actorId, method, args }) => ({ actorId, method, args })))
+      .toEqual([{ actorId: WORKSPACE_ID, method: 'fileStored', args: [KEY, BYTES.byteLength] }]);
+
+    // A refused upload stores nothing and reports nothing.
+    const refused = await fetch(await signed({ key: KEY, op: 'put', size: BYTES.byteLength, type: 'text/html' }), { method: 'PUT', headers: { 'content-type': 'text/html' }, body: BYTES.subarray(0, 3) });
+    expect(refused.status).toBe(400);
+    expect(stored).toHaveLength(1);
+  });
+
+  it('answers 503 with Retry-After when fileStored fails, and a retry of the same URL stores again and records', async () => {
+    const stored: { key: string; size: number }[] = [];
+    let failures = 1;
+    harness = await startHarness({
+      workspace: () => ({
+        handle: unusedHandle,
+        fileStored: (key, size) => {
+          if (failures-- > 0) throw new Error('actor fell over');
+          stored.push({ key, size });
+          return { recorded: true };
+        },
+      }),
+    });
+    const putUrl = await signed({ key: KEY, op: 'put', size: BYTES.byteLength, type: 'text/html' });
+    const put = () => fetch(putUrl, { method: 'PUT', headers: { 'content-type': 'text/html' }, body: BYTES });
+
+    const failed = await put();
+    expect(failed.status).toBe(503);
+    expect(failed.headers.get('retry-after')).toBe('1');
+    expect(failed.headers.get('access-control-allow-origin')).toBe('*');
+    expect((await readJson(failed)).error).toMatchObject({ code: 'workspace_unavailable' });
+    expect(harness.logs).toContainEqual(expect.objectContaining({ level: 'warn', event: 'files.record_stored_failed', workspace_id: WORKSPACE_ID, code: 'actor_error' }));
+    expect(stored).toEqual([]);
+
+    // The bytes already landed; the retry overwrites them and records.
+    const retried = await put();
+    expect(retried.status).toBe(200);
+    expect(stored).toEqual([{ key: KEY, size: BYTES.byteLength }]);
+    const head = await fetch(await signed({ key: KEY, op: 'stat' }), { method: 'HEAD' });
+    expect(head.headers.get(OBJECT_SIZE_HEADER)).toBe(String(BYTES.byteLength));
+
+    // A control plane that cannot be reached is the same.
+    harness.controlPlane.interceptInvoke = () => ({ status: 503, body: { error: { code: 'unavailable', message: 'down' } } });
+    expect((await put()).status).toBe(503);
+    const failedLines = harness.logs.filter((line) => line.event === 'files.record_stored_failed');
+    expect(failedLines).toHaveLength(2);
+
+    // Nothing secret reaches the log: not the signed URL's token, the signing secret or the key's file part.
+    const logText = JSON.stringify(harness.logs);
+    expect(logText).not.toContain(new URL(putUrl).searchParams.get('token')!);
+    expect(logText).not.toContain(FILE_SECRET);
+    for (const line of failedLines) expect(Object.keys(line).sort()).toEqual(['code', 'error', 'event', 'level', 'time', 'workspace_id']);
+  });
+
+  it('answers 503 when fileStored outlives its budget', async () => {
+    // A control plane that never answers: the actor client's fileStored budget fires.
+    const hanging: typeof globalThis.fetch = (_input, init) => new Promise((_resolve, reject) => {
+      init?.signal?.addEventListener('abort', () => reject(Object.assign(new TypeError('fetch failed'), { cause: init.signal!.reason })));
+    });
+    harness = await startHarness({
+      gateway: { actors: createActorClient({ controlPlaneUrl: 'http://cp.invalid', projectId: 'local', fetch: hanging, fileStoredTimeoutMs: 100 }) },
+    });
+    const started = Date.now();
+    const put = await fetch(await signed({ key: KEY, op: 'put', size: BYTES.byteLength, type: 'text/html' }), { method: 'PUT', headers: { 'content-type': 'text/html' }, body: BYTES });
+    expect(put.status).toBe(503);
+    expect(Date.now() - started).toBeLessThan(2_000);
+    expect(harness.logs).toContainEqual(expect.objectContaining({ event: 'files.record_stored_failed', code: 'outcome_unknown' }));
+  });
+
   it('refuses bad, expired or foreign tokens and token/method mismatches', async () => {
     harness = await startHarness();
     const forged = await fetch(`${harness.baseUrl}${ACTOR_FILE_ROUTE}?token=abc.def`);
@@ -153,46 +250,6 @@ describe.each(STORES)('/_relayfiles with the %s store', (kind, fileStore) => {
     expect(preflight.headers.get('access-control-allow-headers')).toBe('content-type');
   });
 
-});
-
-describe('/_relayfiles reports stored uploads to the workspace actor', () => {
-  const unused = () => { throw new Error('handle is not expected here'); };
-
-  it("calls fileStored on the key's workspace actor with the stored size before answering the PUT", async () => {
-    const stored: { key: string; size: number }[] = [];
-    harness = await startFileHarness({
-      workspace: (id) => (id === WORKSPACE_ID ? { handle: unused, fileStored: (key, size) => { stored.push({ key, size }); return { recorded: true }; } } : undefined),
-    });
-    const put = await fetch(await signed({ key: KEY, op: 'put', size: BYTES.byteLength, type: 'text/html' }), { method: 'PUT', headers: { 'content-type': 'text/html' }, body: BYTES });
-    expect(put.status).toBe(200);
-    expect(stored).toEqual([{ key: KEY, size: BYTES.byteLength }]);
-    expect(harness.controlPlane.invocations.map(({ actorId, method, args }) => ({ actorId, method, args })))
-      .toEqual([{ actorId: WORKSPACE_ID, method: 'fileStored', args: [KEY, BYTES.byteLength] }]);
-
-    // A refused upload stores nothing and reports nothing.
-    const refused = await fetch(await signed({ key: KEY, op: 'put', size: BYTES.byteLength, type: 'text/html' }), { method: 'PUT', headers: { 'content-type': 'text/html' }, body: BYTES.subarray(0, 3) });
-    expect(refused.status).toBe(400);
-    expect(stored).toHaveLength(1);
-  });
-
-  it('still answers the PUT when fileStored fails, and logs a warning', async () => {
-    harness = await startFileHarness({
-      workspace: () => ({ handle: unused, fileStored: () => { throw new Error('actor fell over'); } }),
-    });
-    const put = await fetch(await signed({ key: KEY, op: 'put', size: BYTES.byteLength, type: 'text/html' }), { method: 'PUT', headers: { 'content-type': 'text/html' }, body: BYTES });
-    expect(put.status).toBe(200);
-    expect(await readJson(put)).toEqual({ ok: true });
-    expect(harness.logs).toContainEqual(expect.objectContaining({ level: 'warn', event: 'files.record_stored_failed', workspace_id: WORKSPACE_ID }));
-    // The bytes are stored: completion's fallback stat finds them.
-    const head = await fetch(await signed({ key: KEY, op: 'stat' }), { method: 'HEAD' });
-    expect(head.headers.get(OBJECT_SIZE_HEADER)).toBe(String(BYTES.byteLength));
-
-    // A control plane that cannot be reached is the same.
-    harness.controlPlane.interceptInvoke = () => ({ status: 503, body: { error: { code: 'unavailable', message: 'down' } } });
-    const again = await fetch(await signed({ key: KEY, op: 'put', size: BYTES.byteLength, type: 'text/html' }), { method: 'PUT', headers: { 'content-type': 'text/html' }, body: BYTES });
-    expect(again.status).toBe(200);
-    expect(harness.logs.filter((line) => line.event === 'files.record_stored_failed')).toHaveLength(2);
-  });
 });
 
 describe('/_relayfiles with a failing store', () => {

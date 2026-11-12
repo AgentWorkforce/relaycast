@@ -30,12 +30,14 @@ export const OBJECT_SIZE_HEADER = 'x-relaycast-object-size';
  *
  * Upload completion verifies the stored bytes, as on every adapter. The
  * gateway reports each upload it stored to the actor (`fileStored`, through
- * the control plane), so `statObject` first reads that record through
- * `storedSize` and needs no network. Without a record (a gateway that does not
- * report, a call that failed) it asks the gateway (`HEAD` with a signed `stat`
- * token) inside the completing request through `statFetch`, bounded by a
- * short timeout; that call needs the actor to reach `baseUrl`, which a pod
- * whose egress is limited to public addresses may not. `deleteObjects` calls the gateway through `fetch`, which the
+ * the control plane) and acknowledges the PUT only once the actor has the
+ * record, so `statObject` reads it through `storedSize` and needs no network.
+ *
+ * Without a record it asks the gateway (`HEAD` with a signed `stat` token)
+ * inside the completing request through `statFetch`, bounded by a short
+ * timeout. That fallback exists only for gateways that predate `fileStored`
+ * (a rolling deploy): it needs the actor to reach `baseUrl`, which a pod whose
+ * egress is limited to public addresses may not. `deleteObjects` calls the gateway through `fetch`, which the
  * actor runtime allows only during maintenance; inside a request it fails, and
  * the engine's durable cleanup queue retries the deletion from maintenance.
  */
@@ -46,7 +48,7 @@ export interface SignedUrlFileStorageOptions {
   secret: string;
   /** Transport for blob deletes. */
   fetch: typeof globalThis.fetch;
-  /** Transport for upload completion's size check when no stored-size record exists. */
+  /** Transport for upload completion's size check without a stored-size record (gateways that predate `fileStored`). */
   statFetch: typeof globalThis.fetch;
   /**
    * The size the gateway reported storing under a key (`fileStored`), or

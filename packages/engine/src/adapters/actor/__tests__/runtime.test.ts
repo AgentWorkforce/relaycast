@@ -496,6 +496,9 @@ describe('workspace actor runtime', () => {
       const { id, key } = await pendingUpload(actor, alice);
 
       expect(await actor.fileStored(key, 5)).toEqual({ recorded: true });
+      // A retried PUT reports again: the record is refreshed, not refused.
+      expect(await actor.fileStored(key, 5)).toEqual({ recorded: true });
+      expect(rows(actor, 'SELECT COUNT(*) AS n FROM _actor_kv WHERE key = ?', `${FILE_STORED_KV_PREFIX}${key}`)).toEqual([{ n: 1 }]);
       const [record] = rows(actor, 'SELECT value, expires_at FROM _actor_kv WHERE key = ?', `${FILE_STORED_KV_PREFIX}${key}`);
       expect(record?.value).toBe('5');
       expect(Number(record?.expires_at)).toBeGreaterThan(Date.now() + 3600 * 1000);
@@ -521,6 +524,7 @@ describe('workspace actor runtime', () => {
       expect(attempts).toEqual([]);
     });
 
+    // The stat fallback serves only gateways that predate fileStored (rolling deploys).
     it('falls back to the gateway stat without a record, failing as before when the origin is unreachable', async () => {
       const { attempts, outboundFetch } = unreachable();
       const actor = new FakeWorkspaceActor(WORKSPACE_ID, { outboundFetch });
