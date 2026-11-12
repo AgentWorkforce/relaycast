@@ -167,10 +167,23 @@ export async function startPostgresServer(options: StartPostgresServerOptions): 
   return serveRuntime(runtime, options.port, baseUrl);
 }
 
-/** Run `relaycast-engine migrate` or `verify-db` and return its exit code (for the container entrypoint). */
-export async function runPostgresCommand(command: 'migrate' | 'verify-db'): Promise<number> {
+/** PostgreSQL subcommands the container entrypoint dispatches here. */
+export const POSTGRES_COMMANDS = ['migrate', 'verify-db', 'migration-preflight', 'export-for-actors'] as const;
+export type PostgresCommand = (typeof POSTGRES_COMMANDS)[number];
+
+/**
+ * Run a PostgreSQL subcommand (`migrate`, `verify-db`, or the durable-actors
+ * migration's `migration-preflight` / `export-for-actors` with their
+ * arguments) and return its exit code, for the container entrypoint.
+ */
+export async function runPostgresCommand(command: PostgresCommand, argv: readonly string[] = []): Promise<number> {
   const cli = await import('../adapters/postgres/cli.js');
-  return command === 'migrate' ? cli.runMigrateCommand() : cli.runVerifyDbCommand();
+  switch (command) {
+    case 'migrate': return cli.runMigrateCommand();
+    case 'verify-db': return cli.runVerifyDbCommand();
+    case 'migration-preflight': return cli.runMigrationPreflightCommand(argv);
+    case 'export-for-actors': return cli.runMigrationExportCommand(argv);
+  }
 }
 
 function serveRuntime<R extends NodeRuntimeWithDb>(

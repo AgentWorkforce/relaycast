@@ -10,6 +10,9 @@ Usage:
   docker run <image> --base-url <https-origin> [--db <path>] [--port <n>] [--env <name>]
   docker run <image> migrate      Apply PostgreSQL migrations (owner identity)
   docker run <image> verify-db    Check PostgreSQL runtime identity and migrations
+  docker run <image> migration-preflight [...]   Counts before a move to durable-actors (read-only)
+  docker run <image> export-for-actors --out <dir> --run-id <id> [...]
+                                  Export workspaces for relaycast-migrate import
 
 Options:
   --base-url <url>   Required public HTTPS origin (http on loopback/private
@@ -866,10 +869,13 @@ export function installPublicAuthorityMarker(server, baseUrl) {
   });
 }
 
-async function runPostgresCommand(command) {
+async function runPostgresCommand(command, args = []) {
   const engine = await import('@relaycast/engine/node');
-  process.exitCode = await engine.runPostgresCommand(command);
+  process.exitCode = await engine.runPostgresCommand(command, args);
 }
+
+/** Subcommands handed to the engine's PostgreSQL CLI with their arguments. */
+const POSTGRES_COMMANDS = new Set(['migrate', 'verify-db', 'migration-preflight', 'export-for-actors']);
 
 /** True when any RELAYCAST_DATABASE_* variable selects the PostgreSQL backend. */
 function postgresRequested(env) {
@@ -961,8 +967,8 @@ export async function main(argv = process.argv.slice(2)) {
     process.stdout.write(HELP);
     return;
   }
-  if (argv[0] === 'migrate' || argv[0] === 'verify-db') {
-    await runPostgresCommand(argv[0]);
+  if (POSTGRES_COMMANDS.has(argv[0])) {
+    await runPostgresCommand(argv[0], argv.slice(1));
     return;
   }
 
