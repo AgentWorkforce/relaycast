@@ -43,11 +43,32 @@ export function engineDialectOf(db: object): EngineDialect {
 }
 
 /** Run `query` and return every result row (column-name keyed objects). */
+/**
+ * A raw row as a plain object. Drivers that hand drizzle positional rows (the
+ * workspace actor's proxy) answer raw reads with arrays that carry the column
+ * names as extra properties; those serialize as bare arrays, so callers that
+ * return rows in a response would leak positional tuples. Plain objects pass
+ * through unchanged.
+ */
+function plainRow<T>(row: T): T {
+  if (!Array.isArray(row)) return row;
+  const named: Record<string, unknown> = {};
+  for (const key of Object.keys(row)) {
+    if (!/^(?:0|[1-9]\d*)$/.test(key)) named[key] = (row as unknown as Record<string, unknown>)[key];
+  }
+  // A positional row without column names cannot be read by name: fail
+  // loudly rather than hand the caller an empty object.
+  if (row.length > 0 && Object.keys(named).length === 0) {
+    throw new Error('sqlx.all: the driver returned a positional row without column names');
+  }
+  return named as T;
+}
+
 export async function all<T = unknown>(db: object, query: SQL): Promise<T[]> {
   const dialect = engineDialectOf(db);
   switch (dialect) {
     case 'sqlite':
-      return await (db as SqliteRawExecutor).all<T>(query);
+      return (await (db as SqliteRawExecutor).all<T>(query)).map(plainRow);
     case 'pg': {
       const result = await (db as PgRawExecutor).execute(query);
       if (!result || !Array.isArray(result.rows)) {

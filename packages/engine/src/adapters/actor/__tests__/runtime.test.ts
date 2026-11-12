@@ -559,3 +559,20 @@ describe('workspace actor runtime', () => {
     expect(fetched).toEqual([]);
   });
 });
+
+describe('workspace actor raw reads', () => {
+  it('answers raw-SQL reads (the inbox) with objects, not positional tuples', async () => {
+    const actor = new FakeWorkspaceActor('241764880589606998');
+    const { key, alice, bob } = await workspaceWithAgents(actor);
+    expect((await call(actor, 'POST', '/v1/channels', { name: 'ops' }, alice)).status).toBe(201);
+    expect((await call(actor, 'POST', '/v1/channels/ops/join', {}, bob)).status).toBe(200);
+    const posted = await call<{ id: string }>(actor, 'POST', '/v1/channels/ops/messages', { text: 'hi @bob' }, alice);
+    expect((await call(actor, 'POST', `/v1/messages/${posted.json.data.id}/reactions`, { emoji: 'tada' }, bob)).status).toBe(201);
+    const inbox = await call<{ unread_channels: unknown[]; recent_reactions: unknown[] }>(actor, 'GET', '/v1/inbox', undefined, alice);
+    expect(inbox.status).toBe(200);
+    expect(key).toBeTruthy();
+    const bobInbox = await call<{ unread_channels: unknown[] }>(actor, 'GET', '/v1/inbox', undefined, bob);
+    expect(bobInbox.json.data.unread_channels).toEqual([{ channel_name: 'ops', unread_count: 1 }]);
+    expect(inbox.json.data.recent_reactions).toEqual([expect.objectContaining({ channel_name: 'ops', emoji: 'tada', agent_name: 'bob' })]);
+  });
+});
