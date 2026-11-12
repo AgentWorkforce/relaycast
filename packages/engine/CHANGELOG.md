@@ -26,6 +26,7 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 ### Fixed
 
 - `sqlx.all` returns plain objects on SQLite handles that give drizzle positional rows (the workspace actor adapter), so raw reads such as the inbox's unread channels and recent reactions no longer serialize as tuples.
+- PostgreSQL: delivery seq allocation locks recipient agent rows `FOR NO KEY UPDATE` instead of `FOR UPDATE`. The message insert's foreign-key share lock on the sender row conflicted with `FOR UPDATE`, so concurrent posts by members of one channel deadlocked (SQLSTATE 40P01). `runAtomicWrites` also retries a deadlock-victim transaction built from a builder up to three times, logging each retry.
 - Strict exact-node spawn persists pre-dispatch placement and reservation
   ownership atomically on SQLite, D1, and PostgreSQL. Same-key retries resume
   only definitely-unsent work on the selected node; concurrent retries cannot

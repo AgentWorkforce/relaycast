@@ -34,6 +34,10 @@ Packages without a separate changelog are covered by the cross-package notes bel
 - Relayfile callbacks deliver events for embedded and internal path wildcards, including per-issue Linear files and Jira comment paths.
 - Relayfile deletion notifications reach subscribed agents, including typed provider removals without a record snapshot.
 
+### Fixed
+
+- Self-hosted servers on PostgreSQL no longer return `500 deadlock detected` when several agents post to the same channel at once; concurrent channel posts now serialize per recipient without lock cycles.
+
 ## [12.8.0] - 2026-11-04
 
 - Prevent stalled webhook delivery attempts from overwriting a newer attempt’s status or retry deadline after their lease is reclaimed.
