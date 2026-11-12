@@ -14,6 +14,7 @@ import { INTERNAL_CAPABILITIES, generateWorkspaceId, parseArCredential } from '@
 import { WorkspaceMetadataSchema, isArWorkspaceId } from '@relaycast/types';
 import type { GatewayContext } from './context.js';
 import { REQUEST_ID_HEADER, bearerToken, constantTimeEqual, readBody, sendActorResponse, sendError, sendJson, toActorRequest } from './http.js';
+import { MAX_IMPORT_BODY_BYTES } from '@relaycast/engine/gateway';
 import { BOOTSTRAP_PROOF_HEADER, IDEMPOTENCY_KEY_HEADER, chooseWorkspaceId, isWorkspaceIdTaken } from './workspaceId.js';
 
 /** The engine's own capability document: the actors serve exactly these. */
@@ -21,6 +22,7 @@ export { INTERNAL_CAPABILITIES };
 
 const WORKSPACE_ID_PATTERN = /^[A-Za-z0-9_-]{1,128}$/;
 const WORKSPACE_ROUTE = /^\/internal\/workspaces\/([^/]+)(\/api-key)?$/;
+const IMPORT_ROUTE = /^\/internal\/workspaces\/([^/]+)\/import$/;
 /** Admin bodies are small; this is not the upload cap. */
 const MAX_INTERNAL_BODY_BYTES = 64 * 1024;
 
@@ -119,6 +121,27 @@ export async function handleInternal(ctx: GatewayContext, { req, res, url, reque
       setWorkspace(workspaceId);
       response = await ctx.actors.create(workspaceId, request, await ctx.credentialTags.tag(workspaceId), { signal });
     }
+    return sendActorResponse(res, response);
+  }
+
+  // A migration import step (relaycast-migrate import): the actor for an
+  // existing workspace id, empty until the import fills it. The gateway signs
+  // the id's routing tag, as for a create; the actor validates the body.
+  const importMatch = req.method === 'POST' ? IMPORT_ROUTE.exec(path) : null;
+  if (importMatch) {
+    const workspaceId = decodePathSegment(importMatch[1]);
+    if (workspaceId === undefined || !isArWorkspaceId(workspaceId)) {
+      return sendError(res, 400, 'invalid_request', 'Workspace ids on this deployment are 64-bit snowflakes');
+    }
+    setWorkspace(workspaceId);
+    const raw = await readBody(req, MAX_IMPORT_BODY_BYTES);
+    let body: unknown;
+    try {
+      body = JSON.parse(raw.toString('utf8'));
+    } catch {
+      return sendError(res, 400, 'invalid_json', 'Malformed JSON in request body');
+    }
+    const response = await ctx.actors.importData(workspaceId, body, await ctx.credentialTags.tag(workspaceId), { signal });
     return sendActorResponse(res, response);
   }
 

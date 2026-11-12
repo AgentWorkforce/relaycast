@@ -116,6 +116,11 @@ export class Workspace extends Actor {
         return this.db.transaction(() => this.runtime.create(request, credentialTag))
     }
 
+    /** One step of a migration import (`POST /internal/workspaces/:id/import`), with the tag the gateway's keyring signed for this id. */
+    async importData(body: unknown, credentialTag: string): Promise<ActorHttpResponse> {
+        return this.db.transaction(() => this.runtime.importData(body, credentialTag))
+    }
+
     async handle(request: ActorHttpRequest): Promise<ActorHttpResponse> {
         return this.db.transaction(() => this.runtime.handle(request))
     }

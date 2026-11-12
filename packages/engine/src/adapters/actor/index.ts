@@ -33,6 +33,8 @@ import { isSafeExternalUrl } from '../../lib/ssrf.js';
 import { assertInternalSecretStrength } from '../../engine/internalAdmin.js';
 import { ConfigError } from '../../bin/secretEnv.js';
 import { ActorRealtime, type ActorSocketLike, type ActorSocketSource } from './realtime.js';
+import { ActorImport } from './import.js';
+import { ImportRequestSchema, WORKSPACE_IMPORTING_CODE } from '../migration/protocol.js';
 
 /** Minimum `fileSigningSecret` length: it signs file URLs and socket grants (the gateway enforces the same). */
 export const MIN_FILE_SIGNING_SECRET_LENGTH = 32;
@@ -135,6 +137,15 @@ export interface ActorRuntime {
    */
   create(request: ActorHttpRequest, credentialTag: string): Promise<ActorHttpResponse>;
   /**
+   * One step of importing this workspace from another backend
+   * (`POST /internal/workspaces/:id/import`, `migration/protocol.ts`). The
+   * gateway has checked the internal secret and hands over the routing tag
+   * its keyring signs for this id, as for `create`. Until the import
+   * finishes (or is aborted), every other request answers 503
+   * `workspace_importing` and maintenance does nothing.
+   */
+  importData(body: unknown, credentialTag: string): Promise<ActorHttpResponse>;
+  /**
    * Run maintenance from the actor alarm: deliver the webhook outbox and
    * queued ephemeral events, redrive node deliveries and A2A egress, delete
    * blobs, run liveness and presence sweeps, expiry and retention. Re-arms the
@@ -209,6 +220,12 @@ export function createActorRuntime(options: ActorRuntimeOptions): ActorRuntime {
     schemaCurrent = ensureActorSchema(sql);
   };
   const credentialTag = new ActorCredentialTag(sql);
+  const importer = new ActorImport(sql, credentialTag);
+  const IMPORTING: ActorHttpResponse = {
+    status: 503,
+    headers: [['content-type', 'application/json'], ['retry-after', '30']],
+    body: JSON.stringify({ ok: false, error: { code: WORKSPACE_IMPORTING_CODE, message: 'This workspace is being migrated' } }),
+  };
 
   const db = createActorEngineDb(sql, {
     onGroupStart: () => { stepGroups += 1; },
@@ -420,7 +437,20 @@ export function createActorRuntime(options: ActorRuntimeOptions): ActorRuntime {
       return this.handle(request);
     },
 
+    importData(body, tag) {
+      ensureSchema();
+      return finish(async () => {
+        const parsed = ImportRequestSchema.safeParse(body);
+        const result = parsed.success
+          ? await importer.run(parsed.data, tag)
+          : { status: 400, body: { ok: false, error: { code: 'invalid_request', message: parsed.error.issues[0]?.message ?? 'Invalid import request' } } };
+        return { status: result.status, headers: [['content-type', 'application/json']], body: JSON.stringify(result.body) };
+      });
+    },
+
     handle(request) {
+      ensureSchema();
+      if (importer.importing()) return Promise.resolve(IMPORTING);
       return call(async () => {
         const executionCtx = {
           waitUntil: schedule,
@@ -443,6 +473,8 @@ export function createActorRuntime(options: ActorRuntimeOptions): ActorRuntime {
     },
 
     maintain() {
+      ensureSchema();
+      if (importer.importing()) return Promise.resolve();
       return call(async () => {
         maintaining = true;
         blobDeadline = Date.now() + blobDeleteBudgetMs;

@@ -7498,6 +7498,101 @@ paths:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
 
+  /internal/workspaces/{id}/import:
+    servers:
+      - url: https://relaycast.example.com
+        description: Durable-actors gateway (root, no /v1 prefix)
+    post:
+      summary: Import a workspace exported from PostgreSQL (durable-actors only)
+      description: >-
+        One step of moving a workspace from a PostgreSQL deployment
+        (`relaycast-engine export-for-actors`) into its workspace actor under
+        the same id; `relaycast-migrate import` drives it. Served only by the
+        durable-actors gateway. `op` is `begin` (refused unless the actor is
+        empty and the exported column lists equal the engine's), `chunk` (one
+        block of `[rowid, ...values]` rows of one table, idempotent per
+        `table` and `seq`, answered with the digest of the rows read back),
+        `finish` (foreign-key check, then each table's count and digest
+        against the manifest; the workspace becomes `verified` but stays
+        closed), `open` (go-live: the verified workspace serves), `abort`
+        (remove everything imported, before `open`) or `status`. `begin`,
+        `finish` and `open` replay for the same run. Until `open`, every other
+        request to the workspace answers `503 workspace_importing`.
+      tags:
+        - Internal Admin
+      security:
+        - internalSecret: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          description: Workspace id (a 64-bit snowflake).
+          schema:
+            type: string
+            pattern: '^[0-9]{1,20}$'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [op]
+              properties:
+                op:
+                  type: string
+                  enum: [begin, chunk, finish, open, abort, status]
+                run_id:
+                  type: string
+                  pattern: '^[A-Za-z0-9_-]{8,64}$'
+                tables:
+                  type: array
+                  description: '`begin`: every table in plan order with its columns.'
+                  items:
+                    type: object
+                    properties:
+                      name: { type: string }
+                      columns: { type: array, items: { type: string } }
+                table: { type: string }
+                seq: { type: integer, minimum: 0 }
+                rows:
+                  type: array
+                  items: { type: array }
+                manifest:
+                  type: object
+                  description: '`finish`: per table, `{ count, sha256 }` from the export manifest.'
+                  additionalProperties:
+                    type: object
+                    properties:
+                      count: { type: integer }
+                      sha256: { type: string }
+      responses:
+        '200':
+          description: Step applied (or already applied)
+        '201':
+          description: Import begun
+        '400':
+          description: Invalid workspace id or request
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '401':
+          description: Missing or wrong internal secret (`unauthorized`)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '409':
+          description: >-
+            `workspace_exists`, `import_schema_mismatch`, `import_run_mismatch`,
+            `import_not_started`, `import_verified`, `import_open`, `import_chunk_out_of_order`,
+            `import_integrity_failed` or `import_verification_failed` (with
+            `details`).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
   /internal/workspaces/{id}/api-key:
     servers:
       - url: http://localhost:8787

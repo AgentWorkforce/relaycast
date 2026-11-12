@@ -14,6 +14,7 @@ import type { ActorHttpRequest, ActorHttpResponse } from '@relaycast/engine/gate
 export interface FakeWorkspace {
   create?(request: ActorHttpRequest, credentialTag: string): ActorHttpResponse | Promise<ActorHttpResponse>;
   handle(request: ActorHttpRequest): ActorHttpResponse | Promise<ActorHttpResponse>;
+  importData?(body: unknown, credentialTag: string): ActorHttpResponse | Promise<ActorHttpResponse>;
 }
 
 export interface Invocation {
@@ -148,7 +149,9 @@ export async function startFakeControlPlane(options: FakeControlPlaneOptions): P
       try {
         const result = invocation.method === 'create'
           ? await workspace.create?.(invocation.args[0] as ActorHttpRequest, String(invocation.args[1]))
-          : await workspace.handle(invocation.args[0] as ActorHttpRequest);
+          : invocation.method === 'importData'
+            ? await workspace.importData?.(invocation.args[0], String(invocation.args[1]))
+            : await workspace.handle(invocation.args[0] as ActorHttpRequest);
         if (!result) throw new Error(`actor has no method ${invocation.method}`);
         reply(res, 200, { outcome: { type: 'completed', result } });
       } catch (error) {

@@ -227,4 +227,35 @@ describe('internal admin API', () => {
     expect(unknown.status).toBe(404);
     expect(harness.controlPlane.invocations).toHaveLength(0);
   });
+
+  it('forwards a migration import step to the actor for that id, with the tag its keyring signs', async () => {
+    const seen: { body: unknown; tag: string }[] = [];
+    harness = await startHarness({
+      workspace: (id) => ({
+        ...adminWorkspace(id),
+        importData: (body, tag) => {
+          seen.push({ body, tag });
+          return jsonResponse(201, { ok: true, data: { run_id: 'run-0001-import', status: 'in_progress' } });
+        },
+      }),
+      env: { RELAYCAST_INTERNAL_SECRET: INTERNAL_SECRET },
+    });
+    const post = (path: string, body: unknown, secret = INTERNAL_SECRET) => fetch(`${harness!.baseUrl}${path}`, {
+      method: 'POST',
+      headers: { authorization: `Bearer ${secret}`, 'content-type': 'application/json' },
+      body: typeof body === 'string' ? body : JSON.stringify(body),
+    });
+    const begin = { op: 'begin', run_id: 'run-0001-import', tables: [{ name: 'workspaces', columns: ['id'] }] };
+
+    expect((await post(`/internal/workspaces/${WORKSPACE_ID}/import`, begin, 'wrong-secret')).status).toBe(401);
+    expect((await post('/internal/workspaces/not-a-snowflake/import', begin)).status).toBe(400);
+    expect((await post(`/internal/workspaces/${WORKSPACE_ID}/import`, '{nope')).status).toBe(400);
+    expect(seen).toHaveLength(0);
+
+    const response = await post(`/internal/workspaces/${WORKSPACE_ID}/import`, begin);
+    expect(response.status).toBe(201);
+    expect((await readJson(response)).data).toEqual({ run_id: 'run-0001-import', status: 'in_progress' });
+    expect(seen).toEqual([{ body: begin, tag: await harness.signer.tag(WORKSPACE_ID) }]);
+    expect(harness.controlPlane.invocations.at(-1)).toMatchObject({ actorId: WORKSPACE_ID, method: 'importData' });
+  });
 });

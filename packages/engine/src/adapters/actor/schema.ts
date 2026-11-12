@@ -4,6 +4,7 @@ import { ACTOR_KV_TABLE } from './kv.js';
 import { ACTOR_OUTBOUND_TABLE } from './ephemeral-outbox.js';
 import { ACTOR_CREDENTIAL_TAG_TABLE } from './credential-tag.js';
 import { ACTOR_SOCKETS_TABLE } from './socket-table.js';
+import { ACTOR_IMPORT_CHUNKS_TABLE, ACTOR_IMPORT_TABLE } from './import.js';
 
 /** A table the adapter keeps beside the engine schema, with the statement that creates it. */
 export interface ActorTable {
@@ -16,6 +17,8 @@ const ADAPTER_TABLES: readonly ActorTable[] = [
   ACTOR_OUTBOUND_TABLE,
   ACTOR_CREDENTIAL_TAG_TABLE,
   ACTOR_SOCKETS_TABLE,
+  ACTOR_IMPORT_TABLE,
+  ACTOR_IMPORT_CHUNKS_TABLE,
 ];
 
 /**
