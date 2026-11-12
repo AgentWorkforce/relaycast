@@ -367,11 +367,11 @@ describe('sqlx.lockSeq', () => {
 
   it('locks recipient agent rows in id order for deliveries', () => {
     expect(pg(sqlx.lockSeq('pg', targets[2]!))).toEqual({
-      sql: 'SELECT id FROM agents WHERE workspace_id = $1 AND id = ANY($2::text[]) ORDER BY id FOR UPDATE',
+      sql: 'SELECT id FROM agents WHERE workspace_id = $1 AND id = ANY($2::text[]) ORDER BY id FOR NO KEY UPDATE',
       params: ['ws1', ['b', 'a']],
     });
     expect(pg(sqlx.lockSeq('pg', targets[3]!))).toEqual({
-      sql: 'SELECT id FROM agents WHERE workspace_id = $1 AND id IN (SELECT agent_id FROM channel_members WHERE channel_id = $2) ORDER BY id FOR UPDATE',
+      sql: 'SELECT id FROM agents WHERE workspace_id = $1 AND id IN (SELECT agent_id FROM channel_members WHERE channel_id = $2) ORDER BY id FOR NO KEY UPDATE',
       params: ['ws1', 'c1'],
     });
   });

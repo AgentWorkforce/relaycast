@@ -2,14 +2,19 @@ import { is } from 'drizzle-orm';
 import { DrizzleQueryError } from 'drizzle-orm/errors';
 import { getTableConfig, PgTable } from 'drizzle-orm/pg-core';
 import pg from 'pg';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import * as pgSchema from '../../db/schema.pg.js';
 import {
   databaseConstraintKind,
   databaseTriggerRefusal,
   databaseUniqueViolation,
+  DEADLOCK_RETRIES,
+  isDeadlockError,
   PG_NOT_NULL_SENTINELS,
   PG_UNIQUE_CONSTRAINTS,
+  runAtomicWrites,
+  type EngineDb,
+  type TransactionCapability,
 } from '../database.js';
 
 /** A node-postgres DatabaseError as the protocol parser fills it in. */
@@ -143,5 +148,57 @@ describe('PostgreSQL SQLSTATE decoding', () => {
       expect(databaseTriggerRefusal(new Error('D1_ERROR: agent_node_bindings workspace/node mismatch: SQLITE_CONSTRAINT'))).toBe('binding_node_workspace_mismatch');
       expect(databaseTriggerRefusal(new Error('something else'))).toBeUndefined();
     });
+  });
+});
+
+describe('deadlock victim retry (40P01 safety net)', () => {
+  const deadlock = () => wrapped(pgError('40P01', {}, 'deadlock detected'));
+
+  /** A transaction-capable handle whose first `failures` transactions throw `error()`. */
+  function flakyHandle(failures: number, error: () => Error) {
+    let calls = 0;
+    const db: TransactionCapability = {
+      withTransaction: async <T>(fn: (tx: EngineDb) => Promise<T>): Promise<T> => {
+        calls += 1;
+        if (calls <= failures) throw error();
+        return fn(db as never);
+      },
+    };
+    // A transaction-capable test double, not a real handle: hand it over as never.
+    return { db: db as never, calls: () => calls };
+  }
+
+  it('decodes 40P01 through the drizzle cause chain only', () => {
+    expect(isDeadlockError(deadlock())).toBe(true);
+    expect(isDeadlockError(pgError('40001', {}))).toBe(false);
+    expect(isDeadlockError(new Error('deadlock detected'))).toBe(false);
+  });
+
+  it('reruns a builder after a deadlock and returns the committed attempt', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const { db, calls } = flakyHandle(2, deadlock);
+    const built = vi.fn(() => [Promise.resolve('ok')]);
+    await expect(runAtomicWrites(db, built)).resolves.toEqual(['ok']);
+    expect(calls()).toBe(3);
+    expect(built).toHaveBeenCalledTimes(1);
+    expect(warn).toHaveBeenCalledTimes(2);
+    warn.mockRestore();
+  });
+
+  it('gives up after DEADLOCK_RETRIES and rethrows the deadlock', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const { db, calls } = flakyHandle(Infinity, deadlock);
+    await expect(runAtomicWrites(db, () => [])).rejects.toSatisfy(isDeadlockError);
+    expect(calls()).toBe(DEADLOCK_RETRIES + 1);
+    warn.mockRestore();
+  });
+
+  it('does not retry other errors or prebuilt statement lists', async () => {
+    const other = flakyHandle(1, () => wrapped(pgError('23505', {})));
+    await expect(runAtomicWrites(other.db, () => [])).rejects.toBeDefined();
+    expect(other.calls()).toBe(1);
+    const prebuilt = flakyHandle(1, deadlock);
+    await expect(runAtomicWrites(prebuilt.db, [])).rejects.toSatisfy(isDeadlockError);
+    expect(prebuilt.calls()).toBe(1);
   });
 });

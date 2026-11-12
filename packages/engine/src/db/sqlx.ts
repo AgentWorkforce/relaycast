@@ -672,6 +672,14 @@ export type SeqLockTarget =
   /**
    * per-agent `deliveries.seq` allocation: locks the recipients' agent rows in
    * id order. `agentIds` is a bound list or a subquery selecting agent ids.
+   *
+   * The mode is FOR NO KEY UPDATE, not FOR UPDATE. Senders insert their
+   * message first, and its FK check holds FOR KEY SHARE on the sender's agent
+   * row. FOR UPDATE conflicts with that share lock, so two members posting to
+   * one channel each waited on the other's sender row: a deadlock that id
+   * order cannot prevent (relaycast#651). FOR NO KEY UPDATE still serializes
+   * allocators, the high-water trigger's UPDATE and agent deletes, and does
+   * not conflict with FK share locks.
    */
   | { kind: 'delivery'; workspaceId: string; agentIds: readonly string[] | SQL };
 
@@ -695,7 +703,7 @@ export function lockSeq(source: DialectSource, target: SeqLockTarget): SQL {
           const ids = Array.isArray(target.agentIds)
             ? sql`= ANY(${sql.param([...(target.agentIds as readonly string[])])}::text[])`
             : sql`IN (${target.agentIds as SQL})`;
-          return sql`SELECT id FROM agents WHERE workspace_id = ${target.workspaceId} AND id ${ids} ORDER BY id FOR UPDATE`;
+          return sql`SELECT id FROM agents WHERE workspace_id = ${target.workspaceId} AND id ${ids} ORDER BY id FOR NO KEY UPDATE`;
         }
         default:
           throw new Error(`sqlx.lockSeq: unknown lock kind ${JSON.stringify((target as { kind?: unknown }).kind)}`);
