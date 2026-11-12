@@ -8,7 +8,8 @@
   "main": "dist/server.js",
   "types": "dist/server.d.ts",
   "bin": {
-    "relaycast-actors-gateway": "dist/bin.js"
+    "relaycast-actors-gateway": "dist/bin.js",
+    "relaycast-migrate": "dist/migrate.js"
   },
   "exports": {
     ".": {

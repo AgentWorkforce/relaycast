@@ -55,6 +55,8 @@ export interface CallOptions {
 export interface ActorClient {
   create(workspaceId: string, request: ActorHttpRequest, credentialTag: string, options?: CallOptions): Promise<ActorHttpResponse>;
   handle(workspaceId: string, request: ActorHttpRequest, options?: CallOptions): Promise<ActorHttpResponse>;
+  /** One migration import step (`migration/protocol.ts`); the body is the parsed JSON request. */
+  importData(workspaceId: string, body: unknown, credentialTag: string, options?: CallOptions): Promise<ActorHttpResponse>;
   findWebsocket(workspaceId: string, metadata: unknown): Promise<SocketGrant>;
   /** Whether the control plane answers its health check. */
   healthy(): Promise<boolean>;
@@ -183,8 +185,9 @@ export function createActorClient(options: ActorClientOptions): ActorClient {
     return parsed.data.outcome;
   }
 
-  async function invoke(actorId: string, method: 'create' | 'handle', args: unknown[], callOptions?: CallOptions): Promise<ActorHttpResponse> {
-    const signal = withTimeout(method === 'create' ? createTimeoutMs : invokeTimeoutMs, callOptions?.signal);
+  async function invoke(actorId: string, method: 'create' | 'handle' | 'importData', args: unknown[], callOptions?: CallOptions): Promise<ActorHttpResponse> {
+    // An import's first step activates a brand-new actor, like `create`.
+    const signal = withTimeout(method === 'handle' ? invokeTimeoutMs : createTimeoutMs, callOptions?.signal);
     // A `not_executed` outcome means the host never ran the call; one retry, as the SDK does.
     let outcome = await invokeOnce(actorId, method, args, signal);
     if (outcome.type === 'not_executed') outcome = await invokeOnce(actorId, method, args, signal);
@@ -206,6 +209,7 @@ export function createActorClient(options: ActorClientOptions): ActorClient {
   return {
     create: (workspaceId, request, credentialTag, callOptions) => invoke(workspaceId, 'create', [request, credentialTag], callOptions),
     handle: (workspaceId, request, callOptions) => invoke(workspaceId, 'handle', [request], callOptions),
+    importData: (workspaceId, body, credentialTag, callOptions) => invoke(workspaceId, 'importData', [body, credentialTag], callOptions),
 
     async findWebsocket(workspaceId, metadata) {
       const encoded = JSON.stringify(metadata);

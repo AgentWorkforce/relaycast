@@ -403,6 +403,39 @@ with an explicit error. The pg-mode result is a baseline for the query-surface
 work, not a gate. As with the integration tests, use only a disposable
 database.
 
+## Moving a deployment to durable-actors
+
+A PostgreSQL deployment moves to the durable-actors runtime (one workspace
+actor per workspace, behind `relaycast-actors-gateway`) with every row and
+file, under the same workspace ids. The orchestration (snapshot, quiesce,
+chart changes, verification) lives in the deployment tooling; these are the
+pieces it runs:
+
+1. **Credentials first.** The actor gateway routes only `ar_` credentials.
+   Run this server with `RELAYCAST_CREDENTIAL_FORMAT=ar` and the keyring the
+   actor gateway will use, and upgrade every legacy credential
+   (`POST /v1/credentials/upgrade`; workspace keys through
+   `POST /internal/workspaces/:id/api-key`). Their hashes are copied as is,
+   so upgraded holders keep working after the move.
+2. `relaycast-engine migration-preflight [--file-dir <RELAYCAST_FILE_DIR>]
+   [--ar-since <epoch s>]`: read-only per-workspace counts, missing file
+   objects, and principals created before `--ar-since` that were never
+   upgraded. Exit 1 when anything blocks.
+3. Stop every writer, then `relaycast-engine export-for-actors --out <dir>
+   --run-id <id>`: one `REPEATABLE READ` snapshot, per workspace a
+   `manifest.json` (tables in plan order, columns, row count, digest) and one
+   NDJSON file per table. It holds credential hashes, never plaintext.
+4. On the durable-actors deployment, `relaycast-migrate files --dir <dir>
+   --from <old RELAYCAST_FILE_DIR>` (copies completed files into the
+   gateway's file store, verified by sha256), then `relaycast-migrate import
+   --dir <dir> --gateway <url>` (`POST /internal/workspaces/:id/import`; the
+   actor verifies every block it stores and serves the workspace only once
+   all counts and digests match the manifest). Reruns resume; `relaycast-migrate
+   abort` empties a failed workspace.
+
+Both sides must run the same engine schema: `begin` refuses an export whose
+column lists differ from the actor's.
+
 ## Not yet supported
 
 - More than one replica. Realtime, presence and rate limits are in-process.

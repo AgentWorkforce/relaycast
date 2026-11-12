@@ -20,6 +20,7 @@ Packages without a separate changelog are covered by the cross-package notes bel
 
 ### Added
 
+- Self-hosted PostgreSQL deployments can move to durable-actors with every row and file under the same workspace ids: `relaycast-engine migration-preflight` / `export-for-actors`, then `relaycast-migrate files` / `import` against the actor gateway (`POST /internal/workspaces/:id/import`), verified per table by count and digest. See `docs/self-host-postgres.md`.
 - `POST /v1/actions/spawn/strict-invoke` binds builtin spawn and definitely-unsent retries to an exact node id with atomic capacity ownership, a versioned logical request, and a server-owned response marker; `POST /v1/actions/spawn/replay` reads that caller's existing keyed claim without creating, placing, reserving, or dispatching work.
 - Strict spawn callers may opt in to `relay.spawn.invoke.logical-replay-resume/1`; its separate server-owned replay proof lets `/spawn/replay` resume only the original marked, definitely-unsent claim from persisted input, while `logical/1`, dispatched, terminal, and unknown-send claims remain lookup-only.
 - Self-hosted servers can run on PostgreSQL (its own database, schema `public`, single replica) with `relaycast-engine migrate` / `verify-db`; see `docs/self-host-postgres.md`.

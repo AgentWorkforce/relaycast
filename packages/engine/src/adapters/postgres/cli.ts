@@ -146,3 +146,181 @@ export async function runVerifyDbCommand(
     }
   });
 }
+
+/** Principal tables whose credentials must be ar_ before cutover, and their hash column. */
+const LEGACY_CHECKED_PRINCIPALS = [
+  ["agents", "token_hash"],
+  ["nodes", "token_hash"],
+  ["observer_tokens", "token_hash"],
+  ["webhooks", "token_hash"],
+] as const;
+
+interface MigrationCliArgs {
+  workspaces: string[];
+  outDir?: string;
+  runId?: string;
+  blockRows?: number;
+  fileDir?: string;
+  arSince?: number;
+}
+
+function parseMigrationArgs(argv: readonly string[]): MigrationCliArgs {
+  const args: MigrationCliArgs = { workspaces: [] };
+  for (let i = 0; i < argv.length; i += 1) {
+    const flag = argv[i];
+    const value = argv[i + 1];
+    const need = (): string => {
+      if (value === undefined || value.startsWith("--")) throw new ConfigError(`${flag} needs a value`);
+      i += 1;
+      return value;
+    };
+    switch (flag) {
+      case "--workspace": args.workspaces.push(need()); break;
+      case "--out": args.outDir = need(); break;
+      case "--run-id": args.runId = need(); break;
+      case "--block-rows": args.blockRows = Number(need()); break;
+      case "--file-dir": args.fileDir = need(); break;
+      case "--ar-since": args.arSince = Number(need()); break;
+      default: throw new ConfigError(`unknown argument ${flag}`);
+    }
+  }
+  if (args.blockRows !== undefined && !(Number.isInteger(args.blockRows) && args.blockRows >= 1 && args.blockRows <= 10_000)) {
+    throw new ConfigError("--block-rows must be an integer from 1 to 10000");
+  }
+  if (args.arSince !== undefined && !Number.isInteger(args.arSince)) {
+    throw new ConfigError("--ar-since must be epoch seconds");
+  }
+  return args;
+}
+
+async function verifiedMigrations(pool: ReturnType<typeof openPostgresPool>, schema: string, io: CliIo): Promise<boolean> {
+  const result = await verifyPostgresMigrations(pool, { schema, bundled: loadBundledPostgresMigrations() });
+  for (const problem of result.problems) io.err(`  FAIL ${problem}`);
+  if (!result.ok) io.err("database is not migrated for this image: export with the image the database runs");
+  if (result.unknown.length > 0) {
+    io.err(`database has migrations newer than this image (${result.unknown.join(", ")}): export with the image the database runs`);
+    return false;
+  }
+  return result.ok;
+}
+
+/**
+ * `relaycast-engine migration-preflight`: read-only. Per workspace, the row
+ * count of every table a migration copies, file objects missing from
+ * `--file-dir`, and (with `--ar-since <epoch s>`, when credentials.format=ar
+ * was enabled) principals that may still hold a legacy credential: created
+ * before then and never upgraded. One JSON line per workspace on stdout; exit
+ * 1 when anything blocks a migration.
+ */
+export async function runMigrationPreflightCommand(
+  argv: readonly string[],
+  env: NodeJS.ProcessEnv = process.env,
+  io: CliIo = stdio,
+): Promise<number> {
+  let args: MigrationCliArgs;
+  try {
+    args = parseMigrationArgs(argv);
+  } catch (err) {
+    io.err(`configuration error: ${errorMessage(err)}`);
+    return EXIT_CONFIG;
+  }
+  return withVerifiedPool(env, "runtime", io, async (pool, config) => {
+    const { access } = await import("node:fs/promises");
+    const { join } = await import("node:path");
+    const { countWorkspace, listWorkspaces } = await import("../migration/export.js");
+    if (!(await verifiedMigrations(pool, config.schema, io))) return EXIT_FAILURE;
+    const client = await pool.connect();
+    let blocked = false;
+    try {
+      const workspaces = args.workspaces.length > 0 ? args.workspaces : await listWorkspaces(client);
+      for (const workspaceId of workspaces) {
+        const counts = await countWorkspace(client, workspaceId);
+        if (counts.workspaces !== 1) {
+          io.err(`workspace ${workspaceId}: not found`);
+          blocked = true;
+          continue;
+        }
+        let missingFiles: number | null = null;
+        if (args.fileDir !== undefined) {
+          missingFiles = 0;
+          const files = await client.query<{ storage_key: string }>(
+            "SELECT storage_key FROM files WHERE workspace_id = $1 AND status = 'complete'", [workspaceId]);
+          for (const file of files.rows) {
+            try {
+              await access(join(args.fileDir, file.storage_key));
+            } catch {
+              missingFiles += 1;
+            }
+          }
+          if (missingFiles > 0) blocked = true;
+        }
+        let legacy: Record<string, number> | null = null;
+        if (args.arSince !== undefined) {
+          legacy = {};
+          for (const [table, hash] of LEGACY_CHECKED_PRINCIPALS) {
+            const result = await client.query<{ n: number }>(
+              `SELECT count(*)::int AS n FROM ${table} p
+                WHERE p.workspace_id = $1 AND p.${hash} IS NOT NULL AND p.created_at < $2
+                  AND NOT EXISTS (SELECT 1 FROM credential_upgrades u WHERE u.ar_hash = p.${hash})`,
+              [workspaceId, args.arSince]);
+            legacy[table] = Number(result.rows[0]?.n ?? 0);
+          }
+        }
+        io.out(JSON.stringify({ workspace_id: workspaceId, counts, missing_files: missingFiles, legacy_principals: legacy }));
+      }
+    } finally {
+      client.release();
+    }
+    return blocked ? EXIT_FAILURE : 0;
+  });
+}
+
+/**
+ * `relaycast-engine export-for-actors --out <dir> --run-id <id>`: export
+ * workspaces (all, or each `--workspace`) from one snapshot for
+ * `relaycast-migrate import`. Run it with writers stopped.
+ */
+export async function runMigrationExportCommand(
+  argv: readonly string[],
+  env: NodeJS.ProcessEnv = process.env,
+  io: CliIo = stdio,
+): Promise<number> {
+  let args: MigrationCliArgs;
+  try {
+    args = parseMigrationArgs(argv);
+    if (!args.outDir) throw new ConfigError("--out is required");
+    const { IMPORT_RUN_ID } = await import("../migration/protocol.js");
+    if (!args.runId || !IMPORT_RUN_ID.test(args.runId)) throw new ConfigError("--run-id must be 8-64 URL-safe characters");
+  } catch (err) {
+    io.err(`configuration error: ${errorMessage(err)}`);
+    return EXIT_CONFIG;
+  }
+  return withVerifiedPool(env, "runtime", io, async (pool, config) => {
+    const { beginSnapshot, exportWorkspaces, listWorkspaces } = await import("../migration/export.js");
+    if (!(await verifiedMigrations(pool, config.schema, io))) return EXIT_FAILURE;
+    const client = await pool.connect();
+    try {
+      await beginSnapshot(client);
+      const workspaceIds = args.workspaces.length > 0 ? args.workspaces : await listWorkspaces(client);
+      const manifests = await exportWorkspaces(client, {
+        runId: args.runId!,
+        outDir: args.outDir!,
+        workspaceIds,
+        ...(args.blockRows === undefined ? {} : { blockRows: args.blockRows }),
+        log: io.out,
+      });
+      await client.query("COMMIT");
+      for (const manifest of manifests) {
+        const rows = manifest.tables.reduce((sum, table) => sum + table.count, 0);
+        io.out(`exported ${manifest.workspace_id}: ${rows} rows in ${manifest.tables.length} tables`);
+      }
+      return 0;
+    } catch (err) {
+      await client.query("ROLLBACK").catch(() => {});
+      io.err(`export failed: ${errorMessage(err)}`);
+      return EXIT_FAILURE;
+    } finally {
+      client.release();
+    }
+  });
+}

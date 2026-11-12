@@ -12,6 +12,10 @@ Usage:
   relaycast-engine [--db <path>] [--port <n>] [--base-url <url>] [--env <name>]
   relaycast-engine migrate      Apply PostgreSQL migrations (owner identity)
   relaycast-engine verify-db    Check PostgreSQL runtime identity and migrations
+  relaycast-engine migration-preflight [--workspace <id>]... [--file-dir <dir>] [--ar-since <epoch s>]
+                                Per-workspace counts before a move to durable-actors (read-only)
+  relaycast-engine export-for-actors --out <dir> --run-id <id> [--workspace <id>]... [--block-rows <n>]
+                                Export workspaces from one snapshot for relaycast-migrate import
 
 Options:
   --db <path>        SQLite database file (default: $RELAYCAST_DB_PATH or ./relaycast.db)
@@ -100,6 +104,14 @@ async function main(): Promise<void> {
     // Loaded lazily so the SQLite server path never imports pg.
     const cli = await import('../adapters/postgres/cli.js');
     process.exitCode = await (command === 'migrate' ? cli.runMigrateCommand() : cli.runVerifyDbCommand());
+    return;
+  }
+  if (command === 'migration-preflight' || command === 'export-for-actors') {
+    const cli = await import('../adapters/postgres/cli.js');
+    const argv = process.argv.slice(3);
+    process.exitCode = await (command === 'migration-preflight'
+      ? cli.runMigrationPreflightCommand(argv)
+      : cli.runMigrationExportCommand(argv));
     return;
   }
   const opts = parseArgs(process.argv.slice(2), process.env);
