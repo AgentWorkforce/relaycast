@@ -20,6 +20,7 @@ Packages without a separate changelog are covered by the cross-package notes bel
 
 ### Added
 
+- Control planes can keep a temporary workspace alive or make it permanent: `POST /internal/workspaces/:id/expiry` (`{ expires_in_seconds }` or `null`), on self-hosted engines and the hosted gateway. An expired workspace is never revived.
 - Self-hosted PostgreSQL deployments can move to durable-actors with every row and file under the same workspace ids: `relaycast-engine migration-preflight` / `export-for-actors` (sealed, owner-only export), then `relaycast-migrate files` / `import` / `verify-realtime` / `open` against the actor gateway (`POST /internal/workspaces/:id/import`), verified per table by count and digest and closed until go-live. See `docs/self-host-postgres.md`.
 - The durable-actors gateway can dial actor sockets through an in-cluster origin (`DURABLE_ACTORS_SOCKET_ORIGIN`) instead of the control plane's public URL, so realtime works in clusters that cannot resolve or reach that URL.
 - `POST /v1/actions/spawn/strict-invoke` binds builtin spawn and definitely-unsent retries to an exact node id with atomic capacity ownership, a versioned logical request, and a server-owned response marker; `POST /v1/actions/spawn/replay` reads that caller's existing keyed claim without creating, placing, reserving, or dispatching work.

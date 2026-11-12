@@ -4,6 +4,7 @@ import { alias, channels, workspaces } from '../db/tables.js';
 import { sha256Hex } from '../lib/crypto.js';
 import { issueCredential } from '../auth/credentials.js';
 import { codedError } from '../lib/httpError.js';
+import * as sqlx from '../db/sqlx.js';
 import { runAtomicWrites } from '../ports/database.js';
 import { generateId } from './snowflake.js';
 
@@ -406,4 +407,44 @@ export async function pushWorkspaceKey(
     'key_write_conflict',
     409,
   );
+}
+
+/** Longest a control plane may set a workspace's expiry ahead (`expires_in_seconds`). */
+export const MAX_WORKSPACE_EXPIRY_SECONDS = 90 * 24 * 60 * 60;
+
+export type SetWorkspaceExpiryResult =
+  | { ok: true; workspaceId: string; expiresAt: Date | null }
+  | { ok: false; reason: 'not_found' | 'expired' };
+
+/**
+ * Moves or clears the deadline of a workspace that is still live: a temporary
+ * workspace kept alive by activity, or made permanent when someone claims it.
+ * A workspace past its deadline (expired, or being deleted: deletion pulls the
+ * deadline to now) is never revived, so this cannot resurrect a deleted one.
+ *
+ * @param expiresAt - The new deadline, or null for none.
+ */
+export async function setWorkspaceExpiry(
+  db: Db,
+  workspaceId: string,
+  expiresAt: Date | null,
+  now: Date = new Date(),
+): Promise<SetWorkspaceExpiryResult> {
+  const updated = await db
+    .update(workspaces)
+    .set({ expiresAt })
+    // Still live by the request's clock and by the database's own at the write: a deletion that
+    // pulled the deadline to now between the two is never undone.
+    .where(and(
+      eq(workspaces.id, workspaceId),
+      or(
+        sql`${workspaces.expiresAt} IS NULL`,
+        and(gt(workspaces.expiresAt, now), sql`${workspaces.expiresAt} > ${sqlx.now(db)}`),
+      ),
+    ))
+    .returning({ id: workspaces.id, expiresAt: workspaces.expiresAt });
+  const [row] = updated;
+  if (row) return { ok: true, workspaceId: row.id, expiresAt: row.expiresAt ?? null };
+  const [existing] = await db.select({ id: workspaces.id }).from(workspaces).where(eq(workspaces.id, workspaceId));
+  return { ok: false, reason: existing ? 'expired' : 'not_found' };
 }

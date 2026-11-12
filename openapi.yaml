@@ -7363,6 +7363,8 @@ paths:
                             type: boolean
                           server_minted_key:
                             type: boolean
+                          expiry:
+                            type: boolean
         '401':
           description: Missing or wrong internal secret (`unauthorized`)
           content:
@@ -7593,6 +7595,89 @@ paths:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
 
+  /internal/workspaces/{id}/expiry:
+    servers:
+      - url: http://localhost:8787
+        description: Self-hosted engine (root, no /v1 prefix)
+    post:
+      summary: Move or clear a live workspace's expiry (control plane)
+      description: >-
+        Moves the deadline of a workspace that has not expired to
+        `expires_in_seconds` from now (a temporary workspace kept alive by
+        activity), or clears it with `null` (the workspace was claimed and is
+        kept). A workspace already past its deadline, including one being
+        deleted, is never revived (`409 workspace_expired`). Served by the
+        hosted gateway too.
+      tags:
+        - Internal Admin
+      security:
+        - internalSecret: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            pattern: '^[A-Za-z0-9_-]{1,128}$'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [expires_in_seconds]
+              properties:
+                expires_in_seconds:
+                  type: integer
+                  nullable: true
+                  minimum: 60
+                  maximum: 7776000
+      responses:
+        '200':
+          description: The new deadline
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok:
+                    type: boolean
+                    enum: [true]
+                  data:
+                    type: object
+                    required: [workspace_id, expires_at]
+                    properties:
+                      workspace_id:
+                        type: string
+                      expires_at:
+                        type: string
+                        format: date-time
+                        nullable: true
+        '400':
+          description: Invalid workspace id or body
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '401':
+          description: Missing or wrong internal secret (`unauthorized`)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: The admin API is disabled, or no such workspace (`not_found`)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '409':
+          description: The workspace is past its deadline (`workspace_expired`)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
   /internal/workspaces/{id}/api-key:
     servers:
       - url: http://localhost:8787

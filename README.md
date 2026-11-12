@@ -1403,6 +1403,7 @@ accepted; a wrong secret is `401`).
 | `POST /internal/workspaces` | `{ name, metadata? }` → `201` with `workspace_id`, `api_key` (shown once), `api_key_generation: 0` |
 | `DELETE /internal/workspaces/:id` | Idempotently delete by ID with the internal secret (`204`, including when already gone) |
 | `POST /internal/workspaces/:id/api-key` | Push a control-plane-minted key (`{ api_key, key_generation?, grace_ms? }`, upserts a missing workspace with `201`) or omit `api_key` to have the engine mint and return one. Generation-fenced: stale pushes are `409 stale_key_generation`, generationless key changes on a fenced workspace are `409 key_generation_required`, and a key that is live in another workspace (current, or previous within its grace window) is `409 api_key_conflict`. After an internal delete claims this ID, same-process pushes are `410 workspace_deleted`; deleted IDs are not reusable without restarting the engine. |
+| `POST /internal/workspaces/:id/expiry` | Move a live workspace's deadline (`{ expires_in_seconds: 60..7776000 }`, counted from now) or clear it (`{ expires_in_seconds: null }`) → `{ workspace_id, expires_at }`. A workspace already past its deadline, or being deleted, is never revived (`409 workspace_expired`); unknown IDs are `404`. Served by the hosted gateway too. |
 
 Workspace IDs match `^[A-Za-z0-9_-]{1,128}$`. A deployment that mints `ar_` credentials
 (`RELAYCAST_CREDENTIAL_FORMAT=ar`) carries the workspace in every credential as a 64-bit snowflake,
