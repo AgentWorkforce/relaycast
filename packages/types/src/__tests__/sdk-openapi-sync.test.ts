@@ -65,6 +65,7 @@ const NON_SDK_OPENAPI_PATHS = new Set([
   '/v1/internal/workspaces',
   '/v1/internal/workspaces/{param}',
   '/v1/internal/workspaces/{param}/api-key',
+  '/v1/internal/workspaces/{param}/expiry',
   '/v1/internal/workspaces/{param}/import',
 ]);
 

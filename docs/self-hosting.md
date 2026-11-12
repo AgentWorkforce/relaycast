@@ -337,10 +337,11 @@ both.
 
 | Route | Body | Success `data` |
 |---|---|---|
-| `GET /internal/capabilities` | — | `{ workspace_key_push: { generation_cas, generation_required_once_fenced, grace_ms, max_grace_ms: 3600000, revocation_markers, previous_key_slot }, workspace_admin: { create, delete, server_minted_key } }` (all flags `true`) |
+| `GET /internal/capabilities` | — | `{ workspace_key_push: { generation_cas, generation_required_once_fenced, grace_ms, max_grace_ms: 3600000, revocation_markers, previous_key_slot }, workspace_admin: { create, delete, server_minted_key, expiry } }` (all flags `true`) |
 | `POST /internal/workspaces` | `{ name, metadata? }` | `201 { workspace_id, api_key, name, created_at, expires_at: null, api_key_generation: 0 }` |
 | `DELETE /internal/workspaces/:id` | — | `204`, including when the workspace is already gone; current/previous workspace keys and agent tokens stop authenticating |
 | `POST /internal/workspaces/:id/api-key` | `{ api_key?, key_generation?, grace_ms?, plan? }` | `{ workspace_id, api_key_generation }` (`201` when the push created the workspace); plus `api_key` when the engine minted it |
+| `POST /internal/workspaces/:id/expiry` | `{ expires_in_seconds: 60..7776000 \| null }` | `{ workspace_id, expires_at }`: moves a live workspace's deadline to that many seconds from now, or clears it (`null`). A workspace already past its deadline (expired, or being deleted) is never revived: `409 workspace_expired`; unknown id `404` |
 
 `POST /internal/workspaces/:id/api-key` semantics:
 

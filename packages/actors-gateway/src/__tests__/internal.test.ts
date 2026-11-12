@@ -54,7 +54,7 @@ describe('internal admin API', () => {
     const response = await fetch(`${harness.baseUrl}/internal/capabilities`, { headers: { authorization: `Bearer ${INTERNAL_SECRET}` } });
     expect(response.status).toBe(200);
     expect(await readJson(response)).toEqual({ ok: true, data: INTERNAL_CAPABILITIES });
-    expect(INTERNAL_CAPABILITIES.workspace_admin).toEqual({ create: true, delete: true, server_minted_key: true });
+    expect(INTERNAL_CAPABILITIES.workspace_admin).toEqual({ create: true, delete: true, server_minted_key: true, expiry: true });
   });
 
   it('creates a workspace: the gateway mints the id and tag, the actor answers 201', async () => {
@@ -174,7 +174,7 @@ describe('internal admin API', () => {
     expect(harness.controlPlane.invocations).toHaveLength(0);
   });
 
-  it('forwards delete and key push to the named workspace actor with the Authorization header', async () => {
+  it('forwards delete, key push and expiry to the named workspace actor with the Authorization header', async () => {
     harness = await startHarness({ workspace: adminWorkspace, env: { RELAYCAST_INTERNAL_SECRET: INTERNAL_SECRET } });
     const deleted = await fetch(`${harness.baseUrl}/internal/workspaces/${WORKSPACE_ID}`, { method: 'DELETE', headers: { authorization: `Bearer ${INTERNAL_SECRET}` } });
     expect(deleted.status).toBe(200);
@@ -187,7 +187,14 @@ describe('internal admin API', () => {
     });
     expect(pushed.status).toBe(200);
     expect((await readJson(pushed)).data).toMatchObject({ url: `${harness.baseUrl}/internal/workspaces/${WORKSPACE_ID}/api-key`, body: '{"key_generation":2}' });
-    expect(harness.controlPlane.invocations.map((call) => [call.method, call.actorId])).toEqual([['handle', WORKSPACE_ID], ['handle', WORKSPACE_ID]]);
+    const expiry = await fetch(`${harness.baseUrl}/internal/workspaces/${WORKSPACE_ID}/expiry`, {
+      method: 'POST',
+      headers: { authorization: `Bearer ${INTERNAL_SECRET}`, 'content-type': 'application/json' },
+      body: JSON.stringify({ expires_in_seconds: null }),
+    });
+    expect(expiry.status).toBe(200);
+    expect((await readJson(expiry)).data).toMatchObject({ url: `${harness.baseUrl}/internal/workspaces/${WORKSPACE_ID}/expiry`, body: '{"expires_in_seconds":null}' });
+    expect(harness.controlPlane.invocations.map((call) => [call.method, call.actorId])).toEqual([['handle', WORKSPACE_ID], ['handle', WORKSPACE_ID], ['handle', WORKSPACE_ID]]);
   });
 
   it('answers 400 for a workspace id segment whose percent-encoding is malformed', async () => {
