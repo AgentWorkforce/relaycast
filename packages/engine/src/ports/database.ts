@@ -174,11 +174,15 @@ async function executeAtomicWrites(
   }
 
   if (handle.withTransaction) {
-    return handle.withTransaction(async (tx) => {
+    const withTransaction = handle.withTransaction;
+    const attempt = () => withTransaction(async (tx) => {
       inheritHandleBindings(tx, db);
       const statements = buildStatements(input, tx);
       return statements.length === 0 ? [] : runSequentially(statements);
     });
+    // A builder is rebuilt against each new transaction, so a transaction the
+    // server rolled back as a deadlock victim can run again from scratch.
+    return typeof input === 'function' ? retryDeadlockVictim(attempt) : attempt();
   }
 
   const statements = buildStatements(input, db);
@@ -188,6 +192,30 @@ async function executeAtomicWrites(
     return handle.batch(statements as [AtomicWrite, ...AtomicWrite[]]);
   }
   return runSequentially(statements);
+}
+
+/** Attempts after the first for a transaction PostgreSQL aborted as a deadlock victim. */
+export const DEADLOCK_RETRIES = 3;
+
+/** True when `error` (or a cause) is PostgreSQL's deadlock_detected (40P01). */
+export function isDeadlockError(error: unknown): boolean {
+  return walkCauses(error, (record) => (pgSqlState(record) === '40P01' ? true : undefined)) === true;
+}
+
+/**
+ * Safety net only: lock ordering is what prevents deadlocks (see
+ * sqlx.lockSeq). The victim transaction rolled back entirely, so rerunning it
+ * cannot duplicate a write. Each retry is logged so a regression stays visible.
+ */
+async function retryDeadlockVictim<T>(attempt: () => Promise<T>): Promise<T> {
+  for (let retry = 0; ; retry += 1) {
+    try { return await attempt(); }
+    catch (error) {
+      if (retry >= DEADLOCK_RETRIES || !isDeadlockError(error)) throw error;
+      console.warn('[db.atomic] deadlock victim; retrying transaction', { retry: retry + 1 });
+      await new Promise((resolve) => setTimeout(resolve, 5 * 2 ** retry + Math.random() * 10));
+    }
+  }
 }
 
 /** Translate a workspace guard failure after the atomic adapter rolls back. */
