@@ -417,7 +417,7 @@ pieces it runs:
    (`POST /v1/credentials/upgrade`; workspace keys through
    `POST /internal/workspaces/:id/api-key`). Their hashes are copied as is,
    so upgraded holders keep working after the move.
-2. `relaycast-engine migration-preflight [--file-dir <RELAYCAST_FILE_DIR>]
+2. `relaycast-engine migration-preflight [--file-dir <files dir>]
    [--ar-since <epoch s>]`: read-only per-workspace counts, missing file
    objects, and principals created before `--ar-since` that were never
    upgraded. Exit 1 when anything blocks.
@@ -426,12 +426,15 @@ pieces it runs:
    `manifest.json` (tables in plan order, columns, row count, digest) and one
    NDJSON file per table. It holds credential hashes, never plaintext.
 4. On the durable-actors deployment, `relaycast-migrate files --dir <dir>
-   --from <old RELAYCAST_FILE_DIR>` (copies completed files into the
+   --from <files dir>` (copies completed files into the
    gateway's file store, verified by sha256), then `relaycast-migrate import
    --dir <dir> --gateway <url>` (`POST /internal/workspaces/:id/import`; the
    actor verifies every block it stores and serves the workspace only once
    all counts and digests match the manifest). Reruns resume; `relaycast-migrate
    abort` empties a failed workspace.
+
+The files dir is where the server kept uploads: `relaycast-files` under its
+working directory (`/data/relaycast-files` in the container image).
 
 Both sides must run the same engine schema: `begin` refuses an export whose
 column lists differ from the actor's.

@@ -4,7 +4,7 @@
  * (`relaycast-engine export-for-actors`) into this deployment's workspace
  * actors.
  *
- *   relaycast-migrate files  --dir <export> --from <old RELAYCAST_FILE_DIR> [--workspace <id>]...
+ *   relaycast-migrate files  --dir <export> --from <old files dir, e.g. /data/relaycast-files> [--workspace <id>]...
  *       Copy every completed file's bytes into this deployment's file store
  *       (RELAYCAST_FILE_STORE and its RELAYCAST_S3_* / RELAYCAST_GCS_* settings,
  *       as the gateway reads them), verifying size and sha256 by reading each

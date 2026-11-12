@@ -69,8 +69,8 @@ describe.skipIf(!enabled)('Postgres to workspace actor migration (integration)',
         RELAYCAST_CREDENTIAL_KEYRING: KEYRING,
         RELAYCAST_CREDENTIAL_FORMAT: 'ar',
         RELAYCAST_INTERNAL_SECRET: INTERNAL_SECRET,
-        RELAYCAST_FILE_DIR: join(outDir, 'files'),
       },
+      cwd: outDir,
       stdio: 'ignore',
     });
     for (let i = 0; i < 120; i += 1) {
