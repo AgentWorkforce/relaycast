@@ -68,7 +68,8 @@ function httpOrigin(name: string, value: string): string {
  * One relaycast workspace per actor: the actor id is the workspace id, and the
  * engine runs on the actor's SQLite. The gateway (`@relaycast/actors-gateway`)
  * calls `create` for `POST /v1/workspaces` and `handle` for everything else,
- * routing by the workspace id inside each `ar_` credential. A WebSocket
+ * routing by the workspace id inside each `ar_` credential, and `fileStored`
+ * after it stores a signed upload for the workspace in its key. A WebSocket
  * upgrade (`/v1/ws`, `/v1/node/ws`) answers with a socket grant; the gateway
  * opens an actor socket with the grant's principal as metadata, and the
  * engine's realtime runs over the socket lifecycle hooks below.
@@ -123,6 +124,16 @@ export class Workspace extends Actor {
 
     async handle(request: ActorHttpRequest): Promise<ActorHttpResponse> {
         return this.db.transaction(() => this.runtime.handle(request))
+    }
+
+    /**
+     * The gateway stored `size` bytes for the signed upload of `key`; the
+     * actor keeps the size so completing the upload needs no call back to the
+     * gateway's public origin, which the actor's egress may not reach. The
+     * gateway acknowledges the PUT only once this call succeeded.
+     */
+    async fileStored(key: string, size: number): Promise<{ recorded: boolean }> {
+        return this.db.transaction(() => this.runtime.fileStored(key, size))
     }
 
     /** Outbound HTTP (webhooks, http_push, A2A egress) and maintenance run here, never inside a request. */

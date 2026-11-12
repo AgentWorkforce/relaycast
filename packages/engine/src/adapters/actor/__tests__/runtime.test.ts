@@ -1,8 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import { verifyFileToken } from '../../../lib/fileTokens.js';
 import { sha256Hex } from '../../../lib/crypto.js';
-import { createActorRuntime, nextMaintenanceAt } from '../index.js';
-import { SignedUrlFileStorage } from '../files.js';
+import { FILE_STORED_KV_PREFIX, createActorRuntime, nextMaintenanceAt } from '../index.js';
+import { FILE_STORED_TTL_SECONDS, SignedUrlFileStorage } from '../files.js';
 import type { ActorHttpRequest } from '../http.js';
 import { FAKE_FILE_SECRET, FakeAlarm, FakeWorkspaceActor, TEST_CREDENTIAL_TAGS, jsonRequest } from './fakeActor.js';
 
@@ -469,6 +469,106 @@ describe('workspace actor runtime', () => {
     expect(complete.status).toBe(409);
     expect(complete.json.error?.code).toBe('upload_size_mismatch');
     expect(statted).toEqual(['HEAD /_relayfiles']);
+  });
+
+  describe("the gateway's stored-size record (fileStored)", () => {
+    // An actor pod that cannot resolve or reach the public origin (customer VPC egress).
+    const unreachable = () => {
+      const attempts: string[] = [];
+      const outboundFetch: typeof globalThis.fetch = async (input, init) => {
+        attempts.push(`${init?.method} ${new URL(new Request(input).url).pathname}`);
+        throw Object.assign(new TypeError('fetch failed'), { cause: { code: 'ENOTFOUND' } });
+      };
+      return { attempts, outboundFetch };
+    };
+
+    async function pendingUpload(actor: FakeWorkspaceActor, alice: string, size = 5) {
+      const upload = await call<{ id: string; upload_url: string }>(actor, 'POST', '/v1/files/upload', { filename: 'a.txt', content_type: 'text/plain', size_bytes: size }, alice);
+      expect(upload.status).toBe(201);
+      const token = await verifyFileToken(FAKE_FILE_SECRET, new URL(upload.json.data.upload_url).searchParams.get('token'));
+      return { id: upload.json.data.id, key: token!.key };
+    }
+
+    it('completes an upload without any stat transport once the gateway recorded it', async () => {
+      const { attempts, outboundFetch } = unreachable();
+      const actor = new FakeWorkspaceActor(WORKSPACE_ID, { outboundFetch });
+      const { alice } = await workspaceWithAgents(actor);
+      const { id, key } = await pendingUpload(actor, alice);
+
+      expect(await actor.fileStored(key, 5)).toEqual({ recorded: true });
+      // A retried PUT reports again: the record is refreshed, not refused.
+      expect(await actor.fileStored(key, 5)).toEqual({ recorded: true });
+      expect(rows(actor, 'SELECT COUNT(*) AS n FROM _actor_kv WHERE key = ?', `${FILE_STORED_KV_PREFIX}${key}`)).toEqual([{ n: 1 }]);
+      const [record] = rows(actor, 'SELECT value, expires_at FROM _actor_kv WHERE key = ?', `${FILE_STORED_KV_PREFIX}${key}`);
+      expect(record?.value).toBe('5');
+      expect(Number(record?.expires_at)).toBeGreaterThan(Date.now() + 3600 * 1000);
+      expect(Number(record?.expires_at)).toBeLessThanOrEqual(Date.now() + FILE_STORED_TTL_SECONDS * 1000);
+
+      const complete = await call<{ id: string; size_bytes: number }>(actor, 'POST', `/v1/files/${id}/complete`, {}, alice);
+      expect(complete.status).toBe(200);
+      expect(complete.json.data).toMatchObject({ id, size_bytes: 5 });
+      expect(attempts).toEqual([]);
+      // A completed file takes no further record.
+      expect(await actor.fileStored(key, 5)).toEqual({ recorded: false });
+    });
+
+    it('still verifies the recorded size against the declared one', async () => {
+      const { attempts, outboundFetch } = unreachable();
+      const actor = new FakeWorkspaceActor(WORKSPACE_ID, { outboundFetch });
+      const { alice } = await workspaceWithAgents(actor);
+      const { id, key } = await pendingUpload(actor, alice);
+      await actor.fileStored(key, 3);
+      const complete = await call(actor, 'POST', `/v1/files/${id}/complete`, {}, alice);
+      expect(complete.status).toBe(409);
+      expect(complete.json.error?.code).toBe('upload_size_mismatch');
+      expect(attempts).toEqual([]);
+    });
+
+    // The stat fallback serves only gateways that predate fileStored (rolling deploys).
+    it('falls back to the gateway stat without a record, failing as before when the origin is unreachable', async () => {
+      const { attempts, outboundFetch } = unreachable();
+      const actor = new FakeWorkspaceActor(WORKSPACE_ID, { outboundFetch });
+      const { alice } = await workspaceWithAgents(actor);
+      const { id } = await pendingUpload(actor, alice);
+      const complete = await call(actor, 'POST', `/v1/files/${id}/complete`, {}, alice);
+      expect(complete.status).toBe(500);
+      expect(attempts).toEqual(['HEAD /_relayfiles']);
+      expect(rows(actor, 'SELECT status FROM files WHERE id = ?', id)).toEqual([{ status: 'pending' }]);
+    });
+
+    it('asks the gateway again once the record has expired', async () => {
+      const statted: string[] = [];
+      const actor = new FakeWorkspaceActor(WORKSPACE_ID, {
+        outboundFetch: async (input, init) => {
+          statted.push(`${init?.method} ${new URL(new Request(input).url).pathname}`);
+          return new Response(null, { status: 404 });
+        },
+      });
+      const { alice } = await workspaceWithAgents(actor);
+      const { id, key } = await pendingUpload(actor, alice);
+      await actor.fileStored(key, 5);
+      actor.sql.exec('UPDATE _actor_kv SET expires_at = ? WHERE key = ?', Date.now() - 1, `${FILE_STORED_KV_PREFIX}${key}`);
+      const complete = await call(actor, 'POST', `/v1/files/${id}/complete`, {}, alice);
+      expect(complete.status).toBe(409);
+      expect(complete.json.error?.code).toBe('upload_incomplete');
+      expect(statted).toEqual(['HEAD /_relayfiles']);
+    });
+
+    it("refuses another workspace's key and invalid arguments, and records nothing without a pending upload", async () => {
+      const actor = new FakeWorkspaceActor(WORKSPACE_ID);
+      const { alice } = await workspaceWithAgents(actor);
+      const { id, key } = await pendingUpload(actor, alice);
+      const foreign = key.replace(WORKSPACE_ID, '241764880589606913');
+      await expect(actor.fileStored(foreign, 5)).rejects.toThrow(/another workspace/);
+      await expect(actor.fileStored(`${WORKSPACE_ID}/../a`, 5)).rejects.toThrow(/storage key/);
+      await expect(actor.fileStored(`${WORKSPACE_ID}/${id}`, 5)).rejects.toThrow(/storage key/);
+      for (const size of [0, -1, 1.5, Number.NaN]) await expect(actor.fileStored(key, size)).rejects.toThrow();
+      expect(await actor.fileStored(`${WORKSPACE_ID}/999/a.txt`, 5)).toEqual({ recorded: false });
+      // A deleted file's key takes no record either.
+      expect((await call(actor, 'DELETE', `/v1/files/${id}`, undefined, alice)).status).toBeLessThan(300);
+      expect(await actor.fileStored(key, 5)).toEqual({ recorded: false });
+      expect(rows(actor, 'SELECT key FROM _actor_kv WHERE key LIKE ?', `${FILE_STORED_KV_PREFIX}%`)).toEqual([]);
+    });
   });
 
   it('arms the alarm when an idempotency record expires', async () => {

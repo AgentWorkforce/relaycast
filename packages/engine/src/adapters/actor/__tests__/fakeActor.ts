@@ -319,6 +319,11 @@ export class FakeWorkspaceActor {
     return this.call(() => this.runtime.create(request, tag));
   }
 
+  /** `fileStored`: the gateway stored an upload (one call, as `handle`). */
+  fileStored(key: string, size: number): Promise<{ recorded: boolean }> {
+    return this.call(() => this.runtime.fileStored(key, size));
+  }
+
   /** `onAlarm`: the firing alarm reads as set during the call and is consumed after it unless re-armed. */
   async maintain(): Promise<void> {
     const firing = this.alarm.at;

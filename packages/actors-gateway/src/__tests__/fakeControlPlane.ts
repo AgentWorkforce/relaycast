@@ -15,6 +15,7 @@ export interface FakeWorkspace {
   create?(request: ActorHttpRequest, credentialTag: string): ActorHttpResponse | Promise<ActorHttpResponse>;
   handle(request: ActorHttpRequest): ActorHttpResponse | Promise<ActorHttpResponse>;
   importData?(body: unknown, credentialTag: string): ActorHttpResponse | Promise<ActorHttpResponse>;
+  fileStored?(key: string, size: number): { recorded: boolean } | Promise<{ recorded: boolean }>;
 }
 
 export interface Invocation {
@@ -157,6 +158,8 @@ export async function startFakeControlPlane(options: FakeControlPlaneOptions): P
           ? await workspace.create?.(invocation.args[0] as ActorHttpRequest, String(invocation.args[1]))
           : invocation.method === 'importData'
             ? await workspace.importData?.(invocation.args[0], String(invocation.args[1]))
+          : invocation.method === 'fileStored'
+            ? await workspace.fileStored?.(String(invocation.args[0]), Number(invocation.args[1]))
             : await workspace.handle(invocation.args[0] as ActorHttpRequest);
         if (!result) throw new Error(`actor has no method ${invocation.method}`);
         reply(res, 200, { outcome: { type: 'completed', result } });
