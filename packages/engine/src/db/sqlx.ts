@@ -56,6 +56,11 @@ function plainRow<T>(row: T): T {
   for (const key of Object.keys(row)) {
     if (!/^(?:0|[1-9]\d*)$/.test(key)) named[key] = (row as unknown as Record<string, unknown>)[key];
   }
+  // A positional row without column names cannot be read by name: fail
+  // loudly rather than hand the caller an empty object.
+  if (row.length > 0 && Object.keys(named).length === 0) {
+    throw new Error('sqlx.all: the driver returned a positional row without column names');
+  }
   return named as T;
 }
 
