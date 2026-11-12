@@ -62,7 +62,8 @@ describe.skipIf(!enabled)("PostgreSQL concurrent channel posts (integration)", {
       runtimeRole: "relaycast_runtime",
     });
     handle = await m.handle.openPostgresEngineDb(configFor(RUNTIME_URL!, "runtime"));
-  });
+    // Waits for the fixture lock while other PostgreSQL test files hold it.
+  }, 180_000);
 
   afterAll(async () => {
     await handle?.close().catch(() => {});
