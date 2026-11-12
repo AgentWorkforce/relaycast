@@ -6,13 +6,15 @@
  * workspaces come from one snapshot. Each workspace gets a directory:
  *
  *   <out>/<workspace id>/manifest.json   tables (plan order) with columns, count, sha256, blocks
- *   <out>/<workspace id>/<table>.ndjson  one block of rows per line (`migration/rows.ts`)
+ *   <out>/<workspace id>/<table>.ndjson  one sealed block of rows per line (`sealing.ts`, `rows.ts`)
  *
- * Rows hold credential hashes, never plaintext credentials. Nothing is logged
- * but counts and ids.
+ * Blocks are bounded by rows and by serialized bytes, so each fits one import
+ * request. Lines are sealed with a key derived from the internal secret
+ * (subscription signing secrets and headers are in the rows); directories are
+ * 0700 and files 0600. Nothing is logged but counts and ids.
  */
 import { createWriteStream } from 'node:fs';
-import { mkdir, rename, writeFile } from 'node:fs/promises';
+import { chmod, mkdir, rename, writeFile } from 'node:fs/promises';
 import { once } from 'node:events';
 import { join } from 'node:path';
 import { and, asc, eq, getTableColumns, getTableName, gt, inArray, is, like, sql, type SQL } from 'drizzle-orm';
@@ -22,9 +24,15 @@ import type pg from 'pg';
 import * as pgSchema from '../../db/schema.pg.js';
 import { migrationPlan, type MigrationTable } from './plan.js';
 import { blockDigest, encodeRow, tableDigest, type MigrationRow, type TableDigest } from './rows.js';
+import { MAX_IMPORT_BODY_BYTES } from './protocol.js';
+import { SEALING, blockPlace, exportKey, sealBlock } from './sealing.js';
 
 export const EXPORT_FORMAT = 1;
 export const DEFAULT_BLOCK_ROWS = 500;
+/** A block's serialized rows stay under this, well inside one import request. */
+export const DEFAULT_BLOCK_BYTES = 4 * 1024 * 1024;
+/** The largest single row an import request can carry, with room for its envelope. */
+export const MAX_ROW_BYTES = MAX_IMPORT_BODY_BYTES - 64 * 1024;
 
 export interface ManifestTable extends TableDigest {
   name: string;
@@ -37,6 +45,8 @@ export interface WorkspaceManifest {
   run_id: string;
   workspace_id: string;
   exported_at: string;
+  /** How the NDJSON lines are sealed. */
+  sealing: typeof SEALING;
   tables: ManifestTable[];
 }
 
@@ -90,7 +100,10 @@ export interface ExportOptions {
   runId: string;
   outDir: string;
   workspaceIds: readonly string[];
+  /** The deployment's internal secret: the block key is derived from it. */
+  internalSecret: string;
   blockRows?: number;
+  blockBytes?: number;
   log?: (line: string) => void;
 }
 
@@ -100,17 +113,22 @@ export interface ExportOptions {
  */
 export async function exportWorkspaces(client: pg.ClientBase, options: ExportOptions): Promise<WorkspaceManifest[]> {
   const db = drizzle(client as pg.PoolClient, { schema: pgSchema });
+  const key = await exportKey(options.internalSecret, options.runId);
+  await mkdir(options.outDir, { recursive: true, mode: 0o700 });
+  await chmod(options.outDir, 0o700);
   const manifests: WorkspaceManifest[] = [];
   for (const workspaceId of options.workspaceIds) {
-    manifests.push(await exportWorkspace(db, workspaceId, options));
+    manifests.push(await exportWorkspace(db, workspaceId, key, options));
   }
   return manifests;
 }
 
-async function exportWorkspace(db: NodePgDatabase<typeof pgSchema>, workspaceId: string, options: ExportOptions): Promise<WorkspaceManifest> {
+async function exportWorkspace(db: NodePgDatabase<typeof pgSchema>, workspaceId: string, key: CryptoKey, options: ExportOptions): Promise<WorkspaceManifest> {
   const blockRows = options.blockRows ?? DEFAULT_BLOCK_ROWS;
+  const blockBytes = Math.min(options.blockBytes ?? DEFAULT_BLOCK_BYTES, MAX_ROW_BYTES);
   const dir = join(options.outDir, workspaceId);
-  await mkdir(dir, { recursive: true });
+  await mkdir(dir, { recursive: true, mode: 0o700 });
+  await chmod(dir, 0o700);
   const tables: ManifestTable[] = [];
   for (const table of migrationPlan()) {
     const pgTable = pgTableFor(table.name);
@@ -119,27 +137,43 @@ async function exportWorkspace(db: NodePgDatabase<typeof pgSchema>, workspaceId:
     const scope = scopeCondition(db, table, workspaceId);
 
     const path = join(dir, `${table.name}.ndjson`);
-    const out = createWriteStream(`${path}.partial`, { flags: 'w' });
+    const out = createWriteStream(`${path}.partial`, { flags: 'w', mode: 0o600 });
     const digests: string[] = [];
     let count = 0;
     let after = -1;
+    let block: MigrationRow[] = [];
+    let bytes = 0;
+    const flush = async (): Promise<void> => {
+      if (block.length === 0) return;
+      digests.push(await blockDigest(block));
+      const line = await sealBlock(key, blockPlace(workspaceId, table.name, digests.length - 1), JSON.stringify(block));
+      if (!out.write(`${line}\n`)) await once(out, 'drain');
+      count += block.length;
+      block = [];
+      bytes = 0;
+    };
     for (;;) {
       const rows = await db.select().from(pgTable)
         .where(and(scope, gt(rowidColumn, after)))
         .orderBy(asc(rowidColumn))
         .limit(blockRows) as Record<string, unknown>[];
       if (rows.length === 0) break;
-      const block: MigrationRow[] = rows.map((row) => {
+      for (const row of rows) {
         const byColumn: Record<string, unknown> = {};
         for (const [property, column] of properties) byColumn[column] = row[property];
-        return encodeRow(table.name, Number(byColumn.rowid), table.columnObjects, byColumn);
-      });
-      digests.push(await blockDigest(block));
-      if (!out.write(`${JSON.stringify(block)}\n`)) await once(out, 'drain');
-      count += block.length;
-      after = block[block.length - 1]![0];
+        const encoded = encodeRow(table.name, Number(byColumn.rowid), table.columnObjects, byColumn);
+        const size = Buffer.byteLength(JSON.stringify(encoded)) + 1;
+        if (size > MAX_ROW_BYTES) {
+          throw new Error(`${table.name} row ${encoded[0]}: a ${size}-byte row exceeds the ${MAX_ROW_BYTES}-byte import limit`);
+        }
+        if (block.length > 0 && (block.length >= blockRows || bytes + size > blockBytes)) await flush();
+        block.push(encoded);
+        bytes += size;
+        after = encoded[0];
+      }
       if (rows.length < blockRows) break;
     }
+    await flush();
     out.end();
     await once(out, 'finish');
     await rename(`${path}.partial`, path);
@@ -151,9 +185,10 @@ async function exportWorkspace(db: NodePgDatabase<typeof pgSchema>, workspaceId:
     run_id: options.runId,
     workspace_id: workspaceId,
     exported_at: new Date().toISOString(),
+    sealing: SEALING,
     tables,
   };
-  await writeFile(join(dir, 'manifest.json'), `${JSON.stringify(manifest, null, 2)}\n`);
+  await writeFile(join(dir, 'manifest.json'), `${JSON.stringify(manifest, null, 2)}\n`, { mode: 0o600 });
   return manifest;
 }
 

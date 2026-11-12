@@ -3,7 +3,9 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { LocalFileStore } from '../files/index.js';
-import { main } from '../migrate.js';
+import { blockPlace, exportKey } from '@relaycast/engine/gateway';
+import { sealBlock } from '../../../engine/src/adapters/migration/sealing.js';
+import { gatewayOrigin, main } from '../migrate.js';
 import { jsonResponse } from './fakeControlPlane.js';
 import { INTERNAL_SECRET, WORKSPACE_ID, startHarness, type Harness } from './harness.js';
 
@@ -24,6 +26,13 @@ async function tempDir(): Promise<string> {
   return dir;
 }
 
+/** Sealed NDJSON lines for blocks of one table, as the exporter writes them. */
+async function sealed(table: string, blocks: unknown[][][]): Promise<string> {
+  const key = await exportKey(INTERNAL_SECRET, RUN);
+  const lines = await Promise.all(blocks.map((block, seq) => sealBlock(key, blockPlace(WORKSPACE_ID, table, seq), JSON.stringify(block))));
+  return lines.map((line) => `${line}\n`).join('');
+}
+
 /** An export with two tables: three message blocks and one files block. */
 async function writeExport(files: unknown[][] = []) {
   const dir = await tempDir();
@@ -34,8 +43,8 @@ async function writeExport(files: unknown[][] = []) {
     { name: 'files', columns: FILE_COLUMNS, count: files.length, sha256: 'b'.repeat(64), blocks: files.length > 0 ? 1 : 0 },
   ];
   await writeFile(join(ws, 'manifest.json'), JSON.stringify({ format: 1, run_id: RUN, workspace_id: WORKSPACE_ID, exported_at: '', tables }));
-  await writeFile(join(ws, 'messages.ndjson'), '[[1,"m1"]]\n[[2,"m2"]]\n[[3,"m3"]]\n');
-  await writeFile(join(ws, 'files.ndjson'), files.length > 0 ? `${JSON.stringify(files)}\n` : '');
+  await writeFile(join(ws, 'messages.ndjson'), await sealed('messages', [[[1, 'm1']], [[2, 'm2']], [[3, 'm3']]]));
+  await writeFile(join(ws, 'files.ndjson'), files.length > 0 ? await sealed('files', [files]) : '');
   return dir;
 }
 
@@ -109,7 +118,7 @@ describe('relaycast-migrate files', () => {
       row('f1', key, 'complete', 5),
       row('f2', `${WORKSPACE_ID}/f2/pending.bin`, 'pending', 9),
     ]);
-    const env = { RELAYCAST_FILE_STORE: 'local', RELAYCAST_FILE_DIR: target };
+    const env = { RELAYCAST_FILE_STORE: 'local', RELAYCAST_FILE_DIR: target, RELAYCAST_INTERNAL_SECRET: INTERNAL_SECRET };
 
     const first: string[] = [];
     expect(await main(['files', '--dir', dir, '--from', source], env, (line) => first.push(line))).toBe(0);
@@ -125,5 +134,45 @@ describe('relaycast-migrate files', () => {
     const third: string[] = [];
     expect(await main(['files', '--dir', dir, '--from', source], { ...env, RELAYCAST_FILE_DIR: await tempDir() }, (line) => third.push(line))).toBe(1);
     expect(third.at(-1)).toBe(`files ${WORKSPACE_ID}: 0 copied, 0 already present, 1 failed`);
+  });
+});
+
+describe('relaycast-migrate safety', () => {
+  it('skips a workspace that is already open, so rerunning a finished export succeeds', async () => {
+    const ops: string[] = [];
+    harness = await startHarness({
+      workspace: () => ({
+        handle: () => jsonResponse(404, {}),
+        importData: (body) => { ops.push((body as { op: string }).op); return jsonResponse(200, { ok: true, data: { status: 'complete' } }); },
+      }),
+      env: { RELAYCAST_INTERNAL_SECRET: INTERNAL_SECRET },
+    });
+    const dir = await writeExport();
+    const lines: string[] = [];
+    expect(await main(['import', '--dir', dir, '--gateway', harness.baseUrl], { RELAYCAST_INTERNAL_SECRET: INTERNAL_SECRET }, (line) => lines.push(line))).toBe(0);
+    expect(ops).toEqual(['begin']);
+    expect(lines.join('\n')).toContain('already imported and open');
+  });
+
+  it('refuses a block sealed under another secret', async () => {
+    harness = await startHarness({
+      workspace: () => ({ handle: () => jsonResponse(404, {}), importData: () => jsonResponse(201, { ok: true, data: { tables: {} } }) }),
+      env: { RELAYCAST_INTERNAL_SECRET: INTERNAL_SECRET },
+    });
+    const dir = await writeExport();
+    // The export was written by a deployment with another internal secret.
+    const other = await exportKey(`${INTERNAL_SECRET}-other`, RUN);
+    await writeFile(join(dir, WORKSPACE_ID, 'messages.ndjson'), `${await sealBlock(other, blockPlace(WORKSPACE_ID, 'messages', 0), '[[1,"m1"]]')}\n`);
+    const lines: string[] = [];
+    expect(await main(['import', '--dir', dir, '--gateway', harness.baseUrl], { RELAYCAST_INTERNAL_SECRET: INTERNAL_SECRET }, (line) => lines.push(line))).toBe(1);
+    expect(lines.join('\n')).toContain('does not open with this deployment');
+  });
+
+  it('sends the internal secret over plain http only inside the cluster or to loopback', () => {
+    expect(gatewayOrigin('http://relaycast.agent-relay.svc:8787/')).toBe('http://relaycast.agent-relay.svc:8787');
+    expect(gatewayOrigin('http://relaycast.agent-relay.svc.cluster.local:8787')).toBe('http://relaycast.agent-relay.svc.cluster.local:8787');
+    expect(gatewayOrigin('http://127.0.0.1:8787')).toBe('http://127.0.0.1:8787');
+    expect(gatewayOrigin('https://cast.example.com')).toBe('https://cast.example.com');
+    expect(() => gatewayOrigin('http://cast.example.com')).toThrow(/must be https/);
   });
 });

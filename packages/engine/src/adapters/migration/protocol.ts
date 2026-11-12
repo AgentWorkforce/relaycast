@@ -4,8 +4,9 @@
  *
  *   begin   { run_id, tables: [{ name, columns }] }      start, or resume the same run
  *   chunk   { run_id, table, seq, rows }                 idempotent per (table, seq)
- *   finish  { run_id, manifest: { <table>: digest } }    verify; serve on success
- *   abort   { run_id }                                   remove everything imported
+ *   finish  { run_id, manifest: { <table>: digest } }    verify (still closed); replays for the run
+ *   open    { run_id }                                   go-live: serve the verified workspace
+ *   abort   { run_id }                                   remove everything imported (before open)
  *   status  {}                                           the import state
  *
  * Tables are sent in plan order (`migrationPlan`), and `begin` refuses unless
@@ -38,6 +39,7 @@ export const ImportRequestSchema = z.discriminatedUnion('op', [
     run_id: runId,
     manifest: z.record(z.string(), digest),
   }).strict(),
+  z.object({ op: z.literal('open'), run_id: runId }).strict(),
   z.object({ op: z.literal('abort'), run_id: runId }).strict(),
   z.object({ op: z.literal('status') }).strict(),
 ]);

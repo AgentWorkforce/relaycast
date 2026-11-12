@@ -7,7 +7,7 @@
  * Resets the fixture schema as the owner.
  */
 import { spawn, type ChildProcess } from 'node:child_process';
-import { mkdtemp, readFile, readdir, rm } from 'node:fs/promises';
+import { mkdtemp, readFile, readdir, rm, stat } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -17,7 +17,8 @@ import { loadPostgresConfig, type PostgresMode } from '../../postgres/config.js'
 import { loadBundledPostgresMigrations, runPostgresMigrations } from '../../postgres/migrate.js';
 import { openPostgresPool } from '../../postgres/pool.js';
 import { holdFixtureLock, resetSchema, SCHEMA } from '../../postgres/__tests__/fixture.js';
-import { runMigrationExportCommand } from '../../postgres/cli.js';
+import { runMigrationExportCommand, runMigrationPreflightCommand } from '../../postgres/cli.js';
+import { blockPlace, exportKey, openBlock } from '../sealing.js';
 import { FakeWorkspaceActor } from '../../actor/__tests__/fakeActor.js';
 import type { WorkspaceManifest } from '../export.js';
 import type { MigrationRow } from '../rows.js';
@@ -61,7 +62,9 @@ describe.skipIf(!enabled)('Postgres to workspace actor migration (integration)',
     await resetSchema(owner);
     await runPostgresMigrations(owner, { schema: SCHEMA, bundled: loadBundledPostgresMigrations(), runtimeRole: 'relaycast_runtime' });
     outDir = await mkdtemp(join(process.env.TMPDIR ?? tmpdir(), 'relaycast-export-'));
-    server = spawn(process.execPath, ['--import', 'tsx', SERVE, '--port', String(PORT), '--db', join(outDir, 'unused.db')], {
+    // The server runs in the export dir (its files land in ./relaycast-files):
+    // resolve tsx from here, not from that cwd.
+    server = spawn(process.execPath, ['--import', import.meta.resolve('tsx'), SERVE, '--port', String(PORT), '--db', join(outDir, 'unused.db')], {
       env: {
         ...process.env,
         RELAYCAST_DATABASE_URL: RUNTIME_URL,
@@ -73,13 +76,13 @@ describe.skipIf(!enabled)('Postgres to workspace actor migration (integration)',
       cwd: outDir,
       stdio: 'ignore',
     });
-    for (let i = 0; i < 120; i += 1) {
+    for (let i = 0; i < 200; i += 1) {
       const up = await fetch(`${BASE}/health`).then((r) => r.ok, () => false);
       if (up) return;
       await new Promise((resolve) => setTimeout(resolve, 500));
     }
     throw new Error('the PostgreSQL self-host server did not start');
-  });
+  }, 150_000);
 
   afterAll(async () => {
     server?.kill('SIGTERM');
@@ -87,7 +90,7 @@ describe.skipIf(!enabled)('Postgres to workspace actor migration (integration)',
     if (owner) await resetSchema(owner).catch(() => {});
     await releaseFixture?.().catch(() => {});
     await owner?.end().catch(() => {});
-  });
+  }, 60_000);
 
   it('moves every row of a seeded workspace, verified by digest, and the actor answers as Postgres did', async () => {
     const created = await http<{ workspace_id: string; api_key: string }>('POST', '/internal/workspaces', { name: 'armadillo' },
@@ -116,15 +119,32 @@ describe.skipIf(!enabled)('Postgres to workspace actor migration (integration)',
     expect((await http('POST', '/v1/webhooks', { name: 'ci', channel: 'ops' }, key)).status).toBe(201);
     expect((await http('POST', '/v1/subscriptions', { events: ['message.created'], url: 'https://hooks.example.com/relay' }, key)).status).toBe(201);
 
+    // Preflight: everything here was created after the switch to ar_, so a switch
+    // time in the future marks every principal (and the never-rotated workspace
+    // key) as legacy: blocked, unless the operator accepts re-registration.
+    const dbEnv = { RELAYCAST_DATABASE_URL: RUNTIME_URL, RELAYCAST_DATABASE_CA_FILE: CA_FILE, RELAYCAST_INTERNAL_SECRET: INTERNAL_SECRET };
+    const pre: string[] = [];
+    const preIo = { out: (line: string) => pre.push(line), err: (line: string) => pre.push(`ERR ${line}`) };
+    const future = String(Math.floor(Date.now() / 1000) + 3600);
+    expect(await runMigrationPreflightCommand(['--ar-since', future], dbEnv, preIo)).toBe(1);
+    expect(pre.find((line) => line.includes('legacy_principals'))).toMatch(/"workspace_key":1/);
+    expect(await runMigrationPreflightCommand(['--ar-since', future, '--allow-legacy'], dbEnv, preIo)).toBe(0);
+    expect(await runMigrationPreflightCommand(['--ar-since', '0', '--export-dir', outDir], dbEnv, preIo)).toBe(0);
+    expect(pre.find((line) => line.includes('export_capacity'))).toMatch(/"ok":true/);
+    expect(await runMigrationPreflightCommand([], dbEnv, preIo)).toBe(64);
+
     // Export through the CLI entry point, as the migration Job runs it.
     const lines: string[] = [];
     const io = { out: (line: string) => lines.push(line), err: (line: string) => lines.push(`ERR ${line}`) };
-    const exitCode = await runMigrationExportCommand(['--out', outDir, '--run-id', 'run-pg-0001', '--block-rows', '9'],
-      { RELAYCAST_DATABASE_URL: RUNTIME_URL, RELAYCAST_DATABASE_CA_FILE: CA_FILE }, io);
+    const exitCode = await runMigrationExportCommand(['--out', outDir, '--run-id', 'run-pg-0001', '--block-rows', '9'], dbEnv, io);
     expect(exitCode, lines.join('\n')).toBe(0);
     for (const line of lines) {
       for (const secret of [key, ...Object.values(tokens), new URL(RUNTIME_URL!).password]) expect(line).not.toContain(secret);
     }
+    // At rest: owner-only and sealed (no subscription URL or other row content readable).
+    expect((await stat(join(outDir, workspaceId))).mode & 0o777).toBe(0o700);
+    expect((await stat(join(outDir, workspaceId, 'event_subscriptions.ndjson'))).mode & 0o777).toBe(0o600);
+    expect(await readFile(join(outDir, workspaceId, 'event_subscriptions.ndjson'), 'utf8')).not.toContain('hooks.example.com');
 
     const manifest = JSON.parse(await readFile(join(outDir, workspaceId, 'manifest.json'), 'utf8')) as WorkspaceManifest;
     expect(manifest.tables.find((table) => table.name === 'messages')!.count).toBeGreaterThan(40);
@@ -137,9 +157,11 @@ describe.skipIf(!enabled)('Postgres to workspace actor migration (integration)',
       return { status: response.status, json: JSON.parse(response.body) as Envelope<unknown> };
     };
     expect((await step({ op: 'begin', run_id: manifest.run_id, tables: manifest.tables.map(({ name, columns }) => ({ name, columns })) })).status).toBe(201);
+    const blockKey = await exportKey(INTERNAL_SECRET, manifest.run_id);
     for (const table of manifest.tables) {
       const text = await readFile(join(outDir, workspaceId, `${table.name}.ndjson`), 'utf8');
-      const blocks = text.split('\n').filter(Boolean).map((line) => JSON.parse(line) as MigrationRow[]);
+      const blocks = await Promise.all(text.split('\n').filter(Boolean)
+        .map(async (line, seq) => JSON.parse(await openBlock(blockKey, blockPlace(workspaceId, table.name, seq), line)) as MigrationRow[]));
       expect(blocks.length).toBe(table.blocks);
       for (const [seq, rows] of blocks.entries()) {
         const sent = await step({ op: 'chunk', run_id: manifest.run_id, table: table.name, seq, rows });
@@ -152,6 +174,7 @@ describe.skipIf(!enabled)('Postgres to workspace actor migration (integration)',
       manifest: Object.fromEntries(manifest.tables.map(({ name, count, sha256 }) => [name, { count, sha256 }])),
     });
     expect(finished.status, JSON.stringify(finished.json)).toBe(200);
+    expect((await step({ op: 'open', run_id: manifest.run_id })).status).toBe(200);
 
     // The Postgres-issued credentials work on the actor, and every read answers the same.
     const readActor = async (path: string, token: string) => {

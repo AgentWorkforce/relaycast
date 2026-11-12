@@ -417,21 +417,35 @@ pieces it runs:
    (`POST /v1/credentials/upgrade`; workspace keys through
    `POST /internal/workspaces/:id/api-key`). Their hashes are copied as is,
    so upgraded holders keep working after the move.
-2. `relaycast-engine migration-preflight [--file-dir <files dir>]
-   [--ar-since <epoch s>]`: read-only per-workspace counts, missing file
-   objects, and principals created before `--ar-since` that were never
-   upgraded. Exit 1 when anything blocks.
+2. `relaycast-engine migration-preflight --ar-since <epoch s> [--file-dir <files dir>]
+   [--export-dir <dir>] [--allow-legacy]`: read-only per-workspace counts,
+   missing file objects, principals still on legacy credentials (agents,
+   nodes, observer tokens and webhooks created before `--ar-since` and never
+   upgraded, and a workspace key neither created nor rotated since), and with
+   `--export-dir` its free space against twice the database's size. Exit 1
+   when anything blocks; legacy principals block unless `--allow-legacy`
+   (their holders then re-register after the move).
 3. Stop every writer, then `relaycast-engine export-for-actors --out <dir>
-   --run-id <id>`: one `REPEATABLE READ` snapshot, per workspace a
-   `manifest.json` (tables in plan order, columns, row count, digest) and one
-   NDJSON file per table. It holds credential hashes, never plaintext.
-4. On the durable-actors deployment, `relaycast-migrate files --dir <dir>
-   --from <files dir>` (copies completed files into the
-   gateway's file store, verified by sha256), then `relaycast-migrate import
-   --dir <dir> --gateway <url>` (`POST /internal/workspaces/:id/import`; the
-   actor verifies every block it stores and serves the workspace only once
-   all counts and digests match the manifest). Reruns resume; `relaycast-migrate
-   abort` empties a failed workspace.
+   --run-id <id>` (needs `RELAYCAST_INTERNAL_SECRET` or `_FILE`): one
+   `REPEATABLE READ` snapshot, per workspace a `manifest.json` (tables in plan
+   order, columns, row count, digest) and one NDJSON file per table. Blocks
+   are bounded by rows and bytes so each fits one import request. Rows carry
+   credential hashes but also subscription signing secrets and headers, so
+   every line is sealed (AES-256-GCM, key derived from the internal secret
+   and the run id, the line's table and position bound in) and the export is
+   owner-only (directories 0700, files 0600).
+4. On the durable-actors deployment, with the same internal secret:
+   `relaycast-migrate files --dir <dir> --from <files dir>` (copies completed
+   files into the gateway's file store, verified by sha256), then
+   `relaycast-migrate import --dir <dir> --gateway <url>`
+   (`POST /internal/workspaces/:id/import`: the actor verifies every block it
+   stores, then every table's count and digest; the workspace stays closed,
+   503, while verified), `relaycast-migrate verify-realtime --gateway <url>`
+   (a throwaway workspace streams a post over `/v1/ws`), and finally
+   `relaycast-migrate open --dir <dir> --gateway <url>` (go-live). Reruns
+   resume or skip finished workspaces; `relaycast-migrate abort` empties a
+   workspace that is not open yet. `--gateway` must be https unless it is a
+   cluster-local Service or loopback: the internal secret is sent to it.
 
 The files dir is where the server kept uploads: `relaycast-files` under its
 working directory (`/data/relaycast-files` in the container image).

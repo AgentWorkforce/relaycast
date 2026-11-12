@@ -60,3 +60,4 @@ export async function deriveKeyedWorkspaceId(bootstrapSecret: string, idempotenc
 
 /** The migration import protocol the gateway forwards to workspace actors. */
 export { MAX_IMPORT_BODY_BYTES, WORKSPACE_IMPORTING_CODE } from './adapters/migration/protocol.js';
+export { SEALING, blockPlace, exportKey, openBlock } from './adapters/migration/sealing.js';

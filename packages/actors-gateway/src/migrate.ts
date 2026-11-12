@@ -14,6 +14,9 @@
  *       (RELAYCAST_INTERNAL_SECRET or _FILE): begin, every block, finish. A
  *       rerun with the same export resumes. Exits non-zero unless every
  *       workspace finished with the manifest's counts and digests.
+ *   relaycast-migrate open   --dir <export> --gateway <url> [--workspace <id>]...
+ *       Go-live: a verified workspace starts serving (until then it answers
+ *       503, so a rollback before this loses nothing). Idempotent.
  *   relaycast-migrate abort  --dir <export> --gateway <url> --workspace <id>
  *       Remove a failed import's rows so the actor is empty again.
  *   relaycast-migrate verify-realtime --gateway <url>
@@ -23,7 +26,10 @@
  *       cannot bridge actor sockets (e.g. an unreachable control plane
  *       public URL: see DURABLE_ACTORS_SOCKET_ORIGIN).
  *
- * Copy files first: a workspace serves as soon as its import finishes.
+ * Export blocks are sealed (`@relaycast/engine/gateway` openBlock): every
+ * command that reads them needs RELAYCAST_INTERNAL_SECRET (or _FILE). The
+ * secret travels to the gateway, so --gateway must be https unless it is a
+ * cluster-local Service or loopback address.
  * Output is counts, ids and digests only; no credential or file content.
  */
 import { createHash } from 'node:crypto';
@@ -32,6 +38,7 @@ import { readFile, readdir, stat } from 'node:fs/promises';
 import { join, resolve, sep } from 'node:path';
 import { createInterface } from 'node:readline';
 import { pathToFileURL } from 'node:url';
+import { blockPlace, exportKey, openBlock } from '@relaycast/engine/gateway';
 import { ConfigError, secretFromEnv, type FileStoreKind } from './config.js';
 import { createFileStore, type FileStore } from './files/index.js';
 
@@ -44,17 +51,37 @@ interface ManifestTable { name: string; columns: string[]; count: number; sha256
 interface Manifest { format: number; run_id: string; workspace_id: string; tables: ManifestTable[] }
 
 export interface MigrateArgs {
-  command: 'files' | 'import' | 'abort' | 'verify-realtime';
+  command: 'files' | 'import' | 'open' | 'abort' | 'verify-realtime';
   dir: string;
   workspaces: string[];
   gateway?: string;
   from?: string;
 }
 
+/**
+ * The gateway origin. The internal secret is sent to it, so plain http is
+ * accepted only for loopback and cluster-local Service names, where traffic
+ * stays inside the node or the cluster network.
+ */
+export function gatewayOrigin(value: string): string {
+  let url: URL;
+  try {
+    url = new URL(value);
+  } catch {
+    throw new UsageError('--gateway must be an absolute http(s) URL');
+  }
+  const local = url.hostname === 'localhost' || url.hostname === '127.0.0.1' || url.hostname === '[::1]'
+    || /\.svc(\.cluster\.local)?$/.test(url.hostname);
+  if (url.protocol !== 'https:' && !(url.protocol === 'http:' && local)) {
+    throw new UsageError('--gateway must be https unless it is a cluster-local Service (*.svc) or loopback: the internal secret is sent to it');
+  }
+  return url.origin;
+}
+
 export function parseArgs(argv: readonly string[]): MigrateArgs {
   const [command, ...rest] = argv;
-  if (command !== 'files' && command !== 'import' && command !== 'abort' && command !== 'verify-realtime') {
-    throw new UsageError('usage: relaycast-migrate files|import|abort|verify-realtime ...');
+  if (command !== 'files' && command !== 'import' && command !== 'open' && command !== 'abort' && command !== 'verify-realtime') {
+    throw new UsageError('usage: relaycast-migrate files|import|open|abort|verify-realtime ...');
   }
   const args: Partial<MigrateArgs> & { workspaces: string[] } = { command, workspaces: [] };
   for (let i = 0; i < rest.length; i += 1) {
@@ -63,7 +90,7 @@ export function parseArgs(argv: readonly string[]): MigrateArgs {
     if (value === undefined || value.startsWith('--')) throw new UsageError(`${flag} needs a value`);
     i += 1;
     if (flag === '--dir') args.dir = value;
-    else if (flag === '--gateway') args.gateway = value.replace(/\/+$/, '');
+    else if (flag === '--gateway') args.gateway = gatewayOrigin(value);
     else if (flag === '--from') args.from = value;
     else if (flag === '--workspace') args.workspaces.push(value);
     else throw new UsageError(`unknown argument ${flag}`);
@@ -89,10 +116,15 @@ async function readManifest(dir: string, workspaceId: string): Promise<Manifest>
   return manifest;
 }
 
-/** One block per line, streamed: a table's file can be far larger than memory should hold. */
-async function* blocks(dir: string, workspaceId: string, table: string): AsyncGenerator<unknown[][]> {
+/** One sealed block per line, streamed (a table's file can be far larger than memory should hold) and opened. */
+async function* blocks(dir: string, workspaceId: string, table: string, key: CryptoKey): AsyncGenerator<unknown[][]> {
   const lines = createInterface({ input: createReadStream(join(dir, workspaceId, `${table}.ndjson`), 'utf8'), crlfDelay: Infinity });
-  for await (const line of lines) if (line) yield JSON.parse(line) as unknown[][];
+  let seq = 0;
+  for await (const line of lines) {
+    if (!line) continue;
+    yield JSON.parse(await openBlock(key, blockPlace(workspaceId, table, seq), line)) as unknown[][];
+    seq += 1;
+  }
 }
 
 // ---------------------------------------------------------------- files
@@ -109,7 +141,7 @@ async function digestStream(stream: NodeJS.ReadableStream): Promise<{ sha256: st
   return { sha256: hash.digest('hex'), size };
 }
 
-export async function copyFiles(args: MigrateArgs, store: FileStore, out: Out): Promise<boolean> {
+export async function copyFiles(args: MigrateArgs, store: FileStore, secret: string, out: Out): Promise<boolean> {
   const root = resolve(args.from!);
   let ok = true;
   for (const workspaceId of await workspaceDirs(args.dir, args.workspaces)) {
@@ -119,7 +151,8 @@ export async function copyFiles(args: MigrateArgs, store: FileStore, out: Out): 
     let copied = 0;
     let present = 0;
     let failed = 0;
-    for await (const block of blocks(args.dir, workspaceId, 'files')) {
+    const key = await exportKey(secret, manifest.run_id);
+    for await (const block of blocks(args.dir, workspaceId, 'files', key)) {
       for (const row of block) {
         if (row[at('status')] !== 'complete') continue;
         const key = String(row[at('storage_key')]);
@@ -132,7 +165,8 @@ export async function copyFiles(args: MigrateArgs, store: FileStore, out: Out): 
           if (local.size !== size) throw new Error(`source has ${local.size} bytes, the row says ${size}`);
           const expected = await digestStream(createReadStream(source));
           const existing = await store.get(key);
-          if (existing && existing.size === size && (await digestStream(existing.stream)).sha256 === expected.sha256) {
+          if (existing && existing.size === size && existing.contentType === contentType
+            && (await digestStream(existing.stream)).sha256 === expected.sha256) {
             present += 1;
             continue;
           }
@@ -199,12 +233,19 @@ export async function importWorkspaces(args: MigrateArgs, secret: string, out: O
       fail('begin', begun);
       continue;
     }
-    const done = (begun.json.data?.tables ?? {}) as Record<string, { chunks: number }>;
+    const status = begun.json.data?.status;
+    if (status === 'complete') {
+      out(`import ${workspaceId}: already imported and open (run ${manifest.run_id})`);
+      continue;
+    }
+    const key = await exportKey(secret, manifest.run_id);
+    // Verified already: skip the blocks, `finish` replays the verification.
+    const done = (status === 'verified' ? {} : begun.json.data?.tables ?? {}) as Record<string, { chunks: number }>;
     let sent = 0;
     let failed = false;
-    for (const table of manifest.tables) {
+    for (const table of status === 'verified' ? [] : manifest.tables) {
       let seq = 0;
-      for await (const rows of blocks(args.dir, workspaceId, table.name)) {
+      for await (const rows of blocks(args.dir, workspaceId, table.name, key)) {
         if (seq >= (done[table.name]?.chunks ?? 0)) {
           const result = await send(args, secret, workspaceId, { op: 'chunk', run_id: manifest.run_id, table: table.name, seq, rows });
           if (result.status !== 200) {
@@ -229,7 +270,22 @@ export async function importWorkspaces(args: MigrateArgs, secret: string, out: O
       continue;
     }
     const rows = manifest.tables.reduce((sum, table) => sum + table.count, 0);
-    out(`import ${workspaceId}: verified ${rows} rows in ${manifest.tables.length} tables (${sent} blocks sent)`);
+    out(`import ${workspaceId}: verified ${rows} rows in ${manifest.tables.length} tables (${sent} blocks sent); closed until open`);
+  }
+  return ok;
+}
+
+/** Go-live for every (or each named) workspace of the export. */
+export async function openWorkspaces(args: MigrateArgs, secret: string, out: Out): Promise<boolean> {
+  let ok = true;
+  for (const workspaceId of await workspaceDirs(args.dir, args.workspaces)) {
+    const manifest = await readManifest(args.dir, workspaceId);
+    const result = await send(args, secret, workspaceId, { op: 'open', run_id: manifest.run_id });
+    if (result.status === 200) out(`open ${workspaceId}: serving`);
+    else {
+      ok = false;
+      out(`open ${workspaceId}: failed (HTTP ${result.status} ${result.json.error?.code ?? ''}: ${result.json.error?.message ?? ''})`);
+    }
   }
   return ok;
 }
@@ -299,15 +355,16 @@ export async function main(argv: readonly string[], env: NodeJS.ProcessEnv = pro
     return 64;
   }
   try {
+    const secret = secretFromEnv(env, 'RELAYCAST_INTERNAL_SECRET');
+    if (!secret) throw new UsageError('RELAYCAST_INTERNAL_SECRET (or _FILE) is required');
     if (args.command === 'files') {
       const kind = (env.RELAYCAST_FILE_STORE ?? 'local') as FileStoreKind;
       if (kind === 'local' && !env.RELAYCAST_FILE_DIR) throw new UsageError('RELAYCAST_FILE_DIR is required for a local file store');
       const store = createFileStore({ kind, fileDir: env.RELAYCAST_FILE_DIR ?? '', env });
-      return (await copyFiles(args, store, out)) ? 0 : 1;
+      return (await copyFiles(args, store, secret, out)) ? 0 : 1;
     }
-    const secret = secretFromEnv(env, 'RELAYCAST_INTERNAL_SECRET');
-    if (!secret) throw new UsageError('RELAYCAST_INTERNAL_SECRET (or _FILE) is required');
     if (args.command === 'verify-realtime') return (await verifyRealtime(args, secret, out)) ? 0 : 1;
+    if (args.command === 'open') return (await openWorkspaces(args, secret, out)) ? 0 : 1;
     return (await (args.command === 'import' ? importWorkspaces(args, secret, out) : abortImport(args, secret, out))) ? 0 : 1;
   } catch (error) {
     out(`relaycast-migrate: ${(error as Error).message}`);

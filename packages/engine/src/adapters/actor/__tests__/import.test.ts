@@ -35,7 +35,7 @@ async function seededSource() {
   const ids: string[] = [];
   for (let i = 0; i < 30; i += 1) {
     const author = ['alice', 'bob', 'carol'][i % 3]!;
-    const posted = await call<{ id: string }>(source, 'POST', '/v1/channels/ops/messages', { text: `ops message ${i}` }, tokens[author]);
+    const posted = await call<{ id: string }>(source, 'POST', '/v1/channels/ops/messages', { text: `ops message ${i}${i % 5 === 0 ? ' @bob' : ''}` }, tokens[author]);
     expect(posted.status).toBe(201);
     ids.push(posted.json.data.id);
   }
@@ -47,6 +47,8 @@ async function seededSource() {
   }
   expect((await call(source, 'POST', '/v1/files/upload', { filename: 'notes.txt', content_type: 'text/plain', size_bytes: 5 }, tokens.alice)).status).toBe(201);
   expect((await call(source, 'POST', '/v1/webhooks', { name: 'ci', channel: 'ops' }, key)).status).toBe(201);
+  const listed = await call(source, 'POST', '/v1/directory/agents', { name: 'Reviewer', slug: 'reviewer', description: 'reviews pull requests', skills: [{ name: 'code-review', description: 'reads diffs' }] }, key);
+  expect(listed.status, JSON.stringify(listed.json)).toBe(201);
   expect((await call(source, 'POST', '/v1/subscriptions', { events: ['message.created'], url: 'https://hooks.example.com/relay' }, key)).status).toBe(201);
   return { source, key, tokens, ids };
 }
@@ -83,6 +85,12 @@ async function importAll(target: FakeWorkspaceActor, exported: Awaited<ReturnTyp
   return step<{ status: string; tables: Record<string, TableDigest> }>(target, { op: 'finish', run_id: RUN, manifest: exported.manifest });
 }
 
+/** Row counts of the search indexes the engine maintains by trigger. */
+function ftsCounts(actor: FakeWorkspaceActor) {
+  const names = ['messages_fts', 'messages_mention_fts', 'directory_agents_fts', 'directory_skills_fts'];
+  return Object.fromEntries(names.map((name) => [name, (actor.sql.raw.prepare(`SELECT COUNT(*) AS n FROM ${name}`).get() as { n: number }).n]));
+}
+
 describe('workspace actor import', () => {
   it('copies a workspace under the same id with identical rows, and its credentials and history keep working', async () => {
     const { source, key, tokens, ids } = await seededSource();
@@ -92,7 +100,15 @@ describe('workspace actor import', () => {
     const target = new FakeWorkspaceActor(WORKSPACE_ID);
     const finished = await importAll(target, exported);
     expect(finished.status, JSON.stringify(finished.json)).toBe(200);
-    expect(finished.json.data.tables).toEqual(exported.manifest);
+    expect(finished.json.data).toMatchObject({ status: 'verified', tables: exported.manifest });
+    // Verified is not live: nothing is served until the operator opens it.
+    expect((await call(target, 'GET', '/v1/channels', undefined, tokens.bob)).status).toBe(503);
+    expect((await step(target, { op: 'open', run_id: RUN })).status).toBe(200);
+    // Every search index holds what the source's did: the import keeps their triggers.
+    expect(ftsCounts(target)).toEqual(ftsCounts(source));
+    expect(ftsCounts(target).messages_mention_fts).toBeGreaterThan(0);
+    expect(ftsCounts(target).directory_agents_fts).toBeGreaterThan(0);
+    expect(ftsCounts(target).directory_skills_fts).toBeGreaterThan(0);
 
     // The source's credentials authenticate on the target: same hashes, same routing tag.
     for (const path of ['/v1/channels', '/v1/channels/ops/messages?limit=50', `/v1/messages/${ids[3]}/replies`, '/v1/inbox', '/v1/dm/conversations']) {
@@ -106,6 +122,11 @@ describe('workspace actor import', () => {
     expect(agents.status).toBe(200);
     expect(agents.json).toEqual((await call(source, 'GET', '/v1/agents', undefined, key)).json);
     expect(agents.json.data.map((agent) => agent.name)).toEqual(expect.arrayContaining(['alice', 'bob', 'carol']));
+    const found = await call<unknown[]>(target, 'GET', '/v1/directory/search?q=reviewer', undefined, tokens.alice);
+    expect(found.status, JSON.stringify(found.json)).toBe(200);
+    expect(JSON.stringify(found.json.data)).toContain('reviewer');
+    const mentions = await call<{ mentions: unknown[] }>(target, 'GET', '/v1/inbox', undefined, tokens.bob);
+    expect(mentions.json.data.mentions.length).toBeGreaterThan(0);
     const search = await call<{ text: string }[]>(target, 'GET', '/v1/search?q=threaded', undefined, tokens.alice);
     expect(search.json.data.map((hit) => hit.text)).toContain('threaded reply');
 
@@ -189,5 +210,36 @@ describe('workspace actor import', () => {
     expect((await step<{ status: string }>(target, { op: 'status' })).json.data.status).toBe('none');
     // A fresh run can start over.
     expect((await importAll(target, exported)).status).toBe(200);
+  });
+
+  it('replays begin, finish and open for the same run, so a lost response or a rerun succeeds', async () => {
+    const { source } = await seededSource();
+    const exported = await exportFrom(source);
+    const target = new FakeWorkspaceActor(WORKSPACE_ID);
+    expect((await importAll(target, exported)).status).toBe(200);
+    const again = await step<{ status: string; replay: boolean }>(target, { op: 'finish', run_id: RUN, manifest: exported.manifest });
+    expect(again.status).toBe(200);
+    expect(again.json.data).toMatchObject({ status: 'verified', replay: true });
+    expect((await step<{ status: string }>(target, { op: 'begin', run_id: RUN, tables: exported.tables })).json.data.status).toBe('verified');
+    expect((await step(target, { op: 'open', run_id: RUN })).status).toBe(200);
+    expect((await step(target, { op: 'open', run_id: RUN })).status).toBe(200);
+    expect((await step<{ status: string }>(target, { op: 'begin', run_id: RUN, tables: exported.tables })).json.data.status).toBe('complete');
+    expect((await step<{ replay: boolean }>(target, { op: 'finish', run_id: RUN, manifest: exported.manifest })).json.data.replay).toBe(true);
+    // Once open it serves: an abort would destroy live data and is refused, as is another run.
+    expect((await step(target, { op: 'abort', run_id: RUN })).json.error?.code).toBe('import_open');
+    expect((await step(target, { op: 'begin', run_id: 'run-0002-other', tables: exported.tables })).json.error?.code).toBe('import_run_mismatch');
+  });
+
+  it('aborts a verified import without queueing deletions of the copied blobs', async () => {
+    const { source } = await seededSource();
+    const exported = await exportFrom(source);
+    expect(exported.manifest.files!.count).toBeGreaterThan(0);
+    const target = new FakeWorkspaceActor(WORKSPACE_ID);
+    expect((await importAll(target, exported)).status).toBe(200);
+    expect((await step(target, { op: 'abort', run_id: RUN })).status).toBe(200);
+    expect(target.sql.raw.prepare('SELECT COUNT(*) AS n FROM files').get()).toEqual({ n: 0 });
+    expect(target.sql.raw.prepare('SELECT COUNT(*) AS n FROM file_cleanup_queue').get()).toEqual({ n: 0 });
+    expect(target.sql.raw.prepare(`SELECT COUNT(*) AS n FROM sqlite_master WHERE type = 'trigger'`).get())
+      .toEqual(source.sql.raw.prepare(`SELECT COUNT(*) AS n FROM sqlite_master WHERE type = 'trigger'`).get());
   });
 });

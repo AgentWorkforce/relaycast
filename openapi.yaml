@@ -7513,10 +7513,11 @@ paths:
         block of `[rowid, ...values]` rows of one table, idempotent per
         `table` and `seq`, answered with the digest of the rows read back),
         `finish` (foreign-key check, then each table's count and digest
-        against the manifest; the workspace serves only after success),
-        `abort` (remove everything imported) or `status`. Until `finish` or
-        `abort`, every other request to the workspace answers
-        `503 workspace_importing`.
+        against the manifest; the workspace becomes `verified` but stays
+        closed), `open` (go-live: the verified workspace serves), `abort`
+        (remove everything imported, before `open`) or `status`. `begin`,
+        `finish` and `open` replay for the same run. Until `open`, every other
+        request to the workspace answers `503 workspace_importing`.
       tags:
         - Internal Admin
       security:
@@ -7539,7 +7540,7 @@ paths:
               properties:
                 op:
                   type: string
-                  enum: [begin, chunk, finish, abort, status]
+                  enum: [begin, chunk, finish, open, abort, status]
                 run_id:
                   type: string
                   pattern: '^[A-Za-z0-9_-]{8,64}$'
@@ -7584,7 +7585,7 @@ paths:
         '409':
           description: >-
             `workspace_exists`, `import_schema_mismatch`, `import_run_mismatch`,
-            `import_not_started`, `import_complete`, `import_chunk_out_of_order`,
+            `import_not_started`, `import_verified`, `import_open`, `import_chunk_out_of_order`,
             `import_integrity_failed` or `import_verification_failed` (with
             `details`).
           content:

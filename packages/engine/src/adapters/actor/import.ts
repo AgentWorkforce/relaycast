@@ -3,13 +3,20 @@
  * workspace actor, under the same workspace id: `migration/protocol.ts`.
  *
  * Every operation runs inside one actor call (one transaction): a chunk that
- * fails rolls back whole and can be resent. While an import is unfinished the
- * runtime answers every other request 503 `workspace_importing`, runs no
- * maintenance and the gateway's sockets cannot be granted, so nothing but the
- * import writes. The engine's triggers other than full-text search are
- * dropped for the import and restored by `finish` or `abort`: they derive
- * values (sequence high-water marks, liveness revisions, cleanup queues) that
- * the source already stored, and must not re-derive them over copied rows.
+ * fails rolls back whole and can be resent. States: `in_progress` (begun),
+ * `verified` (`finish` checked every table against the manifest), `complete`
+ * (`open`: the operator's go-live). Until `complete` the runtime answers every
+ * other request 503 `workspace_importing`, runs no maintenance and the
+ * gateway's sockets cannot be granted, so nothing but the import writes and a
+ * rollback before go-live loses nothing. `begin`, `finish` and `open` replay
+ * for the same run, so a lost response or a rerun is answered, not refused.
+ *
+ * Triggers that derive values the source already stored (sequence high-water
+ * marks, liveness revisions, cleanup queues, retention pruning) are dropped for
+ * the import and restored by `finish`; `abort` drops them again while it
+ * deletes, so removing copied rows queues no blob deletions. Full-text search
+ * triggers stay, so every copied message, mention and directory entry is
+ * indexed as it lands, and so do the binding checks.
  */
 import { migrationPlan, type MigrationTable } from '../migration/plan.js';
 import { type ImportRequest } from '../migration/protocol.js';
@@ -33,7 +40,7 @@ export const ACTOR_IMPORT_TABLE = {
   ddl: `CREATE TABLE IF NOT EXISTS ${STATE} (
     id INTEGER PRIMARY KEY CHECK (id = 1),
     run_id TEXT NOT NULL,
-    status TEXT NOT NULL CHECK (status IN ('in_progress', 'complete')),
+    status TEXT NOT NULL CHECK (status IN ('in_progress', 'verified', 'complete')),
     triggers TEXT NOT NULL,
     started_at INTEGER NOT NULL,
     finished_at INTEGER
@@ -51,12 +58,12 @@ export const ACTOR_IMPORT_CHUNKS_TABLE = {
   )`,
 } as const;
 
-/** Triggers the import keeps: full-text search must index the copied messages. */
-const KEPT_TRIGGER = /^messages_fts_/;
+/** Triggers the import keeps: search indexes, and checks that only validate. */
+const KEPT_TRIGGER = /(_fts_(insert|update|delete)$)|(^agent_node_bindings_workspace_)/;
 
 interface ImportState {
   run_id: string;
-  status: 'in_progress' | 'complete';
+  status: 'in_progress' | 'verified' | 'complete';
   triggers: string;
   started_at: number;
   finished_at: number | null;
@@ -83,7 +90,10 @@ export class ActorImport {
 
   /** Whether an unfinished import owns this workspace. */
   importing(): boolean {
-    this.importingCache ??= this.state()?.status === 'in_progress';
+    if (this.importingCache === undefined) {
+      const status = this.state()?.status;
+      this.importingCache = status === 'in_progress' || status === 'verified';
+    }
     return this.importingCache;
   }
 
@@ -94,6 +104,7 @@ export class ActorImport {
         case 'begin': return this.begin(request, tag);
         case 'chunk': return await this.chunk(request);
         case 'finish': return await this.finish(request);
+        case 'open': return this.open(request);
         case 'abort': return this.abort(request);
       }
     } finally {
@@ -120,12 +131,16 @@ export class ActorImport {
     };
   }
 
-  /** The state of `runId`, or the failure to answer when it is not the running import. */
-  private running(runId: string): { state: ImportState } | { refused: ImportResult } {
+  /** The state of `runId` when it is in one of `allowed`, or the failure to answer. */
+  private running(runId: string, allowed: readonly ImportState['status'][] = ['in_progress']): { state: ImportState } | { refused: ImportResult } {
     const state = this.state();
     if (!state) return { refused: fail(409, 'import_not_started', 'No import has begun on this workspace') };
     if (state.run_id !== runId) return { refused: fail(409, 'import_run_mismatch', 'Another import run owns this workspace') };
-    if (state.status !== 'in_progress') return { refused: fail(409, 'import_complete', 'This import has already finished') };
+    if (!allowed.includes(state.status)) {
+      return { refused: state.status === 'complete'
+        ? fail(409, 'import_open', 'This workspace is already open: the import cannot change it')
+        : fail(409, 'import_verified', 'This import has been verified; open or abort it') };
+    }
     return { state };
   }
 
@@ -133,7 +148,7 @@ export class ActorImport {
     const state = this.state();
     if (state) {
       if (state.run_id !== request.run_id) return fail(409, 'import_run_mismatch', 'Another import run owns this workspace');
-      if (state.status === 'complete') return fail(409, 'import_complete', 'This import has already finished');
+      // The same run: resume an unfinished import, or replay a finished one (its status says which).
       return ok(this.describe());
     }
     const [{ n }] = this.sql.exec('SELECT COUNT(*) AS n FROM workspaces') as { n: number }[];
@@ -143,8 +158,7 @@ export class ActorImport {
     const mismatch = schemaMismatch(plan, request.tables);
     if (mismatch) return fail(409, 'import_schema_mismatch', `The export's schema differs from this engine's: ${mismatch}`);
 
-    const triggers = (this.sql.exec(`SELECT name, sql FROM sqlite_master WHERE type = 'trigger' ORDER BY name`) as { name: string; sql: string }[])
-      .filter((trigger) => !KEPT_TRIGGER.test(trigger.name));
+    const triggers = this.derivedTriggers();
     for (const trigger of triggers) this.sql.exec(`DROP TRIGGER ${quote(trigger.name)}`);
     this.credentialTag.set(tag);
     this.sql.exec(
@@ -207,8 +221,11 @@ export class ActorImport {
   }
 
   private async finish(request: Extract<ImportRequest, { op: 'finish' }>): Promise<ImportResult> {
-    const running = this.running(request.run_id);
+    const running = this.running(request.run_id, ['in_progress', 'verified', 'complete']);
     if ('refused' in running) return running.refused;
+    // Open: it serves and changes, so its tables no longer match the export.
+    if (running.state.status === 'complete') return ok({ run_id: request.run_id, status: 'complete', replay: true });
+    const replay = running.state.status === 'verified';
 
     const violations = this.sql.exec('PRAGMA foreign_key_check') as { table: string; rowid: number; parent: string }[];
     if (violations.length > 0) {
@@ -234,19 +251,39 @@ export class ActorImport {
       return fail(409, 'import_verification_failed', 'The imported rows do not match the export manifest', { mismatches, unknown_tables: unknown });
     }
 
+    if (replay) return ok({ run_id: request.run_id, status: running.state.status, tables: digests, replay: true });
     this.restoreTriggers(running.state);
-    this.sql.exec(`UPDATE ${STATE} SET status = 'complete', finished_at = ? WHERE id = 1`, Date.now());
-    return ok({ run_id: request.run_id, status: 'complete', tables: digests });
+    this.sql.exec(`UPDATE ${STATE} SET status = 'verified', finished_at = ? WHERE id = 1`, Date.now());
+    return ok({ run_id: request.run_id, status: 'verified', tables: digests });
+  }
+
+  /** Go-live: the verified workspace starts serving. Idempotent for its run. */
+  private open(request: Extract<ImportRequest, { op: 'open' }>): ImportResult {
+    const running = this.running(request.run_id, ['verified', 'complete']);
+    if ('refused' in running) {
+      return running.refused;
+    }
+    if (running.state.status === 'verified') this.sql.exec(`UPDATE ${STATE} SET status = 'complete' WHERE id = 1`);
+    return ok({ run_id: request.run_id, status: 'complete' });
   }
 
   private abort(request: Extract<ImportRequest, { op: 'abort' }>): ImportResult {
-    const running = this.running(request.run_id);
+    const running = this.running(request.run_id, ['in_progress', 'verified']);
     if ('refused' in running) return running.refused;
+    // After `finish` the derived triggers are back: drop them again, or deleting
+    // the copied files would queue deletions of the copied blobs.
+    for (const trigger of this.derivedTriggers()) this.sql.exec(`DROP TRIGGER ${quote(trigger.name)}`);
     for (const table of [...migrationPlan()].reverse()) this.sql.exec(`DELETE FROM ${quote(table.name)}`);
     this.restoreTriggers(running.state);
     this.sql.exec(`DELETE FROM ${CHUNKS}`);
     this.sql.exec(`DELETE FROM ${STATE}`);
     return ok({ run_id: request.run_id, status: 'aborted' });
+  }
+
+  /** The triggers an import suspends, as they are now. */
+  private derivedTriggers(): { name: string; sql: string }[] {
+    return (this.sql.exec(`SELECT name, sql FROM sqlite_master WHERE type = 'trigger' ORDER BY name`) as { name: string; sql: string }[])
+      .filter((trigger) => !KEPT_TRIGGER.test(trigger.name));
   }
 
   private restoreTriggers(state: ImportState): void {

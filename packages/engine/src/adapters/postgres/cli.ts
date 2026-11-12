@@ -1,4 +1,4 @@
-import { ConfigError } from "../../bin/secretEnv.js";
+import { ConfigError, secretFromEnv } from "../../bin/secretEnv.js";
 import {
   describePostgresConfig,
   loadPostgresConfig,
@@ -162,12 +162,15 @@ interface MigrationCliArgs {
   blockRows?: number;
   fileDir?: string;
   arSince?: number;
+  allowLegacy?: boolean;
+  exportDir?: string;
 }
 
 function parseMigrationArgs(argv: readonly string[]): MigrationCliArgs {
   const args: MigrationCliArgs = { workspaces: [] };
   for (let i = 0; i < argv.length; i += 1) {
     const flag = argv[i];
+    if (flag === "--allow-legacy") { args.allowLegacy = true; continue; }
     const value = argv[i + 1];
     const need = (): string => {
       if (value === undefined || value.startsWith("--")) throw new ConfigError(`${flag} needs a value`);
@@ -181,6 +184,7 @@ function parseMigrationArgs(argv: readonly string[]): MigrationCliArgs {
       case "--block-rows": args.blockRows = Number(need()); break;
       case "--file-dir": args.fileDir = need(); break;
       case "--ar-since": args.arSince = Number(need()); break;
+      case "--export-dir": args.exportDir = need(); break;
       default: throw new ConfigError(`unknown argument ${flag}`);
     }
   }
@@ -205,12 +209,16 @@ async function verifiedMigrations(pool: ReturnType<typeof openPostgresPool>, sch
 }
 
 /**
- * `relaycast-engine migration-preflight`: read-only. Per workspace, the row
- * count of every table a migration copies, file objects missing from
- * `--file-dir`, and (with `--ar-since <epoch s>`, when credentials.format=ar
- * was enabled) principals that may still hold a legacy credential: created
- * before then and never upgraded. One JSON line per workspace on stdout; exit
- * 1 when anything blocks a migration.
+ * `relaycast-engine migration-preflight --ar-since <epoch s>`: read-only. Per
+ * workspace, the row count of every table a migration copies, file objects
+ * missing from `--file-dir`, and principals that may still hold a legacy
+ * credential (`--ar-since`: when credentials.format=ar was enabled): agents,
+ * nodes, observer tokens and webhooks created before then and never upgraded,
+ * and a workspace key neither created nor rotated since. With `--export-dir`,
+ * the free space there against twice the database's size. One JSON line per
+ * workspace, then a summary line, on stdout; exit 1 when anything blocks a
+ * migration (legacy principals only without `--allow-legacy`, whose holders
+ * then re-register after the move).
  */
 export async function runMigrationPreflightCommand(
   argv: readonly string[],
@@ -220,12 +228,13 @@ export async function runMigrationPreflightCommand(
   let args: MigrationCliArgs;
   try {
     args = parseMigrationArgs(argv);
+    if (args.arSince === undefined) throw new ConfigError("--ar-since is required: the epoch second credentials.format=ar was enabled");
   } catch (err) {
     io.err(`configuration error: ${errorMessage(err)}`);
     return EXIT_CONFIG;
   }
   return withVerifiedPool(env, "runtime", io, async (pool, config) => {
-    const { access } = await import("node:fs/promises");
+    const { access, statfs } = await import("node:fs/promises");
     const { join } = await import("node:path");
     const { countWorkspace, listWorkspaces } = await import("../migration/export.js");
     if (!(await verifiedMigrations(pool, config.schema, io))) return EXIT_FAILURE;
@@ -254,19 +263,36 @@ export async function runMigrationPreflightCommand(
           }
           if (missingFiles > 0) blocked = true;
         }
-        let legacy: Record<string, number> | null = null;
-        if (args.arSince !== undefined) {
-          legacy = {};
-          for (const [table, hash] of LEGACY_CHECKED_PRINCIPALS) {
-            const result = await client.query<{ n: number }>(
-              `SELECT count(*)::int AS n FROM ${table} p
-                WHERE p.workspace_id = $1 AND p.${hash} IS NOT NULL AND p.created_at < $2
-                  AND NOT EXISTS (SELECT 1 FROM credential_upgrades u WHERE u.ar_hash = p.${hash})`,
-              [workspaceId, args.arSince]);
-            legacy[table] = Number(result.rows[0]?.n ?? 0);
-          }
+        const legacy: Record<string, number> = {};
+        for (const [table, hash] of LEGACY_CHECKED_PRINCIPALS) {
+          const result = await client.query<{ n: number }>(
+            `SELECT count(*)::int AS n FROM ${table} p
+              WHERE p.workspace_id = $1 AND p.${hash} IS NOT NULL AND p.created_at < $2
+                AND NOT EXISTS (SELECT 1 FROM credential_upgrades u WHERE u.ar_hash = p.${hash})`,
+            [workspaceId, args.arSince]);
+          legacy[table] = Number(result.rows[0]?.n ?? 0);
         }
+        // The workspace key: legacy unless created after the switch, upgraded, or
+        // rotated since (relaycast-rekey rotates with a grace, which stamps
+        // previous_api_key_expires_at after the switch).
+        const key = await client.query<{ n: number }>(
+          `SELECT count(*)::int AS n FROM workspaces w
+            WHERE w.id = $1 AND w.created_at < $2
+              AND (w.previous_api_key_expires_at IS NULL OR w.previous_api_key_expires_at < $2)
+              AND NOT EXISTS (SELECT 1 FROM credential_upgrades u WHERE u.ar_hash = w.api_key_hash)`,
+          [workspaceId, args.arSince]);
+        legacy.workspace_key = Number(key.rows[0]?.n ?? 0);
+        if (!args.allowLegacy && Object.values(legacy).some((n) => n > 0)) blocked = true;
         io.out(JSON.stringify({ workspace_id: workspaceId, counts, missing_files: missingFiles, legacy_principals: legacy }));
+      }
+      if (args.exportDir !== undefined) {
+        // The export is the rows as JSON: bounded well under twice the database's on-disk size.
+        const size = Number((await client.query<{ n: string }>("SELECT pg_database_size(current_database())::text AS n")).rows[0]?.n ?? 0);
+        const fs = await statfs(args.exportDir);
+        const free = Number(fs.bavail) * Number(fs.bsize);
+        const enough = free >= 2 * size;
+        if (!enough) blocked = true;
+        io.out(JSON.stringify({ export_capacity: { database_bytes: size, free_bytes: free, required_bytes: 2 * size, ok: enough } }));
       }
     } finally {
       client.release();
@@ -295,6 +321,14 @@ export async function runMigrationExportCommand(
     io.err(`configuration error: ${errorMessage(err)}`);
     return EXIT_CONFIG;
   }
+  let internalSecret: string | undefined;
+  try {
+    internalSecret = secretFromEnv(env, "RELAYCAST_INTERNAL_SECRET");
+    if (!internalSecret) throw new ConfigError("RELAYCAST_INTERNAL_SECRET(_FILE) is required: export blocks are sealed with a key derived from it");
+  } catch (err) {
+    io.err(`configuration error: ${errorMessage(err)}`);
+    return EXIT_CONFIG;
+  }
   return withVerifiedPool(env, "runtime", io, async (pool, config) => {
     const { beginSnapshot, exportWorkspaces, listWorkspaces } = await import("../migration/export.js");
     if (!(await verifiedMigrations(pool, config.schema, io))) return EXIT_FAILURE;
@@ -306,6 +340,7 @@ export async function runMigrationExportCommand(
         runId: args.runId!,
         outDir: args.outDir!,
         workspaceIds,
+        internalSecret: internalSecret!,
         ...(args.blockRows === undefined ? {} : { blockRows: args.blockRows }),
         log: io.out,
       });
