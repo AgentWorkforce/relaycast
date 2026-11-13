@@ -1,10 +1,10 @@
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { brandSqliteEngineDb } from '../../adapters/sqlite-handle.js';
 import { drizzle } from 'drizzle-orm/better-sqlite3';
 import { getSqliteDb, runMigrations, type SqliteDbHandle } from '../../adapters/node/database.js';
 import * as schema from '../../db/tables.js';
 import type { EngineDb } from '../../ports/database.js';
-import { heartbeatNode } from '../node.js';
+import { heartbeatNode, NODE_UNION_REPAIR_INTERVAL_MS } from '../node.js';
 import type { FleetNodeHeartbeatMessage } from '@relaycast/types';
 
 const handles: SqliteDbHandle[] = [];
@@ -134,17 +134,34 @@ describe('node.heartbeat without a capabilities snapshot', () => {
     });
   });
 
-  it('refreshes the capabilities union on a capability-free beat', async () => {
-    const f = fixture();
-    // REST enrollment can write nodes.capabilities directly; without the
-    // union refresh a value drifted from the provider manifest persisted
-    // indefinitely under the single-statement aggregate.
-    f.sqlite.prepare(`UPDATE nodes SET capabilities = '[{"name":"stale"}]' WHERE id = ?`).run('node1');
-    const node = await steadyBeat(f);
-    const names = (node?.capabilities ?? []).map((cap) => cap.name).sort();
-    expect(names).toEqual(['echo', 'spawn']);
-    const row = f.sqlite.prepare('SELECT capabilities FROM nodes WHERE id = ?').get('node1') as { capabilities: string };
-    expect(JSON.parse(row.capabilities).map((cap: { name: string }) => cap.name).sort()).toEqual(['echo', 'spawn']);
+  it('repairs a drifted capabilities union within the repair interval, not on every beat', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    try {
+      const f = fixture();
+      // REST enrollment can write nodes.capabilities directly; the periodic
+      // union refresh keeps a value drifted from the provider manifest from
+      // persisting indefinitely.
+      f.sqlite.prepare(`UPDATE nodes SET capabilities = '[{"name":"stale"}]' WHERE id = ?`).run('node1');
+      vi.setSystemTime(Date.now() + NODE_UNION_REPAIR_INTERVAL_MS);
+      const node = await steadyBeat(f);
+      const names = (node?.capabilities ?? []).map((cap) => cap.name).sort();
+      expect(names).toEqual(['echo', 'spawn']);
+      const row = f.sqlite.prepare('SELECT capabilities FROM nodes WHERE id = ?').get('node1') as { capabilities: string };
+      expect(JSON.parse(row.capabilities).map((cap: { name: string }) => cap.name).sort()).toEqual(['echo', 'spawn']);
+
+      // Until the interval passes again, a beat that changes no capabilities
+      // skips the union aggregation over every provider manifest (#661).
+      const mark = f.queries.length;
+      await steadyBeat(f);
+      await f.beat();
+      expect(f.queries.slice(mark).some((q) => q.sql.includes('json_each'))).toBe(false);
+
+      // A beat whose capabilities changed recomputes the union at once.
+      const changed = await f.beat({ capabilities: [{ name: 'spawn' }, { name: 'echo' }, { name: 'fresh' }] });
+      expect((changed?.capabilities ?? []).map((cap) => cap.name).sort()).toEqual(['echo', 'fresh', 'spawn']);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('keeps the enrolled manifest on a provider-less node', async () => {

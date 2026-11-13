@@ -33,6 +33,7 @@ Packages without a separate changelog are covered by the cross-package notes bel
 ### Fixed
 
 - Node-connected agents no longer receive the same delivery twice on one socket when the database is slow; the redelivery sweep now leaves a fresh delivery to its live send for a minute before treating it as lost.
+- Self-hosted PostgreSQL servers spend far less database time on idle node heartbeats: a heartbeat recomputes the node's capability manifest only when it changed.
 - Durable-actors workspaces answer `GET /v1/inbox` `unread_channels` and `recent_reactions` (and every other raw-SQL read) as objects instead of positional arrays.
 - Self-hosting on durable-actors: completing a file upload (`POST /v1/files/:id/complete`) no longer needs the workspace actor to reach `RELAYCAST_PUBLIC_URL`. The gateway reports each stored upload to the actor and acknowledges the PUT only once the actor recorded it (503 `workspace_unavailable` with `Retry-After` otherwise; retry the same signed URL), and completion verifies the size from that record; this fixes 500s where the public name does not resolve or route from actor pods (e.g. a customer VPC).
 - Channel and thread realtime events retain arbitrary rich blocks across engine workspace frames and TypeScript node deliveries; DM transports preserve blocks when present.

@@ -1054,6 +1054,26 @@ export async function registerNode(
   return { node: publicNode(updated), acceptance, provider };
 }
 
+/**
+ * How often a heartbeat that changed no capabilities still recomputes its node's
+ * union manifest. The union only moves when a provider's capabilities do, which
+ * those heartbeats recompute at once; this periodic pass repairs a manifest
+ * written out of band (REST enrollment on a provider-backed node) within a
+ * bounded time, without paying the jsonb_agg on every beat (relaycast#661).
+ */
+export const NODE_UNION_REPAIR_INTERVAL_MS = 5 * 60_000;
+
+/** Per node: when this process last recomputed its union manifest. */
+const lastUnionRefreshAt = new Map<string, number>();
+
+function unionRepairDue(workspaceId: string, nodeId: string, now: Date): boolean {
+  const key = JSON.stringify([workspaceId, nodeId]);
+  const last = lastUnionRefreshAt.get(key);
+  if (last !== undefined && now.getTime() - last < NODE_UNION_REPAIR_INTERVAL_MS) return false;
+  lastUnionRefreshAt.set(key, now.getTime());
+  return true;
+}
+
 export async function heartbeatNode(
   db: Db,
   workspaceId: string,
@@ -1108,6 +1128,9 @@ export async function heartbeatNode(
   let updated: NodeRow | undefined;
   await runAtomic(db, async (tx) => {
     const now = new Date();
+    // Only a heartbeat that changes its provider's capability set can change
+    // the node's union manifest; most heartbeats carry none or the same set.
+    let capabilitiesChanged = false;
     if (message.capabilities !== undefined) {
       const [existingProvider] = await tx
         .select()
@@ -1122,6 +1145,8 @@ export async function heartbeatNode(
         existingProvider?.capabilities ?? [],
       );
       assertActionTaskMode(caps);
+      capabilitiesChanged = existingProvider === undefined
+        || !sameCapabilities(existingProvider.capabilities ?? [], caps);
       const maxAgents = message.max_agents ?? existingProvider?.maxAgents ?? 0;
       // heartbeatProvider's load rule folded in here: a numeric load only
       // counts as a measurement when the provider opts in via load_reported
@@ -1193,6 +1218,7 @@ export async function heartbeatNode(
       ...(message.name !== undefined ? { name: message.name } : {}),
       ...(message.version !== undefined ? { version: message.version } : {}),
       provenLiveAt: now,
+      capabilities: capabilitiesChanged || unionRepairDue(workspaceId, nodeId, now),
     });
   });
 
