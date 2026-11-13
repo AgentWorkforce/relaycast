@@ -24,6 +24,11 @@ info:
     carry `X-RateLimit-Limit`/`X-RateLimit-Remaining` for the bucket that
     served the request.
 
+    The server sheds writes while it is overloaded: once it has
+    too much accepted work still in flight (`maxBackgroundTasks`, default
+    2,000), non-GET requests return `503` with code `server_overloaded` and
+    `Retry-After: 1`. Nothing was written; retry with backoff.
+
     A hosting deployment may also refuse requests, message sends or new
     registrations (nodes, agents, human members) through its own admission
     policy (for example a usage quota or a device cap). Those errors carry the

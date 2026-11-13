@@ -230,6 +230,14 @@ export interface EngineConfig {
    */
   rateLimitPerMinute?: number;
   /**
+   * Most route background tasks (post fanout, event publishes, triggers) this
+   * process may have in flight before write requests are refused with
+   * `503 server_overloaded` and `Retry-After`. Default 2,000. It bounds the
+   * memory a single process spends on work it accepted but has not finished,
+   * so overload sheds load instead of exhausting the heap.
+   */
+  maxBackgroundTasks?: number;
+  /**
    * Opt-in for the self-serve `POST /v1/workspace/rotate-key` route. Defaults
    * to disabled: the route mints a live workspace credential, so a deployment
    * must explicitly allow it. Hosted deployments — where the canonical key is

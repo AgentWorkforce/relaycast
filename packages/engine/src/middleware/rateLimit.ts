@@ -5,10 +5,17 @@ import { getRequestLogger, toErrorDetails } from '../lib/logger.js';
 import { RATE_LIMIT_WINDOW_MS, rateLimitWindow, rateLimitWindowResetAt, setRetryContract } from '../lib/throttle.js';
 import { admissionDeniedResponse, reportCommitted, resolveAdmission } from './admission.js';
 import { presenceRefresh } from './presenceRefresh.js';
+import { backgroundTasksInFlight } from '../routes/background.js';
 
 /** Per-workspace requests-per-minute ceiling when the host configures none. */
 export const DEFAULT_RATE_LIMIT_PER_MINUTE = 30_000;
 
+/** In-flight route background tasks above which writes get 503 (EngineConfig.maxBackgroundTasks). */
+export const DEFAULT_MAX_BACKGROUND_TASKS = 2_000;
+/** Seconds a shed write is told to wait. */
+const OVERLOAD_RETRY_AFTER_SECONDS = 1;
+
+/** A positive finite number, else undefined (shared by the rate and task ceilings). */
 function validRatePerMinute(value: number | undefined): number | undefined {
   return typeof value === 'number' && Number.isFinite(value) && value > 0 ? value : undefined;
 }
@@ -92,6 +99,18 @@ export const rateLimit = createMiddleware<AppEnv>(async (c, next) => {
   }
 
   const { admission, config, rateLimiter } = c.get('engine');
+
+  // Shed writes while this process is behind on work it already accepted
+  // (relaycast#659): each accepted post queues fanout, publishes and triggers
+  // in the background, and without a bound an overloaded process grows its
+  // heap until it dies and drops every socket.
+  if (c.req.method !== 'GET' && c.req.method !== 'HEAD') {
+    const maxTasks = validRatePerMinute(config.maxBackgroundTasks) ?? DEFAULT_MAX_BACKGROUND_TASKS;
+    if (backgroundTasksInFlight() >= maxTasks) {
+      c.header('Retry-After', String(OVERLOAD_RETRY_AFTER_SECONDS));
+      return jsonError(c, 'server_overloaded', 'Server is busy; retry shortly.', 503);
+    }
+  }
 
   // Apply route-specific multiplier if applicable
   const routeKey = getRouteKey(c.req.method, c.req.path);

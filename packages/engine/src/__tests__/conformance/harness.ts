@@ -86,6 +86,7 @@ export function makeNodeStack(options?: {
   publicWorkspaceCreate?: boolean;
   admission?: AdmissionHooks;
   rateLimitPerMinute?: number;
+  maxBackgroundTasks?: number;
   credentialFormat?: EngineConfig['credentialFormat'];
   credentialTagger?: EngineConfig['credentialTagger'];
   legacyCredentialGraceSeconds?: number;
@@ -120,6 +121,7 @@ export function makeNodeStack(options?: {
         internalSecret: options?.internalSecret,
         publicWorkspaceCreate: options?.publicWorkspaceCreate,
         rateLimitPerMinute: options?.rateLimitPerMinute,
+        maxBackgroundTasks: options?.maxBackgroundTasks,
         credentialFormat: options?.credentialFormat,
         credentialTagger: options?.credentialTagger,
         legacyCredentialGraceSeconds: options?.legacyCredentialGraceSeconds,

@@ -17,18 +17,26 @@ type WaitUntilContext = {
  * response is returned. Plain "fire-and-forget" promises can be terminated at
  * request end in Workers, which leads to dropped realtime events.
  */
+let inFlight = 0;
+
+/** Route background tasks started in this process and not yet settled. */
+export function backgroundTasksInFlight(): number {
+  return inFlight;
+}
+
 export function runInBackground(
   c: Context<AppEnv>,
   task: Promise<unknown> | unknown,
   label: string,
 ): void {
   const logger = getRequestLogger(c, 'background.task');
+  inFlight += 1;
   const wrapped = Promise.resolve(task).catch(async (error) => {
     logger.error(`${label} failed`, {
       ...toErrorDetails(error),
     });
     await logger.flush();
-  });
+  }).finally(() => { inFlight -= 1; });
 
   let executionCtx: WaitUntilContext['executionCtx'];
   try {
