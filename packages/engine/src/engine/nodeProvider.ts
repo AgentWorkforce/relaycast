@@ -397,7 +397,18 @@ export async function refreshNodeAggregate(
   db: Db,
   workspaceId: string,
   nodeId: string,
-  extra: { name?: string; version?: string; provenLiveAt?: Date } = {},
+  extra: {
+    name?: string;
+    version?: string;
+    provenLiveAt?: Date;
+    /**
+     * Recompute the union manifest (default true). A heartbeat that did not
+     * change any provider's capabilities passes false: the union is then
+     * unchanged, and its jsonb_agg over every provider manifest was the most
+     * expensive statement idle node sockets ran (relaycast#661).
+     */
+    capabilities?: boolean;
+  } = {},
 ): Promise<typeof nodes.$inferSelect | undefined> {
   const onNode = and(eq(nodeProviders.workspaceId, workspaceId), eq(nodeProviders.nodeId, nodeId));
   const online = and(onNode, eq(nodeProviders.status, 'online'));
@@ -419,7 +430,7 @@ export async function refreshNodeAggregate(
       // band (e.g. REST enrollment on a provider-backed node) cannot drift from
       // provider truth indefinitely. Provider-less nodes keep their manifest —
       // there are no rows to derive one from.
-      capabilities: sql`CASE WHEN EXISTS(SELECT 1 FROM ${nodeProviders} WHERE ${onNode}) THEN COALESCE((
+      ...(extra.capabilities === false ? {} : { capabilities: sql`CASE WHEN EXISTS(SELECT 1 FROM ${nodeProviders} WHERE ${onNode}) THEN COALESCE((
         SELECT ${sqlx.jsonAgg(db, sqlx.json(db, sql.raw('value')))} FROM (
           ${sqlx.dialectOf(db) === 'pg'
             ? sql`SELECT DISTINCT ON (${sqlx.jsonGet(db, sql.raw('je.value'), '$.name')}) je.value AS value
@@ -431,7 +442,7 @@ export async function refreshNodeAggregate(
           WHERE np.workspace_id = ${workspaceId} AND np.node_id = ${nodeId}
           GROUP BY ${sqlx.jsonGet(db, sql.raw('je.value'), '$.name')}`}
         )${sqlx.dialectOf(db) === 'pg' ? sql` AS merged_capabilities` : sql``}
-      ), '[]') ELSE ${nodes.capabilities} END`,
+      ), '[]') ELSE ${nodes.capabilities} END` }),
       // Node liveness mirrors ONLINE providers only: an offline provider's
       // disconnect timestamp is fresh and must not keep a stale node "live".
       // last_heartbeat_at stores unix seconds (drizzle `timestamp` mode).
