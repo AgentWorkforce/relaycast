@@ -983,6 +983,7 @@ function fanoutRecordFromDeliveryRow(row: PendingDeliveryRow): DeliveryFanoutRec
     deliveryAdapter: row.delivery.deliveryAdapter,
     nextAttemptAt: row.delivery.nextAttemptAt,
     expiresAt: row.delivery.expiresAt,
+    createdAt: row.delivery.createdAt,
   };
 }
 

@@ -40,6 +40,8 @@ export interface DeliveryFanoutRecord {
   deliveryAdapter: string | null;
   nextAttemptAt?: Date | null;
   expiresAt?: Date | null;
+  /** When the row was created; set on rows read back for redrive. */
+  createdAt?: Date | null;
 }
 
 export type DeliveryRejectionReason = 'depth_cap' | 'recipient_offline';
