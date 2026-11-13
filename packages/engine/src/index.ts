@@ -27,6 +27,7 @@ export type {
   ConnectionRegistry,
   UpgradeArgs,
   PresenceTracker,
+  RateLimitCheck,
   RateLimiter,
   RateLimitResult,
   FileStorage,

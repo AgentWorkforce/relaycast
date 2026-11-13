@@ -48,6 +48,12 @@ Packages without a separate changelog are covered by the cross-package notes bel
 
 - Prevent stalled webhook delivery attempts from overwriting a newer attempt’s status or retry deadline after their lease is reclaimed.
 
+- Connect observer messages redact both public Relay Connect invite URL forms.
+- Connect observer links accept capabilities only from URL fragments and remove rejected credentials from browser history; reopen the original link if first-open validation fails.
+- Observer links have isolated, bounded rate-limit budgets that do not consume the workspace-admin allowance or multiply the workspace observer ceiling.
+- A rate limiter without an atomic multi-bucket check refuses the request instead of serving it with no limit.
+- Changing dashboard sessions cleans up the prior dashboard-minted stream token, including after a workspace-key rotation.
+- Repeating an observer-token revocation now succeeds for the owning workspace while missing and cross-workspace ids remain indistinguishable.
 - A sender can follow its message. `POST /v1/dm` answers with `delivery: { id, status, expires_at } | null` and `POST /v1/channels/:name/messages` with `deliveries: [{ id, agent_id, status, expires_at }]` (first 50, plus `deliveries_truncated`). The sender then receives `delivery.delivered` when a row reaches the recipient's socket or push endpoint and the new `delivery.acked` when the recipient acks it (REST ack, node cumulative ack, or `http_push` `on_2xx` / `response`), each with the recipient's `agent_id` / `agent_name`, `status` and `at`. `GET /v1/messages/:id/deliveries` lists every recipient's delivery and read state (`read_at`) for a message the caller sent; a workspace key or an admitted observer reads any message. Recipient-side events are unchanged.
 - SDKs: TypeScript `agent.messageDeliveries(id)`, `relay.messages.deliveries(id)` and `on.deliveryAcked`. Rust and Swift SDKs do not yet wrap the new route or event.
 - `POST /v1/nodes` accepts a CSPRNG `Idempotency-Key` (32+ characters) on a first enrollment, without `X-Relaycast-Node-Token`. Persist the key before the first request; a retry with the same key and body within 24 hours returns `201` with the node's original token, with no new row and no rotation, so a lost reply no longer strands an orphan node holding the name. A changed body, another key, or no key still gets `409 node_token_proof_required`. TypeScript `nodes.create({...}, { idempotencyKey })` no longer requires `currentToken`.
