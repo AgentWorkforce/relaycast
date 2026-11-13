@@ -36,6 +36,15 @@ type DeliveryTarget = {
 };
 
 const DISPATCH_RETRY_DELAY_MS = 30_000;
+/**
+ * Re-check delay for a row skipped because its agent is not delivery-ready.
+ * Readiness arrives with agent.register/recover, inventory.sync or a bind, and
+ * each of those replays the agent's queued rows from the database regardless
+ * of next_attempt_at, so this is only a safety net (e.g. a host that restores
+ * readiness without replaying). A 30 s loop re-stamped every queued row of
+ * every not-ready agent twice a minute until its TTL (relaycast#659).
+ */
+const NOT_READY_RECHECK_DELAY_MS = 5 * 60_000;
 // Fifty 50-row statements expire at most 2,500 deliveries per invocation.
 // On a */5 schedule that is 720,000/day: above the measured 519,000/day peak
 // while each UPDATE remains well below D1's 100-bound-parameter ceiling.
@@ -200,14 +209,14 @@ async function recordDispatchRetry(
   ctx: RoutingContext,
   deliveryId: string,
   error: string,
-  opts: { incrementAttempts?: boolean } = {},
+  opts: { incrementAttempts?: boolean; delayMs?: number } = {},
 ): Promise<void> {
   await ctx.db
     .update(deliveryRows)
     .set({
       ...(opts.incrementAttempts ? { dispatchAttempts: sql`coalesce(${deliveryRows.dispatchAttempts}, 0) + 1` } : {}),
       lastDispatchError: error,
-      nextAttemptAt: new Date(Date.now() + DISPATCH_RETRY_DELAY_MS),
+      nextAttemptAt: new Date(Date.now() + (opts.delayMs ?? DISPATCH_RETRY_DELAY_MS)),
       updatedAt: new Date(),
     })
     .where(and(
@@ -436,10 +445,10 @@ async function routeOneDeliveryOutcome(
     )) {
       // The provider connection has not marked this identity delivery-ready
       // (cursor negotiation pending). Leave the row queued but stamp it so the
-      // skip is observable and a later sweep retries it, instead of the row
-      // silently sitting until its mailbox TTL dead-letters it. This is a skip,
-      // not a dispatch attempt, so dispatch_attempts is not incremented.
-      await recordDispatchRetry(ctx, delivery.id, 'provider connection not delivery-ready for agent');
+      // skip is observable. The replay that accompanies readiness delivers it;
+      // the sweep re-checks it only after NOT_READY_RECHECK_DELAY_MS. This is a
+      // skip, not a dispatch attempt, so dispatch_attempts is not incremented.
+      await recordDispatchRetry(ctx, delivery.id, 'provider connection not delivery-ready for agent', { delayMs: NOT_READY_RECHECK_DELAY_MS });
       console.warn('[delivery.route] provider not delivery-ready; delivery deferred', {
         workspace_id: ctx.workspaceId,
         node_id: locationNodeId,

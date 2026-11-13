@@ -1156,6 +1156,9 @@ describe('durable delivery api', () => {
 
     // The new-instance re-register wiped the ready-set: the seq 2 frame is NOT
     // delivered and the row stays queued but is stamped observable + retryable.
+    // The re-check waits ~5 minutes: the replay that comes with readiness is
+    // what delivers it, so the sweep does not re-poll it every 30 s.
+    const postedAt = Date.now();
     await waitForAssertion(async () => {
       const [row] = await stack.runtime.deps.db
         .select()
@@ -1169,6 +1172,7 @@ describe('durable delivery api', () => {
       expect(row.status).toBe('queued');
       expect(row.lastDispatchError).toBe('provider connection not delivery-ready for agent');
       expect(row.nextAttemptAt).toBeInstanceOf(Date);
+      expect(row.nextAttemptAt!.getTime()).toBeGreaterThanOrEqual(postedAt + 4 * 60_000);
       expect(row.dispatchAttempts).toBe(0);
     });
     expect(node.sock.ofType('deliver').some((frame) => frame.agent === bob.name && frame.seq === 2)).toBe(false);
