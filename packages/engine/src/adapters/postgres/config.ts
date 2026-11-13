@@ -29,9 +29,13 @@ export interface PostgresConfig {
   poolMax: number | undefined;
   statementTimeoutMs: number | undefined;
   /**
-   * How long to wait for a new connection (TCP + TLS + startup). After a
-   * failover the DNS name points at the new primary; a dial to an unreachable
-   * address must fail fast so the pool retries instead of hanging.
+   * pg-pool's `connectionTimeoutMillis`, which bounds two waits: dialing a
+   * new connection (TCP + TLS + startup), and a request waiting for a free
+   * pool slot when every client is checked out. After a failover the DNS name
+   * points at the new primary; a dial to an unreachable address must fail
+   * fast so the pool retries instead of hanging. While dead clients still hold
+   * slots (until the query timeout evicts them), queued requests can fail with
+   * "timeout exceeded when trying to connect".
    */
   connectTimeoutMs: number;
   /**

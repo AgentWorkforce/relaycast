@@ -10,6 +10,7 @@ import {
   parseInt8,
   postgresPoolOptions,
   postgresTlsOptions,
+  isConnectionFatal,
 } from "../pool.js";
 
 const pem = (name: string) =>
@@ -190,5 +191,22 @@ describe("openPostgresPool idle-client errors", () => {
     } finally {
       await closePostgresPool(pool);
     }
+  });
+});
+
+describe("isConnectionFatal", () => {
+  const pgErr = (code: string) => Object.assign(new Error(`sqlstate ${code}`), { code });
+  it("evicts on lost connections, server shutdowns, read-only demotion and our own timeouts", () => {
+    for (const code of ["08006", "08003", "57P01", "57P02", "57P03", "53300", "25006", "ECONNRESET", "ETIMEDOUT", "EPIPE"]) {
+      expect(isConnectionFatal(pgErr(code))).toBe(true);
+    }
+    for (const message of ["Query read timeout", "Connection terminated unexpectedly", "timeout exceeded when trying to connect"]) {
+      expect(isConnectionFatal(new Error(message))).toBe(true);
+    }
+  });
+  it("sees through drizzle's wrapper and leaves ordinary query errors alone", () => {
+    expect(isConnectionFatal(new Error("Failed query: begin", { cause: new Error("Query read timeout") }))).toBe(true);
+    for (const code of ["57014", "40001", "40P01", "23505", "42P01"]) expect(isConnectionFatal(pgErr(code))).toBe(false);
+    expect(isConnectionFatal(undefined)).toBe(false);
   });
 });

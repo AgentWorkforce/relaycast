@@ -16,7 +16,7 @@ import { readFileSync } from "node:fs";
 import net from "node:net";
 import { sql } from "drizzle-orm";
 import pg from "pg";
-import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
+import { afterAll, describe, expect, it, vi } from "vitest";
 import { loadPostgresConfig } from "../config.js";
 import { isConnectionFatal, openPostgresPool } from "../pool.js";
 
@@ -74,28 +74,29 @@ async function blackholeProxy(target: { host: string; port: number }) {
 }
 
 describe.skipIf(!enabled)("PostgreSQL pool failover recovery (integration)", { timeout: 120_000 }, () => {
+  // One proxy per pool, so black-holing one test's connections leaves the
+  // others alone.
   let proxy: Awaited<ReturnType<typeof blackholeProxy>>;
+  const proxies: Awaited<ReturnType<typeof blackholeProxy>>[] = [];
   const pools: pg.Pool[] = [];
 
-  beforeAll(async () => {
-    const runtime = new URL(RUNTIME_URL!);
-    proxy = await blackholeProxy({ host: runtime.hostname, port: Number(runtime.port || 5432) });
-  });
-
   afterAll(async () => {
-    await proxy?.close();
+    for (const each of proxies) await each.close();
     for (const pool of pools) await pool.end().catch(() => {});
   });
 
-  /** A runtime pool through the proxy, with short failover bounds. */
+  /** A runtime pool through a fresh proxy, with short failover bounds. */
   async function poolThroughProxy() {
+    const runtime = new URL(RUNTIME_URL!);
+    proxy = await blackholeProxy({ host: runtime.hostname, port: Number(runtime.port || 5432) });
+    proxies.push(proxy);
     const url = new URL(RUNTIME_URL!);
     url.port = String(proxy.port);
     const config = loadPostgresConfig({
       RELAYCAST_DATABASE_URL: url.toString(),
       RELAYCAST_DATABASE_CA_FILE: CA_FILE,
       RELAYCAST_DATABASE_QUERY_TIMEOUT_MS: "1500",
-      RELAYCAST_DATABASE_CONNECT_TIMEOUT_MS: "2000",
+      RELAYCAST_DATABASE_CONNECT_TIMEOUT_MS: "5000",
       RELAYCAST_DATABASE_POOL_MAX: "4",
     }, "runtime");
     const pool = openPostgresPool(config);
@@ -147,6 +148,30 @@ describe.skipIf(!enabled)("PostgreSQL pool failover recovery (integration)", { t
     expect(Date.now() - recovered).toBeLessThan(10_000);
     const after = await Promise.all(Array.from({ length: 4 }, () => pid(pool)));
     for (const backend of after) expect(before.has(backend)).toBe(false);
+  });
+
+  it("does not leak pool slots when transactions start on dead connections (BEGIN never answers)", async () => {
+    // drizzle's transaction() runs BEGIN outside its try/finally, so a BEGIN
+    // that fails used to leave its client checked out forever; with every
+    // slot leaked the pool hung for good. Only transactions touch the dead
+    // clients here.
+    const { pool, db } = await poolThroughProxy();
+    await Promise.all(Array.from({ length: 4 }, () => db.withTransaction((tx) => tx.execute(sql`SELECT pg_sleep(0.05)`))));
+    expect(pool.totalCount).toBe(4);
+    expect(proxy.blackhole()).toBe(4);
+
+    const first = await Promise.allSettled(Array.from({ length: 4 }, () => db.withTransaction((tx) => tx.execute(sql`SELECT 1`))));
+    for (const result of first) {
+      if (result.status === "rejected") expect(isConnectionFatal(result.reason)).toBe(true);
+    }
+    // Every slot came back: nothing waits, nothing stays checked out.
+    await vi.waitFor(() => {
+      expect(pool.waitingCount).toBe(0);
+      expect(pool.idleCount).toBe(pool.totalCount);
+    }, { timeout: 10_000, interval: 100 });
+    const again = await Promise.all(Array.from({ length: 8 }, () => db.withTransaction((tx) => tx.execute(sql`SELECT 1 AS ok`))));
+    expect(again).toHaveLength(8);
+    await vi.waitFor(() => expect(pool.idleCount).toBe(pool.totalCount), { timeout: 5_000, interval: 100 });
   });
 
   it("re-dials after the server terminates every backend (restart / failover / pg_terminate_backend)", async () => {

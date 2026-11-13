@@ -75,8 +75,12 @@ export function postgresPoolOptions(config: PostgresConfig): pg.PoolConfig {
 /** Idle time before the first TCP keepalive probe on a pooled connection. */
 export const KEEPALIVE_INITIAL_DELAY_MS = 10_000;
 
-/** SQLSTATE classes/codes after which a connection must not be reused. */
-const FATAL_SQLSTATE = /^(08|57P0[1-3]|53300)/;
+/**
+ * SQLSTATE classes/codes after which a connection must not be reused. 25006
+ * (read_only_sql_transaction): a failover demoted the server this connection
+ * reached to a reader, so re-dial the name, which now points at the primary.
+ */
+const FATAL_SQLSTATE = /^(08|57P0[1-3]|53300|25006)/;
 /** Socket-level error codes after which a connection must not be reused. */
 const FATAL_ERRNO = new Set(["ECONNRESET", "ETIMEDOUT", "EPIPE", "ECONNREFUSED", "EHOSTUNREACH", "ENETUNREACH"]);
 
@@ -87,13 +91,23 @@ const FATAL_ERRNO = new Set(["ECONNRESET", "ETIMEDOUT", "EPIPE", "ECONNREFUSED",
  * stopped answering.
  */
 export function isConnectionFatal(err: unknown): boolean {
-  if (!err || typeof err !== "object") return false;
-  const { code, message } = err as { code?: unknown; message?: unknown };
+  // drizzle wraps driver errors (DrizzleQueryError with the pg error as cause).
+  for (let cause = err, depth = 0; cause && typeof cause === "object" && depth < 5; depth += 1) {
+    if (isFatalRecord(cause as { code?: unknown; message?: unknown })) return true;
+    cause = (cause as { cause?: unknown }).cause;
+  }
+  return false;
+}
+
+function isFatalRecord({ code, message }: { code?: unknown; message?: unknown }): boolean {
   if (typeof code === "string" && (FATAL_SQLSTATE.test(code) || FATAL_ERRNO.has(code))) return true;
   return typeof message === "string" && (
     message === "Query read timeout"
     || message.startsWith("Connection terminated")
     || message === "Client was closed and is not queryable"
+    // pg-pool: no client could be dialed or freed within connectionTimeoutMillis
+    // (no client to evict; classified so callers treat it as the same outage).
+    || message === "timeout exceeded when trying to connect"
   );
 }
 

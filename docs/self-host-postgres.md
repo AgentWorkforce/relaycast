@@ -55,7 +55,7 @@ owner just created, not grants on schemas or roles.
 | `RELAYCAST_DATABASE_POOL_MAX` | no | 1-100. Default is the node-postgres default (10). |
 | `RELAYCAST_DATABASE_STATEMENT_TIMEOUT_MS` | no | 0-86400000. Unset leaves the server default. |
 | `RELAYCAST_DATABASE_QUERY_TIMEOUT_MS` | no | Runtime only. Client-side bound on one query, 1000-86400000, default 60000, and always at least the statement timeout plus 5 s. A query on a dead connection fails at this bound and its connection is discarded. |
-| `RELAYCAST_DATABASE_CONNECT_TIMEOUT_MS` | no | 1000-300000, default 10000. Bound on dialing a new connection. |
+| `RELAYCAST_DATABASE_CONNECT_TIMEOUT_MS` | no | 1000-300000, default 10000. Bounds both dialing a new connection and a request waiting for a free pool slot. While dead connections still hold slots during a failover, waiting requests can fail with "timeout exceeded when trying to connect" until the query timeout evicts them. |
 | `RELAYCAST_DATABASE_IDLE_IN_TRANSACTION_TIMEOUT_MS` | no | Runtime only. Sets the session's `idle_in_transaction_session_timeout`, 1000-86400000, default 60000. |
 
 ### Failover and connection loss
@@ -67,8 +67,9 @@ recovers on its own:
 - TCP keepalive is on (first probe after 10 s idle);
 - a query that does not answer within `RELAYCAST_DATABASE_QUERY_TIMEOUT_MS` fails;
 - any connection-fatal error (that timeout, a reset or terminated socket,
-  SQLSTATE class `08`, `57P01`-`57P03` or `53300`) destroys the connection
-  and returns its pool slot, so new work dials the database name again and
+  SQLSTATE class `08`, `57P01`-`57P03`, `53300`, or `25006` when the old
+  primary came back as a read-only replica) destroys the connection and
+  returns its pool slot, so new work dials the database name again and
   reaches the new primary.
 
 Two probes report it. `GET /health/ready` returns 503 while the database does
