@@ -234,8 +234,9 @@ export async function loadFileRowsFromPostgres(env: NodeJS.ProcessEnv): Promise<
  * bucket that `RELAYCAST_FILE_STORE=s3` and `RELAYCAST_FILE_S3_*` name, for
  * every live `files` row (read with the `RELAYCAST_DATABASE_*` runtime
  * credentials). Exit 0 when every live file is in the bucket and verified, 1
- * on any mismatch, missing file or failure, and 64 for a refused
- * configuration. Never deletes local files.
+ * on any mismatch, missing file or failure, 64 for a refused configuration,
+ * and 65 for a wrong database identity (as the server). Never deletes local
+ * files.
  */
 export async function runMigrateFilesToS3Command(
   argv: readonly string[],
@@ -266,7 +267,10 @@ export async function runMigrateFilesToS3Command(
     return summary.mismatched.length === 0 && summary.failed.length === 0 ? 0 : 1;
   } catch (error) {
     io.err(`migrate-files-to-s3: ${error instanceof Error ? error.message : String(error)}`);
-    return error instanceof ConfigError ? 64 : 1;
+    // Same exit codes as the server: 64 refused configuration, 65 wrong
+    // database identity, 1 anything else.
+    if (error instanceof ConfigError) return 64;
+    return error instanceof Error && error.name === 'PostgresIdentityError' ? 65 : 1;
   }
 }
 

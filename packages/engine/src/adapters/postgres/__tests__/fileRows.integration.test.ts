@@ -52,3 +52,28 @@ describe.skipIf(!enabled)('migrate-files-to-s3 file rows (integration)', { timeo
     expect(rows.find((row) => row.storageKey === `${ws}/f2/f2.txt`)).toEqual({ storageKey: `${ws}/f2/f2.txt`, status: 'complete', sizeBytes: 2 });
   });
 });
+
+const OWNER_URL = process.env.RELAYCAST_PG_TEST_URL_OWNER;
+const S3_ENDPOINT = process.env.RELAYCAST_S3_TEST_ENDPOINT;
+const S3_BUCKET = process.env.RELAYCAST_S3_TEST_BUCKET;
+
+describe.skipIf(!(enabled && OWNER_URL && S3_ENDPOINT && S3_BUCKET))('migrate-files-to-s3 database identity (integration)', { timeout: 60_000 }, () => {
+  it('exits 65, as the server does, when the database credentials are not the runtime identity', async () => {
+    vi.resetModules();
+    const { runMigrateFilesToS3Command } = await import('../../../entrypoints/node.js');
+    const lines: string[] = [];
+    const code = await runMigrateFilesToS3Command(['--from', '/nonexistent'], {
+      RELAYCAST_DATABASE_URL: OWNER_URL,
+      RELAYCAST_DATABASE_CA_FILE: CA_FILE,
+      RELAYCAST_FILE_STORE: 's3',
+      RELAYCAST_FILE_S3_BUCKET: S3_BUCKET,
+      RELAYCAST_FILE_S3_REGION: process.env.RELAYCAST_S3_TEST_REGION ?? 'us-east-1',
+      RELAYCAST_FILE_S3_ENDPOINT: S3_ENDPOINT,
+      RELAYCAST_FILE_S3_FORCE_PATH_STYLE: 'true',
+    }, { out: (line) => lines.push(line), err: (line) => lines.push(line) });
+    expect(code).toBe(65);
+    // Credentials never reach the output.
+    const password = decodeURIComponent(new URL(OWNER_URL!).password);
+    expect(lines.join('\n')).not.toContain(password);
+  });
+});
