@@ -28,7 +28,33 @@ export interface PostgresConfig {
   expectedRole: string;
   poolMax: number | undefined;
   statementTimeoutMs: number | undefined;
+  /**
+   * pg-pool's `connectionTimeoutMillis`, which bounds two waits: dialing a
+   * new connection (TCP + TLS + startup), and a request waiting for a free
+   * pool slot when every client is checked out. After a failover the DNS name
+   * points at the new primary; a dial to an unreachable address must fail
+   * fast so the pool retries instead of hanging. While dead clients still hold
+   * slots (until the query timeout evicts them), queued requests can fail with
+   * "timeout exceeded when trying to connect".
+   */
+  connectTimeoutMs: number;
+  /**
+   * Client-side bound on one query, runtime mode only (undefined in owner
+   * mode, where migrations may run long). A query on a half-open socket (the
+   * old primary after a failover) otherwise never returns; on timeout the
+   * client is destroyed rather than reused.
+   */
+  queryTimeoutMs: number | undefined;
+  /** Server-side `idle_in_transaction_session_timeout`, runtime mode only. */
+  idleInTransactionTimeoutMs: number | undefined;
 }
+
+/** Default {@link PostgresConfig.connectTimeoutMs}. */
+export const DEFAULT_CONNECT_TIMEOUT_MS = 10_000;
+/** Default {@link PostgresConfig.queryTimeoutMs} for the runtime. */
+export const DEFAULT_QUERY_TIMEOUT_MS = 60_000;
+/** Default {@link PostgresConfig.idleInTransactionTimeoutMs} for the runtime. */
+export const DEFAULT_IDLE_IN_TRANSACTION_TIMEOUT_MS = 60_000;
 
 /** The only schema the bundled migrations and schema.pg.ts target. */
 export const DEFAULT_SCHEMA = "public";
@@ -300,6 +326,16 @@ export function loadPostgresConfig(
     );
   }
 
+  const statementTimeoutMs = positiveIntFromEnv(
+    env,
+    "RELAYCAST_DATABASE_STATEMENT_TIMEOUT_MS",
+    { min: 0, max: 86_400_000 },
+  );
+  const queryTimeoutMs = positiveIntFromEnv(env, "RELAYCAST_DATABASE_QUERY_TIMEOUT_MS", {
+    min: 1_000,
+    max: 86_400_000,
+  });
+
   return {
     mode,
     ...url,
@@ -313,11 +349,20 @@ export function loadPostgresConfig(
       min: 1,
       max: 100,
     }),
-    statementTimeoutMs: positiveIntFromEnv(
-      env,
-      "RELAYCAST_DATABASE_STATEMENT_TIMEOUT_MS",
-      { min: 0, max: 86_400_000 },
-    ),
+    statementTimeoutMs,
+    connectTimeoutMs: positiveIntFromEnv(env, "RELAYCAST_DATABASE_CONNECT_TIMEOUT_MS", {
+      min: 1_000,
+      max: 300_000,
+    }) ?? DEFAULT_CONNECT_TIMEOUT_MS,
+    queryTimeoutMs: mode === "runtime"
+      // A client bound shorter than the server's statement_timeout would cut
+      // off statements the operator allowed; keep it just above.
+      ? Math.max(queryTimeoutMs ?? DEFAULT_QUERY_TIMEOUT_MS, statementTimeoutMs ? statementTimeoutMs + 5_000 : 0)
+      : undefined,
+    idleInTransactionTimeoutMs: mode === "runtime"
+      ? positiveIntFromEnv(env, "RELAYCAST_DATABASE_IDLE_IN_TRANSACTION_TIMEOUT_MS", { min: 1_000, max: 86_400_000 })
+        ?? DEFAULT_IDLE_IN_TRANSACTION_TIMEOUT_MS
+      : undefined,
   };
 }
 

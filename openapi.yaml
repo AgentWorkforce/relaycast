@@ -2145,6 +2145,59 @@ paths:
                   build:
                     type: string
 
+  /health/ready:
+    get:
+      summary: Readiness probe
+      description: >-
+        200 while the database answers `SELECT 1` within 2 seconds, 503
+        otherwise. Use it as a readiness probe so traffic stops while the
+        database is unreachable (for example during a failover).
+      tags:
+        - System
+      responses:
+        '200':
+          description: Database reachable
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok:
+                    type: boolean
+                  database:
+                    type: string
+                    enum: [ok, unreachable]
+        '503':
+          description: Database unreachable
+
+  /health/live:
+    get:
+      summary: Liveness probe
+      description: >-
+        Probes the database like `/health/ready`, but returns 503 only once
+        no probe has succeeded for 90 seconds, so an orchestrator restarts a
+        process that did not recover on its own. A brief outage fails only
+        readiness.
+      tags:
+        - System
+      responses:
+        '200':
+          description: Live (the database answered recently)
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok:
+                    type: boolean
+                  database:
+                    type: string
+                    enum: [ok, unreachable]
+                  database_down_ms:
+                    type: integer
+        '503':
+          description: The database has been unreachable past the liveness grace period
+
   /workspaces:
     post:
       summary: Create workspace

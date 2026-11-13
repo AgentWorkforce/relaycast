@@ -25,6 +25,9 @@ const IGNORED_SEGMENTS = new Set([
 
 const NON_SDK_OPENAPI_PATHS = new Set([
   '/v1/health',
+  // Orchestrator readiness/liveness probes, not an agent-SDK surface.
+  '/v1/health/ready',
+  '/v1/health/live',
   '/v1/.well-known/agent-card.json',
   // Path-scoped form of the same unauthenticated A2A discovery endpoint. Served
   // for counterparties that name the workspace explicitly; like the bare form
