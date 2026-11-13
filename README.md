@@ -1557,7 +1557,16 @@ configured. No key is bundled. Disable capture with `DO_NOT_TRACK=1` or
 
 ## License
 
-Apache-2.0
+- **Server** (`packages/engine`, `docker`, `packages/actors-gateway`,
+  `packages/actors-workspace`, `packages/observer-dashboard`,
+  `packages/observer-router`): [FSL-1.1-ALv2](https://fsl.software) from the
+  first release after this change. Self-host and modify it freely; you can't
+  offer it as a competing hosted service. Each release becomes Apache-2.0 two
+  years after it ships.
+- **Everything else** (SDKs, CLI, MCP server, types, React, A2A, OpenClaw):
+  Apache-2.0.
+
+See [NOTICE](NOTICE).
 
 
 ### Agent subscription delivery

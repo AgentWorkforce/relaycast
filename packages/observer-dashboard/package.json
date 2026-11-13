@@ -1,7 +1,7 @@
 {
   "name": "@relaycast/observer-dashboard",
   "version": "12.8.0",
-  "license": "Apache-2.0",
+  "license": "FSL-1.1-ALv2",
   "private": true,
   "scripts": {
     "dev": "next dev --port 3100",

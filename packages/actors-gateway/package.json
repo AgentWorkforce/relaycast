@@ -1,7 +1,7 @@
 {
   "name": "@relaycast/actors-gateway",
   "version": "12.8.0",
-  "license": "Apache-2.0",
+  "license": "FSL-1.1-ALv2",
   "private": true,
   "type": "module",
   "description": "Node gateway in front of relaycast Workspace actors on durable-actors: routes by ar_ credential, bridges WebSockets, long-polls deliveries and serves signed file URLs.",

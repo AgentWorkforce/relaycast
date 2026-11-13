@@ -1,0 +1,19 @@
+Relaycast
+Copyright 2025-2026 Agent Workforce, Inc.
+
+Licensing: from the first release published after this change, the
+first-party code in the Relaycast server packages (packages/engine, docker, packages/actors-gateway, packages/actors-workspace, packages/observer-dashboard, packages/observer-router) is licensed under the Functional Source License,
+Version 1.1, ALv2 Future License (FSL-1.1-ALv2; see the LICENSE file in each of those directories). Each version
+converts to the Apache License, Version 2.0 two years after it is made
+available. Earlier releases and commits remain available under the Apache
+License, Version 2.0. Contributions made under the Apache License, Version 2.0
+before this change keep that license and their authors' notices, and are
+included in this work as Apache-2.0 licensed material.
+
+Enterprise features (single sign-on, SCIM provisioning, audit logs, hard delete
+and retention controls) require an Agent Relay Enterprise agreement for
+production use. Contact founders@agentrelay.com.
+
+Everything else in this repository, including the SDKs, CLI, MCP server, types,
+React, A2A and OpenClaw packages, stays under the Apache License, Version 2.0
+(root LICENSE and each package's own LICENSE).

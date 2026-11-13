@@ -1,7 +1,7 @@
 {
   "name": "@relaycast/actors-workspace",
   "version": "12.8.0",
-  "license": "Apache-2.0",
+  "license": "FSL-1.1-ALv2",
   "private": true,
   "description": "The relaycast Workspace actor: one workspace per TerseAI durable actor, served by the engine's actor adapter",
   "type": "module",
