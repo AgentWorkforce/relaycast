@@ -123,6 +123,8 @@ const updateAgentSchema = z.object({
   metadata: AgentMetadataInputSchema.optional(),
   skills: AgentSkillsInputSchema.optional(),
   capabilities: capabilitiesSchema.nullable().optional(),
+  /** Write only if the name still belongs to this agent id (a renamed or re-registered name 409s). */
+  expected_agent_id: z.string().min(1).optional(),
 });
 
 const legacyIdentityClaimSchema = z.object({
@@ -695,6 +697,14 @@ agentRoutes.patch(
       }
 
       const body = parsed.data;
+      if (body.expected_agent_id !== undefined && existing.id !== body.expected_agent_id) {
+        return jsonError(
+          c,
+          'agent_identity_changed',
+          `Agent "${name}" no longer has expected id "${body.expected_agent_id}"`,
+          409,
+        );
+      }
       const reservedMetadataKey = body.metadata
         ? Object.keys(body.metadata).find((key) => RESERVED_AGENT_METADATA_KEYS.has(key))
         : undefined;
@@ -714,7 +724,9 @@ agentRoutes.patch(
         }
         : undefined;
 
-      const updated = await agentEngine.updateAgent(db, workspace.id, name, {
+      // By id: the merged metadata above was built from this exact row, so a
+      // delete-and-recreate under the same name must not receive it.
+      const updated = await agentEngine.updateAgentById(db, workspace.id, existing.id, {
         status: body.status,
         persona: body.persona,
         metadata: nextMetadata,

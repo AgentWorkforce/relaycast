@@ -180,6 +180,28 @@ describe('agent cards', () => {
     expect(after.card).toEqual(nextCard);
   });
 
+  it('PATCH with expected_agent_id writes only the agent that still holds the name', async () => {
+    const ws = await createWorkspace(stack.app, 'card-expected-id');
+    const first = await registerAgent(stack.app, ws.workspaceKey, 'reused');
+    const ok = await send('PATCH', '/v1/agents/reused', ws.workspaceKey, {
+      metadata: { card: CARD }, expected_agent_id: first.agentId,
+    });
+    expect(ok.status).toBe(200);
+
+    // The name is released and taken by a different agent.
+    await stack.runtime.deps.db.update(agents)
+      .set({ status: 'released', name: `reused#released-${first.agentId}` })
+      .where(eq(agents.id, first.agentId));
+    await registerAgent(stack.app, ws.workspaceKey, 'reused');
+
+    const stale = await send('PATCH', '/v1/agents/reused', ws.workspaceKey, {
+      metadata: { card: { ...CARD, description: 'Not yours.' } }, expected_agent_id: first.agentId,
+    });
+    expect(stale.status).toBe(409);
+    expect(((await stale.json()) as { error: { code: string } }).error.code).toBe('agent_identity_changed');
+    expect((await storedMetadata(ws.workspaceId, 'reused'))?.card).toBeUndefined();
+  });
+
   it('enforces skill and card bounds on register and PATCH', async () => {
     const ws = await createWorkspace(stack.app, 'card-bounds');
     await registerAgent(stack.app, ws.workspaceKey, 'bounded');

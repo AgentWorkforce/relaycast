@@ -174,6 +174,7 @@ export const UpdateAgentRequestSchema = z.object({
   metadata: AgentMetadataInputSchema.optional(),
   skills: AgentSkillsInputSchema.optional(),
   capabilities: z.record(z.string(), z.unknown()).nullable().optional(),
+  expected_agent_id: z.string().min(1).optional(),
 });
 export type UpdateAgentRequest = z.infer<typeof UpdateAgentRequestSchema>;
 
