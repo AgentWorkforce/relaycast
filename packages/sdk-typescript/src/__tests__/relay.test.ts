@@ -683,6 +683,50 @@ describe('RelayCast', () => {
     });
   });
 
+  describe('agent cards', () => {
+    it('getAgentCard() calls GET /v1/agents/:name/card and returns the camelCase card unchanged', async () => {
+      const { RelayCast } = await import('../relay.js');
+      const relay = new RelayCast({ apiKey: 'rk_live_test123' });
+      const card = {
+        protocolVersion: '0.3.0',
+        name: 'infra-ops',
+        description: 'Operates AWS infrastructure for the workspace.',
+        url: 'https://cast.agentrelay.com/a2a/rpc',
+        preferredTransport: 'JSONRPC',
+        version: '2',
+        provider: { organization: 'acme', url: 'https://agentrelay.com' },
+        documentationUrl: 'https://docs.example/infra-ops',
+        capabilities: { streaming: false, pushNotifications: false },
+        defaultInputModes: ['text/plain'],
+        defaultOutputModes: ['text/plain'],
+        skills: [{
+          id: 'cost-report',
+          name: 'Cost report',
+          description: 'Summarise AWS spend.',
+          tags: ['aws'],
+          examples: ['What did we spend on EC2 last week?'],
+        }],
+        'x-agent-relay': {
+          address: 'infra-ops@direct',
+          kind: 'agent',
+          where: 'direct',
+          status: 'live',
+          tags: ['infra'],
+          cardUpdatedAt: '2026-11-13T00:00:00.000Z',
+          hasCard: true,
+        },
+      };
+      mockFetch.mockImplementation(() => mockResponse(card));
+
+      const result = await relay.getAgentCard('a/b');
+
+      const [url, init] = mockFetch.mock.calls[0]!;
+      expect(url).toBe('https://cast.agentrelay.com/v1/agents/a%2Fb/card');
+      expect(init.method).toBe('GET');
+      expect(result).toEqual(card);
+    });
+  });
+
   describe('directory and routing', () => {
     it('route() calls POST /v1/route with JSON body', async () => {
       const { RelayCast } = await import('../relay.js');

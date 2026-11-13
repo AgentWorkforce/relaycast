@@ -22,10 +22,11 @@ import {
   type A2aTaskState,
 } from '@relaycast/a2a';
 import { z } from 'zod';
-import type { FileAttachment } from '@relaycast/types';
+import { AGENT_SKILL_EXAMPLES_MAX, type FileAttachment } from '@relaycast/types';
 import type { getDb } from '../db/index.js';
 import { a2aAgents, agents } from '../db/tables.js';
 import { registerAgent, getAgentByName, updateAgent, updateAgentById } from './agent.js';
+import { readCardMetadata, readDeclaredSkills } from './agentCard.js';
 import type { RegistrationAdmission } from './registrationAdmission.js';
 import { rotateAgentToken } from './tokenRotate.js';
 import { createAndRunCertification } from './certify.js';
@@ -783,14 +784,34 @@ export async function getWorkspaceAgentCard(
       metadata: agents.metadata,
     })
     .from(agents)
-    .where(eq(agents.workspaceId, workspaceId));
+    // Released rows are tombstones, not roster members (see listAgents).
+    .where(and(eq(agents.workspaceId, workspaceId), sql`${agents.status} <> 'released'`));
 
-  const skills = workspaceAgents.map((agent) => ({
-    id: agent.name,
-    name: agent.name,
-    description: agent.persona ?? `${agent.type} agent in ${workspaceName}`,
-    tags: ['relaycast', agent.type],
-  }));
+  // One skill per agent, its id the agent name: callers (and remote
+  // registration) send that id as the target agent, so it must stay routable.
+  // An agent that declared skills describes itself with its card and skills.
+  const skills = workspaceAgents.map((agent) => {
+    const fallbackDescription = agent.persona ?? `${agent.type} agent in ${workspaceName}`;
+    const declared = readDeclaredSkills(agent.metadata);
+    const card = readCardMetadata(agent.metadata);
+    if (declared.length === 0 && !card) {
+      return {
+        id: agent.name,
+        name: agent.name,
+        description: fallbackDescription,
+        tags: ['relaycast', agent.type],
+      };
+    }
+    const skillList = declared.map((skill) => skill.name).join('; ');
+    const examples = declared.flatMap((skill) => skill.examples ?? []).slice(0, AGENT_SKILL_EXAMPLES_MAX);
+    return {
+      id: agent.name,
+      name: agent.name,
+      description: [card?.description ?? fallbackDescription, skillList && `Skills: ${skillList}.`].filter(Boolean).join(' '),
+      tags: [...new Set(['relaycast', agent.type, ...(card?.tags ?? []), ...declared.flatMap((skill) => skill.tags)])],
+      ...(examples.length > 0 ? { examples } : {}),
+    };
+  });
 
   return {
     name: workspaceName,

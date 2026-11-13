@@ -51,6 +51,16 @@ describe('A2aSkillSchema', () => {
     ).toBe(true);
   });
 
+  it('accepts example requests on a skill', () => {
+    const result = A2aSkillSchema.safeParse({
+      id: 'triage',
+      name: 'Triage',
+      examples: ['Triage the failing deploy'],
+    });
+    expect(result.success).toBe(true);
+    expect(result.data?.examples).toEqual(['Triage the failing deploy']);
+  });
+
   it('rejects a missing name', () => {
     const result = A2aSkillSchema.safeParse({ description: 'no name' });
     expect(result.success).toBe(false);

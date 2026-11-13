@@ -3,6 +3,7 @@ import type {
   A2aAgentCard,
   A2aAgentRecord,
   Agent,
+  AgentCard,
   AgentListQuery,
   AgentPresenceInfo,
   Channel,
@@ -693,6 +694,11 @@ export class RelayCast {
 
   removeA2aAgent(name: string): Promise<RemoveA2aAgentResponse> {
     return this.client.request('DELETE', `/v1/a2a/agents/${encodeURIComponent(name)}`);
+  }
+
+  /** A local agent's A2A agent card (camelCase, A2A spec shape). */
+  getAgentCard(name: string): Promise<AgentCard> {
+    return this.client.get(`/v1/agents/${encodeURIComponent(name)}/card`);
   }
 
   getA2aAgentCard(name: string): Promise<A2aAgentCard> {

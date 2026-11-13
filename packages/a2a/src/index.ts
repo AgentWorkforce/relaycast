@@ -105,6 +105,7 @@ export const A2aSkillSchema = z.object({
   name: z.string().min(1),
   description: z.string().optional(),
   tags: z.array(z.string()).optional(),
+  examples: z.array(z.string()).optional(),
 });
 
 export const A2aAgentCardSchema = z.object({

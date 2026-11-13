@@ -1,5 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import type { A2aJsonRpcRequest, A2aJsonRpcResponse, A2aTaskState } from '@relaycast/a2a';
+import { A2aAgentCardSchema, type A2aJsonRpcRequest, type A2aJsonRpcResponse, type A2aTaskState } from '@relaycast/a2a';
+import { eq } from 'drizzle-orm';
+import { agents } from '../../db/tables.js';
 import {
   getWorkspaceAgentCard,
   jsonRpcError,
@@ -464,6 +466,54 @@ describe('getWorkspaceAgentCard', () => {
     expect(skillIds).toEqual(['alice', 'bob']);
     const alice = card.skills.find((s) => s.id === 'alice');
     expect(alice).toMatchObject({ id: 'alice', name: 'alice', tags: ['relaycast', 'agent'] });
+  });
+
+  it('keeps one routable skill per agent, described by its declared skills, and skips released agents', async () => {
+    const ws = await createWorkspace(stack.app, 'declared-ws');
+    const registered = await stack.app.request('/v1/agents', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', authorization: `Bearer ${ws.workspaceKey}` },
+      body: JSON.stringify({
+        name: 'ops',
+        persona: 'Ops persona',
+        skills: [
+          { id: 'deploy', name: 'Deploy', description: 'Roll out a service.', tags: ['ci'], examples: ['Deploy api to prod'] },
+          { name: 'Cost report' },
+        ],
+      }),
+    });
+    expect(registered.status).toBe(201);
+    await registerAgent(stack.app, ws.workspaceKey, 'plain');
+    const gone = await registerAgent(stack.app, ws.workspaceKey, 'gone');
+    await stack.runtime.deps.db
+      .update(agents)
+      .set({ status: 'released', name: `gone#released-${gone.agentId}` })
+      .where(eq(agents.id, gone.agentId));
+
+    const card = await getWorkspaceAgentCard(
+      stack.runtime.deps.db,
+      ws.workspaceId,
+      'Declared Workspace',
+      'https://relay.example',
+    );
+
+    expect(A2aAgentCardSchema.safeParse(card).success).toBe(true);
+    // Each skill id is an agent name, the target a caller sends.
+    expect(card.skills).toEqual([
+      {
+        id: 'ops',
+        name: 'ops',
+        description: 'Ops persona Skills: Deploy; Cost report.',
+        tags: ['relaycast', 'agent', 'ci'],
+        examples: ['Deploy api to prod'],
+      },
+      {
+        id: 'plain',
+        name: 'plain',
+        description: 'agent agent in Declared Workspace',
+        tags: ['relaycast', 'agent'],
+      },
+    ]);
   });
 
   it('emits a single fallback skill when the workspace has no agents', async () => {

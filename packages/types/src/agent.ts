@@ -38,22 +38,122 @@ export const AgentSchema = z.object({
 });
 export type Agent = z.infer<typeof AgentSchema>;
 
+/** Bounds for skills stored on an agent (`metadata.skills`) and its A2A card. */
+export const AGENT_SKILLS_MAX = 20;
+export const AGENT_SKILL_NAME_MAX = 80;
+export const AGENT_SKILL_DESCRIPTION_MAX = 500;
+export const AGENT_SKILL_EXAMPLES_MAX = 5;
+export const AGENT_SKILL_EXAMPLE_MAX = 200;
+export const AGENT_CARD_DESCRIPTION_MAX = 1000;
+export const AGENT_CARD_TAGS_MAX = 10;
+/** A2A protocol version of the cards `GET /v1/agents/:name/card` returns. */
+export const AGENT_CARD_PROTOCOL_VERSION = '0.3.0';
+
 export const AgentSkillInputSchema = z.object({
   id: z.string().min(1).optional(),
-  name: z.string().min(1),
-  description: z.string().optional(),
+  name: z.string().min(1).max(AGENT_SKILL_NAME_MAX),
+  description: z.string().max(AGENT_SKILL_DESCRIPTION_MAX).optional(),
   tags: z.array(z.string().min(1)).optional(),
+  /** Short example requests a peer could send for this skill. */
+  examples: z.array(z.string().min(1).max(AGENT_SKILL_EXAMPLE_MAX)).max(AGENT_SKILL_EXAMPLES_MAX).optional(),
   metadata: z.record(z.string(), z.unknown()).optional(),
 });
 export type AgentSkillInput = z.infer<typeof AgentSkillInputSchema>;
+
+/** An agent's declared skills: at most 20, with unique explicit ids. */
+export const AgentSkillsInputSchema = z.array(AgentSkillInputSchema)
+  .max(AGENT_SKILLS_MAX)
+  .superRefine((skills, ctx) => {
+    const seen = new Set<string>();
+    skills.forEach((skill, index) => {
+      if (skill.id === undefined) return;
+      if (seen.has(skill.id)) {
+        ctx.addIssue({ code: 'custom', path: [index, 'id'], message: `duplicate skill id "${skill.id}"` });
+      }
+      seen.add(skill.id);
+    });
+  });
+
+/**
+ * The agent card fields stored at `metadata.card` (snake_case, like the rest of
+ * the wire). Skills live beside it at `metadata.skills`.
+ */
+export const AgentCardMetadataSchema = z.object({
+  description: z.string().min(1).max(AGENT_CARD_DESCRIPTION_MAX),
+  documentation_url: z.string().url().refine((url) => url.startsWith('https://'), 'documentation_url must be https').optional(),
+  tags: z.array(z.string().min(1)).max(AGENT_CARD_TAGS_MAX).optional(),
+  updated_at: z.string().datetime({ offset: true }),
+  version: z.string().min(1),
+});
+export type AgentCardMetadata = z.infer<typeof AgentCardMetadataSchema>;
+
+/**
+ * Agent metadata as accepted on register and update: free-form, except that a
+ * `card` key must be a valid {@link AgentCardMetadataSchema} and a `skills` key
+ * a valid {@link AgentSkillsInputSchema}.
+ */
+export const AgentMetadataInputSchema = z.record(z.string(), z.unknown()).superRefine((metadata, ctx) => {
+  // `metadata.skills` is what the cards publish, so it carries the same bounds
+  // as the top-level `skills` field.
+  for (const [key, schema] of [['card', AgentCardMetadataSchema], ['skills', AgentSkillsInputSchema]] as const) {
+    if (metadata[key] === undefined) continue;
+    const parsed = schema.safeParse(metadata[key]);
+    if (!parsed.success) {
+      for (const issue of parsed.error.issues) {
+        ctx.addIssue({ code: 'custom', path: [key, ...issue.path], message: issue.message });
+      }
+    }
+  }
+});
+
+/** One skill on an A2A agent card (camelCase, per the A2A spec). */
+export const AgentCardSkillSchema = z.object({
+  id: z.string(),
+  name: z.string(),
+  description: z.string(),
+  tags: z.array(z.string()),
+  examples: z.array(z.string()).optional(),
+});
+export type AgentCardSkill = z.infer<typeof AgentCardSkillSchema>;
+
+/**
+ * The A2A agent card `GET /v1/agents/:name/card` returns. Its keys are the A2A
+ * spec's camelCase, not the snake_case of the rest of the wire, so any A2A
+ * client can consume it unchanged. `x-agent-relay` carries Agent Relay fields.
+ */
+export const AgentCardSchema = z.object({
+  protocolVersion: z.string(),
+  name: z.string(),
+  description: z.string(),
+  url: z.string(),
+  preferredTransport: z.literal('JSONRPC'),
+  version: z.string(),
+  provider: z.object({ organization: z.string(), url: z.string() }),
+  documentationUrl: z.string().optional(),
+  capabilities: z.object({ streaming: z.boolean(), pushNotifications: z.boolean() }),
+  defaultInputModes: z.array(z.string()),
+  defaultOutputModes: z.array(z.string()),
+  skills: z.array(AgentCardSkillSchema),
+  'x-agent-relay': z.object({
+    address: z.string(),
+    kind: z.string(),
+    owner: z.string().optional(),
+    where: z.string().optional(),
+    status: z.enum(['live', 'offline']),
+    tags: z.array(z.string()),
+    cardUpdatedAt: z.string().optional(),
+    hasCard: z.boolean(),
+  }),
+});
+export type AgentCard = z.infer<typeof AgentCardSchema>;
 
 export const CreateAgentRequestSchema = z.object({
   auto_join_general: z.boolean().optional(),
   name: z.string(),
   type: AgentTypeSchema.optional(),
   persona: z.string().optional(),
-  metadata: z.record(z.string(), z.unknown()).optional(),
-  skills: z.array(AgentSkillInputSchema).optional(),
+  metadata: AgentMetadataInputSchema.optional(),
+  skills: AgentSkillsInputSchema.optional(),
   capabilities: z.record(z.string(), z.unknown()).optional(),
   recovery_proof_hash: z.string().regex(AGENT_RECOVERY_PROOF_HASH_PATTERN).optional(),
   work_unit_id: z.string().min(1).optional(),
@@ -69,10 +169,17 @@ export const CreateAgentResponseSchema = z.object({
 });
 export type CreateAgentResponse = z.infer<typeof CreateAgentResponseSchema>;
 
+/**
+ * `metadata` is merged into the stored metadata one top-level key at a time
+ * (keys not sent are kept); `skills` replaces `metadata.skills`.
+ */
 export const UpdateAgentRequestSchema = z.object({
   status: AgentStatusSchema.optional(),
   persona: z.string().nullable().optional(),
-  metadata: z.record(z.string(), z.unknown()).optional(),
+  metadata: AgentMetadataInputSchema.optional(),
+  skills: AgentSkillsInputSchema.optional(),
+  capabilities: z.record(z.string(), z.unknown()).nullable().optional(),
+  expected_agent_id: z.string().min(1).optional(),
 });
 export type UpdateAgentRequest = z.infer<typeof UpdateAgentRequestSchema>;
 
