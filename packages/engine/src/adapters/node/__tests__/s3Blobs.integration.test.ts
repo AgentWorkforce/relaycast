@@ -9,7 +9,7 @@ import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { randomUUID } from 'node:crypto';
-import { afterAll, describe, expect, it } from 'vitest';
+import { afterAll, describe, expect, it, vi } from 'vitest';
 import { DiskBlobStore, SignedRouteFileStorage, createFileRouteHandler } from '../files.js';
 import { S3BlobStore, sha256Base64 } from '../s3Blobs.js';
 import { migrateLocalFilesToS3, type FileRow } from '../fileMigration.js';
@@ -166,5 +166,45 @@ describe.skipIf(!enabled)('S3 file storage (integration)', { timeout: 60_000 }, 
     await expect(store().verifyAccess()).resolves.toBeUndefined();
     const missing = new S3BlobStore({ bucket: `relaycast-missing-${randomUUID().slice(0, 8)}`, region: REGION!, endpoint: ENDPOINT, forcePathStyle: true });
     await expect(missing.verifyAccess()).rejects.toThrow(/not reachable/);
+  });
+});
+
+describe('S3BlobStore bounds and warnings', () => {
+  it('fails the startup bucket check within its bound against an endpoint that never answers', async () => {
+    const net = await import('node:net');
+    const held: import('node:net').Socket[] = [];
+    const server = net.createServer((socket) => { held.push(socket); });
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+    const port = (server.address() as import('node:net').AddressInfo).port;
+    try {
+      const store = new S3BlobStore({ bucket: 'some-bucket', region: 'us-east-1', endpoint: `http://127.0.0.1:${port}`, forcePathStyle: true, startupCheckTimeoutMs: 1_500 });
+      const started = Date.now();
+      await expect(store.verifyAccess()).rejects.toThrow(/not reachable/);
+      expect(Date.now() - started).toBeLessThan(10_000);
+    } finally {
+      for (const socket of held) socket.destroy();
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+    }
+  });
+
+  it('warns once when reads cannot be checksum-verified', async () => {
+    const { GetObjectCommand } = await import('@aws-sdk/client-s3');
+    const client = {
+      send: async (command: unknown) => {
+        if (command instanceof GetObjectCommand) {
+          return { ContentType: 'text/plain', Body: { transformToByteArray: async () => new TextEncoder().encode('hi') } };
+        }
+        throw new Error('unexpected command');
+      },
+    };
+    const store = new S3BlobStore({ bucket: 'some-bucket', region: 'us-east-1', client: client as never });
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      expect((await store.read('ws/f/f.txt'))?.bytes.toString()).toBe('hi');
+      await store.read('ws/f/f.txt');
+      expect(warn.mock.calls.filter(([line]) => String(line).includes('not checksum-verified'))).toHaveLength(1);
+    } finally {
+      warn.mockRestore();
+    }
   });
 });

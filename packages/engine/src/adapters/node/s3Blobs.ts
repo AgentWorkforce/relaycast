@@ -19,6 +19,12 @@ import { ConfigError } from '../../bin/secretEnv.js';
 import type { FileBlobStore } from './files.js';
 
 const DEFAULT_CONTENT_TYPE = 'application/octet-stream';
+/** Bound on opening a connection to the S3 endpoint. */
+export const S3_CONNECT_TIMEOUT_MS = 5_000;
+/** Bound on one S3 request once connected (generous for large uploads). */
+export const S3_REQUEST_TIMEOUT_MS = 60_000;
+/** Bound on the whole startup bucket check (HeadBucket). */
+export const S3_STARTUP_CHECK_TIMEOUT_MS = 30_000;
 
 /** The slice of `S3Client` this store uses (a test fake implements it, answering real command instances). */
 export type S3ClientLike = Pick<S3Client, 'send'>;
@@ -34,6 +40,8 @@ export interface S3BlobStoreOptions {
   forcePathStyle?: boolean;
   /** Substitute client (tests); otherwise an `S3Client` built from the options, created on first use. */
   client?: S3ClientLike;
+  /** Bound on the startup bucket check (default {@link S3_STARTUP_CHECK_TIMEOUT_MS}). */
+  startupCheckTimeoutMs?: number;
 }
 
 type Sdk = typeof import('@aws-sdk/client-s3');
@@ -74,6 +82,8 @@ export class S3BlobStore implements FileBlobStore {
   readonly forcePathStyle: boolean;
   private readonly injected: S3ClientLike | undefined;
   private loaded: Promise<{ sdk: Sdk; client: S3ClientLike }> | undefined;
+  private warnedUnverifiedRead = false;
+  private readonly startupCheckTimeoutMs: number;
 
   constructor(options: S3BlobStoreOptions) {
     this.bucket = options.bucket;
@@ -82,6 +92,7 @@ export class S3BlobStore implements FileBlobStore {
     this.endpoint = options.endpoint;
     this.forcePathStyle = options.forcePathStyle ?? false;
     this.injected = options.client;
+    this.startupCheckTimeoutMs = options.startupCheckTimeoutMs ?? S3_STARTUP_CHECK_TIMEOUT_MS;
   }
 
   private load(): Promise<{ sdk: Sdk; client: S3ClientLike }> {
@@ -102,7 +113,7 @@ export class S3BlobStore implements FileBlobStore {
    */
   async verifyAccess(): Promise<void> {
     const { sdk, client } = await this.load();
-    await client.send(new sdk.HeadBucketCommand({ Bucket: this.bucket })).catch((cause: unknown) => {
+    await client.send(new sdk.HeadBucketCommand({ Bucket: this.bucket }), { abortSignal: AbortSignal.timeout(this.startupCheckTimeoutMs) }).catch((cause: unknown) => {
       throw new Error(`S3 bucket ${this.bucket} is not reachable: ${cause instanceof Error ? cause.message : String(cause)}`, { cause });
     });
   }
@@ -113,6 +124,9 @@ export class S3BlobStore implements FileBlobStore {
       region,
       endpoint,
       forcePathStyle,
+      // Bounded, so an unreachable endpoint fails (startup's HeadBucket, an
+      // upload) with an error instead of hanging silently.
+      requestHandler: { connectionTimeout: S3_CONNECT_TIMEOUT_MS, requestTimeout: S3_REQUEST_TIMEOUT_MS },
       // Non-AWS endpoints do not all accept the SDK's default CRC32 trailers;
       // only send checksums the request asks for (our explicit SHA-256).
       ...(endpoint ? { requestChecksumCalculation: 'WHEN_REQUIRED', responseChecksumValidation: 'WHEN_REQUIRED' } : {}),
@@ -150,8 +164,13 @@ export class S3BlobStore implements FileBlobStore {
     const bytes = Buffer.from(await body.transformToByteArray());
     // Verify the stored SHA-256 here too: the SDK skips response validation
     // for custom endpoints (MinIO and other S3-compatible stores).
-    if (object.ChecksumSHA256 && object.ChecksumSHA256 !== sha256Base64(bytes)) {
-      throw new Error(`S3 object ${Key} does not match its stored SHA-256`);
+    if (object.ChecksumSHA256) {
+      if (object.ChecksumSHA256 !== sha256Base64(bytes)) throw new Error(`S3 object ${Key} does not match its stored SHA-256`);
+    } else if (!this.warnedUnverifiedRead) {
+      // Once per store: an endpoint that does not return checksums would
+      // otherwise log on every read.
+      this.warnedUnverifiedRead = true;
+      console.warn('[files.s3] read not checksum-verified: the S3 endpoint returned no ChecksumSHA256', { bucket: this.bucket, key: Key });
     }
     return { bytes, contentType: object.ContentType || DEFAULT_CONTENT_TYPE };
   }

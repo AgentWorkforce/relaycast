@@ -204,17 +204,27 @@ export async function runPostgresCommand(command: PostgresCommand, argv: readonl
   }
 }
 
-/** Every not-deleted `files` row, read with the runtime database credentials (`RELAYCAST_DATABASE_*`). */
-async function loadFileRowsFromPostgres(env: NodeJS.ProcessEnv): Promise<FileRow[]> {
-  const { loadPostgresConfig, openPostgresPool } = await import('../adapters/postgres/index.js');
-  const pool = openPostgresPool(loadPostgresConfig(env, 'runtime'));
+/**
+ * Every not-deleted `files` row, read with the runtime database credentials
+ * (`RELAYCAST_DATABASE_*`) after the same identity and migration-ledger checks
+ * the server makes, in primary-key pages so the read never sorts the table.
+ */
+export async function loadFileRowsFromPostgres(env: NodeJS.ProcessEnv): Promise<FileRow[]> {
+  const { loadPostgresConfig, openPostgresEngineDb } = await import('../adapters/postgres/index.js');
+  const handle = await openPostgresEngineDb(loadPostgresConfig(env, 'runtime'));
   try {
-    const { rows } = await pool.query<{ storage_key: string; status: string; size_bytes: string | number }>(
-      "SELECT storage_key, status, size_bytes FROM files WHERE status <> 'deleted' ORDER BY storage_key",
-    );
-    return rows.map((row) => ({ storageKey: row.storage_key, status: row.status, sizeBytes: Number(row.size_bytes) }));
+    const rows: FileRow[] = [];
+    for (let after = ''; ;) {
+      const page = await handle.pool.query<{ id: string; storage_key: string; status: string; size_bytes: string | number }>(
+        "SELECT id, storage_key, status, size_bytes FROM files WHERE id > $1 AND status <> 'deleted' ORDER BY id LIMIT 1000",
+        [after],
+      );
+      for (const row of page.rows) rows.push({ storageKey: row.storage_key, status: row.status, sizeBytes: Number(row.size_bytes) });
+      if (page.rows.length < 1000) return rows;
+      after = page.rows[page.rows.length - 1]!.id;
+    }
   } finally {
-    await pool.end();
+    await handle.close();
   }
 }
 
@@ -224,8 +234,9 @@ async function loadFileRowsFromPostgres(env: NodeJS.ProcessEnv): Promise<FileRow
  * bucket that `RELAYCAST_FILE_STORE=s3` and `RELAYCAST_FILE_S3_*` name, for
  * every live `files` row (read with the `RELAYCAST_DATABASE_*` runtime
  * credentials). Exit 0 when every live file is in the bucket and verified, 1
- * on any mismatch, missing file or failure, and 64 for a refused
- * configuration. Never deletes local files.
+ * on any mismatch, missing file or failure, 64 for a refused configuration,
+ * and 65 for a wrong database identity (as the server). Never deletes local
+ * files.
  */
 export async function runMigrateFilesToS3Command(
   argv: readonly string[],
@@ -256,7 +267,10 @@ export async function runMigrateFilesToS3Command(
     return summary.mismatched.length === 0 && summary.failed.length === 0 ? 0 : 1;
   } catch (error) {
     io.err(`migrate-files-to-s3: ${error instanceof Error ? error.message : String(error)}`);
-    return error instanceof ConfigError ? 64 : 1;
+    // Same exit codes as the server: 64 refused configuration, 65 wrong
+    // database identity, 1 anything else.
+    if (error instanceof ConfigError) return 64;
+    return error instanceof Error && error.name === 'PostgresIdentityError' ? 65 : 1;
   }
 }
 
