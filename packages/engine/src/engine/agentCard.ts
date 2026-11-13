@@ -31,21 +31,27 @@ export function skillIdFromName(name: string): string {
 /**
  * Skills stored at `metadata.skills`. Rows written before validation existed
  * may hold anything, so malformed entries are skipped rather than trusted.
- * Ids are unique per agent: a derived id that collides gets a numeric suffix.
+ * Ids are unique per agent. Explicit ids are reserved first, so a declared id
+ * is published unchanged; a derived id that collides gets a numeric suffix.
  */
 export function readDeclaredSkills(metadata: Record<string, unknown> | null | undefined): DeclaredAgentSkill[] {
   const raw = metadata?.skills;
   if (!Array.isArray(raw)) return [];
-  const used = new Set<string>();
-  const skills: DeclaredAgentSkill[] = [];
-  for (const value of raw) {
-    if (!value || typeof value !== 'object' || Array.isArray(value)) continue;
+  const entries = raw.flatMap((value) => {
+    if (!value || typeof value !== 'object' || Array.isArray(value)) return [];
     const skill = value as Record<string, unknown>;
     const name = nonEmptyString(skill.name)?.trim();
-    if (!name) continue;
-    const base = nonEmptyString(skill.id)?.trim() ?? skillIdFromName(name);
+    return name ? [{ skill, name, explicit: nonEmptyString(skill.id)?.trim() }] : [];
+  });
+  const reserved = new Set(entries.flatMap((entry) => (entry.explicit ? [entry.explicit] : [])));
+  const used = new Set<string>();
+  const skills: DeclaredAgentSkill[] = [];
+  for (const { skill, name, explicit } of entries) {
+    const base = explicit ?? skillIdFromName(name);
     let id = base;
-    for (let n = 2; used.has(id); n += 1) id = `${base}-${n}`;
+    // An explicit id keeps its value unless a legacy row repeats it; any other
+    // candidate also steers clear of every explicit id.
+    for (let n = 2; used.has(id) || (id !== explicit && reserved.has(id)); n += 1) id = `${base}-${n}`;
     used.add(id);
     const examples = stringArray(skill.examples);
     skills.push({

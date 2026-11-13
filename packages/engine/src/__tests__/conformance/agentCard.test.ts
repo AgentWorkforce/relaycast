@@ -202,6 +202,26 @@ describe('agent cards', () => {
     expect((await storedMetadata(ws.workspaceId, 'reused'))?.card).toBeUndefined();
   });
 
+  it('publishes declared skill ids unchanged, even after a derived id that matches', async () => {
+    const ws = await createWorkspace(stack.app, 'card-ids');
+    await send('POST', '/v1/agents', ws.workspaceKey, {
+      name: 'ids', skills: [{ name: 'Deploy' }, { id: 'deploy', name: 'Release' }],
+    });
+    const { body } = await getCard(ws.workspaceKey, 'ids');
+    expect((body.data.skills as { id: string }[]).map((skill) => skill.id)).toEqual(['deploy-2', 'deploy']);
+  });
+
+  it('applies the skill bounds to metadata.skills too', async () => {
+    const ws = await createWorkspace(stack.app, 'card-meta-skills');
+    const tooMany = Array.from({ length: 21 }, (_, i) => ({ id: `s-${i}`, name: `S${i}` }));
+    expect((await send('POST', '/v1/agents', ws.workspaceKey, { name: 'm', metadata: { skills: tooMany } })).status).toBe(400);
+    await registerAgent(stack.app, ws.workspaceKey, 'm2');
+    expect((await send('PATCH', '/v1/agents/m2', ws.workspaceKey, {
+      metadata: { skills: [{ name: 'X', examples: ['x'.repeat(201)] }] },
+    })).status).toBe(400);
+    expect((await send('PATCH', '/v1/agents/m2', ws.workspaceKey, { metadata: { skills: [{ name: 'X' }] } })).status).toBe(200);
+  });
+
   it('enforces skill and card bounds on register and PATCH', async () => {
     const ws = await createWorkspace(stack.app, 'card-bounds');
     await registerAgent(stack.app, ws.workspaceKey, 'bounded');

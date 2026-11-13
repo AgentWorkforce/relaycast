@@ -468,7 +468,7 @@ describe('getWorkspaceAgentCard', () => {
     expect(alice).toMatchObject({ id: 'alice', name: 'alice', tags: ['relaycast', 'agent'] });
   });
 
-  it('uses declared skills when present, keeps the fallback otherwise, and skips released agents', async () => {
+  it('keeps one routable skill per agent, described by its declared skills, and skips released agents', async () => {
     const ws = await createWorkspace(stack.app, 'declared-ws');
     const registered = await stack.app.request('/v1/agents', {
       method: 'POST',
@@ -498,19 +498,14 @@ describe('getWorkspaceAgentCard', () => {
     );
 
     expect(A2aAgentCardSchema.safeParse(card).success).toBe(true);
+    // Each skill id is an agent name, the target a caller sends.
     expect(card.skills).toEqual([
       {
-        id: 'ops/deploy',
-        name: 'Deploy',
-        description: 'Roll out a service.',
-        tags: ['relaycast', 'agent', 'agent:ops', 'ci'],
+        id: 'ops',
+        name: 'ops',
+        description: 'Ops persona Skills: Deploy; Cost report.',
+        tags: ['relaycast', 'agent', 'ci'],
         examples: ['Deploy api to prod'],
-      },
-      {
-        id: 'ops/cost-report',
-        name: 'Cost report',
-        description: 'Ops persona',
-        tags: ['relaycast', 'agent', 'agent:ops'],
       },
       {
         id: 'plain',

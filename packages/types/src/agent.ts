@@ -89,14 +89,19 @@ export type AgentCardMetadata = z.infer<typeof AgentCardMetadataSchema>;
 
 /**
  * Agent metadata as accepted on register and update: free-form, except that a
- * `card` key, when present, must be a valid {@link AgentCardMetadataSchema}.
+ * `card` key must be a valid {@link AgentCardMetadataSchema} and a `skills` key
+ * a valid {@link AgentSkillsInputSchema}.
  */
 export const AgentMetadataInputSchema = z.record(z.string(), z.unknown()).superRefine((metadata, ctx) => {
-  if (metadata.card === undefined) return;
-  const parsed = AgentCardMetadataSchema.safeParse(metadata.card);
-  if (!parsed.success) {
-    for (const issue of parsed.error.issues) {
-      ctx.addIssue({ code: 'custom', path: ['card', ...issue.path], message: issue.message });
+  // `metadata.skills` is what the cards publish, so it carries the same bounds
+  // as the top-level `skills` field.
+  for (const [key, schema] of [['card', AgentCardMetadataSchema], ['skills', AgentSkillsInputSchema]] as const) {
+    if (metadata[key] === undefined) continue;
+    const parsed = schema.safeParse(metadata[key]);
+    if (!parsed.success) {
+      for (const issue of parsed.error.issues) {
+        ctx.addIssue({ code: 'custom', path: [key, ...issue.path], message: issue.message });
+      }
     }
   }
 });
