@@ -372,6 +372,170 @@ components:
           type: string
           format: date-time
 
+    AgentSkillInput:
+      type: object
+      required: [name]
+      properties:
+        id:
+          type: string
+          description: Unique per agent; kebab-case recommended. Derived from `name` on the card when omitted.
+        name:
+          type: string
+          maxLength: 80
+        description:
+          type: string
+          maxLength: 500
+        tags:
+          type: array
+          items:
+            type: string
+        examples:
+          type: array
+          maxItems: 5
+          description: Short example requests a peer could send for this skill.
+          items:
+            type: string
+            maxLength: 200
+        metadata:
+          type: object
+          additionalProperties: true
+
+    AgentSkillsInput:
+      type: array
+      maxItems: 20
+      description: Stored at `metadata.skills`. Explicit skill ids must be unique.
+      items:
+        $ref: '#/components/schemas/AgentSkillInput'
+
+    AgentCardMetadata:
+      type: object
+      description: The agent card fields stored at `metadata.card`.
+      required: [description, updated_at, version]
+      properties:
+        description:
+          type: string
+          maxLength: 1000
+          description: The agent's purpose; what it does and why work with it.
+        documentation_url:
+          type: string
+          format: uri
+          description: Must be https.
+        tags:
+          type: array
+          maxItems: 10
+          items:
+            type: string
+        updated_at:
+          type: string
+          format: date-time
+        version:
+          type: string
+
+    AgentMetadataInput:
+      type: object
+      additionalProperties: true
+      description: Free-form agent metadata; a `card` key, when present, must be an AgentCardMetadata.
+      properties:
+        card:
+          $ref: '#/components/schemas/AgentCardMetadata'
+
+    AgentCard:
+      type: object
+      description: A2A agent card (camelCase per the A2A spec).
+      required: [protocolVersion, name, description, url, preferredTransport, version, provider, capabilities, defaultInputModes, defaultOutputModes, skills, x-agent-relay]
+      properties:
+        protocolVersion:
+          type: string
+          example: '0.3.0'
+        name:
+          type: string
+        description:
+          type: string
+          description: '`metadata.card.description`, else the persona, else `metadata.description`.'
+        url:
+          type: string
+          description: The workspace A2A JSON-RPC endpoint (`<origin>/a2a/rpc`).
+        preferredTransport:
+          type: string
+          enum: [JSONRPC]
+        version:
+          type: string
+          description: '`metadata.card.version`, else `1`.'
+        provider:
+          type: object
+          properties:
+            organization:
+              type: string
+              description: Workspace name.
+            url:
+              type: string
+        documentationUrl:
+          type: string
+        capabilities:
+          type: object
+          properties:
+            streaming:
+              type: boolean
+            pushNotifications:
+              type: boolean
+        defaultInputModes:
+          type: array
+          items:
+            type: string
+        defaultOutputModes:
+          type: array
+          items:
+            type: string
+        skills:
+          type: array
+          items:
+            type: object
+            required: [id, name, description, tags]
+            properties:
+              id:
+                type: string
+              name:
+                type: string
+              description:
+                type: string
+              tags:
+                type: array
+                items:
+                  type: string
+              examples:
+                type: array
+                items:
+                  type: string
+        x-agent-relay:
+          type: object
+          required: [address, kind, status, tags, hasCard]
+          properties:
+            address:
+              type: string
+              description: Exact `agent@machine` address, or the bare name when the agent is not hosted.
+            kind:
+              type: string
+              description: '`metadata.kind`, else the agent type.'
+            owner:
+              type: string
+              description: '`metadata.owner_name`, else `metadata.owner`; omitted when unset.'
+            where:
+              type: string
+              description: '`metadata.where`, else the machine part of the address.'
+            status:
+              type: string
+              enum: [live, offline]
+            tags:
+              type: array
+              items:
+                type: string
+            cardUpdatedAt:
+              type: string
+              format: date-time
+            hasCard:
+              type: boolean
+              description: The agent declared a card or at least one skill.
+
     Agent:
       type: object
       properties:
@@ -2743,7 +2907,12 @@ paths:
                 persona:
                   type: string
                 metadata:
+                  $ref: '#/components/schemas/AgentMetadataInput'
+                skills:
+                  $ref: '#/components/schemas/AgentSkillsInput'
+                capabilities:
                   type: object
+                  additionalProperties: true
                 recovery_proof_hash:
                   type: string
                   pattern: '^[a-f0-9]{64}$'
@@ -2981,7 +3150,10 @@ paths:
     patch:
       summary: Update agent
       description: >-
-        Update agent properties. Platform-managed metadata keys such as
+        Update agent properties. `metadata` is merged into the stored metadata
+        one top-level key at a time: keys not sent are kept, a key sent
+        replaces its stored value whole (no deep merge). `skills` replaces
+        `metadata.skills`. Platform-managed metadata keys such as
         `identity_key` are rejected; use the dedicated legacy identity claim
         endpoint for the one supported backfill operation. A `status` write
         does not renew `last_seen`. The response `status` is derived presence,
@@ -3016,8 +3188,15 @@ paths:
                     (`agent.status.offline`).
                 persona:
                   type: string
+                  nullable: true
                 metadata:
+                  $ref: '#/components/schemas/AgentMetadataInput'
+                skills:
+                  $ref: '#/components/schemas/AgentSkillsInput'
+                capabilities:
                   type: object
+                  nullable: true
+                  additionalProperties: true
       responses:
         '200':
           description: Agent updated
@@ -3054,6 +3233,43 @@ paths:
       responses:
         '204':
           description: Agent deleted
+
+  /agents/{name}/card:
+    get:
+      summary: Get agent card
+      description: >-
+        The agent's A2A agent card, built from `metadata.card` and
+        `metadata.skills`. Unlike the rest of the API the card's keys are the
+        A2A spec's camelCase, so A2A clients can use it unchanged; Agent Relay
+        fields are under `x-agent-relay`. An agent without a card or skills
+        still gets a minimal card with `skills: []` and
+        `x-agent-relay.hasCard: false`. Released agents are not found.
+        Observer tokens require `agents:read`.
+      tags:
+        - Agents
+      security:
+        - workspaceKey: []
+        - observerToken: []
+      parameters:
+        - name: name
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Agent card
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok:
+                    type: boolean
+                  data:
+                    $ref: '#/components/schemas/AgentCard'
+        '404':
+          description: Agent not found (agent_not_found)
 
   /agents/{name}/subscription-channel:
     post:
@@ -7830,6 +8046,11 @@ paths:
         otherwise returns 404. An explicit query or path selector that does not
         resolve always returns 404 rather than falling back to any other
         workspace.
+
+        Skills: an agent that declared skills (`metadata.skills`) contributes
+        each one, with id `<agent>/<skill id>` and an `agent:<agent>` tag; an
+        agent without declared skills contributes one skill named after it,
+        described by its persona. Released agents are excluded.
       tags: [A2A]
       parameters:
         - in: query

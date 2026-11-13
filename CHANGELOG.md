@@ -20,6 +20,7 @@ Packages without a separate changelog are covered by the cross-package notes bel
 
 ### Added
 
+- Every agent has an A2A agent card at `GET /v1/agents/:name/card` (`relay.getAgentCard(name)`), built from `metadata.card` and `metadata.skills`. Skills accept `examples`, and skills and `metadata.card` are bounded on register and update (at most 20 skills; name <= 80, description <= 500, <= 5 examples of <= 200; card description <= 1000, https `documentation_url`, <= 10 tags). The workspace card (`/.well-known/agent-card.json`) now lists each agent's declared skills and leaves out released agents.
 - Control planes can keep a temporary workspace alive or make it permanent: `POST /internal/workspaces/:id/expiry` (`{ expires_in_seconds }` or `null`), on self-hosted engines and the hosted gateway. An expired workspace is never revived.
 - Self-hosted PostgreSQL deployments can move to durable-actors with every row and file under the same workspace ids: `relaycast-engine migration-preflight` / `export-for-actors` (sealed, owner-only export), then `relaycast-migrate files` / `import` / `verify-realtime` / `open` against the actor gateway (`POST /internal/workspaces/:id/import`), verified per table by count and digest and closed until go-live. See `docs/self-host-postgres.md`.
 - The durable-actors gateway can dial actor sockets through an in-cluster origin (`DURABLE_ACTORS_SOCKET_ORIGIN`) instead of the control plane's public URL, so realtime works in clusters that cannot resolve or reach that URL.

@@ -1,7 +1,13 @@
 import { Hono, type Context } from 'hono';
 import { z } from 'zod';
 import { and, eq } from 'drizzle-orm';
-import { AGENT_TOKEN_HASH_PATTERN, AgentTypeSchema, CliTypeSchema } from '@relaycast/types';
+import {
+  AGENT_TOKEN_HASH_PATTERN,
+  AgentMetadataInputSchema,
+  AgentSkillsInputSchema,
+  AgentTypeSchema,
+  CliTypeSchema,
+} from '@relaycast/types';
 import type { AppEnv } from '../env.js';
 import { requireWorkspaceKey, requireAuth, requireAgentToken, requireSender, requireWorkspaceRead } from '../middleware/auth.js';
 import {
@@ -19,6 +25,7 @@ import * as agentIdentityEngine from '../engine/agentIdentity.js';
 import * as nodeEngine from '../engine/node.js';
 import * as actionEngine from '../engine/action.js';
 import * as directoryEngine from '../engine/directory.js';
+import { buildAgentCard } from '../engine/agentCard.js';
 import * as sessionEventEngine from '../engine/sessionEvent.js';
 import {
   getObserverTokenFromContext,
@@ -64,14 +71,6 @@ agentRoutes.post('/agents/retention', requireWorkspaceKey, rateLimit, async (c) 
   }
 });
 
-const skillSchema = z.object({
-  id: z.string().min(1).optional(),
-  name: z.string().min(1),
-  description: z.string().optional(),
-  tags: z.array(z.string().min(1)).optional(),
-  metadata: z.record(z.string(), z.unknown()).optional(),
-});
-
 const capabilitiesSchema = z.record(z.string(), z.unknown());
 
 const registerAgentSchema = z.object({
@@ -80,8 +79,8 @@ const registerAgentSchema = z.object({
   direct_machine_prefix: z.string().max(40).regex(/^[a-z0-9]+(?:-[a-z0-9]+)*$/).optional(),
   type: AgentTypeSchema.optional(),
   persona: z.string().optional(),
-  metadata: z.record(z.string(), z.unknown()).optional(),
-  skills: z.array(skillSchema).optional(),
+  metadata: AgentMetadataInputSchema.optional(),
+  skills: AgentSkillsInputSchema.optional(),
   capabilities: capabilitiesSchema.optional(),
   recovery_proof_hash: z.string().regex(agentEngine.AGENT_RECOVERY_PROOF_HASH_PATTERN).optional(),
   work_unit_id: z.string().min(1).optional(),
@@ -121,8 +120,8 @@ const AGENT_STATUSES = ['active', 'idle', 'blocked', 'waiting', 'offline', 'onli
 const updateAgentSchema = z.object({
   status: z.enum(AGENT_STATUSES).optional(),
   persona: z.string().nullable().optional(),
-  metadata: z.record(z.string(), z.unknown()).optional(),
-  skills: z.array(skillSchema).optional(),
+  metadata: AgentMetadataInputSchema.optional(),
+  skills: AgentSkillsInputSchema.optional(),
   capabilities: capabilitiesSchema.nullable().optional(),
 });
 
@@ -645,6 +644,31 @@ agentRoutes.get(
         return agentNotFound(c, name);
       }
       return jsonOk(c, agent);
+    } catch (err: unknown) {
+      return errorResponse(c, err);
+    }
+  },
+);
+
+// GET /v1/agents/:name/card - the agent's A2A agent card (camelCase, per the A2A spec)
+agentRoutes.get(
+  '/agents/:name/card',
+  requireWorkspaceRead('agents:read', { allowAgent: false, allowNode: false }),
+  rateLimit,
+  async (c) => {
+    try {
+      const db = c.get('db');
+      const workspace = c.get('workspace');
+      const name = c.req.param('name');
+      const agent = await agentEngine.getAgentByName(db, workspace.id, name);
+      if (
+        !agent
+        || agent.status === agentEngine.RELEASED_AGENT_STATUS
+        || !observerAllowsAgent(getObserverTokenFromContext(c), agent.id)
+      ) {
+        return agentNotFound(c, name);
+      }
+      return jsonOk(c, buildAgentCard(agent, workspace.name, new URL(c.req.url).origin));
     } catch (err: unknown) {
       return errorResponse(c, err);
     }

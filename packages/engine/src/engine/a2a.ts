@@ -26,6 +26,7 @@ import type { FileAttachment } from '@relaycast/types';
 import type { getDb } from '../db/index.js';
 import { a2aAgents, agents } from '../db/tables.js';
 import { registerAgent, getAgentByName, updateAgent, updateAgentById } from './agent.js';
+import { readDeclaredSkills } from './agentCard.js';
 import type { RegistrationAdmission } from './registrationAdmission.js';
 import { rotateAgentToken } from './tokenRotate.js';
 import { createAndRunCertification } from './certify.js';
@@ -783,14 +784,31 @@ export async function getWorkspaceAgentCard(
       metadata: agents.metadata,
     })
     .from(agents)
-    .where(eq(agents.workspaceId, workspaceId));
+    // Released rows are tombstones, not roster members (see listAgents).
+    .where(and(eq(agents.workspaceId, workspaceId), sql`${agents.status} <> 'released'`));
 
-  const skills = workspaceAgents.map((agent) => ({
-    id: agent.name,
-    name: agent.name,
-    description: agent.persona ?? `${agent.type} agent in ${workspaceName}`,
-    tags: ['relaycast', agent.type],
-  }));
+  // An agent that declared skills contributes each of them, its id prefixed
+  // with the agent name so ids stay unique across the workspace; an agent
+  // without declared skills keeps the single persona-derived skill.
+  const skills = workspaceAgents.flatMap((agent) => {
+    const fallbackDescription = agent.persona ?? `${agent.type} agent in ${workspaceName}`;
+    const declared = readDeclaredSkills(agent.metadata);
+    if (declared.length === 0) {
+      return [{
+        id: agent.name,
+        name: agent.name,
+        description: fallbackDescription,
+        tags: ['relaycast', agent.type],
+      }];
+    }
+    return declared.map((skill) => ({
+      id: `${agent.name}/${skill.id}`,
+      name: skill.name,
+      description: skill.description ?? fallbackDescription,
+      tags: [...new Set(['relaycast', agent.type, `agent:${agent.name}`, ...skill.tags])],
+      ...(skill.examples ? { examples: skill.examples } : {}),
+    }));
+  });
 
   return {
     name: workspaceName,

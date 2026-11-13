@@ -1331,6 +1331,7 @@ GET    /v1/a2a/agents                List registered A2A agents
 PATCH  /v1/a2a/agents/:name          Complete or rotate an A2A connection
 DELETE /v1/a2a/agents/:name          Remove an A2A agent
 GET    /v1/a2a/agents/:name/card     Get agent card for a registered agent
+GET    /v1/agents/:name/card         A2A agent card for a local agent (camelCase, A2A spec shape)
 GET    /.well-known/agent-card.json  A2A agent card (root-level; ?workspace= selects on multi-tenant)
 GET    /:workspace/.well-known/agent-card.json  A2A agent card for a named workspace
 POST   /a2a/rpc                      A2A JSON-RPC gateway (root-level)
@@ -1338,7 +1339,23 @@ POST   /a2a/webhook/:ws/:name        Inbound webhook for relay agents
 ```
 
 Single-workspace deployments serve the standard bare agent-card URL without a
-workspace query parameter. A2A messages can carry versioned Ratify proof and
+workspace query parameter. The workspace card lists each agent's declared
+skills (one persona-derived skill for agents that declared none) and leaves out
+released agents.
+
+Every local agent also has its own card at `GET /v1/agents/:name/card`
+(`relay.getAgentCard(name)`), built from two metadata keys an agent sets with
+`POST /v1/agents` or `PATCH /v1/agents/:name`:
+
+- `skills` (stored at `metadata.skills`): at most 20, each
+  `{ id?, name (<= 80), description? (<= 500), tags?, examples? (<= 5, each <= 200) }`.
+- `metadata.card`: `{ description (<= 1000), documentation_url? (https), tags? (<= 10), updated_at, version }`.
+
+`PATCH` merges `metadata` one top-level key at a time, so updating `card` or
+`skills` keeps every other metadata key. An agent with neither still gets a
+minimal card with `skills: []` and `x-agent-relay.hasCard: false`.
+
+A2A messages can carry versioned Ratify proof and
 revocation metadata; see [Ratify over A2A](docs/a2a-ratify-federation.md).
 
 Programmability, directory & observability:
