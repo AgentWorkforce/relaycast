@@ -204,17 +204,27 @@ export async function runPostgresCommand(command: PostgresCommand, argv: readonl
   }
 }
 
-/** Every not-deleted `files` row, read with the runtime database credentials (`RELAYCAST_DATABASE_*`). */
-async function loadFileRowsFromPostgres(env: NodeJS.ProcessEnv): Promise<FileRow[]> {
-  const { loadPostgresConfig, openPostgresPool } = await import('../adapters/postgres/index.js');
-  const pool = openPostgresPool(loadPostgresConfig(env, 'runtime'));
+/**
+ * Every not-deleted `files` row, read with the runtime database credentials
+ * (`RELAYCAST_DATABASE_*`) after the same identity and migration-ledger checks
+ * the server makes, in primary-key pages so the read never sorts the table.
+ */
+export async function loadFileRowsFromPostgres(env: NodeJS.ProcessEnv): Promise<FileRow[]> {
+  const { loadPostgresConfig, openPostgresEngineDb } = await import('../adapters/postgres/index.js');
+  const handle = await openPostgresEngineDb(loadPostgresConfig(env, 'runtime'));
   try {
-    const { rows } = await pool.query<{ storage_key: string; status: string; size_bytes: string | number }>(
-      "SELECT storage_key, status, size_bytes FROM files WHERE status <> 'deleted' ORDER BY storage_key",
-    );
-    return rows.map((row) => ({ storageKey: row.storage_key, status: row.status, sizeBytes: Number(row.size_bytes) }));
+    const rows: FileRow[] = [];
+    for (let after = ''; ;) {
+      const page = await handle.pool.query<{ id: string; storage_key: string; status: string; size_bytes: string | number }>(
+        "SELECT id, storage_key, status, size_bytes FROM files WHERE id > $1 AND status <> 'deleted' ORDER BY id LIMIT 1000",
+        [after],
+      );
+      for (const row of page.rows) rows.push({ storageKey: row.storage_key, status: row.status, sizeBytes: Number(row.size_bytes) });
+      if (page.rows.length < 1000) return rows;
+      after = page.rows[page.rows.length - 1]!.id;
+    }
   } finally {
-    await pool.end();
+    await handle.close();
   }
 }
 
