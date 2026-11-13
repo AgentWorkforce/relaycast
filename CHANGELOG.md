@@ -32,6 +32,7 @@ Packages without a separate changelog are covered by the cross-package notes bel
 
 ### Fixed
 
+- The self-host container sizes Node's heap at 75 % of its memory limit (768 MB in a 1 Gi pod) instead of Node's default of about half, so it no longer dies of heap exhaustion with memory to spare; an explicit `--max-old-space-size` in `NODE_OPTIONS` still wins.
 - Node-connected agents no longer receive the same delivery twice on one socket when the database is slow; the redelivery sweep now leaves a fresh delivery to its live send for a minute before treating it as lost.
 - Self-hosted PostgreSQL servers spend far less database time on idle node heartbeats: a heartbeat recomputes the node's capability manifest only when it changed.
 - Durable-actors workspaces answer `GET /v1/inbox` `unread_channels` and `recent_reactions` (and every other raw-SQL read) as objects instead of positional arrays.
