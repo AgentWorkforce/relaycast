@@ -54,6 +54,31 @@ owner just created, not grants on schemas or roles.
 | `RELAYCAST_DATABASE_RUNTIME_ROLE` | no | Default `relaycast_runtime`. Must differ from the owner role. |
 | `RELAYCAST_DATABASE_POOL_MAX` | no | 1-100. Default is the node-postgres default (10). |
 | `RELAYCAST_DATABASE_STATEMENT_TIMEOUT_MS` | no | 0-86400000. Unset leaves the server default. |
+| `RELAYCAST_DATABASE_QUERY_TIMEOUT_MS` | no | Runtime only. Client-side bound on one query, 1000-86400000, default 60000, and always at least the statement timeout plus 5 s. A query on a dead connection fails at this bound and its connection is discarded. |
+| `RELAYCAST_DATABASE_CONNECT_TIMEOUT_MS` | no | 1000-300000, default 10000. Bound on dialing a new connection. |
+| `RELAYCAST_DATABASE_IDLE_IN_TRANSACTION_TIMEOUT_MS` | no | Runtime only. Sets the session's `idle_in_transaction_session_timeout`, 1000-86400000, default 60000. |
+
+### Failover and connection loss
+
+A database failover (for example RDS Multi-AZ) can leave pooled connections to
+the old primary half-open: nothing answers and nothing closes. The pool
+recovers on its own:
+
+- TCP keepalive is on (first probe after 10 s idle);
+- a query that does not answer within `RELAYCAST_DATABASE_QUERY_TIMEOUT_MS` fails;
+- any connection-fatal error (that timeout, a reset or terminated socket,
+  SQLSTATE class `08`, `57P01`-`57P03` or `53300`) destroys the connection
+  and returns its pool slot, so new work dials the database name again and
+  reaches the new primary.
+
+Two probes report it. `GET /health/ready` returns 503 while the database does
+not answer within 2 s. `GET /health/live` returns 503 only after 90 s without a
+successful probe, so the orchestrator restarts a process that did not recover.
+
+Keepalive only detects a dead peer quickly if the kernel probes often.
+Kernel defaults are a 75 s interval and 9 probes. In Kubernetes set the safe
+sysctls `net.ipv4.tcp_keepalive_intvl=5` and `net.ipv4.tcp_keepalive_probes=3`
+on the pod. The query timeout bounds an in-flight query either way.
 
 TLS is always on and always verify-full. The chain is verified against
 that file only, not the system store. The server name must
