@@ -1063,14 +1063,24 @@ export async function registerNode(
  */
 export const NODE_UNION_REPAIR_INTERVAL_MS = 5 * 60_000;
 
-/** Per node: when this process last recomputed its union manifest. */
+/**
+ * Per node: when this process last recomputed its union manifest, oldest
+ * first (an entry is re-inserted on each refresh). Capped so node churn
+ * cannot grow it without bound; an evicted node just refreshes early.
+ */
 const lastUnionRefreshAt = new Map<string, number>();
+const UNION_REFRESH_TRACKED_NODES = 50_000;
 
 function unionRepairDue(workspaceId: string, nodeId: string, now: Date): boolean {
   const key = JSON.stringify([workspaceId, nodeId]);
   const last = lastUnionRefreshAt.get(key);
   if (last !== undefined && now.getTime() - last < NODE_UNION_REPAIR_INTERVAL_MS) return false;
+  lastUnionRefreshAt.delete(key);
   lastUnionRefreshAt.set(key, now.getTime());
+  for (const oldest of lastUnionRefreshAt.keys()) {
+    if (lastUnionRefreshAt.size <= UNION_REFRESH_TRACKED_NODES) break;
+    lastUnionRefreshAt.delete(oldest);
+  }
   return true;
 }
 
