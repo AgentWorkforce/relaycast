@@ -20,6 +20,10 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 - `DeliveryAckedEventSchema` (`delivery.acked`: `delivery_id`, `message_id`, recipient `agent_id` / `agent_name`, `status: 'acked'`, `at`), in `ServerEventSchema`, `WsClientEventSchema` and `SubscribableEventTypeSchema`. `DeliveryDeliveredEventSchema` gains optional sender-side `agent_id`, `agent_name`, `status`, `at`.
 - `SentDeliverySchema`, `MessageDeliveryReceiptSchema`, `MessageDeliveriesResponseSchema`; `SendDmResponseSchema.delivery` (`{ id, status, expires_at } | null`).
 
+### Changed
+
+- `CliTypeSchema` accepts any harness id (lowercase letters, digits and hyphens, at most 32 characters; `HARNESS_ID_PATTERN`) instead of a fixed list, and `CliType` widens to the known ids plus any string. The known ids are exported as `KNOWN_CLI_TYPES`.
+
 ## [12.7.0] - 2026-11-03
 
 ### Added

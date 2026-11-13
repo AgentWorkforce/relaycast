@@ -70,6 +70,7 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Changed
 
+- `POST /v1/agents/spawn` accepts any harness id a node advertises as `spawn:<id>`; malformed ids return `400` before dispatch.
 - `POST /v1/nodes` no longer returns `400 node_rotation_idempotency_requires_current_token`; a key shorter than 32 characters is `400 node_rotation_idempotency_key_too_weak` with or without proof.
 - `createActorRuntime` runs no SQL in the actor's constructor: the schema is applied inside the first call and commits with it, so a failed `create` leaves no half-built actor; a wake with a current schema runs no DDL.
 - `/internal/workspaces/:id` and `/internal/workspaces/:id/api-key` answer 404 for another workspace's id on a single-workspace host (`config.workspaceId`), where `POST /internal/workspaces` is also a 404.
