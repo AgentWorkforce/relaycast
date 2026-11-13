@@ -18,7 +18,7 @@ import { InProcessPresence, type InProcessPresenceOptions } from './presence.js'
 import { InProcessRateLimiter } from './rate-limit.js';
 import { InProcessKeyValueStore } from './kv.js';
 import { DurableEventQueue, InProcessEventQueue, type DurableEventQueueOptions } from './event-queue.js';
-import { LocalFileStorage, createFileRouteHandler, FILE_ROUTE_PREFIX } from './files.js';
+import { DiskBlobStore, LocalFileStorage, SignedRouteFileStorage, createFileRouteHandler, FILE_ROUTE_PREFIX, type FileBlobStore } from './files.js';
 import { sweepOfflineNodes } from '../../engine/node.js';
 import { sweepStaleAgents } from '../../engine/agent.js';
 import { sweepTimedOutInvocations } from '../../engine/action.js';
@@ -37,6 +37,8 @@ export {
   InProcessEventQueue,
   DurableEventQueue,
   LocalFileStorage,
+  SignedRouteFileStorage,
+  DiskBlobStore,
   createFileRouteHandler,
   FILE_ROUTE_PREFIX,
   getSqliteDb,
@@ -86,8 +88,10 @@ export interface NodeRuntimeOptions {
   dbPath: string;
   /** This server's own origin, used for signed file URLs. */
   baseUrl: string;
-  /** Directory blobs are written to. Default: `<cwd>/relaycast-files`. */
+  /** Directory blobs are written to. Default: `<cwd>/relaycast-files`. Ignored with `fileBlobs`. */
   fileDir?: string;
+  /** Where file bytes live (e.g. an `S3BlobStore`). Default: local disk under `fileDir`. */
+  fileBlobs?: FileBlobStore;
   /** HMAC secret for signed file URLs. Default: a random per-process secret. */
   fileSecret?: string;
   /** Run migrations on startup. Default: true. */
@@ -264,8 +268,8 @@ function assembleRuntime(
   realtime.setPresenceTracker(presence);
   const rateLimiter = new InProcessRateLimiter();
   const kv = new InProcessKeyValueStore();
-  const fileStorage = new LocalFileStorage(
-    options.fileDir ?? `${process.cwd()}/relaycast-files`,
+  const fileStorage = new SignedRouteFileStorage(
+    options.fileBlobs ?? new DiskBlobStore(options.fileDir ?? `${process.cwd()}/relaycast-files`),
     options.baseUrl,
     options.fileSecret ?? randomBytes(32).toString('hex'),
   );

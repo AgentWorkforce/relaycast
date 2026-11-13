@@ -3,7 +3,7 @@
   "version": "12.8.0",
   "license": "FSL-1.1-ALv2",
   "type": "module",
-  "description": "Portable, platform-agnostic engine for Relaycast — channels, threads, DMs, presence, real-time events. Runs on Node + SQLite (self-host) or behind a Cloudflare Durable Object adapter (hosted).",
+  "description": "Portable, platform-agnostic engine for Relaycast \u2014 channels, threads, DMs, presence, real-time events. Runs on Node + SQLite (self-host) or behind a Cloudflare Durable Object adapter (hosted).",
   "bin": {
     "relaycast-engine": "dist/bin/serve.js"
   },
@@ -90,6 +90,7 @@
     "zod": "^4.3.6"
   },
   "devDependencies": {
+    "@aws-sdk/client-s3": "^3.984.0",
     "@identities-ai/ratify-protocol": "1.0.0-alpha.16",
     "@types/better-sqlite3": "^7.6.11",
     "@types/bun": "^1.4.4",
@@ -106,5 +107,13 @@
     "type": "git",
     "url": "git+https://github.com/AgentWorkforce/relaycast.git",
     "directory": "packages/engine"
+  },
+  "peerDependencies": {
+    "@aws-sdk/client-s3": "^3.984.0"
+  },
+  "peerDependenciesMeta": {
+    "@aws-sdk/client-s3": {
+      "optional": true
+    }
   }
 }

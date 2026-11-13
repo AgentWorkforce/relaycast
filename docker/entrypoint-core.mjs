@@ -13,6 +13,8 @@ Usage:
   docker run <image> migration-preflight [...]   Counts before a move to durable-actors (read-only)
   docker run <image> export-for-actors --out <dir> --run-id <id> [...]
                                   Export workspaces for relaycast-migrate import
+  docker run <image> migrate-files-to-s3 [--from <dir>]
+                                  Copy local files to the RELAYCAST_FILE_S3_* bucket (idempotent)
 
 Options:
   --base-url <url>   Required public HTTPS origin (http on loopback/private
@@ -875,7 +877,7 @@ async function runPostgresCommand(command, args = []) {
 }
 
 /** Subcommands handed to the engine's PostgreSQL CLI with their arguments. */
-const POSTGRES_COMMANDS = new Set(['migrate', 'verify-db', 'migration-preflight', 'export-for-actors']);
+const POSTGRES_COMMANDS = new Set(['migrate', 'verify-db', 'migration-preflight', 'export-for-actors', 'migrate-files-to-s3']);
 
 /** True when any RELAYCAST_DATABASE_* variable selects the PostgreSQL backend. */
 function postgresRequested(env) {
