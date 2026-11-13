@@ -15,6 +15,7 @@ Usage:
   relaycast-engine migration-preflight [--workspace <id>]... [--file-dir <dir>] [--ar-since <epoch s>]
                                 Per-workspace counts before a move to durable-actors (read-only)
   relaycast-engine export-for-actors --out <dir> --run-id <id> [--workspace <id>]... [--block-rows <n>]
+  relaycast-engine migrate-files-to-s3 [--from <dir>]   Copy local files into the RELAYCAST_FILE_S3_* bucket
                                 Export workspaces from one snapshot for relaycast-migrate import
 
 Options:
@@ -104,6 +105,11 @@ async function main(): Promise<void> {
     // Loaded lazily so the SQLite server path never imports pg.
     const cli = await import('../adapters/postgres/cli.js');
     process.exitCode = await (command === 'migrate' ? cli.runMigrateCommand() : cli.runVerifyDbCommand());
+    return;
+  }
+  if (command === 'migrate-files-to-s3') {
+    const { runMigrateFilesToS3Command } = await import('../entrypoints/node.js');
+    process.exitCode = await runMigrateFilesToS3Command(process.argv.slice(3));
     return;
   }
   if (command === 'migration-preflight' || command === 'export-for-actors') {

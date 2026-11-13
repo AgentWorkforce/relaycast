@@ -224,7 +224,7 @@ may run more than one replica. Each item names its port.
 | Webhook outbox (`EventQueue`) | SQL with leases | Already safe across replicas. Keep it; claim with `FOR UPDATE SKIP LOCKED`. |
 | Maintenance sweeps (`setInterval`) | every replica, process-serialised | Wrap them in a `MaintenanceScheduler` port. On Postgres one leader runs them: `pg_try_advisory_lock` held on a dedicated connection, so leadership follows connection loss. Every sweep must also be idempotent, so a leadership flip mid-sweep is harmless. Most already are, by design for D1. |
 | In-process serialisers (`serializeMachineEnroll`, write gate) | process memory | Advisory locks or guarded statements, from the inventory in §1. |
-| Files (`FileStorage`) | local disk | An `S3FileStorage` (S3/MinIO/GCS-interop presigned URLs). With more than one replica it is required. Local disk stays the default for one replica. |
+| Files (`FileStorage`) | local disk, or S3 (`RELAYCAST_FILE_STORE=s3`) | Done: the signed `/_relayfiles` route over an `S3BlobStore` (any S3-compatible API), so clients need no store access; `migrate-files-to-s3` copies an existing volume. With more than one replica it is required. Local disk stays the default for one replica. |
 | Workspace-stream override and resync ring (`self-hosting.md` §8) | memory | Persist the override flag on the workspace row. The ring becomes reads from the stream log. |
 
 Proof gate before the chart allows `replicas > 1` (in the helm-charts kind
@@ -278,7 +278,7 @@ Each step lands behind the conformance suite and keeps SQLite green.
 3. Postgres adapter, migrations, sentinel decoding, and search. The full
    conformance suite runs against Postgres in CI (service container).
    **Single replica only.**
-4. `S3FileStorage`, plus export and import.
+4. S3 file storage (done: `RELAYCAST_FILE_STORE=s3`, `migrate-files-to-s3`), plus export and import.
 5. Multi-replica ports: fanout, node-session leases, presence, rate limits,
    the maintenance leader, and the serialiser inventory. Each ships with the
    proof gate above.

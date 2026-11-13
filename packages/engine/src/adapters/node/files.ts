@@ -19,45 +19,28 @@ const tokenPayloadSchema = z.object({
 type TokenPayload = z.infer<typeof tokenPayloadSchema>;
 
 /**
- * Local-filesystem file storage replacing Cloudflare R2 for self-host. Blobs are
- * written under `dir`; upload/download URLs are short-lived HMAC-signed links
- * pointing back at the engine-mounted handler ({@link createFileRouteHandler}),
- * so the client PUT/GET flow matches the hosted (presigned-R2) experience.
+ * Where file bytes live behind the signed `/_relayfiles` route: local disk
+ * ({@link DiskBlobStore}) or an S3 bucket (`S3BlobStore`). Keys are the
+ * engine-assigned storage keys (`<workspaceId>/<id>/<name>`).
  */
-export class LocalFileStorage implements FileStorage {
-  constructor(
-    private readonly dir: string,
-    private readonly baseUrl: string,
-    private readonly secret: string,
-  ) {}
+export interface FileBlobStore {
+  /** Store exactly `bytes` under `key`, replacing any previous object atomically. */
+  write(key: string, bytes: Buffer, contentType: string): Promise<void>;
+  /** The object's bytes and content type, or null when absent. */
+  read(key: string): Promise<{ bytes: Buffer; contentType: string } | null>;
+  /** The object's size, or null when absent; any other failure throws. */
+  stat(key: string): Promise<{ sizeBytes: number } | null>;
+  /** Remove the objects; idempotent. */
+  delete(keys: string[]): Promise<void>;
+}
 
-  private sign(payload: TokenPayload): string {
-    const body = Buffer.from(JSON.stringify(payload)).toString('base64url');
-    const mac = createHmac('sha256', this.secret).update(body).digest('base64url');
-    return `${body}.${mac}`;
-  }
+/** File bytes on local disk under `dir` (the default self-host store). */
+export class DiskBlobStore implements FileBlobStore {
+  constructor(readonly dir: string) {}
 
-  private url(payload: TokenPayload): string {
-    const base = this.baseUrl.replace(/\/$/, '');
-    return `${base}${ROUTE_PREFIX}?token=${this.sign(payload)}`;
-  }
-
-  async createUploadUrl(args: { storageKey: string; contentType: string; sizeBytes: number }): Promise<{ uploadUrl: string; expiresAt: string }> {
-    const exp = Math.floor(Date.now() / 1000) + URL_TTL_SECONDS;
-    return {
-      uploadUrl: this.url({ key: args.storageKey, op: 'put', exp, size: args.sizeBytes, type: args.contentType }),
-      expiresAt: new Date(exp * 1000).toISOString(),
-    };
-  }
-
-  async createDownloadUrl(args: { storageKey: string }): Promise<string> {
-    const exp = Math.floor(Date.now() / 1000) + URL_TTL_SECONDS;
-    return this.url({ key: args.storageKey, op: 'get', exp });
-  }
-
-  async statObject(args: { storageKey: string }): Promise<{ sizeBytes: number } | null> {
+  async stat(key: string): Promise<{ sizeBytes: number } | null> {
     try {
-      const info = await stat(this.resolvePath(args.storageKey));
+      const info = await stat(this.resolvePath(key));
       return info.isFile() ? { sizeBytes: info.size } : null;
     } catch (err) {
       // Only a missing object means "never uploaded"; any other failure is a
@@ -67,8 +50,8 @@ export class LocalFileStorage implements FileStorage {
     }
   }
 
-  async deleteObjects(args: { storageKeys: string[] }): Promise<void> {
-    for (const storageKey of args.storageKeys) {
+  async delete(keys: string[]): Promise<void> {
+    for (const storageKey of keys) {
       const path = this.resolvePath(storageKey);
       // Also sweep temporaries a crashed write left beside the object.
       const prefix = `${basename(path)}.`;
@@ -84,7 +67,7 @@ export class LocalFileStorage implements FileStorage {
   }
 
   /** Resolve a storage key to an absolute path under `dir`, rejecting traversal. */
-  private resolvePath(key: string): string {
+  resolvePath(key: string): string {
     const rel = normalize(key).replace(/^(\.\.(\/|\\|$))+/, '');
     const abs = join(this.dir, rel);
     if (!abs.startsWith(this.dir + sep) && abs !== this.dir) {
@@ -93,34 +76,11 @@ export class LocalFileStorage implements FileStorage {
     return abs;
   }
 
-  verify(token: string | null): TokenPayload | null {
-    if (!token) return null;
-    const dot = token.lastIndexOf('.');
-    if (dot < 0) return null;
-    const body = token.slice(0, dot);
-    const mac = token.slice(dot + 1);
-    const expected = createHmac('sha256', this.secret).update(body).digest('base64url');
-    const a = Buffer.from(mac);
-    const b = Buffer.from(expected);
-    if (a.length !== b.length || !timingSafeEqual(a, b)) return null;
-    try {
-      const parsed = tokenPayloadSchema.safeParse(
-        JSON.parse(Buffer.from(body, 'base64url').toString('utf8')),
-      );
-      if (!parsed.success) return null;
-      const payload = parsed.data;
-      if (payload.exp * 1000 < Date.now()) return null;
-      return payload;
-    } catch {
-      return null;
-    }
-  }
-
   async write(key: string, bytes: Buffer, contentType: string): Promise<void> {
     const path = this.resolvePath(key);
     await mkdir(dirname(path), { recursive: true });
     // Write to a temporary file and rename it into place, so a concurrent
-    // statObject/read never sees a partially written object.
+    // stat/read never sees a partially written object.
     // The content type is published only after the bytes, so a failed PUT
     // never leaves stored bytes paired with another upload's type.
     const tmp = `${path}.${randomUUID()}.tmp`;
@@ -151,6 +111,91 @@ export class LocalFileStorage implements FileStorage {
   }
 }
 
+/**
+ * Self-host file storage replacing Cloudflare R2: upload/download URLs are
+ * short-lived HMAC-signed links pointing back at the engine-mounted handler
+ * ({@link createFileRouteHandler}), so the client PUT/GET flow matches the
+ * hosted (presigned-R2) experience whichever {@link FileBlobStore} holds the
+ * bytes. Clients never talk to the blob store directly.
+ */
+export class SignedRouteFileStorage implements FileStorage {
+  constructor(
+    readonly blobs: FileBlobStore,
+    private readonly baseUrl: string,
+    private readonly secret: string,
+  ) {}
+
+  private sign(payload: TokenPayload): string {
+    const body = Buffer.from(JSON.stringify(payload)).toString('base64url');
+    const mac = createHmac('sha256', this.secret).update(body).digest('base64url');
+    return `${body}.${mac}`;
+  }
+
+  private url(payload: TokenPayload): string {
+    const base = this.baseUrl.replace(/\/$/, '');
+    return `${base}${ROUTE_PREFIX}?token=${this.sign(payload)}`;
+  }
+
+  async createUploadUrl(args: { storageKey: string; contentType: string; sizeBytes: number }): Promise<{ uploadUrl: string; expiresAt: string }> {
+    const exp = Math.floor(Date.now() / 1000) + URL_TTL_SECONDS;
+    return {
+      uploadUrl: this.url({ key: args.storageKey, op: 'put', exp, size: args.sizeBytes, type: args.contentType }),
+      expiresAt: new Date(exp * 1000).toISOString(),
+    };
+  }
+
+  async createDownloadUrl(args: { storageKey: string }): Promise<string> {
+    const exp = Math.floor(Date.now() / 1000) + URL_TTL_SECONDS;
+    return this.url({ key: args.storageKey, op: 'get', exp });
+  }
+
+  statObject(args: { storageKey: string }): Promise<{ sizeBytes: number } | null> {
+    return this.blobs.stat(args.storageKey);
+  }
+
+  deleteObjects(args: { storageKeys: string[] }): Promise<void> {
+    return this.blobs.delete(args.storageKeys);
+  }
+
+  verify(token: string | null): TokenPayload | null {
+    if (!token) return null;
+    const dot = token.lastIndexOf('.');
+    if (dot < 0) return null;
+    const body = token.slice(0, dot);
+    const mac = token.slice(dot + 1);
+    const expected = createHmac('sha256', this.secret).update(body).digest('base64url');
+    const a = Buffer.from(mac);
+    const b = Buffer.from(expected);
+    if (a.length !== b.length || !timingSafeEqual(a, b)) return null;
+    try {
+      const parsed = tokenPayloadSchema.safeParse(
+        JSON.parse(Buffer.from(body, 'base64url').toString('utf8')),
+      );
+      if (!parsed.success) return null;
+      const payload = parsed.data;
+      if (payload.exp * 1000 < Date.now()) return null;
+      return payload;
+    } catch {
+      return null;
+    }
+  }
+
+  write(key: string, bytes: Buffer, contentType: string): Promise<void> {
+    return this.blobs.write(key, bytes, contentType);
+  }
+
+  read(key: string): Promise<{ bytes: Buffer; contentType: string } | null> {
+    return this.blobs.read(key);
+  }
+}
+
+/** {@link SignedRouteFileStorage} over local disk under `dir`. */
+export class LocalFileStorage extends SignedRouteFileStorage {
+  constructor(dir: string, baseUrl: string, secret: string) {
+    super(new DiskBlobStore(dir), baseUrl, secret);
+  }
+}
+
 /** The body when it is exactly `size` bytes; null otherwise. Stops reading once it passes `size`. */
 async function readExactly(request: Request, size: number): Promise<Buffer | null> {
   const declared = request.headers.get('content-length');
@@ -171,7 +216,7 @@ async function readExactly(request: Request, size: number): Promise<Buffer | nul
  * Build a `fetch`-style handler for `${ROUTE_PREFIX}` PUT/GET. The Node
  * entrypoint mounts it so signed upload/download URLs resolve.
  */
-export function createFileRouteHandler(storage: LocalFileStorage) {
+export function createFileRouteHandler(storage: SignedRouteFileStorage) {
   return async (request: Request): Promise<Response> => {
     const url = new URL(request.url);
     const payload = storage.verify(url.searchParams.get('token'));

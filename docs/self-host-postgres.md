@@ -3,7 +3,9 @@
 Status: the server serves from PostgreSQL when any `RELAYCAST_DATABASE_*`
 variable is set: it verifies the runtime identity and migration ledger before
 listening, and never touches SQLite. Single replica only; realtime, presence
-and rate limits are in-process, and files stay on local disk.
+and rate limits are in-process. Files stay on local disk by default, or go to
+an S3 bucket with `RELAYCAST_FILE_STORE=s3` (see [File storage](#file-storage)),
+in which case the pod needs no persistent volume.
 
 ## What the platform provides
 
@@ -478,6 +480,84 @@ working directory (`/data/relaycast-files` in the container image).
 
 Both sides must run the same engine schema: `begin` refuses an export whose
 column lists differ from the actor's.
+
+## File storage
+
+Clients always upload and download through the server's own signed
+`/_relayfiles` URLs: the upload, complete and read API is the same whichever
+store holds the bytes, and clients never talk to the store directly.
+
+| Variable | Default | Meaning |
+| --- | --- | --- |
+| `RELAYCAST_FILE_STORE` | `local` | `local`: bytes on disk under `/data/relaycast-files` (needs a persistent volume). `s3`: bytes in an S3 bucket. Anything else refuses to start (exit 64). |
+| `RELAYCAST_FILE_S3_BUCKET` | (required for `s3`) | Bucket name. |
+| `RELAYCAST_FILE_S3_REGION` | `AWS_REGION` | Bucket region. |
+| `RELAYCAST_FILE_S3_PREFIX` | none | Key prefix, for example `relaycast/files`. Objects are `<prefix>/<workspace>/<file>/<name>`. |
+| `RELAYCAST_FILE_S3_ENDPOINT` | AWS | An S3-compatible endpoint (for example MinIO). |
+| `RELAYCAST_FILE_S3_FORCE_PATH_STYLE` | `false` | `true` for path-style addressing, which most non-AWS endpoints need. |
+
+Credentials come only from the AWS SDK's default chain: IRSA or EKS Pod
+Identity on Kubernetes, or an instance role. There is no static-key setting.
+The role needs:
+
+```json
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    { "Effect": "Allow", "Action": ["s3:GetObject", "s3:PutObject", "s3:DeleteObject"],
+      "Resource": "arn:aws:s3:::<bucket>/<prefix>/*" },
+    { "Effect": "Allow", "Action": "s3:ListBucket", "Resource": "arn:aws:s3:::<bucket>" }
+  ]
+}
+```
+
+`s3:ListBucket` backs the `HeadBucket` check that tells a missing object from
+a missing bucket. A bucket encrypted with a customer-managed KMS key also needs
+`kms:GenerateDataKey` and `kms:Decrypt` on that key. Objects are stored at
+`<prefix>/<workspace>/<fileId>/<fileId>.<ext>`. Every write carries a SHA-256
+checksum that S3 verifies and stores, and every read is checked against it.
+
+At startup the server loads the AWS SDK and checks the bucket with
+`HeadBucket`, so it refuses to serve rather than failing its first upload: exit
+64 if the SDK is missing, exit 1 if the bucket is unreachable or access is
+denied. Setting any `RELAYCAST_FILE_S3_*` without `RELAYCAST_FILE_STORE=s3`
+also refuses to start (exit 64) instead of silently keeping files on disk. The
+SQLite server refuses all of these settings: S3 file storage is for the
+PostgreSQL backend only.
+
+### Moving existing files to S3
+
+The database decides what is copied: every `files` row that is not deleted.
+The command therefore needs the same `RELAYCAST_DATABASE_*` runtime settings as
+the server, plus the `RELAYCAST_FILE_*` settings for the target bucket:
+
+```sh
+docker run --rm -v <files-volume>:/data/relaycast-files:ro \
+  -e RELAYCAST_DATABASE_URL_FILE=/run/secrets/runtime-url -e RELAYCAST_DATABASE_CA_FILE=/etc/relaycast/db-ca.pem \
+  -e RELAYCAST_FILE_STORE=s3 -e RELAYCAST_FILE_S3_BUCKET=<bucket> \
+  -e RELAYCAST_FILE_S3_REGION=<region> -e RELAYCAST_FILE_S3_PREFIX=<prefix> \
+  <image> migrate-files-to-s3 [--from <dir>]
+```
+
+For each live file:
+
+- **Already in the bucket:** verified by size and SHA-256 against the local copy. An object with different bytes is reported as `MISMATCH` and never overwritten.
+- **Only on disk:** copied with its content type, then verified.
+- **On neither:** a `FAILED` complete file, since its bytes are lost. A pending file with no bytes is an upload that never finished, and is fine.
+
+Local objects no live row references are listed and not copied, so a file
+deleted since an earlier run is never resurrected. Nothing is skipped because
+of its name. Local files are never deleted, so the volume stays a complete
+rollback. The command reads one file per worker at a time (4 workers).
+
+Exit codes: 0 means every live file is in the bucket and verified; 1 means a
+mismatch, a lost file, an unreachable bucket or another failure, each printed;
+64 means a refused configuration.
+
+Procedure: run the command, set `RELAYCAST_FILE_STORE=s3` on the server and
+restart it, then run the command once more. That second run copies uploads
+that landed on the volume between the first run and the restart, and skips
+everything else. Remove the volume only after a run exits 0.
 
 ## Not yet supported
 
