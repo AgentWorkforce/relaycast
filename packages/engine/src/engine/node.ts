@@ -3901,10 +3901,34 @@ export async function handleNodeControlMessage(args: HandleNodeControlMessageArg
     ?? ('provider' in message && message.provider ? message.provider.name : undefined)
     ?? DEFAULT_PROVIDER_NAME;
 
+  // `delivery.ack` is cumulative and sends no reply, so a newer ack for the
+  // same agent can be folded into one that is still queued behind this node's
+  // other frames. Without this, a node acking every few ms while the database
+  // is slower queues one closure per ack without bound: the heap grows, and
+  // the agent.register/inventory.sync frames that make agents delivery-ready
+  // wait behind the backlog.
+  let coalescedAck: PendingAck | undefined;
+  if (message.type === 'delivery.ack') {
+    const ackKey = JSON.stringify([args.workspaceId, args.nodeId, frameProviderName, message.agent]);
+    const queued = pendingAcks.get(ackKey);
+    if (queued) {
+      queued.upToSeq = Math.max(queued.upToSeq, message.up_to_seq);
+      return queued.done;
+    }
+    coalescedAck = { key: ackKey, upToSeq: message.up_to_seq, done: Promise.resolve() };
+    pendingAcks.set(ackKey, coalescedAck);
+  }
+
   // Serialize all control operations for a node so a concurrent register and
   // teardown (or two providers attaching at once) can't race the duplicate
   // check, the provider-row upsert, or the aggregate recompute.
-  return serializeNodeOp(args.workspaceId, args.nodeId, async () => {
+  const run = serializeNodeOp(args.workspaceId, args.nodeId, async () => {
+  if (coalescedAck) {
+    // From here on a new ack starts its own entry; this one acks the highest
+    // seq folded in while it waited.
+    pendingAcks.delete(coalescedAck.key);
+    if (message.type === 'delivery.ack') message = { ...message, up_to_seq: coalescedAck.upToSeq };
+  }
   try {
     // Decided under the node lock: a frame queued on a socket that a
     // reconnect's `node.register` has since superseded would act on the live
@@ -4414,7 +4438,19 @@ export async function handleNodeControlMessage(args: HandleNodeControlMessageArg
     });
   }
   });
+  if (coalescedAck) coalescedAck.done = run.then(() => undefined, () => undefined);
+  return run;
 }
+
+/** A queued `delivery.ack` that later acks for the same agent fold into. */
+interface PendingAck {
+  key: string;
+  upToSeq: number;
+  done: Promise<void>;
+}
+
+/** Queued, not yet started acks by workspace, node, provider and agent. */
+const pendingAcks = new Map<string, PendingAck>();
 
 async function publicNodes(db: Db, rows: NodeRow[], now: number, status?: 'online' | 'offline', limit?: number) {
   if (!nodeLivenessAuthority(db)) return rows.map(row => publicNode(row, now));
