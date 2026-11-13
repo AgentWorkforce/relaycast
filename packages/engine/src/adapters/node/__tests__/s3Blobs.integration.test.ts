@@ -12,7 +12,7 @@ import { randomUUID } from 'node:crypto';
 import { afterAll, describe, expect, it } from 'vitest';
 import { DiskBlobStore, SignedRouteFileStorage, createFileRouteHandler } from '../files.js';
 import { S3BlobStore, sha256Base64 } from '../s3Blobs.js';
-import { migrateLocalFilesToS3 } from '../fileMigration.js';
+import { migrateLocalFilesToS3, type FileRow } from '../fileMigration.js';
 import { runMigrateFilesToS3Command } from '../../../entrypoints/node.js';
 
 const ENDPOINT = process.env.RELAYCAST_S3_TEST_ENDPOINT;
@@ -78,35 +78,67 @@ describe.skipIf(!enabled)('S3 file storage (integration)', { timeout: 60_000 }, 
     expect(gone.status).toBe(404);
   });
 
-  it('migrates local files once, verifies them, skips them on re-run, and never overwrites a different object', async () => {
+  it('migrates every live file row once, verified, and never overwrites a different object', async () => {
     const dir = await scratch();
     const disk = new DiskBlobStore(dir);
-    await disk.write('ws1/f1/a.png', Buffer.from('png-bytes'), 'image/png');
-    await disk.write('ws2/f9/notes.txt', Buffer.from('some notes'), 'text/plain');
-    // A crashed write's temporary is not an object.
-    await writeFile(join(dir, 'ws1', 'f1', 'a.png.1234.tmp'), 'partial');
+    // Real uploads whose stored names end in .ct / .tmp are files like any other.
+    const files: FileRow[] = [
+      { storageKey: 'ws1/f1/f1.png', status: 'complete', sizeBytes: 9 },
+      { storageKey: 'ws1/f2/f2.ct', status: 'complete', sizeBytes: 10 },
+      { storageKey: 'ws1/f3/f3.tmp', status: 'complete', sizeBytes: 7 },
+    ];
+    await disk.write('ws1/f1/f1.png', Buffer.from('png-bytes'), 'image/png');
+    await disk.write('ws1/f2/f2.ct', Buffer.from('ct upload!'), 'text/plain');
+    await disk.write('ws1/f3/f3.tmp', Buffer.from('tmpfile'), 'application/octet-stream');
+    // DiskBlobStore's own crashed-write temporary is not a file.
+    await writeFile(join(dir, 'ws1', 'f1', `f1.png.${randomUUID()}.tmp`), 'partial');
     const s3 = store();
 
-    const first = await migrateLocalFilesToS3({ dir, store: s3 });
-    expect(first).toEqual({ copied: 2, alreadyPresent: 0, mismatched: [], failed: [] });
-    expect(await s3.read('ws1/f1/a.png')).toEqual({ bytes: Buffer.from('png-bytes'), contentType: 'image/png' });
-    expect(await s3.read('ws2/f9/notes.txt')).toEqual({ bytes: Buffer.from('some notes'), contentType: 'text/plain' });
+    const first = await migrateLocalFilesToS3({ dir, store: s3, rows: files });
+    expect(first).toMatchObject({ copied: 3, alreadyPresent: 0, unreferenced: [], mismatched: [], failed: [] });
+    expect(await s3.read('ws1/f2/f2.ct')).toEqual({ bytes: Buffer.from('ct upload!'), contentType: 'text/plain' });
+    expect(await s3.read('ws1/f3/f3.tmp')).toEqual({ bytes: Buffer.from('tmpfile'), contentType: 'application/octet-stream' });
 
-    const again = await migrateLocalFilesToS3({ dir, store: s3 });
-    expect(again).toEqual({ copied: 0, alreadyPresent: 2, mismatched: [], failed: [] });
+    const again = await migrateLocalFilesToS3({ dir, store: s3, rows: files });
+    expect(again).toMatchObject({ copied: 0, alreadyPresent: 3, mismatched: [], failed: [] });
 
     // The bucket object changed (a newer upload): reported, left untouched.
-    await s3.write('ws2/f9/notes.txt', Buffer.from('a newer upload'), 'text/plain');
-    const mismatch = await migrateLocalFilesToS3({ dir, store: s3 });
-    expect(mismatch.mismatched).toEqual(['ws2/f9/notes.txt']);
-    expect((await s3.read('ws2/f9/notes.txt'))?.bytes).toEqual(Buffer.from('a newer upload'));
+    await s3.write('ws1/f2/f2.ct', Buffer.from('a newer upload'), 'text/plain');
+    const mismatch = await migrateLocalFilesToS3({ dir, store: s3, rows: files });
+    expect(mismatch.mismatched).toEqual(['ws1/f2/f2.ct']);
+    expect((await s3.read('ws1/f2/f2.ct'))?.bytes).toEqual(Buffer.from('a newer upload'));
     // Local files are never deleted.
-    expect(await disk.read('ws1/f1/a.png')).not.toBeNull();
+    expect(await disk.read('ws1/f1/f1.png')).not.toBeNull();
   });
 
-  it('runs as a command: 0 when everything is verified, 1 on a mismatch, 64 without an s3 config', async () => {
+  it('follows the database: deleted files are not resurrected, lost files fail, unfinished uploads are fine', async () => {
     const dir = await scratch();
-    await new DiskBlobStore(dir).write('ws3/f1/x.bin', Buffer.from([1, 2, 3]), 'application/octet-stream');
+    const disk = new DiskBlobStore(dir);
+    await disk.write('ws2/d1/d1.txt', Buffer.from('deleted later'), 'text/plain');
+    await disk.write('ws2/o1/o1.txt', Buffer.from('no row at all'), 'text/plain');
+    await disk.write('ws2/p1/p1.txt', Buffer.from('pending'), 'text/plain');
+    const s3 = store();
+    const summary = await migrateLocalFilesToS3({
+      dir,
+      store: s3,
+      rows: [
+        { storageKey: 'ws2/d1/d1.txt', status: 'deleted', sizeBytes: 13 },
+        { storageKey: 'ws2/p1/p1.txt', status: 'pending', sizeBytes: 7 },
+        { storageKey: 'ws2/p2/p2.txt', status: 'pending', sizeBytes: 5 },
+        { storageKey: 'ws2/c1/c1.txt', status: 'complete', sizeBytes: 4 },
+      ],
+    });
+    expect(await s3.stat('ws2/d1/d1.txt')).toBeNull();
+    expect(await s3.stat('ws2/o1/o1.txt')).toBeNull();
+    expect(summary.unreferenced).toEqual(['ws2/d1/d1.txt', 'ws2/o1/o1.txt']);
+    expect(summary.copied).toBe(1);
+    expect(summary.pendingWithoutBytes).toBe(1);
+    expect(summary.failed).toEqual([{ key: 'ws2/c1/c1.txt', error: 'complete file is neither on disk nor in the bucket' }]);
+  });
+
+  it('runs as a command: 0 when everything is verified, 1 on a mismatch or unreachable bucket, 64 on bad config', async () => {
+    const dir = await scratch();
+    await new DiskBlobStore(dir).write('ws3/f1/f1.bin', Buffer.from([1, 2, 3]), 'application/octet-stream');
     const prefix = `test/${randomUUID()}`;
     const env = {
       RELAYCAST_FILE_STORE: 's3',
@@ -118,12 +150,21 @@ describe.skipIf(!enabled)('S3 file storage (integration)', { timeout: 60_000 }, 
     };
     const lines: string[] = [];
     const io = { out: (line: string) => lines.push(line), err: (line: string) => lines.push(line) };
-    expect(await runMigrateFilesToS3Command(['--from', dir], env, io)).toBe(0);
-    expect(await runMigrateFilesToS3Command(['--from', dir], env, io)).toBe(0);
-    await new S3BlobStore({ bucket: BUCKET!, region: REGION!, endpoint: ENDPOINT, forcePathStyle: true, prefix }).write('ws3/f1/x.bin', Buffer.from([9]), 'application/octet-stream');
-    expect(await runMigrateFilesToS3Command(['--from', dir], env, io)).toBe(1);
-    expect(await runMigrateFilesToS3Command(['--from', dir], { RELAYCAST_FILE_STORE: 'local' }, io)).toBe(64);
-    expect(await runMigrateFilesToS3Command(['--bogus'], env, io)).toBe(64);
-    expect(lines.some((line) => line.includes('MISMATCH') && line.includes('ws3/f1/x.bin'))).toBe(true);
+    const loadFileRows = async () => [{ storageKey: 'ws3/f1/f1.bin', status: 'complete', sizeBytes: 3 }];
+    expect(await runMigrateFilesToS3Command(['--from', dir], env, io, { loadFileRows })).toBe(0);
+    expect(await runMigrateFilesToS3Command(['--from', dir], env, io, { loadFileRows })).toBe(0);
+    await new S3BlobStore({ bucket: BUCKET!, region: REGION!, endpoint: ENDPOINT, forcePathStyle: true, prefix }).write('ws3/f1/f1.bin', Buffer.from([9]), 'application/octet-stream');
+    expect(await runMigrateFilesToS3Command(['--from', dir], env, io, { loadFileRows })).toBe(1);
+    expect(lines.some((line) => line.includes('MISMATCH') && line.includes('ws3/f1/f1.bin'))).toBe(true);
+    expect(await runMigrateFilesToS3Command(['--from', dir], { ...env, RELAYCAST_FILE_S3_BUCKET: `relaycast-missing-${randomUUID().slice(0, 8)}` }, io, { loadFileRows })).toBe(1);
+    expect(lines.some((line) => /not reachable/.test(line))).toBe(true);
+    expect(await runMigrateFilesToS3Command(['--from', dir], { RELAYCAST_FILE_STORE: 'local' }, io, { loadFileRows })).toBe(64);
+    expect(await runMigrateFilesToS3Command(['--bogus'], env, io, { loadFileRows })).toBe(64);
+  });
+
+  it('verifyAccess passes for a reachable bucket and fails for a missing one', async () => {
+    await expect(store().verifyAccess()).resolves.toBeUndefined();
+    const missing = new S3BlobStore({ bucket: `relaycast-missing-${randomUUID().slice(0, 8)}`, region: REGION!, endpoint: ENDPOINT, forcePathStyle: true });
+    await expect(missing.verifyAccess()).rejects.toThrow(/not reachable/);
   });
 });

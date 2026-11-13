@@ -27,7 +27,14 @@ function read(env: NodeJS.ProcessEnv, name: string): string | undefined {
 /** Parse the `RELAYCAST_FILE_*` settings; `defaultDir` is the local store's directory. */
 export function loadFileStoreConfig(env: NodeJS.ProcessEnv, defaultDir: string): FileStoreConfig {
   const kind = read(env, 'RELAYCAST_FILE_STORE') ?? 'local';
-  if (kind === 'local') return { kind, dir: defaultDir };
+  if (kind === 'local') {
+    // Half-configured S3 must not silently keep files on a disk the pod may lose.
+    const stray = Object.keys(env).filter((name) => name.startsWith('RELAYCAST_FILE_S3_') && read(env, name) !== undefined).sort();
+    if (stray.length > 0) {
+      throw new ConfigError(`${stray.join(', ')} ${stray.length === 1 ? 'is' : 'are'} set but RELAYCAST_FILE_STORE is not s3; set RELAYCAST_FILE_STORE=s3 or unset ${stray.length === 1 ? 'it' : 'them'}`);
+    }
+    return { kind, dir: defaultDir };
+  }
   if (kind !== 's3') throw new ConfigError(`RELAYCAST_FILE_STORE must be local or s3, got ${JSON.stringify(kind)}`);
 
   const bucket = read(env, 'RELAYCAST_FILE_S3_BUCKET');

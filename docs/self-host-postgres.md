@@ -512,33 +512,52 @@ The role needs:
 ```
 
 `s3:ListBucket` backs the `HeadBucket` check that tells a missing object from
-a missing bucket. Every write carries a SHA-256 checksum that S3 verifies and
-stores.
+a missing bucket. A bucket encrypted with a customer-managed KMS key also needs
+`kms:GenerateDataKey` and `kms:Decrypt` on that key. Objects are stored at
+`<prefix>/<workspace>/<fileId>/<fileId>.<ext>`. Every write carries a SHA-256
+checksum that S3 verifies and stores, and every read is checked against it.
+
+At startup the server loads the AWS SDK and checks the bucket with
+`HeadBucket`, so it refuses to serve rather than failing its first upload: exit
+64 if the SDK is missing, exit 1 if the bucket is unreachable or access is
+denied. Setting any `RELAYCAST_FILE_S3_*` without `RELAYCAST_FILE_STORE=s3`
+also refuses to start (exit 64) instead of silently keeping files on disk. The
+SQLite server refuses all of these settings: S3 file storage is for the
+PostgreSQL backend only.
 
 ### Moving existing files to S3
 
-Run once, against the existing volume, before switching the server:
+The database decides what is copied: every `files` row that is not deleted.
+The command therefore needs the same `RELAYCAST_DATABASE_*` runtime settings as
+the server, plus the `RELAYCAST_FILE_*` settings for the target bucket:
 
 ```sh
 docker run --rm -v <files-volume>:/data/relaycast-files:ro \
+  -e RELAYCAST_DATABASE_URL_FILE=/run/secrets/runtime-url -e RELAYCAST_DATABASE_CA_FILE=/etc/relaycast/db-ca.pem \
   -e RELAYCAST_FILE_STORE=s3 -e RELAYCAST_FILE_S3_BUCKET=<bucket> \
   -e RELAYCAST_FILE_S3_REGION=<region> -e RELAYCAST_FILE_S3_PREFIX=<prefix> \
   <image> migrate-files-to-s3 [--from <dir>]
 ```
 
-It copies every stored object with its content type and verifies each one in
-the bucket by size and SHA-256. It is idempotent: a re-run skips objects
-already present with the same bytes, so an interrupted copy can simply be run
-again. An object already in the bucket with different bytes is reported as a
-`MISMATCH` and never overwritten. Local files are never deleted, so the volume
-stays a complete rollback. Exit 0 means every object is in the bucket and
-verified, 1 means a mismatch or failure (each is printed), and 64 means a
-refused configuration.
+For each live file:
 
-Then set `RELAYCAST_FILE_STORE=s3` on the server and restart it. Files
-uploaded between the copy and the restart are still only on the volume, so
-run the command once more after the restart (it skips everything already
-copied) before you remove the volume.
+- **Already in the bucket:** verified by size and SHA-256 against the local copy. An object with different bytes is reported as `MISMATCH` and never overwritten.
+- **Only on disk:** copied with its content type, then verified.
+- **On neither:** a `FAILED` complete file, since its bytes are lost. A pending file with no bytes is an upload that never finished, and is fine.
+
+Local objects no live row references are listed and not copied, so a file
+deleted since an earlier run is never resurrected. Nothing is skipped because
+of its name. Local files are never deleted, so the volume stays a complete
+rollback. The command reads one file per worker at a time (4 workers).
+
+Exit codes: 0 means every live file is in the bucket and verified; 1 means a
+mismatch, a lost file, an unreachable bucket or another failure, each printed;
+64 means a refused configuration.
+
+Procedure: run the command, set `RELAYCAST_FILE_STORE=s3` on the server and
+restart it, then run the command once more. That second run copies uploads
+that landed on the volume between the first run and the restart, and skips
+everything else. Remove the volume only after a run exits 0.
 
 ## Not yet supported
 

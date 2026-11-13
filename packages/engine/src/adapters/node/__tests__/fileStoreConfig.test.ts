@@ -35,6 +35,9 @@ describe('RELAYCAST_FILE_STORE', () => {
       expect((error as Error).message).toMatch(message);
     };
     refuse({ RELAYCAST_FILE_STORE: 'gcs' }, /must be local or s3/);
+    // Half-configured S3 never silently falls back to disk.
+    refuse({ RELAYCAST_FILE_S3_BUCKET: 'ok-bucket' }, /RELAYCAST_FILE_S3_BUCKET is set but RELAYCAST_FILE_STORE is not s3/);
+    refuse({ RELAYCAST_FILE_STORE: 'local', RELAYCAST_FILE_S3_BUCKET: 'ok-bucket', RELAYCAST_FILE_S3_REGION: 'us-east-1' }, /are set but RELAYCAST_FILE_STORE is not s3/);
     refuse({ RELAYCAST_FILE_STORE: 's3' }, /requires RELAYCAST_FILE_S3_BUCKET/);
     refuse({ RELAYCAST_FILE_STORE: 's3', RELAYCAST_FILE_S3_BUCKET: 'Bad_Bucket' }, /not a valid bucket/);
     refuse({ RELAYCAST_FILE_STORE: 's3', RELAYCAST_FILE_S3_BUCKET: 'ok-bucket' }, /requires RELAYCAST_FILE_S3_REGION/);

@@ -32,7 +32,9 @@ import {
 } from '../engine/wsAuth.js';
 
 export { credentialConfigFromEnv, type CredentialEnvConfig } from '../config/credentialEnv.js';
-export { ConfigError } from '../bin/secretEnv.js';
+import { ConfigError } from '../bin/secretEnv.js';
+import type { FileRow } from '../adapters/node/fileMigration.js';
+export { ConfigError };
 export { createCollectorTelemetrySink } from '../providers/collector-telemetry.js';
 export type { NodeTelemetryCollectorOptions } from '../adapters/node/index.js';
 
@@ -92,6 +94,11 @@ export function startServer(options: StartServerOptions): RunningServer {
   // Refuse a weak admin secret before opening SQLite or starting the queue
   // and sweeper, so a rejected config leaves nothing running.
   assertInternalSecretStrength(options.config?.internalSecret);
+  // S3 file storage is a PostgreSQL-server feature; refuse it here rather
+  // than silently keep files on disk.
+  if ((process.env.RELAYCAST_FILE_STORE ?? '').trim() === 's3' || Object.keys(process.env).some((name) => name.startsWith('RELAYCAST_FILE_S3_') && (process.env[name] ?? '').trim() !== '')) {
+    throw new ConfigError('RELAYCAST_FILE_STORE=s3 and RELAYCAST_FILE_S3_* are supported only on the PostgreSQL backend (set RELAYCAST_DATABASE_*); the SQLite server stores files on local disk');
+  }
   const runtime = createNodeRuntime({
     dbPath: options.dbPath,
     baseUrl,
@@ -149,13 +156,17 @@ export async function startPostgresServer(options: StartPostgresServerOptions): 
   const { createFileBlobStore, describeFileStoreConfig, loadFileStoreConfig } = await import('../adapters/node/fileStoreConfig.js');
   const fileStore = loadFileStoreConfig(options.env ?? process.env, options.fileDir ?? `${process.cwd()}/relaycast-files`);
   log(describeFileStoreConfig(fileStore));
+  const fileBlobs = createFileBlobStore(fileStore);
+  // Refuse to serve with an S3 store that cannot work (SDK missing: exit 64;
+  // bucket unreachable or access denied: exit 1) instead of failing uploads.
+  if ('verifyAccess' in fileBlobs && typeof fileBlobs.verifyAccess === 'function') await fileBlobs.verifyAccess();
   const handle = await openPostgresEngineDb(config, { log });
   let runtime: NodeRuntimeWithDb;
   try {
     runtime = createNodeRuntimeWithDb(handle.db, {
       baseUrl,
       fileDir: options.fileDir,
-      fileBlobs: createFileBlobStore(fileStore),
+      fileBlobs,
       fileSecret: options.fileSecret,
       auth: options.auth,
       admission: options.admission,
@@ -193,12 +204,28 @@ export async function runPostgresCommand(command: PostgresCommand, argv: readonl
   }
 }
 
+/** Every not-deleted `files` row, read with the runtime database credentials (`RELAYCAST_DATABASE_*`). */
+async function loadFileRowsFromPostgres(env: NodeJS.ProcessEnv): Promise<FileRow[]> {
+  const { loadPostgresConfig, openPostgresPool } = await import('../adapters/postgres/index.js');
+  const pool = openPostgresPool(loadPostgresConfig(env, 'runtime'));
+  try {
+    const { rows } = await pool.query<{ storage_key: string; status: string; size_bytes: string | number }>(
+      "SELECT storage_key, status, size_bytes FROM files WHERE status <> 'deleted' ORDER BY storage_key",
+    );
+    return rows.map((row) => ({ storageKey: row.storage_key, status: row.status, sizeBytes: Number(row.size_bytes) }));
+  } finally {
+    await pool.end();
+  }
+}
+
 /**
  * `migrate-files-to-s3 [--from <dir>]`: copy the local file store (default
  * `<cwd>/relaycast-files`, `/data/relaycast-files` in the image) into the
- * bucket that `RELAYCAST_FILE_STORE=s3` and `RELAYCAST_FILE_S3_*` name. Exit
- * 0 when every object is in the bucket and verified, 1 on any mismatch or
- * failure, and 64 for a refused configuration. Never deletes local files.
+ * bucket that `RELAYCAST_FILE_STORE=s3` and `RELAYCAST_FILE_S3_*` name, for
+ * every live `files` row (read with the `RELAYCAST_DATABASE_*` runtime
+ * credentials). Exit 0 when every live file is in the bucket and verified, 1
+ * on any mismatch, missing file or failure, and 64 for a refused
+ * configuration. Never deletes local files.
  */
 export async function runMigrateFilesToS3Command(
   argv: readonly string[],
@@ -207,8 +234,8 @@ export async function runMigrateFilesToS3Command(
     out: (line) => process.stdout.write(`${line}\n`),
     err: (line) => process.stderr.write(`${line}\n`),
   },
+  options: { loadFileRows?: (env: NodeJS.ProcessEnv) => Promise<FileRow[]> } = {},
 ): Promise<number> {
-  const { ConfigError } = await import('../bin/secretEnv.js');
   const { createFileBlobStore, describeFileStoreConfig, loadFileStoreConfig } = await import('../adapters/node/fileStoreConfig.js');
   const { migrateLocalFilesToS3 } = await import('../adapters/node/fileMigration.js');
   let from = `${process.cwd()}/relaycast-files`;
@@ -222,7 +249,10 @@ export async function runMigrateFilesToS3Command(
     io.out(describeFileStoreConfig(config));
     const { S3BlobStore } = await import('../adapters/node/s3Blobs.js');
     const store = createFileBlobStore(config) as InstanceType<typeof S3BlobStore>;
-    const summary = await migrateLocalFilesToS3({ dir: from, store, log: io.out });
+    await store.verifyAccess();
+    // The live file rows decide what is copied (runtime credentials, read only).
+    const rows = await (options.loadFileRows ?? loadFileRowsFromPostgres)(env);
+    const summary = await migrateLocalFilesToS3({ dir: from, store, rows, log: io.out });
     return summary.mismatched.length === 0 && summary.failed.length === 0 ? 0 : 1;
   } catch (error) {
     io.err(`migrate-files-to-s3: ${error instanceof Error ? error.message : String(error)}`);

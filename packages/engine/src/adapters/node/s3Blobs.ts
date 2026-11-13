@@ -15,6 +15,7 @@
  */
 import { createHash } from 'node:crypto';
 import type { S3Client } from '@aws-sdk/client-s3';
+import { ConfigError } from '../../bin/secretEnv.js';
 import type { FileBlobStore } from './files.js';
 
 const DEFAULT_CONTENT_TYPE = 'application/octet-stream';
@@ -84,8 +85,26 @@ export class S3BlobStore implements FileBlobStore {
   }
 
   private load(): Promise<{ sdk: Sdk; client: S3ClientLike }> {
-    this.loaded ??= import('@aws-sdk/client-s3').then((sdk) => ({ sdk, client: this.injected ?? this.createClient(sdk) }));
+    this.loaded ??= import('@aws-sdk/client-s3').then(
+      (sdk) => ({ sdk, client: this.injected ?? this.createClient(sdk) }),
+      (cause: unknown) => {
+        this.loaded = undefined;
+        throw new ConfigError(`RELAYCAST_FILE_STORE=s3 needs the @aws-sdk/client-s3 package, which could not be loaded: ${cause instanceof Error ? cause.message : String(cause)}`);
+      },
+    );
     return this.loaded;
+  }
+
+  /**
+   * Load the SDK and confirm the bucket answers (HeadBucket), so a server
+   * configured for S3 refuses to start instead of failing its first upload.
+   * A missing SDK is a ConfigError; an unreachable bucket an Error.
+   */
+  async verifyAccess(): Promise<void> {
+    const { sdk, client } = await this.load();
+    await client.send(new sdk.HeadBucketCommand({ Bucket: this.bucket })).catch((cause: unknown) => {
+      throw new Error(`S3 bucket ${this.bucket} is not reachable: ${cause instanceof Error ? cause.message : String(cause)}`, { cause });
+    });
   }
 
   private createClient(sdk: Sdk): S3ClientLike {
@@ -121,17 +140,20 @@ export class S3BlobStore implements FileBlobStore {
     const { sdk, client } = await this.load();
     let object;
     try {
-      object = await client.send(new sdk.GetObjectCommand({ Bucket: this.bucket, Key }));
+      object = await client.send(new sdk.GetObjectCommand({ Bucket: this.bucket, Key, ChecksumMode: 'ENABLED' }));
     } catch (error) {
       if (isMissing(error)) return null;
       throw error;
     }
     const body = object.Body as { transformToByteArray?: () => Promise<Uint8Array> } | undefined;
     if (!body?.transformToByteArray) throw new Error('S3 returned an object body of an unexpected type');
-    return {
-      bytes: Buffer.from(await body.transformToByteArray()),
-      contentType: object.ContentType || DEFAULT_CONTENT_TYPE,
-    };
+    const bytes = Buffer.from(await body.transformToByteArray());
+    // Verify the stored SHA-256 here too: the SDK skips response validation
+    // for custom endpoints (MinIO and other S3-compatible stores).
+    if (object.ChecksumSHA256 && object.ChecksumSHA256 !== sha256Base64(bytes)) {
+      throw new Error(`S3 object ${Key} does not match its stored SHA-256`);
+    }
+    return { bytes, contentType: object.ContentType || DEFAULT_CONTENT_TYPE };
   }
 
   async stat(key: string): Promise<{ sizeBytes: number } | null> {
