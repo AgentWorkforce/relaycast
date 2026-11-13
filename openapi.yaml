@@ -8047,10 +8047,11 @@ paths:
         resolve always returns 404 rather than falling back to any other
         workspace.
 
-        Skills: an agent that declared skills (`metadata.skills`) contributes
-        each one, with id `<agent>/<skill id>` and an `agent:<agent>` tag; an
-        agent without declared skills contributes one skill named after it,
-        described by its persona. Released agents are excluded.
+        Skills: one per agent, its id and name the agent name (the target a
+        caller sends). An agent with a card or declared skills
+        (`metadata.card`, `metadata.skills`) is described by its card
+        description and skill names, with their tags and up to 5 examples; any
+        other agent by its persona. Released agents are excluded.
       tags: [A2A]
       parameters:
         - in: query

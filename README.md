@@ -1339,8 +1339,9 @@ POST   /a2a/webhook/:ws/:name        Inbound webhook for relay agents
 ```
 
 Single-workspace deployments serve the standard bare agent-card URL without a
-workspace query parameter. The workspace card lists each agent's declared
-skills (one persona-derived skill for agents that declared none) and leaves out
+workspace query parameter. The workspace card lists one skill per agent, with
+the agent name as its id (the target a caller sends), described by the agent's
+card and declared skills, or by its persona when it has neither, and leaves out
 released agents.
 
 Every local agent also has its own card at `GET /v1/agents/:name/card`
