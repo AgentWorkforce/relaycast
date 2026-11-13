@@ -60,7 +60,7 @@ COPY --from=engine-install /opt/relaycast /opt/relaycast
 COPY --from=engine-build /workspace/packages/a2a/dist /opt/relaycast/node_modules/@relaycast/a2a/dist
 COPY --from=engine-build /workspace/packages/types/dist /opt/relaycast/node_modules/@relaycast/types/dist
 COPY --from=engine-build /workspace/packages/engine/dist /opt/relaycast/node_modules/@relaycast/engine/dist
-COPY --chmod=0555 docker/entrypoint.mjs docker/entrypoint-core.mjs /opt/relaycast/
+COPY --chmod=0555 docker/entrypoint.mjs docker/entrypoint-core.mjs docker/start.sh /opt/relaycast/
 
 RUN install -d -o node -g node /data /data/relaycast-files
 
@@ -69,4 +69,4 @@ VOLUME ["/data"]
 EXPOSE 8787
 USER node
 
-ENTRYPOINT ["node", "/opt/relaycast/entrypoint.mjs"]
+ENTRYPOINT ["/opt/relaycast/start.sh"]

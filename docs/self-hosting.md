@@ -576,6 +576,12 @@ public workspace creation off by default, and an optional backup CronJob. See
 that chart's README for the quickstart, the first-workspace bootstrap, ingress
 and backup/restore.
 
+**Container memory**: the image starts Node with `--max-old-space-size` set to
+75 % of the container's cgroup memory limit (for example 768 MB in a 1 Gi pod)
+rather than Node's default of about half. Set your own `--max-old-space-size`
+in `NODE_OPTIONS` to override it; without a memory limit Node's default
+applies.
+
 ---
 
 ## 7. Upgrades & backups

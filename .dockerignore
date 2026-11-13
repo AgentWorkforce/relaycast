@@ -2,6 +2,7 @@
 !packages/
 !docker/
 !docker/entrypoint.mjs
+!docker/start.sh
 !docker/package.json
 !docker/package-lock.json
 !package.json
