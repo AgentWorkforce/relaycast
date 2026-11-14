@@ -30,6 +30,7 @@ export {
   type SocketPrincipalVerdict,
 } from './adapters/actor/socket-grant.js';
 export {
+  INBOX_HELLO,
   INBOX_SEQ_BASE,
   InboxSocketMetadataSchema,
   channelActorId,
@@ -41,6 +42,7 @@ export {
   type InboxHandoff,
   type InboxSocketMetadata,
   type SourcePost,
+  type SourcePostBatchResult,
   type SourcePostResult,
   type SplitResolveResult,
 } from './adapters/actor/split/protocol.js';

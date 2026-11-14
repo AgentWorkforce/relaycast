@@ -3,7 +3,7 @@ import WebSocket from 'ws';
 import { INBOX_SEQ_BASE, type InboxHandoff, type SourcePost } from '@relaycast/engine/gateway';
 import type { ActorClient } from '../actors.js';
 import type { GatewayContext } from '../context.js';
-import { NodeSocketSplit, createSplitRouter, hotPathSend } from '../split.js';
+import { NodeSocketSplit, createBatcher, createSplitRouter, hotPathSend } from '../split.js';
 
 const WS = '241764880589606912';
 const bob = { id: '300000000000000002', name: 'bob', address: 'bob@direct' };
@@ -28,13 +28,19 @@ function fakeContext(overrides: Partial<ActorClient> = {}) {
         ...(input.dm_to ? { dm: { recipient: alice, conversation_id: 'dm_abc', pair_key: 'abc' } } : {}),
         ...(input.channel ? { channel: { id: '400', name: input.channel, members: [alice, bob, carol] } } : {}),
       })),
-    sourcePost: vi.fn(async (actorName: string, actorId: string, input: SourcePost) => {
-      posts.push({ actorName, actorId, input });
-      seq += 1;
-      const recipients = input.kind === 'dm' ? [input.recipient] : input.recipients.filter((member) => member.id !== input.sender.id);
-      return { status: 201, body: JSON.stringify({ ok: true, data: { id: `m${seq}` } }), handoffs: recipients.map((agent) => handoff(agent, seq)) };
+    sourcePost: vi.fn(async (actorName: string, actorId: string, inputs: SourcePost[]) => {
+      const results = [];
+      const handoffs = new Map<string, InboxHandoff>();
+      for (const input of inputs) {
+        posts.push({ actorName, actorId, input });
+        seq += 1;
+        const recipients = input.kind === 'dm' ? [input.recipient] : input.recipients.filter((member) => member.id !== input.sender.id);
+        for (const agent of recipients) handoffs.set(agent.id, handoff(agent, seq));
+        results.push({ status: 201, body: JSON.stringify({ ok: true, data: { id: `m${seq}` } }) });
+      }
+      return { results, handoffs: [...handoffs.values()] };
     }),
-    inboxAccept: vi.fn(async (_id: string, h: InboxHandoff) => ({ through: h.entries.at(-1)!.source_seq, accepted: h.entries.length })),
+    inboxAccept: vi.fn(async (_id: string, hs: InboxHandoff[]) => hs.map((h) => ({ through: h.entries.at(-1)!.source_seq, accepted: h.entries.length }))),
     sourceConfirm: vi.fn(async () => {}),
     ...overrides,
   } as unknown as ActorClient;
@@ -114,6 +120,29 @@ describe('split router', () => {
   });
 });
 
+describe('group commit batcher', () => {
+  it('keeps one call in flight per key and sends what queued meanwhile together, in order', async () => {
+    const calls: string[][] = [];
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => { release = resolve; });
+    const batch = createBatcher<string, string>(10, async (key, items) => {
+      calls.push([key, ...items]);
+      if (calls.length === 1) await gate;
+      return items.map((item) => `${item}!`);
+    });
+    const first = batch('a', '1');
+    const rest = [batch('a', '2'), batch('a', '3'), batch('b', 'x')];
+    release();
+    expect(await Promise.all([first, ...rest])).toEqual(['1!', '2!', '3!', 'x!']);
+    expect(calls).toEqual([['a', '1'], ['b', 'x'], ['a', '2', '3']]);
+  });
+
+  it('fails every caller of a failed batch', async () => {
+    const batch = createBatcher<number, number>(10, async () => { throw new Error('down'); });
+    await expect(batch('k', 1)).rejects.toThrow('down');
+  });
+});
+
 describe('node socket split', () => {
   it('routes acks by seq space: inbox seqs to the inbox socket, the rest (capped) to the Workspace actor', () => {
     const { ctx } = fakeContext();
@@ -137,5 +166,25 @@ describe('node socket split', () => {
     expect(nodeSplit.fromClient(JSON.stringify({ v: 1, type: 'delivery.ack', agent: 'bob', up_to_seq: INBOX_SEQ_BASE + 1 }))).toBeNull();
     nodeSplit.close();
     expect(inboxSocket.close).toHaveBeenCalled();
+  });
+});
+
+describe('inbox order', () => {
+  const deliver = (seq: number) => JSON.stringify({ v: 1, type: 'deliver', seq });
+  it('forwards deliveries in seq order from the hello, drops repeats and reports a gap that stays open', async () => {
+    const { InboxOrder } = await import('../split.js');
+    const out: number[] = [];
+    const onGap = vi.fn();
+    const order = new InboxOrder((text) => out.push(JSON.parse(text).seq), onGap, 20);
+    // A delivery that overtook the hello waits for it.
+    order.push(deliver(6));
+    expect(out).toEqual([]);
+    order.push(JSON.stringify({ v: 1, type: 'split.inbox_hello', next_seq: 5 }));
+    for (const seq of [5, 5, 8, 7]) order.push(deliver(seq));
+    expect(out).toEqual([5, 6, 7, 8]);
+    order.push(deliver(10));
+    await new Promise((resolve) => setTimeout(resolve, 40));
+    expect(onGap).toHaveBeenCalledTimes(1);
+    expect(out).toEqual([5, 6, 7, 8]);
   });
 });

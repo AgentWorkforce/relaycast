@@ -36,6 +36,9 @@ const ACK_MS = 50;
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 const now = () => performance.timeOrigin + performance.now();
 
+/** Per-hop times the split gateway reports (`x-relaycast-split-timing`). */
+const hops: Record<string, number[]> = { resolve: [], post: [] };
+
 async function call(method: string, path: string, token: string | undefined, body?: unknown): Promise<{ status: number; json: any; ms: number }> {
   const started = now();
   const response = await fetch(`${BASE}${path}`, {
@@ -45,6 +48,10 @@ async function call(method: string, path: string, token: string | undefined, bod
   });
   const text = await response.text();
   const ms = now() - started;
+  for (const part of response.headers.get('x-relaycast-split-timing')?.split(';') ?? []) {
+    const [hop, value] = part.split('=');
+    if (hop && hops[hop]) hops[hop]!.push(Number(value));
+  }
   let json: any = null;
   try { json = JSON.parse(text); } catch { /* not json */ }
   return { status: response.status, json, ms };
@@ -245,6 +252,7 @@ async function main(): Promise<void> {
     sends: Object.fromEntries(statuses),
     post_ms: { dm: percentiles(postLatency.dm!), channel: percentiles(postLatency.channel!) },
     post_ms_corrected: { dm: percentiles(postLatencyCorrected.dm!), channel: percentiles(postLatencyCorrected.channel!) },
+    split_hops_ms: { resolve: percentiles(hops.resolve!), post: percentiles(hops.post!) },
     deliver_ms: { all: percentiles(deliverLatency), dm: percentiles(deliverLatencyByKind.dm!), channel: percentiles(deliverLatencyByKind.channel!) },
     integrity: { expected: expectedCount, delivered_distinct: expectedCount - missing(), lost: missing(), duplicated: dups, reordered: ooo, unmarked_frames: unmarked, frames, socket_closes: socketDrops },
   };

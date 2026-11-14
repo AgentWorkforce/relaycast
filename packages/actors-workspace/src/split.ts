@@ -33,9 +33,9 @@ class SourceCore {
         this.source = split.createSplitSource(db, { actorId })
     }
 
-    post(input: split.SourcePost): Promise<split.SourcePostResult> {
+    post(inputs: split.SourcePost[]): Promise<split.SourcePostBatchResult> {
         return this.db.transaction(async () => {
-            const result = this.source.post(input)
+            const result = this.source.postMany(inputs)
             // Only an idle alarm is set, so a steady stream of posts costs no extra alarm writes.
             if (this.alarm.get() === null) this.alarm.set(Date.now() + split.REDRIVE_AFTER_MS + 500)
             return result
@@ -55,12 +55,12 @@ class SourceCore {
         const due = this.source.dueHandoffs()
         const workspaceId = split.parseSplitActorId(this.actorId)?.workspaceId
         const settled = workspaceId
-            ? await Promise.allSettled(due.map(handoff => Inbox.get(split.inboxActorId(workspaceId, handoff.agent.id)).accept(handoff)))
+            ? await Promise.allSettled(due.map(handoff => Inbox.get(split.inboxActorId(workspaceId, handoff.agent.id)).accept([handoff])))
             : []
         await this.db.transaction(async () => {
             const confirmed: split.Confirmation[] = []
             settled.forEach((outcome, i) => {
-                if (outcome.status === "fulfilled") confirmed.push({ recipient: due[i]!.agent.id, through: outcome.value.through })
+                if (outcome.status === "fulfilled") confirmed.push({ recipient: due[i]!.agent.id, through: outcome.value[0]!.through })
             })
             this.source.confirm(confirmed)
             const next = this.source.nextRedriveAt()
@@ -78,9 +78,13 @@ export class Channel extends Actor {
         this.core = new SourceCore(this.id, this.db, this.alarm)
     }
 
-    /** One message, committed with its outbox entries in one write; the caller runs the returned hand-offs. */
-    async post(input: split.SourcePost): Promise<split.SourcePostResult> {
-        return this.core.post(input)
+    /**
+     * Messages in order, committed with their outbox entries in one write
+     * (the gateway batches posts that arrive while one is in flight); the
+     * caller runs the returned hand-offs.
+     */
+    async post(inputs: split.SourcePost[]): Promise<split.SourcePostBatchResult> {
+        return this.core.post(inputs)
     }
 
     /** Drop outbox entries the recipients' inboxes accepted. */
@@ -107,8 +111,8 @@ export class Conversation extends Actor {
         this.core = new SourceCore(this.id, this.db, this.alarm)
     }
 
-    async post(input: split.SourcePost): Promise<split.SourcePostResult> {
-        return this.core.post(input)
+    async post(inputs: split.SourcePost[]): Promise<split.SourcePostBatchResult> {
+        return this.core.post(inputs)
     }
 
     async confirm(confirmations: split.Confirmation[]): Promise<void> {
@@ -139,10 +143,11 @@ export class Inbox extends Actor {
         this.inbox = split.createSplitInbox(this.db)
     }
 
-    async accept(handoff: split.InboxHandoff): Promise<split.InboxAcceptResult> {
-        const { result, frames } = await this.db.transaction(async () => this.inbox.accept(handoff))
+    /** Hand-offs in order, in one write (the gateway batches those that arrive while one is in flight). */
+    async accept(handoffs: split.InboxHandoff[]): Promise<split.InboxAcceptResult[]> {
+        const { results, frames } = await this.db.transaction(async () => this.inbox.acceptMany(handoffs))
         for (const frame of frames) this.broadcast(frame as never)
-        return result
+        return results
     }
 
     async onConnect(socket: ActorSocket): Promise<void> {
@@ -154,7 +159,9 @@ export class Inbox extends Actor {
             return
         }
         // The schema may be created here, so the replay reads run in the call's transaction.
-        const pending = await this.db.transaction(async () => this.inbox.pending())
+        const { pending, nextSeq } = await this.db.transaction(async () => ({ pending: this.inbox.pending(), nextSeq: this.inbox.state().ackedSeq + 1 }))
+        // Socket frames may arrive out of order; the gateway forwards deliveries in seq order from here.
+        socket.send({ v: 1, type: split.INBOX_HELLO, next_seq: nextSeq } as never)
         for (const frame of pending) socket.send(frame as never)
     }
 

@@ -83,6 +83,11 @@ export function createSourceIdGenerator(now: () => number = Date.now): () => str
 export interface SplitSource {
   /** Commit one message and its outbox entries; answer the HTTP response and the hand-offs. Run inside the actor's transaction. */
   post(input: SourcePost): SourcePostResult;
+  /**
+   * Group commit: several messages in one write (the caller's transaction),
+   * in order. One hand-off per recipient covers all of them.
+   */
+  postMany(inputs: readonly SourcePost[]): { results: { status: number; body: string }[]; handoffs: InboxHandoff[] };
   /** Drop outbox entries the recipients' inboxes accepted. */
   confirm(confirmations: readonly Confirmation[]): void;
   /** Hand-offs for every recipient with an entry older than `olderThanMs` (the alarm's redrive). */
@@ -129,8 +134,9 @@ export function createSplitSource(sql: ActorDatabase, options: { actorId: string
     };
   };
 
-  return {
-    post(raw) {
+  /** Commit one message; answers its HTTP response and the recipients it queued entries for. */
+  const commit = (raw: SourcePost): { status: number; body: string; recipients: AgentRef[] } => {
+    {
       ensureSchema();
       const input = SourcePostSchema.parse(raw);
       if (input.confirmed) confirm(input.confirmed);
@@ -231,11 +237,25 @@ export function createSplitSource(sql: ActorDatabase, options: { actorId: string
         );
       }
 
-      return {
-        status: 201,
-        body: JSON.stringify({ ok: true, data: responseData }),
-        handoffs: recipients.map(handoffFor),
-      };
+      return { status: 201, body: JSON.stringify({ ok: true, data: responseData }), recipients };
+    }
+  };
+
+  return {
+    post(raw) {
+      const { status, body, recipients } = commit(raw);
+      return { status, body, handoffs: recipients.map(handoffFor) };
+    },
+
+    postMany(inputs) {
+      const recipients = new Map<string, AgentRef>();
+      const results = inputs.map((input) => {
+        const { status, body, recipients: queued } = commit(input);
+        for (const recipient of queued) recipients.set(recipient.id, recipient);
+        return { status, body };
+      });
+      // One hand-off per recipient carries the entries of every message in the batch.
+      return { results, handoffs: [...recipients.values()].map(handoffFor) };
     },
 
     confirm,

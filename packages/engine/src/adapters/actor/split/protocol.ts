@@ -30,6 +30,15 @@ import { z } from 'zod';
  */
 export const INBOX_SEQ_BASE = 1_000_000_000_000;
 
+/**
+ * The first frame an inbox sends a socket: `{ v: 1, type, next_seq }`, the
+ * seq its replay starts at. The gateway forwards `deliver` frames to the
+ * client strictly in seq order from there (actor socket frames may arrive
+ * out of order), so a cumulative `delivery.ack` never covers a frame the
+ * client has not seen.
+ */
+export const INBOX_HELLO = 'split.inbox_hello';
+
 /** Most entries one hand-off carries per recipient; the rest follow on the next one. */
 export const MAX_ENTRIES_PER_HANDOFF = 200;
 
@@ -119,6 +128,12 @@ export interface InboxAcceptResult {
 export interface SourcePostResult {
   status: number;
   body: string;
+  handoffs: InboxHandoff[];
+}
+
+/** A source's answer to a batch of posts (group commit): one response per post, one hand-off per recipient. */
+export interface SourcePostBatchResult {
+  results: { status: number; body: string }[];
   handoffs: InboxHandoff[];
 }
 

@@ -27,7 +27,7 @@ import type {
   InboxAcceptResult,
   InboxHandoff,
   SourcePost,
-  SourcePostResult,
+  SourcePostBatchResult,
   SplitResolveResult,
 } from '@relaycast/engine/gateway';
 
@@ -85,12 +85,12 @@ export interface ActorClient {
   splitResolve(workspaceId: string, input: { token: string; dm_to?: string; channel?: string }, options?: CallOptions): Promise<SplitResolveResult>;
   /** Split topology: the agents bound to a node (Workspace actor). */
   splitNodeAgents(workspaceId: string, nodeId: string, options?: CallOptions): Promise<AgentRef[]>;
-  /** Split topology: commit one message on a Channel or Conversation actor. */
-  sourcePost(actorName: SourceActorName, actorId: string, input: SourcePost, options?: CallOptions): Promise<SourcePostResult>;
+  /** Split topology: commit messages, in order and in one write, on a Channel or Conversation actor. */
+  sourcePost(actorName: SourceActorName, actorId: string, inputs: SourcePost[], options?: CallOptions): Promise<SourcePostBatchResult>;
   /** Split topology: drop outbox entries the recipients' inboxes accepted. */
   sourceConfirm(actorName: SourceActorName, actorId: string, confirmations: Confirmation[], options?: CallOptions): Promise<void>;
-  /** Split topology: hand outbox entries to an Inbox actor. */
-  inboxAccept(actorId: string, handoff: InboxHandoff, options?: CallOptions): Promise<InboxAcceptResult>;
+  /** Split topology: hand outbox entries to an Inbox actor, in order and in one write. */
+  inboxAccept(actorId: string, handoffs: InboxHandoff[], options?: CallOptions): Promise<InboxAcceptResult[]>;
   /** Split topology: a socket grant on an Inbox actor. */
   findSplitWebsocket(actorName: SplitActorName, actorId: string, metadata: unknown): Promise<SocketGrant>;
 }
@@ -151,8 +151,7 @@ const SplitResolveResultSchema = z.union([
 ]);
 // Hand-offs pass through the gateway to an inbox, which validates them itself.
 const SourcePostResultSchema = z.object({
-  status: z.number().int().min(100).max(599),
-  body: z.string(),
+  results: z.array(z.object({ status: z.number().int().min(100).max(599), body: z.string() })),
   handoffs: z.array(z.custom<InboxHandoff>((value) => typeof value === 'object' && value !== null)),
 });
 const InboxAcceptResultSchema = z.object({ through: z.number().int().nonnegative(), accepted: z.number().int().nonnegative() });
@@ -286,13 +285,13 @@ export function createActorClient(options: ActorClientOptions): ActorClient {
       invoke(workspaceId, 'splitResolve', [input], invokeTimeoutMs, SplitResolveResultSchema, callOptions),
     splitNodeAgents: (workspaceId, nodeId, callOptions) =>
       invoke(workspaceId, 'splitNodeAgents', [nodeId], invokeTimeoutMs, z.array(AgentRefSchema), callOptions),
-    sourcePost: (actorName, actorId, input, callOptions) =>
-      invoke(actorId, 'post', [input], invokeTimeoutMs, SourcePostResultSchema, callOptions, actorName),
+    sourcePost: (actorName, actorId, inputs, callOptions) =>
+      invoke(actorId, 'post', [inputs], invokeTimeoutMs, SourcePostResultSchema, callOptions, actorName),
     sourceConfirm: async (actorName, actorId, confirmations, callOptions) => {
       await invoke(actorId, 'confirm', [confirmations], invokeTimeoutMs, z.unknown(), callOptions, actorName);
     },
-    inboxAccept: (actorId, handoff, callOptions) =>
-      invoke(actorId, 'accept', [handoff], invokeTimeoutMs, InboxAcceptResultSchema, callOptions, 'Inbox'),
+    inboxAccept: (actorId, handoffs, callOptions) =>
+      invoke(actorId, 'accept', [handoffs], invokeTimeoutMs, z.array(InboxAcceptResultSchema), callOptions, 'Inbox'),
 
     healthy,
   };

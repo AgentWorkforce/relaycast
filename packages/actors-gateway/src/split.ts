@@ -22,6 +22,7 @@
  * bound agent, on its Inbox actor: {@link NodeSocketSplit}.
  */
 import {
+  INBOX_HELLO,
   INBOX_SEQ_BASE,
   channelActorId,
   conversationActorId,
@@ -29,10 +30,12 @@ import {
   type ActorHttpResponse,
   type AgentRef,
   type Confirmation,
+  type InboxAcceptResult,
   type InboxHandoff,
   type SourcePost,
   type SplitResolveResult,
 } from '@relaycast/engine/gateway';
+import { performance } from 'node:perf_hooks';
 import WebSocket from 'ws';
 import type { SourceActorName } from './actors.js';
 import type { GatewayContext } from './context.js';
@@ -46,6 +49,10 @@ export const CONFIRM_FLUSH_MS = 1_000;
 /** One retry of a failed hand-off before the source's outbox and alarm take over. */
 const HANDOFF_RETRY_MS = 250;
 const MAX_CACHE_ENTRIES = 50_000;
+/** Most posts (or hand-offs) one group-committed actor call carries. */
+const MAX_BATCH = 64;
+/** A hand-off slower than this is logged with its time (benchmarks). */
+const SLOW_HANDOFF_MS = 250;
 
 const DM_KEYS = new Set(['to', 'text', 'mode']);
 const CHANNEL_KEYS = new Set(['text', 'mode']);
@@ -172,6 +179,31 @@ export function createSplitRouter(ctx: GatewayContext, options: { now?: () => nu
     pending.timer.unref?.();
   }
 
+  // Group commit: one call in flight per actor; what arrives meanwhile goes in the next call, in order.
+  const posts = createBatcher<{ actorName: SourceActorName; input: SourcePost; workspaceId: string }, { status: number; body: string }>(MAX_BATCH, async (sourceId, items) => {
+    const { actorName, workspaceId } = items[0]!;
+    const confirmed = takeConfirmations(sourceId);
+    const inputs = items.map((item, i) => (i === 0 && confirmed?.length ? { ...item.input, confirmed } : item.input));
+    let batch;
+    try {
+      batch = await ctx.actors.sourcePost(actorName, sourceId, inputs);
+    } catch (error) {
+      // Confirmations are idempotent: keep them for the next attempt.
+      for (const { recipient, through } of confirmed ?? []) addConfirmation(actorName, sourceId, recipient, through);
+      throw error;
+    }
+    // The messages are committed with their outbox; delivery continues after the answers.
+    for (const handoff of batch.handoffs) track(handOff(workspaceId, actorName, sourceId, handoff));
+    return batch.results;
+  });
+  const accepts = createBatcher<InboxHandoff, InboxAcceptResult>(MAX_BATCH, async (inboxId, handoffs) => {
+    const started = performance.now();
+    const results = await ctx.actors.inboxAccept(inboxId, handoffs);
+    const ms = performance.now() - started;
+    if (ms >= SLOW_HANDOFF_MS) ctx.logger.info('split.handoff_slow', { actor_id: inboxId, ms: Math.round(ms), handoffs: handoffs.length });
+    return results;
+  });
+
   function track(promise: Promise<unknown>): void {
     inflight.add(promise);
     void promise.finally(() => inflight.delete(promise));
@@ -181,7 +213,7 @@ export function createSplitRouter(ctx: GatewayContext, options: { now?: () => nu
     const inboxId = inboxActorId(workspaceId, handoff.agent.id);
     for (let attempt = 0; ; attempt += 1) {
       try {
-        const accepted = await ctx.actors.inboxAccept(inboxId, handoff);
+        const accepted = await accepts(inboxId, handoff);
         if (accepted.through > 0) addConfirmation(actorName, sourceId, handoff.agent.id, accepted.through);
         return;
       } catch (error) {
@@ -198,7 +230,9 @@ export function createSplitRouter(ctx: GatewayContext, options: { now?: () => nu
 
   return {
     async send(send, signal) {
+      const started = performance.now();
       const resolved = await resolve(send, signal);
+      const resolvedAt = performance.now();
       // Anything the split path does not serve gets the engine's own answer.
       if (!resolved.ok) return undefined;
       let actorName: SourceActorName;
@@ -222,20 +256,17 @@ export function createSplitRouter(ctx: GatewayContext, options: { now?: () => nu
           mode: send.mode,
         };
       }
-      const confirmed = takeConfirmations(sourceId);
-      let result;
-      try {
-        result = await ctx.actors.sourcePost(actorName, sourceId, confirmed?.length ? { ...input, confirmed } : input, { signal });
-      } catch (error) {
-        // Confirmations are idempotent: keep them for the next attempt.
-        for (const { recipient, through } of confirmed ?? []) addConfirmation(actorName, sourceId, recipient, through);
-        throw error;
-      }
-      // The message is committed with its outbox; delivery continues after the answer.
-      for (const handoff of result.handoffs) track(handOff(send.workspaceId, actorName, sourceId, handoff));
+      if (signal.aborted) return undefined;
+      const result = await posts(sourceId, { actorName, input, workspaceId: send.workspaceId });
+      const postedAt = performance.now();
       return {
         status: result.status,
-        headers: [['content-type', 'application/json'], ['x-relaycast-topology', 'split']],
+        headers: [
+          ['content-type', 'application/json'],
+          ['x-relaycast-topology', 'split'],
+          // Per-hop time for benchmarks: the Workspace lookup (0 when cached) and the source actor's commit.
+          ['x-relaycast-split-timing', `resolve=${(resolvedAt - started).toFixed(1)};post=${(postedAt - resolvedAt).toFixed(1)}`],
+        ],
         body: result.body,
       };
     },
@@ -251,6 +282,41 @@ export function createSplitRouter(ctx: GatewayContext, options: { now?: () => nu
 }
 
 /**
+ * Per key, at most one call in flight: items that arrive while it runs are
+ * sent together, in arrival order, in the next call (group commit). Each
+ * caller gets its own item's result, or the batch's error.
+ */
+export function createBatcher<I, O>(maxBatch: number, run: (key: string, items: I[]) => Promise<O[]>): (key: string, item: I) => Promise<O> {
+  interface Waiting { item: I; resolve: (value: O) => void; reject: (error: unknown) => void }
+  const queues = new Map<string, { waiting: Waiting[]; busy: boolean }>();
+  const pump = (key: string): void => {
+    const queue = queues.get(key);
+    if (!queue || queue.busy) return;
+    if (queue.waiting.length === 0) {
+      queues.delete(key);
+      return;
+    }
+    queue.busy = true;
+    const batch = queue.waiting.splice(0, maxBatch);
+    run(key, batch.map((waiting) => waiting.item))
+      .then((outputs) => batch.forEach((waiting, i) => {
+        if (i < outputs.length) waiting.resolve(outputs[i]!);
+        else waiting.reject(new Error('batch answered fewer results than items'));
+      }), (error: unknown) => batch.forEach((waiting) => waiting.reject(error)))
+      .finally(() => {
+        queue.busy = false;
+        pump(key);
+      });
+  };
+  return (key, item) => new Promise<O>((resolve, reject) => {
+    let queue = queues.get(key);
+    if (!queue) queues.set(key, (queue = { waiting: [], busy: false }));
+    queue.waiting.push({ item, resolve, reject });
+    pump(key);
+  });
+}
+
+/**
  * The split topology's part of one `/v1/node/ws` bridge. The client's
  * socket stays bridged to the Workspace actor (registration, heartbeats and
  * every frame outside the hot path); once the node registered, each agent
@@ -261,7 +327,7 @@ export function createSplitRouter(ctx: GatewayContext, options: { now?: () => nu
  * seq the Workspace actor delivered.
  */
 export class NodeSocketSplit {
-  private readonly inboxes = new Map<string, { socket: WebSocket; agentId: string }>();
+  private readonly inboxes = new Map<string, { socket: WebSocket; agentId: string; order?: InboxOrder }>();
   private readonly workspaceSeq = new Map<string, number>();
   private readonly registerIds = new Set<string>();
   private readonly agentRegisterIds = new Map<string, string>();
@@ -318,7 +384,10 @@ export class NodeSocketSplit {
 
   close(): void {
     this.closed = true;
-    for (const { socket } of this.inboxes.values()) socket.close(1000, 'node socket closed');
+    for (const { socket, order } of this.inboxes.values()) {
+      order?.close();
+      socket?.close(1000, 'node socket closed');
+    }
     this.inboxes.clear();
   }
 
@@ -333,7 +402,7 @@ export class NodeSocketSplit {
     const actorId = inboxActorId(this.workspaceId, agent.id);
     const metadata = { v: 1, kind: 'inbox', workspace_id: this.workspaceId, agent_id: agent.id, agent_name: agent.name };
     // Reserve the name so a second register reply does not open a second socket.
-    const placeholder = { socket: undefined as unknown as WebSocket, agentId: agent.id };
+    const placeholder: { socket: WebSocket; agentId: string; order?: InboxOrder } = { socket: undefined as unknown as WebSocket, agentId: agent.id };
     this.inboxes.set(agent.name, placeholder);
     void this.ctx.actors.findSplitWebsocket('Inbox', actorId, metadata).then((grant) => {
       if (this.closed) return;
@@ -343,9 +412,16 @@ export class NodeSocketSplit {
         ...(target.servername ? { servername: target.servername } : {}),
       });
       placeholder.socket = socket;
-      socket.on('message', (data) => {
-        if (this.client.readyState === WebSocket.OPEN) this.client.send(data.toString());
-      });
+      const order = new InboxOrder(
+        (text) => { if (this.client.readyState === WebSocket.OPEN) this.client.send(text); },
+        () => {
+          this.ctx.logger.warn('split.inbox_gap', { workspace_id: this.workspaceId, actor_id: actorId });
+          // Unacked deliveries are replayed in order on the client's next connection.
+          this.fail(1012, 'inbox delivery gap');
+        },
+      );
+      placeholder.order = order;
+      socket.on('message', (data) => order.push(data.toString()));
       socket.on('error', (error) => {
         this.ctx.logger.warn('split.inbox_socket_error', { workspace_id: this.workspaceId, actor_id: actorId, error: errorText(error) });
       });
@@ -358,6 +434,64 @@ export class NodeSocketSplit {
         this.fail(1012, 'inbox socket closed');
       });
     }).catch((error: unknown) => this.attachFailed(error));
+  }
+}
+
+/** How long a seq gap may stay open before the client is made to reconnect. */
+export const INBOX_GAP_TIMEOUT_MS = 2_000;
+
+/**
+ * Puts one inbox socket's `deliver` frames back in seq order. The inbox's
+ * hello names the first seq; a frame below the next expected one was
+ * already forwarded and is dropped; one above it waits for the gap to fill.
+ * A gap still open after {@link INBOX_GAP_TIMEOUT_MS} calls `onGap`.
+ */
+export class InboxOrder {
+  private next: number | undefined;
+  private readonly held = new Map<number, string>();
+  private timer: NodeJS.Timeout | undefined;
+
+  constructor(private readonly forward: (text: string) => void, private readonly onGap: () => void, private readonly gapTimeoutMs = INBOX_GAP_TIMEOUT_MS) {}
+
+  push(text: string): void {
+    const frame = parseFrame(text);
+    if (frame?.type === INBOX_HELLO && typeof frame.next_seq === 'number') {
+      this.next = frame.next_seq;
+      this.flush();
+      return;
+    }
+    if (frame?.type !== 'deliver' || typeof frame.seq !== 'number') {
+      this.forward(text);
+      return;
+    }
+    if (this.next !== undefined && frame.seq < this.next) return;
+    // Before the hello, deliveries wait for it (the gap timer covers a hello that never comes).
+    this.held.set(frame.seq, text);
+    this.flush();
+  }
+
+  close(): void {
+    if (this.timer) clearTimeout(this.timer);
+    this.timer = undefined;
+  }
+
+  private flush(): void {
+    if (this.next !== undefined) {
+      for (let text = this.held.get(this.next); text !== undefined; text = this.held.get(this.next)) {
+        this.held.delete(this.next);
+        this.forward(text);
+        this.next += 1;
+      }
+    }
+    if (this.held.size === 0) {
+      this.close();
+    } else if (!this.timer) {
+      this.timer = setTimeout(() => {
+        this.timer = undefined;
+        if (this.held.size > 0) this.onGap();
+      }, this.gapTimeoutMs);
+      this.timer.unref?.();
+    }
   }
 }
 

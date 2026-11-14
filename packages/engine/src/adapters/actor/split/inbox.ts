@@ -36,6 +36,8 @@ export type DeliverFrame = ReturnType<typeof buildDeliverFrame>;
 export interface SplitInbox {
   /** Apply one hand-off; answers the cursor and the `deliver` frames it created, in seq order. Run inside the actor's transaction. */
   accept(handoff: InboxHandoff): { result: InboxAcceptResult; frames: DeliverFrame[] };
+  /** Group commit: several hand-offs in one write (the caller's transaction), in order. */
+  acceptMany(handoffs: readonly InboxHandoff[]): { results: InboxAcceptResult[]; frames: DeliverFrame[] };
   /** Unacked deliveries in seq order (replayed to a socket that connects). */
   pending(limit?: number): DeliverFrame[];
   /** Ack every delivery up to `upToSeq`; answers how many were acked. */
@@ -59,7 +61,17 @@ export function createSplitInbox(sql: ActorDatabase, options: { now?: () => numb
     return { lastSeq: Number(row!.last_seq), ackedSeq: Number(row!.acked_seq) };
   };
 
-  return {
+  const inbox: SplitInbox = {
+    acceptMany(handoffs) {
+      const frames: DeliverFrame[] = [];
+      const results = handoffs.map((handoff) => {
+        const accepted = inbox.accept(handoff);
+        frames.push(...accepted.frames);
+        return accepted.result;
+      });
+      return { results, frames };
+    },
+
     accept(raw) {
       const handoff = InboxHandoffSchema.parse(raw);
       ensureSchema();
@@ -123,4 +135,5 @@ export function createSplitInbox(sql: ActorDatabase, options: { now?: () => numb
 
     state,
   };
+  return inbox;
 }

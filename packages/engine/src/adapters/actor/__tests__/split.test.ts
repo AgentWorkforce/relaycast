@@ -96,6 +96,18 @@ describe('split source (channel / conversation actor)', () => {
     expect(source.history().map((message) => (message.payload as { text: string }).text)).toEqual(['one', 'two', 'three']);
   });
 
+  it('group-commits a batch of posts in order with one hand-off per recipient', () => {
+    const sql = new FakeActorDatabase();
+    const source = createSplitSource(sql, { actorId: 'src' });
+    const batch = source.postMany([channelPost('one'), channelPost('two'), { kind: 'dm', sender: bob, conversationId: 'dm_x', recipient: alice, text: 'three' }]);
+    expect(batch.results.map((result) => result.status)).toEqual([201, 201, 201]);
+    expect(batch.handoffs.map((handoff) => [handoff.agent.name, handoff.entries.map((entry) => entry.source_seq)])).toEqual([['alice', [1, 2, 3]], ['carol', [1, 2]]]);
+    const inbox = createSplitInbox(new FakeActorDatabase());
+    const accepted = inbox.acceptMany(batch.handoffs.filter((handoff) => handoff.agent.id === alice.id));
+    expect(accepted.results).toEqual([{ through: 3, accepted: 3 }]);
+    expect(accepted.frames.map((frame) => (frame.payload as { data: { text: string } }).data.text)).toEqual(['one', 'two', 'three']);
+  });
+
   it('redrives only entries older than the redrive delay', () => {
     let now = 1_000_000;
     const sql = new FakeActorDatabase();

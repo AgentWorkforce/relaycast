@@ -150,7 +150,9 @@ path runs on per-entity actors from the same bundle (`src/split.ts`):
   recipient's pending outbox entries to its `Inbox` actor (`<ws>-in-<agent id>`).
   Inboxes apply entries idempotently in per-source order; accepted entries are
   confirmed to the source on its next post (or within 1 s); a source's alarm
-  redrives entries nobody confirmed. Any other request, or a target the
+  redrives entries nobody confirmed. The gateway keeps one call in flight per
+  source and per inbox and sends what arrives meanwhile in the next call, as
+  one write (group commit, up to 64 items). Any other request, or a target the
   Workspace actor does not resolve, goes to the Workspace actor unchanged.
 - `/v1/node/ws`: the client stays bridged to the Workspace actor; after
   `node.register` (and each `agent.register`) the gateway opens one actor
