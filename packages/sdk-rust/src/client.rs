@@ -234,8 +234,13 @@ impl HttpClient {
     /// Create a new HTTP client with the given options.
     pub fn new(options: ClientOptions) -> Result<Self> {
         let client = Client::builder().timeout(Duration::from_secs(30)).build()?;
+        Ok(Self::with_http_client(options, client))
+    }
 
-        Ok(Self {
+    /// Use an existing HTTP transport, retaining its TLS, redirect and timeout
+    /// policies. Authentication and response/retry handling remain the SDK's.
+    pub fn with_http_client(options: ClientOptions, client: Client) -> Self {
+        Self {
             client,
             api_key: options.api_key,
             base_url: options
@@ -251,7 +256,7 @@ impl HttpClient {
             agent_relay_distinct_id: sanitize_agent_relay_distinct_id(
                 options.agent_relay_distinct_id,
             ),
-        })
+        }
     }
 
     /// Get the API key.
@@ -284,18 +289,11 @@ impl HttpClient {
         self.agent_relay_distinct_id.as_deref()
     }
 
-    /// Return a cloned client with a different API key while preserving base URL and origin metadata.
+    /// Clone with a different API key, retaining transport policy and origin metadata.
     pub fn with_api_key(&self, api_key: impl Into<String>) -> Result<Self> {
-        let mut options = ClientOptions::new(api_key)
-            .with_base_url(self.base_url.clone())
-            .with_origin(self.origin_client.clone(), self.origin_version.clone());
-        if let Some(origin_actor) = &self.origin_actor {
-            options = options.with_origin_actor(origin_actor.clone());
-        }
-        if let Some(id) = &self.agent_relay_distinct_id {
-            options = options.with_agent_relay_distinct_id(id.clone());
-        }
-        HttpClient::new(options)
+        let mut client = self.clone();
+        client.api_key = api_key.into();
+        Ok(client)
     }
 
     /// Make a request to the API.

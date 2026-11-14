@@ -1,7 +1,7 @@
 import { prepareAuthorityFanout } from './deliveryWrites.js';
 import { eq, and, isNull } from 'drizzle-orm';
 import type { getDb } from '../db/index.js';
-import { messages, channels, agents, dmConversations, dmParticipants, messageAttachments } from '../db/schema.js';
+import { messages, channels, agents, dmConversations, dmParticipants, messageAttachments } from '../db/tables.js';
 import { runAtomicWrites, type AtomicWrite } from '../ports/database.js';
 import { generateId } from './snowflake.js';
 import {

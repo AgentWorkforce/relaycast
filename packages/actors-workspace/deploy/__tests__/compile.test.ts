@@ -29,7 +29,9 @@ describe("compileActor", () => {
         const [workspace] = contract.actors
         expect(workspace!.rpc.methods.map((method) => [method.name, method.parameters.length, method.result.kind])).toEqual([
             ["create", 2, "value"],
+            ["fileStored", 2, "value"],
             ["handle", 1, "value"],
+            ["importData", 2, "value"],
         ])
         // The socket lifecycle (onConnect/onMessage/onDisconnect) is described by the socket contract, never as RPC.
         expect(workspace!.socket.actorName).toBe("Workspace")

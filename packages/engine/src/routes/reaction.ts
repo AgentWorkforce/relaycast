@@ -5,7 +5,7 @@ import { requireAgentToken, requireWorkspaceRead } from '../middleware/auth.js';
 import { rateLimit } from '../middleware/rateLimit.js';
 import * as reactionEngine from '../engine/reaction.js';
 import { and, eq } from 'drizzle-orm';
-import { channels, dmConversations, messages } from '../db/schema.js';
+import { channels, dmConversations, messages } from '../db/tables.js';
 import {
   getMessageObserverResource,
   getObserverTokenFromContext,

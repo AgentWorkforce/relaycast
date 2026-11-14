@@ -1,6 +1,6 @@
 import { and, asc, eq, inArray } from 'drizzle-orm';
 import type { getDb } from '../db/index.js';
-import { messageAttachments, files } from '../db/schema.js';
+import { messageAttachments, files } from '../db/tables.js';
 import { codedError } from '../lib/httpError.js';
 import { queryInChunks } from '../lib/queryChunks.js';
 

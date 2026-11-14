@@ -1,6 +1,6 @@
 import { eq, and } from 'drizzle-orm';
 import type { getDb } from '../db/index.js';
-import { eventSubscriptions } from '../db/schema.js';
+import { eventSubscriptions } from '../db/tables.js';
 import { generateId } from './snowflake.js';
 
 type Db = ReturnType<typeof getDb>;

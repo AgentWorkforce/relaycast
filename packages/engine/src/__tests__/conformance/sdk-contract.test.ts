@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { and, eq } from 'drizzle-orm';
 import { deliverEvent } from '../../engine/eventDelivery.js';
-import { actionInvocations, sessionEvents, webhooks } from '../../db/schema.js';
+import { actionInvocations, sessionEvents, webhooks } from '../../db/tables.js';
 import {
   makeNodeStack,
   createWorkspace,
@@ -226,6 +226,22 @@ describe('SDK v8 service contract', () => {
       handlerNodeId: handlerNode.nodeId,
     }]);
     expect(kvPutAttempts).toBe(0);
+
+    const completed = await stack.app.request(
+      `/v1/actions/summarize/invocations/${invokeBody.data.invocation_id}/complete`,
+      {
+        method: 'POST',
+        headers: {
+          'content-type': 'application/json',
+          authorization: `Bearer ${handler.token}`,
+        },
+        body: JSON.stringify({ output: { summary: 'done' } }),
+      },
+    );
+    expect(completed.status).toBe(200);
+    expect(await completed.json()).toMatchObject({
+      data: { status: 'completed', output: { summary: 'done' } },
+    });
 
     const deniedNode = await attachDirectNodeSocket(stack, ws.workspaceId, denied);
     const deniedInvoke = await stack.app.request('/v1/actions/summarize/invoke', {
@@ -1057,7 +1073,7 @@ describe('SDK v8 service contract', () => {
     // and the agent status write: inject a failure into the status mutation
     // only, so the caller sees an error while the event row is already
     // durable — exactly the interrupted window relaycast#425 is about.
-    const { agents } = await import('../../db/schema.js');
+    const { agents } = await import('../../db/tables.js');
 
     // Recursively proxy the builder chain (`.update(...).set(...).where(...)`)
     // so the failure surfaces only when the final statement is executed

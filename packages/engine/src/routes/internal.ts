@@ -20,7 +20,9 @@ import * as workspaceEngine from '../engine/workspace.js';
 import {
   beginInternalWorkspaceDeletion,
   INTERNAL_CAPABILITIES,
+  MAX_WORKSPACE_EXPIRY_SECONDS,
   pushWorkspaceKey,
+  setWorkspaceExpiry,
 } from '../engine/internalAdmin.js';
 import { WORKSPACE_KEY_MAX_GRACE_MS } from '../engine/tokenRotate.js';
 
@@ -194,6 +196,46 @@ internalRoutes.post('/workspaces/:id/api-key', async (c) => {
       ...(result.mintedApiKey ? { api_key: result.mintedApiKey } : {}),
     };
     return result.created ? jsonCreated(c, data) : jsonOk(c, data);
+  } catch (err: unknown) {
+    return errorResponse(c, err);
+  }
+});
+
+const expirySchema = z.object({
+  expires_in_seconds: z.number().int()
+    .min(60, 'expires_in_seconds must be at least 60')
+    .max(MAX_WORKSPACE_EXPIRY_SECONDS, `expires_in_seconds must be at most ${MAX_WORKSPACE_EXPIRY_SECONDS}`)
+    .nullable(),
+}).strict();
+
+// POST /internal/workspaces/:id/expiry — `{ expires_in_seconds: n }` moves a
+// live workspace's deadline to n seconds from now (a temporary workspace kept
+// alive by activity); `null` clears it (the workspace was claimed). A workspace
+// already past its deadline is not revived: 409 workspace_expired.
+// → `{ workspace_id, expires_at }`.
+internalRoutes.post('/workspaces/:id/expiry', async (c) => {
+  try {
+    const workspaceId = c.req.param('id');
+    if (!WORKSPACE_ID_PATTERN.test(workspaceId)) {
+      return jsonError(c, 'invalid_request', 'Invalid workspace id', 400);
+    }
+    if (foreignWorkspace(c, workspaceId)) return jsonNotFound(c, 'not_found', 'Workspace not found');
+    const parsed = await parseJsonBody(c, expirySchema, 'expires_in_seconds is required (seconds, or null to clear)');
+    if (!parsed.ok) return parsed.response;
+    const seconds = parsed.data.expires_in_seconds;
+    const now = new Date();
+    const result = await setWorkspaceExpiry(
+      c.get('db'),
+      workspaceId,
+      seconds === null ? null : new Date(now.getTime() + seconds * 1000),
+      now,
+    );
+    if (!result.ok) {
+      return result.reason === 'expired'
+        ? jsonError(c, 'workspace_expired', 'Workspace has expired', 409)
+        : jsonNotFound(c, 'not_found', 'Workspace not found');
+    }
+    return jsonOk(c, { workspace_id: result.workspaceId, expires_at: result.expiresAt?.toISOString() ?? null });
   } catch (err: unknown) {
     return errorResponse(c, err);
   }

@@ -2,7 +2,7 @@ import { nodeLivenessAuthority, inspectNodeLiveness, inspectNodesLiveness, inval
 import type { NodeLivenessSnapshot } from '../ports/nodeLiveness.js';
 import { eq, and, exists, gt, lt, ne, sql, inArray, type SQL } from 'drizzle-orm';
 import type { getDb } from '../db/index.js';
-import { agents, agentNodeBindings, agentRecoveryCredentials, channels, channelMembers, dmParticipants, deliveries, nodes } from '../db/schema.js';
+import { agents, agentNodeBindings, agentRecoveryCredentials, channels, channelMembers, dmParticipants, deliveries, nodes } from '../db/tables.js';
 import { randomHex, sha256Hex } from '../lib/crypto.js';
 import { generateId } from './snowflake.js';
 import { invalidateChannelCache } from './cache.js';
@@ -15,6 +15,7 @@ import { runAtomicWrites, type AtomicWrite } from '../ports/database.js';
 import { AGENT_RECOVERY_PROOF_HASH_PATTERN } from '@relaycast/types';
 import { WEBHOOK_AGENT_NAME } from './messageMetadata.js';
 import { issueCredential } from '../auth/credentials.js';
+import * as sqlx from '../db/sqlx.js';
 
 export { AGENT_RECOVERY_PROOF_HASH_PATTERN } from '@relaycast/types';
 
@@ -191,7 +192,7 @@ function isUniqueConstraintError(err: unknown): boolean {
   if (!err || typeof err !== 'object') return false;
   const e = err as { code?: string; message?: string; cause?: unknown };
   // Direct D1/SQLite error codes
-  if (e.code === 'SQLITE_CONSTRAINT_UNIQUE' || e.code === 'SQLITE_CONSTRAINT') return true;
+  if (e.code === 'SQLITE_CONSTRAINT_UNIQUE' || e.code === 'SQLITE_CONSTRAINT' || e.code === '23505') return true;
   // Message-based detection (D1 wraps as "D1_ERROR: UNIQUE constraint failed: ...")
   if (typeof e.message === 'string') {
     const msg = e.message.toLowerCase();
@@ -478,10 +479,10 @@ export async function listAgents(
   // after effectiveAgentStatus has marked it offline.
   const cutoff = (now - AGENT_LIVENESS_TTL_MS) / 1_000;
   if (requestedStatus === 'active' && !nodeLivenessAuthority(db)) {
-    conditions.push(sql`${agents.status} IN ('active', 'online') AND ${agents.lastSeen} >= ${cutoff}`);
+    conditions.push(sql`${agents.status} IN ('active', 'online') AND ${agents.lastSeen} >= ${sqlx.numericParam(db, cutoff)}`);
   } else if (requestedStatus === 'offline' && !nodeLivenessAuthority(db)) {
     conditions.push(sql`(${agents.status} = 'offline' OR (
-      ${agents.status} IN ('active', 'online') AND ${agents.lastSeen} < ${cutoff}
+      ${agents.status} IN ('active', 'online') AND ${agents.lastSeen} < ${sqlx.numericParam(db, cutoff)}
     ))`);
   } else if (requestedStatus && requestedStatus !== 'all' && !nodeLivenessAuthority(db)) {
     conditions.push(eq(agents.status, requestedStatus));
@@ -494,7 +495,7 @@ export async function listAgents(
     conditions.push(sql`(${agents.status} IN ${stored} OR (${agents.status} = 'offline' AND ${agents.statusBeforeLivenessLoss} IN ${stored}))`);
   }
   if ((!requestedStatus || requestedStatus === 'all') && !options.includeStale && !byName) {
-    const recent = sql`${agents.lastSeen} >= ${(now - AGENT_ROSTER_RECENCY_MS) / 1_000}`;
+    const recent = sql`${agents.lastSeen} >= ${sqlx.numericParam(db, (now - AGENT_ROSTER_RECENCY_MS) / 1_000)}`;
     // A stale hosted row stays listed while its node says it is live. One that
     // is offline with no saved pre-loss status resolves to offline whatever the
     // node says, and stale offline rows are dropped below, so leave it out here
@@ -526,7 +527,7 @@ export async function listAgents(
           ? sql<Record<string, unknown>>`'{}'`.mapWith(agents.metadata)
           : agents.metadata,
       },
-      node: addressNodeSelection,
+      node: addressNodeSelection(),
     })
     .from(agents)
     .leftJoin(nodes, eq(nodes.id, agents.locationNodeId))
@@ -555,7 +556,7 @@ export async function listAgents(
 
 export async function getAgentByName(db: Db, workspaceId: string, name: string) {
   const [row] = await db
-    .select({ agent: agents, node: addressNodeSelection })
+    .select({ agent: agents, node: addressNodeSelection() })
     .from(agents)
     .leftJoin(nodes, eq(nodes.id, agents.locationNodeId))
     .where(and(eq(agents.workspaceId, workspaceId), eq(agents.name, name)));
@@ -593,7 +594,7 @@ export async function getAgentByName(db: Db, workspaceId: string, name: string) 
         eq(deliveries.workspaceId, workspaceId),
         eq(deliveries.agentId, agent.id),
         sql`${deliveries.status} IN ('queued', 'delivered')`,
-        sql`(${deliveries.expiresAt} IS NULL OR ${deliveries.expiresAt} > unixepoch())`,
+        sql`(${deliveries.expiresAt} IS NULL OR ${deliveries.expiresAt} > ${sqlx.now(db)})`,
       ))
       .orderBy(deliveries.createdAt, deliveries.id)
       .limit(50),
@@ -687,14 +688,12 @@ export async function updateAgentById(
     // write time, even when this update was built from a stale pre-claim read;
     // otherwise an overlapping generic metadata PATCH could erase a winning
     // legacy claim immediately after its atomic UPDATE.
+    const currentMetadata = sql`COALESCE(${agents.metadata}, '{}')`;
+    const nextMetadataJson = sqlx.json(db, sql`${nextMetadata}`);
     setClause.metadata = sql`CASE
-      WHEN json_type(COALESCE(${agents.metadata}, '{}'), ${AGENT_IDENTITY_METADATA_JSON_PATH}) IS NULL
-        THEN json(${nextMetadata})
-      ELSE json_set(
-        json(${nextMetadata}),
-        ${AGENT_IDENTITY_METADATA_JSON_PATH},
-        json_extract(COALESCE(${agents.metadata}, '{}'), ${AGENT_IDENTITY_METADATA_JSON_PATH})
-      )
+      WHEN ${sqlx.jsonType(db, currentMetadata, { bind: AGENT_IDENTITY_METADATA_JSON_PATH })} IS NULL
+        THEN ${nextMetadataJson}
+      ELSE ${sqlx.jsonSet(db, nextMetadataJson, { bind: AGENT_IDENTITY_METADATA_JSON_PATH }, sqlx.jsonGet(db, currentMetadata, { bind: AGENT_IDENTITY_METADATA_JSON_PATH }), 'text')}
     END`;
   }
   if (updates.capabilities !== undefined) setClause.capabilities = updates.capabilities;
@@ -717,7 +716,7 @@ export async function updateAgentById(
 
   if (!updated) return null;
   const [node] = updated.locationNodeId
-    ? await db.select(addressNodeSelection).from(nodes).where(eq(nodes.id, updated.locationNodeId))
+    ? await db.select(addressNodeSelection()).from(nodes).where(eq(nodes.id, updated.locationNodeId))
     : [];
 
   return {
@@ -758,19 +757,19 @@ export async function claimLegacyAgentIdentity(
   const [updated] = await db
     .update(agents)
     .set({
-      metadata: sql`json_set(COALESCE(${agents.metadata}, '{}'), ${AGENT_IDENTITY_METADATA_JSON_PATH}, ${identityKeyHash})`,
+      metadata: sqlx.jsonSet(db, sql`COALESCE(${agents.metadata}, '{}')`, { bind: AGENT_IDENTITY_METADATA_JSON_PATH }, sql`${identityKeyHash}`, 'text'),
     })
     .where(and(
       eq(agents.workspaceId, workspaceId),
       eq(agents.name, name),
       eq(agents.status, 'offline'),
-      sql`json_type(COALESCE(${agents.metadata}, '{}'), ${AGENT_IDENTITY_METADATA_JSON_PATH}) IS NULL`,
+      sql`${sqlx.jsonType(db, sql`COALESCE(${agents.metadata}, '{}')`, { bind: AGENT_IDENTITY_METADATA_JSON_PATH })} IS NULL`,
     ))
     .returning();
 
   if (!updated) return null;
   const [node] = updated.locationNodeId
-    ? await db.select(addressNodeSelection).from(nodes).where(eq(nodes.id, updated.locationNodeId))
+    ? await db.select(addressNodeSelection()).from(nodes).where(eq(nodes.id, updated.locationNodeId))
     : [];
 
   return {
@@ -832,13 +831,13 @@ export async function deleteAgent(db: Db, workspaceId: string, name: string) {
         lastSeen: releasedAt,
         // Same `release` shape both release paths write, so an audit does not
         // have to know which path released the agent.
-        metadata: sql`json_patch(COALESCE(${agents.metadata}, '{}'), ${JSON.stringify({
+        metadata: sqlx.jsonMerge(writeDb, sql`COALESCE(${agents.metadata}, '{}')`, sql`${JSON.stringify({
           release: {
             reason: 'agent removed',
             released_at: releasedAt.toISOString(),
             previous_name: agent.name,
           },
-        })})`,
+        })}`),
       })
       .where(eq(agents.id, agent.id)));
     // `channel_members` and `dm_participants` cascade on DELETE; an UPDATE does

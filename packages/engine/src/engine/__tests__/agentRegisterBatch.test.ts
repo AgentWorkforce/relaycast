@@ -1,7 +1,8 @@
 import { afterEach, describe, expect, it } from 'vitest';
+import { brandSqliteEngineDb } from '../../adapters/sqlite-handle.js';
 import { drizzle } from 'drizzle-orm/better-sqlite3';
 import { getSqliteDb, runMigrations, type SqliteDbHandle } from '../../adapters/node/database.js';
-import * as schema from '../../db/schema.js';
+import * as schema from '../../db/tables.js';
 import type { EngineDb } from '../../ports/database.js';
 import { registerAgentViaNode } from '../node.js';
 import { claimSpawnNode, reserveNodeCapacity } from '../placement.js';
@@ -46,7 +47,7 @@ function fixture(
     INSERT INTO channels(id,workspace_id,name) VALUES ('chan-general','ws','general');
     ${nodeSql}
   `);
-  const base = drizzle(sqlite, { schema }) as unknown as EngineDb;
+  const base = brandSqliteEngineDb(drizzle(sqlite, { schema }));
   // A stand-in for D1's `db.batch`: like the real one it receives
   // already-built statements and returns their results in order. D1 batches
   // are atomic; this double executes sequentially, which still exercises the
@@ -71,7 +72,7 @@ function fixture(
       }
       return results;
     },
-  }) as unknown as EngineDb;
+  });
   return { sqlite, db, batches };
 }
 

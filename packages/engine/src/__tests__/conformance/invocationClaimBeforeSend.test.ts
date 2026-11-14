@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { and, eq } from 'drizzle-orm';
 import { drainNodeInvocations, rescheduleNodeInvocation, sweepTimedOutInvocations } from '../../engine/action.js';
 import { exclusiveClaimWrite } from '../../engine/invocationClaim.js';
-import { actionInvocations, actions, agents, nodes } from '../../db/schema.js';
+import { actionInvocations, actions, agents, nodes } from '../../db/tables.js';
 import { attachDirectNodeSocket, createWorkspace, FakeSocket, injectUpdateFailure, makeNodeStack, registerAgent, stripTransactionCapability, type TestStack } from './harness.js';
 
 // Drain and the timeout sweep both select a due pending spawn and do not share

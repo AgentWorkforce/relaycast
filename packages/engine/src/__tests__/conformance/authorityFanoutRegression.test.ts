@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { and, eq } from 'drizzle-orm';
 import { makeNodeStack, createWorkspace, registerAgent, type TestStack } from './harness.js';
-import { agents, channelMembers, channels, deliveries, messages, nodes } from '../../db/schema.js';
+import { agents, channelMembers, channels, deliveries, messages, nodes } from '../../db/tables.js';
 import { configureNodeLiveness, nodeLive } from '../../engine/nodeLiveness.js';
 import { createGroupDm, postGroupMessage } from '../../engine/groupDm.js';
 import { postReply } from '../../engine/thread.js';

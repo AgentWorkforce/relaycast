@@ -725,6 +725,12 @@ export type ThreadReplyRequest = Camelize<Raw.ThreadReplyRequest>;
 export type TokenRotateResponse = Camelize<Raw.TokenRotateResponse>;
 export type CredentialUpgradeResponse = Camelize<Raw.CredentialUpgradeResponse>;
 export type UpdateAgentRequest = Camelize<Raw.UpdateAgentRequest>;
+/**
+ * An agent's A2A agent card. Its keys are already the A2A spec's camelCase
+ * (plus the `x-agent-relay` extension), so it is used as-is, not camelized.
+ */
+export type AgentCard = Raw.AgentCard;
+export type AgentCardSkill = Raw.AgentCardSkill;
 export type UpdateChannelRequest = Camelize<Raw.UpdateChannelRequest>;
 export type UpdateWorkspaceRequest = Camelize<Raw.UpdateWorkspaceRequest>;
 export type UploadRequest = Camelize<Raw.UploadRequest>;

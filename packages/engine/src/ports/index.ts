@@ -71,6 +71,8 @@ export type {
   EngineProgressSample,
 } from './diagnostics.js';
 
+export type { SearchIndex, MessageSearchOptions, MessageSearchQuery, MessageSearchResult } from './search.js';
+import type { SearchIndex } from './search.js';
 import type { EngineDb } from './database.js';
 import type { RealtimeBus, ConnectionRegistry, NodeConnectionRegistry } from './realtime.js';
 import type { PresenceTracker } from './presence.js';
@@ -89,6 +91,8 @@ import type { CredentialTagger } from '../auth/credentialTags.js';
 /** Infrastructure ports the engine reads off the request context. */
 export interface EnginePorts {
   db: EngineDb;
+  /** Optional message-search backend; omission preserves the existing SQLite/D1 FTS5 behavior. */
+  search?: SearchIndex;
   realtime: RealtimeBus;
   connections: ConnectionRegistry;
   nodeConnections: NodeConnectionRegistry;

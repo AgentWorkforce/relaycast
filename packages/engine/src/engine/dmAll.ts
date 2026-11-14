@@ -6,7 +6,7 @@ import {
   dmParticipants,
   messages,
   agents,
-} from '../db/schema.js';
+} from '../db/tables.js';
 import { codedError } from '../lib/httpError.js';
 import { D1_SAFE_IN_QUERY_CHUNK_SIZE, queryInChunks } from '../lib/queryChunks.js';
 import { publicMessageMetadata } from './messageMetadata.js';

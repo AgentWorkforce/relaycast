@@ -1,6 +1,6 @@
 {
   "name": "@relaycast/sdk",
-  "version": "12.7.0",
+  "version": "12.8.0",
   "license": "Apache-2.0",
   "type": "module",
   "main": "dist/index.js",
@@ -30,7 +30,7 @@
     "test:types": "tsc -p tsconfig.workspace-types.json"
   },
   "dependencies": {
-    "@relaycast/types": "12.7.0",
+    "@relaycast/types": "12.8.0",
     "zod": "^4.3.6"
   },
   "devDependencies": {

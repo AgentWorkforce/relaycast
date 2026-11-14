@@ -4,7 +4,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { and, eq } from 'drizzle-orm';
 import type { EventQueue, QueuedEvent } from '../../ports/event-queue.js';
 import type { EngineDb } from '../../ports/database.js';
-import { directDmIdempotency, messages, pendingEvents } from '../../db/schema.js';
+import { directDmIdempotency, messages, pendingEvents } from '../../db/tables.js';
 import { sweepPendingEvents } from '../../engine/eventQueue.js';
 import { createWorkspace, registerAgent, makeNodeStack, type TestStack } from '../../__tests__/conformance/harness.js';
 import type { KeyValueStore } from '../../ports/kv.js';

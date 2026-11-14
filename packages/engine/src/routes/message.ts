@@ -1,7 +1,7 @@
 import { Hono } from 'hono';
 import { z } from 'zod';
 import { and, eq } from 'drizzle-orm';
-import { agents } from '../db/schema.js';
+import { agents } from '../db/tables.js';
 import type { AppEnv } from '../env.js';
 import { requireSender, requireWorkspaceKey, requireWorkspaceRead } from '../middleware/auth.js';
 import { rateLimit } from '../middleware/rateLimit.js';

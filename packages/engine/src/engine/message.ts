@@ -2,7 +2,7 @@ import { prepareAuthorityFanout } from './deliveryWrites.js';
 import { parseMessageMentions } from './mentions.js';
 import { eq, and, sql, isNull, lt, gt, inArray } from 'drizzle-orm';
 import type { getDb } from '../db/index.js';
-import { messages, agents, reactions, readReceipts, messageAttachments } from '../db/schema.js';
+import { messages, agents, reactions, readReceipts, messageAttachments } from '../db/tables.js';
 import { runAtomicWrites, type AtomicWrite } from '../ports/database.js';
 import { generateId } from './snowflake.js';
 import { buildMessageLogWrite } from './console.js';

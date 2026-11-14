@@ -1,7 +1,8 @@
 import { afterEach, describe, expect, it } from 'vitest';
+import { brandSqliteEngineDb } from '../../adapters/sqlite-handle.js';
 import { drizzle } from 'drizzle-orm/better-sqlite3';
 import { getSqliteDb, runMigrations, type SqliteDbHandle } from '../../adapters/node/database.js';
-import * as schema from '../../db/schema.js';
+import * as schema from '../../db/tables.js';
 import type { EngineDb } from '../../ports/database.js';
 import { registerAgentViaNode } from '../node.js';
 
@@ -49,7 +50,7 @@ function fixture({ tombstones = 0, failedRows = 5_000 } = {}) {
     }
   })();
   const queries: { sql: string; params: unknown[] }[] = [];
-  const db = drizzle(sqlite, { schema, logger: { logQuery: (sql, params) => queries.push({ sql, params }) } }) as unknown as EngineDb;
+  const db = brandSqliteEngineDb(drizzle(sqlite, { schema, logger: { logQuery: (sql, params) => queries.push({ sql, params }) } }));
   return { sqlite, db, queries };
 }
 

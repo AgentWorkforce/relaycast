@@ -8,10 +8,10 @@ See the [changelog](CHANGELOG.md) for release highlights and upgrade notes.
 
 Relayfile inbound targets scoped to `/github/repos/<owner>/<repo>/pulls/<number>/**`
 follow GitHub PR title changes and associated comments/reviews with the exact stable
-PR reference. New targets carry a server-issued, HMAC-bound opt-in; legacy targets
-retain literal matching. Deploy the Relaycast receiver and Relayfile cloud
-companion, then reprovision the binding with full repository read permission.
-Other globs retain literal path matching.
+PR reference. New targets carry a server-issued, HMAC-bound identity opt-in.
+Deploy the Relaycast receiver and Relayfile cloud companion, then reprovision
+the binding with full repository read permission. Legacy targets and other
+globs use ordinary path-based wildcard matching.
 
 ## Quick Start
 
@@ -1203,6 +1203,34 @@ replay that reaches the narrow interval before its placement/dispatch outcome is
 durable returns retryable `idempotency_unavailable`; clients must retry the same
 logical request with the same key rather than minting a replacement.
 
+Builtin spawn callers that require exact node identity use
+`POST /v1/actions/spawn/strict-invoke` with the
+`relay.spawn.invoke.logical/1` contract, or explicitly opt in to replay-side
+resume with `relay.spawn.invoke.logical-replay-resume/1`. The dedicated route is absent on older
+servers, so an unsupported client fails before dispatch instead of sending new
+fields through the legacy generic route. The request binds the target node ID
+and name plus the stable logical spawn fields; only the server-materialized
+`worker_cwd` may differ on a retry with the same key. A successful response
+includes the server-owned `spawn_contract_applied` marker, which callers must
+verify. The replay-resume variant also returns the independent server-owned
+`spawn_replay_capability_applied: relay.spawn.replay-resume/1` proof; clients
+must verify both before relying on replay-side resume. Before provider I/O the engine durably binds the claim to that exact
+node and owns its capacity reservation atomically. A same-key retry resumes a
+definitely-unsent placement; it never falls back to another node. If the
+process loses the socket-send outcome, Relaycast fails closed instead of
+automatically sending a second frame, because providers do not yet persist a
+cross-restart invocation acknowledgement. If a caller can no longer
+materialize a safe local path,
+`POST /v1/actions/spawn/replay` reads the existing caller-scoped claim without
+creating another invocation. For `logical/1`, replay stays lookup-only: it
+validates the exact caller, key, and logical request, then returns the stored
+claim without placing, reserving, or dispatching it. Only a claim originally
+accepted and marked under `logical-replay-resume/1` may resume a definitely-unsent
+dispatch, using its persisted task, target, `worker_cwd`, caller, and key. Replay
+never selects another node or falls back to strict-invoke, generic invoke,
+registered actions, or legacy spawn. Dispatched, terminal, and unknown-send
+snapshots never resend.
+
 Long-running providers can register an action capability with
 `execution_mode: "task"` (for example `{name: "task.run", kind: "action", global:
 true, execution_mode: "task"}`). Task invocations use the existing authenticated
@@ -1344,6 +1372,7 @@ GET    /v1/a2a/agents                List registered A2A agents
 PATCH  /v1/a2a/agents/:name          Complete or rotate an A2A connection
 DELETE /v1/a2a/agents/:name          Remove an A2A agent
 GET    /v1/a2a/agents/:name/card     Get agent card for a registered agent
+GET    /v1/agents/:name/card         A2A agent card for a local agent (camelCase, A2A spec shape)
 GET    /.well-known/agent-card.json  A2A agent card (root-level; ?workspace= selects on multi-tenant)
 GET    /:workspace/.well-known/agent-card.json  A2A agent card for a named workspace
 POST   /a2a/rpc                      A2A JSON-RPC gateway (root-level)
@@ -1351,7 +1380,24 @@ POST   /a2a/webhook/:ws/:name        Inbound webhook for relay agents
 ```
 
 Single-workspace deployments serve the standard bare agent-card URL without a
-workspace query parameter. A2A messages can carry versioned Ratify proof and
+workspace query parameter. The workspace card lists one skill per agent, with
+the agent name as its id (the target a caller sends), described by the agent's
+card and declared skills, or by its persona when it has neither, and leaves out
+released agents.
+
+Every local agent also has its own card at `GET /v1/agents/:name/card`
+(`relay.getAgentCard(name)`), built from two metadata keys an agent sets with
+`POST /v1/agents` or `PATCH /v1/agents/:name`:
+
+- `skills` (stored at `metadata.skills`): at most 20, each
+  `{ id?, name (<= 80), description? (<= 500), tags?, examples? (<= 5, each <= 200) }`.
+- `metadata.card`: `{ description (<= 1000), documentation_url? (https), tags? (<= 10), updated_at, version }`.
+
+`PATCH` merges `metadata` one top-level key at a time, so updating `card` or
+`skills` keeps every other metadata key. An agent with neither still gets a
+minimal card with `skills: []` and `x-agent-relay.hasCard: false`.
+
+A2A messages can carry versioned Ratify proof and
 revocation metadata; see [Ratify over A2A](docs/a2a-ratify-federation.md).
 
 Programmability, directory & observability:
@@ -1416,6 +1462,7 @@ accepted; a wrong secret is `401`).
 | `POST /internal/workspaces` | `{ name, metadata? }` → `201` with `workspace_id`, `api_key` (shown once), `api_key_generation: 0` |
 | `DELETE /internal/workspaces/:id` | Idempotently delete by ID with the internal secret (`204`, including when already gone) |
 | `POST /internal/workspaces/:id/api-key` | Push a control-plane-minted key (`{ api_key, key_generation?, grace_ms? }`, upserts a missing workspace with `201`) or omit `api_key` to have the engine mint and return one. Generation-fenced: stale pushes are `409 stale_key_generation`, generationless key changes on a fenced workspace are `409 key_generation_required`, and a key that is live in another workspace (current, or previous within its grace window) is `409 api_key_conflict`. After an internal delete claims this ID, same-process pushes are `410 workspace_deleted`; deleted IDs are not reusable without restarting the engine. |
+| `POST /internal/workspaces/:id/expiry` | Move a live workspace's deadline (`{ expires_in_seconds: 60..7776000 }`, counted from now) or clear it (`{ expires_in_seconds: null }`) → `{ workspace_id, expires_at }`. A workspace already past its deadline, or being deleted, is never revived (`409 workspace_expired`); unknown IDs are `404`. Served by the hosted gateway too. |
 
 Workspace IDs match `^[A-Za-z0-9_-]{1,128}$`. A deployment that mints `ar_` credentials
 (`RELAYCAST_CREDENTIAL_FORMAT=ar`) carries the workspace in every credential as a 64-bit snowflake,
@@ -1569,7 +1616,16 @@ configured. No key is bundled. Disable capture with `DO_NOT_TRACK=1` or
 
 ## License
 
-Apache-2.0
+- **Server** (`packages/engine`, `docker`, `packages/actors-gateway`,
+  `packages/actors-workspace`, `packages/observer-dashboard`,
+  `packages/observer-router`): [FSL-1.1-ALv2](https://fsl.software) from the
+  first release after this change. Self-host and modify it freely; you can't
+  offer it as a competing hosted service. Each release becomes Apache-2.0 two
+  years after it ships.
+- **Everything else** (SDKs, CLI, MCP server, types, React, A2A, OpenClaw):
+  Apache-2.0.
+
+See [NOTICE](NOTICE).
 
 
 ### Agent subscription delivery
@@ -1615,6 +1671,10 @@ Node-control `agent.deregister` requests with an `id` receive a correlated `repl
 only after the binding has been removed and the agent moved offline. Requests
 without an `id` retain fire-and-forget behavior. Brokers performing owned identity
 cleanup must await that acknowledgement before requesting deletion.
+
+Relayfile callback path globs follow the producer's path matching: `*` within a segment and whole `**` segments across directories, including `/linear/issues/*__<id>.json` and `/jira/issues/*/comments/*.json`. Matching canonicalizes repeated slashes and dot segments while preserving case and percent escapes. Existing trailing-prefix patterns retain their behavior, including `/*` for root-level paths; target signing and GitHub identity opt-ins are unchanged.
+
+Relayfile ingress accepts authenticated `file.created`, `file.updated`, and `file.deleted` notifications. Deletes without a snapshot preserve the event type and path, with a notice that deleted content is unavailable; no record content or actor is reconstructed.
 
 The signed Relayfile webhook request follows Relayfile's existing external event contract (`eventId`, `providerEventType`, `resourceRef`). These are verified vendor payload fields, not alternate spellings of Relaycast HTTP fields; Relaycast message metadata remains snake_case.
 

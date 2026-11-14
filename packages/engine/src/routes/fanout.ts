@@ -1,7 +1,7 @@
 import type { Context } from 'hono';
 import type { AppEnv } from '../env.js';
 import { getRequestLogger, toErrorDetails } from '../lib/logger.js';
-import { dmConversations, dmParticipants } from '../db/schema.js';
+import { dmConversations, dmParticipants } from '../db/tables.js';
 import { and, eq, isNull } from 'drizzle-orm';
 import {
   publishEvent,

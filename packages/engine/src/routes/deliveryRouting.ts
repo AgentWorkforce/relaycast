@@ -8,7 +8,7 @@ import type {
   DeliveryFanoutRecord,
   DeliveryRejectionRecord,
 } from '../engine/deliveryWrites.js';
-import { agents, agentNodeBindings, deliveries as deliveryRows, nodes } from '../db/schema.js';
+import { agents, agentNodeBindings, deliveries as deliveryRows, nodes } from '../db/tables.js';
 import { buildHttpPushHeaders, postHttpPush, resolveHttpPushProxy } from '../engine/httpPushDispatch.js';
 import { isSafeExternalUrl } from '../lib/ssrf.js';
 import { settlePool } from '../lib/settlePool.js';
@@ -36,6 +36,13 @@ type DeliveryTarget = {
 };
 
 const DISPATCH_RETRY_DELAY_MS = 30_000;
+/**
+ * A never-attempted ws row is left to its live dispatch for this long before
+ * the ordered redrive re-sends it. Without it, a sweep could re-send a row whose
+ * live send already reached the socket but whose `delivered` mark had not
+ * committed yet, a same-socket duplicate (seen under load in relaycast#659).
+ */
+export const NODE_REDRIVE_INITIAL_GRACE_SECONDS = 60;
 // Fifty 50-row statements expire at most 2,500 deliveries per invocation.
 // On a */5 schedule that is 720,000/day: above the measured 519,000/day peak
 // while each UPDATE remains well below D1's 100-bound-parameter ceiling.
@@ -635,8 +642,14 @@ async function redriveWsBacklogForAgent(
 
   const outcomes: Array<{ deliveryId: string; outcome: DeliveryDispatchOutcome }> = [];
   const repliedIds: string[] = [];
+  const freshSince = Math.floor(now.getTime() / 1000) - NODE_REDRIVE_INITIAL_GRACE_SECONDS;
   try {
     for (const event of backlog) {
+      // A never-attempted row this young still belongs to its live dispatch,
+      // which may already have sent it; stop here (in order) rather than send
+      // it twice. A later sweep picks it up if that dispatch was lost.
+      const createdAt = event.delivery.createdAt;
+      if (event.delivery.nextAttemptAt == null && createdAt && Math.floor(createdAt.getTime() / 1000) > freshSince) break;
       const outcome = await routeOneDeliveryOutcome(
         ctx,
         liveLocations,

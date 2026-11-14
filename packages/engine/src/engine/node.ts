@@ -23,14 +23,14 @@ import {
   parseFleetBrokerToRelaycastMessage,
 } from '@relaycast/types';
 import type { getDb } from '../db/index.js';
-import { actionInvocations, actions, agents, agentNodeBindings, channelMembers, channels, nodeProviders, nodes, workspaces } from '../db/schema.js';
+import { actionInvocations, actions, agents, agentNodeBindings, channelMembers, channels, nodeProviders, nodes, workspaces } from '../db/tables.js';
 import { isWorkspaceExpired, WORKSPACE_EXPIRED_CODE, WORKSPACE_EXPIRED_MESSAGE } from '../auth/workspaceExpiry.js';
 import { randomHex, sha256Hex } from '../lib/crypto.js';
 import { codedError } from '../lib/httpError.js';
 import type { RegistrationAdmission } from './registrationAdmission.js';
 import { AdmissionDeniedError } from '../lib/admissionError.js';
 import { acceptTaskInvocation, completeTaskInvocation } from './taskInvocation.js';
-import { databaseConstraintKind, runAtomic, runAtomicWrites } from '../ports/database.js';
+import { databaseConstraintKind, hasTransactionCapability, runAtomic, runAtomicWrites } from '../ports/database.js';
 import { retryD1Write } from '../lib/d1Retry.js';
 import { chunkValues } from '../lib/queryChunks.js';
 import type { AtomicWrite, BatchCapability, EngineDb } from '../ports/database.js';
@@ -63,6 +63,7 @@ import {
   detachInvocationsFromLostNode,
   dispatchCapacitySpawn,
   emitFailedInvocationEffects,
+  isStrictBuiltinSpawnInvocation,
   rescheduleInvocationsForLostNode,
   rescheduleNodeInvocation,
 } from './action.js';
@@ -71,6 +72,7 @@ import type { InvocationCompletionDeps, NodeOfflineReason } from './invocationCo
 import { acceptDeliveries, ackDeliveriesUpToSeq, ackNodeDelivery, deliverPendingToNode, type DeliveryReplayDeps } from './delivery.js';
 import { notifySenderDeliveryReceipts } from './deliveryReceipts.js';
 import { issueCredential } from '../auth/credentials.js';
+import * as sqlx from '../db/sqlx.js';
 
 type Db = ReturnType<typeof getDb>;
 type NodeRow = typeof nodes.$inferSelect;
@@ -265,13 +267,13 @@ function isServerOwnedTag(tag: string): boolean {
 // every adapter (it runs unwrapped on D1) and enrollment does not take the
 // node lock, so a single statement is the only boundary that holds everywhere.
 // `substr` keeps the match case-sensitive like isServerOwnedTag; LIKE would not.
-function brokerTagsPreservingServerOwned(callerTags: string[]) {
+function brokerTagsPreservingServerOwned(db: object, callerTags: string[]) {
   return sql<string[]>`(
-    SELECT json_group_array(value) FROM (
-      SELECT 0 AS src, key AS pos, value FROM json_each(${nodes.tags})
+    SELECT ${sqlx.jsonAgg(db, sql.raw('value'))} FROM (
+      SELECT 0 AS src, key AS pos, value FROM ${sqlx.jsonEach(db, nodes.tags, { elements: 'text' })}
         WHERE substr(value, 1, ${SERVER_OWNED_NODE_TAG_PREFIX.length}) = ${SERVER_OWNED_NODE_TAG_PREFIX}
       UNION ALL
-      SELECT 1 AS src, key AS pos, value FROM json_each(${JSON.stringify(callerTags)})
+      SELECT 1 AS src, key AS pos, value FROM ${sqlx.jsonEach(db, JSON.stringify(callerTags), { elements: 'text' })}
       ORDER BY src, pos
     )
   )`;
@@ -1033,7 +1035,7 @@ export async function registerNode(
     });
     await tx
       .update(nodes)
-      .set({ name: message.name, kind: 'ws', role: 'broker', deliveryAdapter: 'ws.node.v1', deliveryConfig: null, tags: brokerTagsPreservingServerOwned(tags) })
+      .set({ name: message.name, kind: 'ws', role: 'broker', deliveryAdapter: 'ws.node.v1', deliveryConfig: null, tags: brokerTagsPreservingServerOwned(tx, tags) })
       .where(and(eq(nodes.workspaceId, workspaceId), eq(nodes.id, authenticatedNodeId)));
     await recomputeNodeAggregate(tx, workspaceId, authenticatedNodeId, {
       version: message.version,
@@ -1051,6 +1053,36 @@ export async function registerNode(
     accepted: true,
   }));
   return { node: publicNode(updated), acceptance, provider };
+}
+
+/**
+ * How often a heartbeat that changed no capabilities still recomputes its node's
+ * union manifest. The union only moves when a provider's capabilities do, which
+ * those heartbeats recompute at once; this periodic pass repairs a manifest
+ * written out of band (REST enrollment on a provider-backed node) within a
+ * bounded time, without paying the jsonb_agg on every beat (relaycast#661).
+ */
+export const NODE_UNION_REPAIR_INTERVAL_MS = 5 * 60_000;
+
+/**
+ * Per node: when this process last recomputed its union manifest, oldest
+ * first (an entry is re-inserted on each refresh). Capped so node churn
+ * cannot grow it without bound; an evicted node just refreshes early.
+ */
+const lastUnionRefreshAt = new Map<string, number>();
+const UNION_REFRESH_TRACKED_NODES = 50_000;
+
+function unionRepairDue(workspaceId: string, nodeId: string, now: Date): boolean {
+  const key = JSON.stringify([workspaceId, nodeId]);
+  const last = lastUnionRefreshAt.get(key);
+  if (last !== undefined && now.getTime() - last < NODE_UNION_REPAIR_INTERVAL_MS) return false;
+  lastUnionRefreshAt.delete(key);
+  lastUnionRefreshAt.set(key, now.getTime());
+  for (const oldest of lastUnionRefreshAt.keys()) {
+    if (lastUnionRefreshAt.size <= UNION_REFRESH_TRACKED_NODES) break;
+    lastUnionRefreshAt.delete(oldest);
+  }
+  return true;
 }
 
 export async function heartbeatNode(
@@ -1107,6 +1139,9 @@ export async function heartbeatNode(
   let updated: NodeRow | undefined;
   await runAtomic(db, async (tx) => {
     const now = new Date();
+    // Only a heartbeat that changes its provider's capability set can change
+    // the node's union manifest; most heartbeats carry none or the same set.
+    let capabilitiesChanged = false;
     if (message.capabilities !== undefined) {
       const [existingProvider] = await tx
         .select()
@@ -1121,6 +1156,8 @@ export async function heartbeatNode(
         existingProvider?.capabilities ?? [],
       );
       assertActionTaskMode(caps);
+      capabilitiesChanged = existingProvider === undefined
+        || !sameCapabilities(existingProvider.capabilities ?? [], caps);
       const maxAgents = message.max_agents ?? existingProvider?.maxAgents ?? 0;
       // heartbeatProvider's load rule folded in here: a numeric load only
       // counts as a measurement when the provider opts in via load_reported
@@ -1192,6 +1229,7 @@ export async function heartbeatNode(
       ...(message.name !== undefined ? { name: message.name } : {}),
       ...(message.version !== undefined ? { version: message.version } : {}),
       provenLiveAt: now,
+      capabilities: capabilitiesChanged || unionRepairDue(workspaceId, nodeId, now),
     });
   });
 
@@ -1215,7 +1253,7 @@ export async function claimNodeOffline(
   expected: { lastHeartbeatAt: Date | null; livenessRevision: number },
 ): Promise<{ name: string; claimAt: Date; claimRevision: number } | undefined> {
   const claimAt = new Date();
-  const nextRevision = sql<number>`MAX(
+  const nextRevision = sql<number>`${sql.raw(sqlx.dialectOf(db) === 'pg' ? 'GREATEST' : 'MAX')}(
     ${nodes.livenessRevision},
     COALESCE((
       SELECT MAX(np.liveness_revision)
@@ -1343,9 +1381,15 @@ export async function settleNodeOffline(
     ));
 
   if (opts.detachOnly && claimRevision !== undefined) {
-    await detachInvocationsFromLostNode(db, workspaceId, nodeId, { claimRevision });
+    await detachInvocationsFromLostNode(db, workspaceId, nodeId, {
+      claimRevision,
+      completionDeps: opts.deps,
+    });
   } else {
-    await rescheduleInvocationsForLostNode(db, registry, workspaceId, nodeId, { claimRevision });
+    await rescheduleInvocationsForLostNode(db, registry, workspaceId, nodeId, {
+      claimRevision,
+      completionDeps: opts.deps,
+    });
   }
 
   if (opts.deps && opts.before && opts.before.status === 'online') {
@@ -1706,9 +1750,9 @@ function reserveNodeAgentSlotStatement(
       ? and(
         eq(actionInvocations.dispatchedNodeId, node.id),
         eq(actionInvocations.dispatchedProvider, claim.providerName),
-        sql`json_extract(${actionInvocations.input}, '$.name') = ${claim.agentName}`,
+        sql`${sqlx.jsonGet(db, actionInvocations.input, '$.name')} = ${claim.agentName}`,
       )
-      : sql`0`;
+      : sqlx.bool(db, false);
   const ownsSpawnReservation = claim
     ? sql`EXISTS (
         SELECT 1 FROM ${actionInvocations}
@@ -1722,9 +1766,9 @@ function reserveNodeAgentSlotStatement(
             ${actionInvocations.actionName} = 'spawn'
             OR ${actionInvocations.actionName} LIKE 'spawn:%'
           )
-          AND json_extract(${actionInvocations.input}, '$.name') = ${claim.agentName}
+          AND ${sqlx.jsonGet(db, actionInvocations.input, '$.name')} = ${claim.agentName}
       )`
-    : sql`0`;
+    : sqlx.bool(db, false);
   return db
     .update(nodes)
     .set({
@@ -1793,12 +1837,12 @@ function canceledSpawnTombstoneQuery(
       eq(actionInvocations.id, registration.invocationId),
       eq(actionInvocations.dispatchedNodeId, registration.nodeId),
       providerCorrelation,
-      sql`json_extract(${actionInvocations.input}, '$.name') = ${registration.agentName}`,
+      sql`${sqlx.jsonGet(db, actionInvocations.input, '$.name')} = ${registration.agentName}`,
     )
     : and(
       eq(actionInvocations.dispatchedNodeId, registration.nodeId),
       providerCorrelation,
-      sql`json_extract(${actionInvocations.input}, '$.name') = ${registration.agentName}`,
+      sql`${sqlx.jsonGet(db, actionInvocations.input, '$.name')} = ${registration.agentName}`,
     );
   return db
     .select({ id: actionInvocations.id })
@@ -2063,9 +2107,7 @@ export async function bindAgentToNode(
   // in order inside it instead. Without one, the move has to be a D1 batch, and
   // a handle offering neither is refused before a single statement lands rather
   // than committing half a move it cannot undo.
-  const hasInteractiveTransaction = typeof (db as EngineDb & {
-    withTransaction?: unknown;
-  }).withTransaction === 'function';
+  const hasInteractiveTransaction = hasTransactionCapability(db);
   const bound = await runAtomic(db, async (tx) => {
     const node = await getNodeByName(tx, workspaceId, nodeName);
     if (!node) throw codedError(`Node "${nodeName}" not found`, 'node_not_found', 404);
@@ -2362,6 +2404,7 @@ export async function deleteNode(
     await settleNodeOffline(db, registry, workspaceId, current.id, {
       claimRevision: current.livenessRevision,
       detachOnly: true,
+      deps,
     });
     await emitNodeStatusEffects(deps, workspaceId, {
       status: 'offline',
@@ -2510,7 +2553,7 @@ export async function registerAgentViaNode(
     // sequentially — with results still pushed into the sinks as they land,
     // so the catch below compensates exactly the writes that committed, no
     // more and no less.
-    const hasBatch = typeof (tx as EngineDb & Partial<BatchCapability>).batch === 'function';
+    const hasBatch = typeof (tx as Partial<BatchCapability>).batch === 'function';
     const runStatements = async (
       statements: readonly AtomicWrite[],
       sink: unknown[],
@@ -2776,9 +2819,7 @@ export async function recoverAgentViaNode(
   options: { deliveryCursorSupported?: boolean } = {},
 ): Promise<AgentRegisterReplyData> {
   assertRegistrableAgentName(message.name);
-  const hasInteractiveTransaction = typeof (db as EngineDb & {
-    withTransaction?: unknown;
-  }).withTransaction === 'function';
+  const hasInteractiveTransaction = hasTransactionCapability(db);
   const recovered = await runAtomic(db, async (tx) => {
     const [node] = await tx
       .select()
@@ -2823,17 +2864,17 @@ export async function recoverAgentViaNode(
     }
     try {
       const now = new Date().toISOString();
-      const fleetMetadata = sql`json_object(
-        'node_id', ${nodeId},
-        'invocation_id', ${message.invocation_id ?? null},
-        'registered_at', ${now}
-      )`;
+      const fleetMetadata = sqlx.jsonObject(tx, sql`
+        'node_id', ${sqlx.textParam(tx, nodeId)},
+        'invocation_id', ${sqlx.textParam(tx, message.invocation_id ?? null)},
+        'registered_at', ${sqlx.textParam(tx, now)}
+      `);
       const [result] = await tx
         .update(agents)
         .set({
           status: 'active',
           lastSeen: new Date(),
-          metadata: sql`json_patch(COALESCE(${agents.metadata}, '{}'), ${fleetMetadata})`,
+          metadata: sqlx.jsonMerge(tx, sql`COALESCE(${agents.metadata}, '{}')`, fleetMetadata),
           locationType: 'via_node',
           locationNodeId: nodeId,
           providerName,
@@ -3187,6 +3228,8 @@ export async function reconcileInventory(
       input: actionInvocations.input,
       status: actionInvocations.status,
       dispatchedNodeId: actionInvocations.dispatchedNodeId,
+      dispatchedAt: actionInvocations.dispatchedAt,
+      spawnDispatchGeneration: actionInvocations.spawnDispatchGeneration,
       dispatchedProvider: actionInvocations.dispatchedProvider,
       providerAcceptedAttempt: actionInvocations.providerAcceptedAttempt,
       spawnReservedAt: actionInvocations.spawnReservedAt,
@@ -3276,7 +3319,7 @@ export async function reconcileInventory(
               eq(nodeProviders.workspaceId, workspaceId), eq(nodeProviders.nodeId, nodeId),
               eq(nodeProviders.name, 'broker'), eq(nodeProviders.id, proof.brokerId),
               eq(nodeProviders.livenessRevision, proof.brokerRevision),
-              sql`unixepoch() * 1000 < ${proof.expiresAt}`,
+              sql`${sqlx.now(db)} * 1000 < ${proof.expiresAt}`,
             )));
           }
           const [updated] = await db
@@ -3351,7 +3394,7 @@ export async function reconcileInventory(
         name: sql`${agents.name}`.mapWith(agents.name),
         metadata: sql`${agents.metadata}`.mapWith(agents.metadata),
       })
-      .from(sql`${agents} INDEXED BY idx_agents_location_node_fk`)
+      .from(sql`${agents} ${sqlx.indexedBy(db, 'idx_agents_location_node_fk')}`)
       .where(and(
         eq(agents.workspaceId, workspaceId),
         eq(agents.locationType, 'via_node'),
@@ -3420,9 +3463,13 @@ export async function reconcileInventory(
       // A live broker owns the bounded readiness wait and cleanup. A transient
       // empty inventory during launch/teardown must not redispatch this spawn.
       // Actual provider disconnect and invocation expiry retain their own recovery.
-      if (liveInvocationIds.has(invocation.id) || requiresSpawnReadiness(invocation.input)) continue;
+      if (
+        liveInvocationIds.has(invocation.id)
+        || requiresSpawnReadiness(invocation.input)
+        || isStrictBuiltinSpawnInvocation(invocation)
+      ) continue;
       try {
-        if (await rescheduleNodeInvocation(db, registry, invocation)) {
+        if (await rescheduleNodeInvocation(db, registry, invocation, { completionDeps })) {
           rescheduledInvocations++;
         }
       } catch {
@@ -3522,10 +3569,14 @@ export interface ListNodesHistoryPage {
  * `json_extract` ever sees a bare string, leaving the string-equality branch
  * to match primitive capabilities exactly as before.
  */
-function capabilityMatchCondition(capability: string) {
-  return sql`EXISTS (SELECT 1 FROM json_each(CASE WHEN json_valid(${nodes.capabilities}) THEN ${nodes.capabilities} ELSE '[]' END) AS cap
+function capabilityMatchCondition(db: object, capability: string) {
+  // jsonb_array_elements refuses a scalar; json_each yields it as one row.
+  const list = sqlx.dialectOf(db) === 'pg'
+    ? sql`CASE WHEN jsonb_typeof(${nodes.capabilities}) = 'array' THEN ${nodes.capabilities} ELSE jsonb_build_array(${nodes.capabilities}) END`
+    : sql`CASE WHEN ${sqlx.jsonValid(db, nodes.capabilities)} THEN ${nodes.capabilities} ELSE '[]' END`;
+  return sql`EXISTS (SELECT 1 FROM ${sqlx.jsonEach(db, list, { alias: ' AS cap', elements: 'text' })}
     WHERE cap.value = ${capability}
-       OR (json_valid(cap.value) AND json_extract(cap.value, '$.name') = ${capability}))`;
+       OR (${sqlx.jsonValid(db, sql.raw('cap.value'))} AND ${sqlx.jsonGet(db, sql.raw('cap.value'), '$.name')} = ${capability}))`;
 }
 
 /**
@@ -3535,11 +3586,11 @@ function capabilityMatchCondition(capability: string) {
  * node, mirroring `observerAllowsAgent`'s fail-closed behavior for an empty
  * allow-list rather than falling open.
  */
-function observerNodeVisibilityCondition(agentIds: string[]) {
-  if (agentIds.length === 0) return sql`0`;
+function observerNodeVisibilityCondition(db: object, agentIds: string[]) {
+  if (agentIds.length === 0) return sqlx.bool(db, false);
   return sql`EXISTS (
     SELECT 1 FROM ${agentNodeBindings} AS b
-    JOIN json_each(${JSON.stringify(agentIds)}) AS allowed
+    JOIN ${sqlx.jsonEach(db, JSON.stringify(agentIds), { alias: ' AS allowed', elements: 'text' })}
       ON allowed.value = b.agent_id
     WHERE b.node_id = ${nodes.id}
       AND b.status = 'active'
@@ -3574,8 +3625,8 @@ async function visibleActiveAgentCounts(
     .where(and(
       eq(agentNodeBindings.workspaceId, workspaceId),
       eq(agentNodeBindings.status, 'active'),
-      sql`${agentNodeBindings.nodeId} IN (SELECT value FROM json_each(${JSON.stringify(nodeIds)}))`,
-      sql`${agentNodeBindings.agentId} IN (SELECT value FROM json_each(${JSON.stringify(agentIds)}))`,
+      sqlx.inJsonArray(db, agentNodeBindings.nodeId, nodeIds),
+      sqlx.inJsonArray(db, agentNodeBindings.agentId, agentIds),
     ))
     .groupBy(agentNodeBindings.nodeId);
   for (const row of rows) counts.set(row.nodeId, Number(row.count));
@@ -3646,7 +3697,7 @@ export async function listNodes(
   const now = new Date();
   const conditions = [eq(nodes.workspaceId, workspaceId)];
   if (filters.name) conditions.push(eq(nodes.name, filters.name));
-  if (filters.capability) conditions.push(capabilityMatchCondition(filters.capability));
+  if (filters.capability) conditions.push(capabilityMatchCondition(db, filters.capability));
   if (filters.status && !nodeLivenessAuthority(db)) conditions.push(livenessCondition(filters.status, now));
   else if (filters.status === 'online') conditions.push(onlineCandidateCondition(now));
   // Observer authorization is a WHERE condition, evaluated in the same query
@@ -3654,7 +3705,7 @@ export async function listNodes(
   // below — a hidden node is excluded from row selection entirely, so it can
   // never land in `nextCursor`, and cursor advancement always tracks "the
   // next authorized row" rather than "the next row, authorized or not".
-  if (filters.observerAgentIds) conditions.push(observerNodeVisibilityCondition(filters.observerAgentIds));
+  if (filters.observerAgentIds) conditions.push(observerNodeVisibilityCondition(db, filters.observerAgentIds));
 
   if (!filters.history) {
     // Legacy/default shape: a bare array, matching every caller that predates

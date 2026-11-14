@@ -1,6 +1,6 @@
 import { and, desc, eq, exists, gte, inArray, lt, lte, sql } from 'drizzle-orm';
 import type { getDb } from '../db/index.js';
-import { eventSubscriptions, pendingEvents, webhookDeliveries } from '../db/schema.js';
+import { eventSubscriptions, pendingEvents, webhookDeliveries } from '../db/tables.js';
 import { hmacSha256Hex, sha256Hex } from '../lib/crypto.js';
 import { codedError } from '../lib/httpError.js';
 import { isSafeExternalUrl } from '../lib/ssrf.js';

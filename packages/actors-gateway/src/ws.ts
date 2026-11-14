@@ -55,6 +55,24 @@ export interface SocketBridgeOptions {
 }
 
 /** The token from `?token=` or `Authorization: Bearer`, as the engine's `queryOrBearerToken`. */
+/**
+ * The socket to dial for a grant: the grant URL as given, or (with a socket
+ * origin) its path and query at that origin, keeping the grant's host as the
+ * Host header and TLS server name so the control plane sees the request it
+ * signed.
+ */
+export function socketTarget(grantUrl: string, socketOrigin: string | undefined): { url: string; headers?: Record<string, string>; servername?: string } {
+  if (!socketOrigin) return { url: grantUrl };
+  const grant = new URL(grantUrl);
+  const via = new URL(socketOrigin);
+  const scheme = via.protocol === 'https:' ? 'wss:' : 'ws:';
+  return {
+    url: `${scheme}//${via.host}${grant.pathname}${grant.search}`,
+    headers: { host: grant.host },
+    ...(scheme === 'wss:' ? { servername: grant.hostname } : {}),
+  };
+}
+
 export function queryOrBearerToken(req: IncomingMessage, url: URL): string | undefined {
   return url.searchParams.get('token')?.trim() || bearerToken(req);
 }
@@ -243,7 +261,13 @@ export function createSocketBridge(ctx: GatewayContext, options: SocketBridgeOpt
     if (entry.settled) return;
     if (grant.connectByMs < Date.now()) throw new ActorCallError('grant_expired', 'the socket grant expired before the gateway could use it');
 
-    const upstream = new WebSocket(grant.websocketUrl, { maxPayload: UPSTREAM_MAX_MESSAGE_BYTES, handshakeTimeout: connectTimeoutMs });
+    const target = socketTarget(grant.websocketUrl, ctx.config.socketOrigin);
+    const upstream = new WebSocket(target.url, {
+      maxPayload: UPSTREAM_MAX_MESSAGE_BYTES,
+      handshakeTimeout: connectTimeoutMs,
+      ...(target.headers ? { headers: target.headers } : {}),
+      ...(target.servername ? { servername: target.servername } : {}),
+    });
     entry.upstream = upstream;
     const info: Bridged = { path: url.pathname, workspaceId, requestId, started };
     upstream.once('open', () => {

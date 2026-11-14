@@ -1,4 +1,4 @@
-import type { workspaces, agents, nodes, observerTokens } from '../db/schema.js';
+import type { workspaces, agents, nodes, observerTokens } from '../db/tables.js';
 import type { EngineDb } from './database.js';
 
 export type Workspace = typeof workspaces.$inferSelect;

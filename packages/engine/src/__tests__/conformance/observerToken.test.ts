@@ -8,7 +8,7 @@ import {
   registerAgent,
   type TestStack,
 } from './harness.js';
-import { channels, messageLogs, messages, observerTokens } from '../../db/schema.js';
+import { channels, messageLogs, messages, observerTokens } from '../../db/tables.js';
 import { authenticateRealtimeWs } from '../../engine/wsAuth.js';
 
 async function createObserverToken(

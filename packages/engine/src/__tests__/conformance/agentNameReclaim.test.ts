@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { and, eq } from 'drizzle-orm';
 import { createWorkspace, FakeSocket, makeNodeStack, type TestStack } from './harness.js';
-import { agentNodeBindings, agents, nodes } from '../../db/schema.js';
+import { agentNodeBindings, agents, nodes } from '../../db/tables.js';
 import type { TransactionCapability } from '../../ports/database.js';
 
 /**

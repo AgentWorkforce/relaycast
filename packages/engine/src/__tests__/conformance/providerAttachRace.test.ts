@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createEngine } from '../../engine.js';
 import { createNodeRuntime, type NodeRuntime } from '../../adapters/node/index.js';
-import { nodeProviders, nodes } from '../../db/schema.js';
+import { nodeProviders, nodes } from '../../db/tables.js';
 import { FakeSocket, createWorkspace } from './harness.js';
 
 // File-backed so runAtomic uses isolated transactions like production (not the

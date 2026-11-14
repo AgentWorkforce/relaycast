@@ -7,7 +7,7 @@ import {
   registerAgent,
   type TestStack,
 } from './harness.js';
-import { workspaceEvents } from '../../db/schema.js';
+import { workspaceEvents } from '../../db/tables.js';
 
 interface EventLogResponse {
   ok: boolean;

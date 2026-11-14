@@ -124,7 +124,14 @@ export function createRequestHandler(ctx: GatewayContext, options: RequestHandle
   async function route(req: IncomingMessage, res: ServerResponse, url: URL, requestId: string, signal: AbortSignal, setWorkspace: (id: string) => void): Promise<void> {
     const path = url.pathname;
     if (path === ACTOR_FILE_ROUTE) {
-      return serveFile(req, res, url, { store: ctx.files, secret: ctx.config.fileSigningSecret, maxUploadBytes: ctx.config.maxUploadBytes, logger: ctx.logger });
+      return serveFile(req, res, url, {
+        store: ctx.files,
+        secret: ctx.config.fileSigningSecret,
+        maxUploadBytes: ctx.config.maxUploadBytes,
+        logger: ctx.logger,
+        // A signed key names its workspace first (`<workspace>/<file>/<name>`).
+        recordStored: (key, size) => ctx.actors.fileStored(key.split('/')[0]!, key, size),
+      });
     }
     if (req.method === 'OPTIONS') return sendPreflight(req, res);
     if (path === '/health' || path === '/healthz') return sendJson(res, 200, { ok: true, service: SERVICE_NAME });

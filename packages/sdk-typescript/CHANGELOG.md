@@ -22,15 +22,22 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 - `agent.dm(...)` / `sendTo(...)` take `replyTo` (sent as `reply_to_message_id`; the answered message's delivery becomes `replied` for its sender); `agent.reply(parentId, text)` answers its parent the same way.
 - `agent.dm(...)`, `agent.sendTo(...)`, `agent.send(...)` / `post(...)` take `waitMs` (0–2000; 1000 recommended) and return the delivery `state` the server answered with; `send` / `post` now return `PostMessageResponse` (`MessageWithMeta` plus `deliveries`, `deliveriesTruncated`). Types `SendDmOptions`, `SendMessageOptions`, `DeliveryState`, `DeliveryRepliedEvent`; `SentDelivery` / `MessageDeliveryReceipt` carry the new fields.
 - `on.deliveryReplied` (agent and relay) for the sender-side `delivery.replied` event; `on.deliveryDelivered` events carry `accepted`.
+- `relay.getAgentCard(name)` returns a local agent's A2A card (`AgentCard`), unchanged from the wire's camelCase.
+
+### Fixed
+
+- Message creation, updates, and thread WebSocket events retain arbitrary rich blocks. DM and group-DM handlers also preserve blocks when supplied by the server; DM send/storage support is unchanged.
+- Best-effort `deliver` frames (`seq: 0`, e.g. `action.completed`) are dispatched at once instead of queueing behind the agent's running handler, so a handler awaiting `on.actionCompleted` no longer deadlocks; they never run the persistence hook nor send `delivery.accepted` / `delivery.ack`.
+
+## [12.8.0] - 2026-11-04
+
+### Added
+
 - `AgentClient.messageDeliveries(messageId)` and `relay.messages.deliveries(messageId)` call `GET /v1/messages/:id/deliveries`; `on.deliveryAcked` (agent and relay) handles the sender-side `delivery.acked` event. New types `DeliveryAckedEvent`, `SentDelivery`, `MessageDeliveryReceipt`, `MessageDeliveriesResponse`; `SendDmResponse.delivery`.
 
 ### Changed
 
 - `nodes.create(data, { idempotencyKey })` no longer requires `currentToken`: without it the key makes a first enrollment recoverable (persist it before the first call and reuse it on retries).
-
-### Fixed
-
-- Best-effort `deliver` frames (`seq: 0`, e.g. `action.completed`) are dispatched at once instead of queueing behind the agent's running handler, so a handler awaiting `on.actionCompleted` no longer deadlocks; they never run the persistence hook nor send `delivery.accepted` / `delivery.ack`.
 
 ## [12.7.0] - 2026-11-03
 

@@ -9,9 +9,10 @@ import {
   deliveries,
   dmConversations,
   dmParticipants,
-} from '../db/schema.js';
+} from '../db/tables.js';
 import { runAtomicWrites } from '../ports/database.js';
 import { pendingReplyLink, repliedAtOnTransition } from './delivery.js';
+import * as sqlx from '../db/sqlx.js';
 
 type Db = ReturnType<typeof getDb>;
 
@@ -33,7 +34,7 @@ export function advanceDmParticipantReadCursor(
         SELECT ${dmConversations.id} FROM ${dmConversations}
         WHERE ${dmConversations.channelId} = ${channelId}
       )`,
-      sql`(${dmParticipants.lastReadId} IS NULL OR CAST(${dmParticipants.lastReadId} AS BIGINT) < CAST(${messageId} AS BIGINT))`,
+      sql`(${dmParticipants.lastReadId} IS NULL OR ${sqlx.castNumeric(db, dmParticipants.lastReadId)} < ${sqlx.castNumeric(db, sql`${messageId}`)})`,
       when,
     ));
 }
@@ -121,7 +122,7 @@ export async function markReadAndApplyReplies(
     // write, so no crash can strand the link on a consumed row.
     writeDb
       .update(deliveries)
-      .set({ status: 'acked', ackedAt: new Date(), repliedAt: repliedAtOnTransition(), updatedAt: new Date() })
+      .set({ status: 'acked', ackedAt: new Date(), repliedAt: repliedAtOnTransition(writeDb), updatedAt: new Date() })
       .where(consumable)
       .returning({ id: deliveries.id, repliedAt: deliveries.repliedAt }),
 
@@ -133,7 +134,7 @@ export async function markReadAndApplyReplies(
         and(
           eq(channelMembers.channelId, msg.channelId),
           eq(channelMembers.agentId, agentId),
-          sql`(${channelMembers.lastReadId} IS NULL OR CAST(${channelMembers.lastReadId} AS BIGINT) < CAST(${messageId} AS BIGINT))`,
+          sql`(${channelMembers.lastReadId} IS NULL OR ${sqlx.castNumeric(db, channelMembers.lastReadId)} < ${sqlx.castNumeric(db, sql`${messageId}`)})`,
         ),
       ),
 

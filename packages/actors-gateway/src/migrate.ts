@@ -1,0 +1,377 @@
+#!/usr/bin/env node
+/**
+ * `relaycast-migrate`: move workspaces exported from a PostgreSQL deployment
+ * (`relaycast-engine export-for-actors`) into this deployment's workspace
+ * actors.
+ *
+ *   relaycast-migrate files  --dir <export> --from <old files dir, e.g. /data/relaycast-files> [--workspace <id>]...
+ *       Copy every completed file's bytes into this deployment's file store
+ *       (RELAYCAST_FILE_STORE and its RELAYCAST_S3_* / RELAYCAST_GCS_* settings,
+ *       as the gateway reads them), verifying size and sha256 by reading each
+ *       object back. Objects already present with the same bytes are skipped.
+ *   relaycast-migrate import --dir <export> --gateway <url> [--workspace <id>]...
+ *       Send each workspace through POST /internal/workspaces/:id/import
+ *       (RELAYCAST_INTERNAL_SECRET or _FILE): begin, every block, finish. A
+ *       rerun with the same export resumes. Exits non-zero unless every
+ *       workspace finished with the manifest's counts and digests.
+ *   relaycast-migrate open   --dir <export> --gateway <url> [--workspace <id>]...
+ *       Go-live: a verified workspace starts serving (until then it answers
+ *       503, so a rollback before this loses nothing). Idempotent.
+ *   relaycast-migrate abort  --dir <export> --gateway <url> --workspace <id>
+ *       Remove a failed import's rows so the actor is empty again.
+ *   relaycast-migrate verify-realtime --gateway <url>
+ *       Realtime through the gateway, end to end: create a throwaway
+ *       workspace, stream it over /v1/ws with an observer token, post, wait
+ *       for the event, delete the workspace. Fails (exit 1) when the gateway
+ *       cannot bridge actor sockets (e.g. an unreachable control plane
+ *       public URL: see DURABLE_ACTORS_SOCKET_ORIGIN).
+ *
+ * Export blocks are sealed (`@relaycast/engine/gateway` openBlock): every
+ * command that reads them needs RELAYCAST_INTERNAL_SECRET (or _FILE). The
+ * secret travels to the gateway, so --gateway must be https unless it is a
+ * cluster-local Service or loopback address.
+ * Output is counts, ids and digests only; no credential or file content.
+ */
+import { createHash } from 'node:crypto';
+import { createReadStream } from 'node:fs';
+import { readFile, readdir, stat } from 'node:fs/promises';
+import { join, resolve, sep } from 'node:path';
+import { createInterface } from 'node:readline';
+import { pathToFileURL } from 'node:url';
+import { blockPlace, exportKey, openBlock } from '@relaycast/engine/gateway';
+import { ConfigError, secretFromEnv, type FileStoreKind } from './config.js';
+import { createFileStore, type FileStore } from './files/index.js';
+
+type Out = (line: string) => void;
+
+/** A refused command line or environment (exit 64). */
+export class UsageError extends Error {}
+
+interface ManifestTable { name: string; columns: string[]; count: number; sha256: string; blocks: number }
+interface Manifest { format: number; run_id: string; workspace_id: string; tables: ManifestTable[] }
+
+export interface MigrateArgs {
+  command: 'files' | 'import' | 'open' | 'abort' | 'verify-realtime';
+  dir: string;
+  workspaces: string[];
+  gateway?: string;
+  from?: string;
+}
+
+/**
+ * The gateway origin. The internal secret is sent to it, so plain http is
+ * accepted only for loopback and cluster-local Service names, where traffic
+ * stays inside the node or the cluster network.
+ */
+export function gatewayOrigin(value: string): string {
+  let url: URL;
+  try {
+    url = new URL(value);
+  } catch {
+    throw new UsageError('--gateway must be an absolute http(s) URL');
+  }
+  const local = url.hostname === 'localhost' || url.hostname === '127.0.0.1' || url.hostname === '[::1]'
+    || /\.svc(\.cluster\.local)?$/.test(url.hostname);
+  if (url.protocol !== 'https:' && !(url.protocol === 'http:' && local)) {
+    throw new UsageError('--gateway must be https unless it is a cluster-local Service (*.svc) or loopback: the internal secret is sent to it');
+  }
+  return url.origin;
+}
+
+export function parseArgs(argv: readonly string[]): MigrateArgs {
+  const [command, ...rest] = argv;
+  if (command !== 'files' && command !== 'import' && command !== 'open' && command !== 'abort' && command !== 'verify-realtime') {
+    throw new UsageError('usage: relaycast-migrate files|import|open|abort|verify-realtime ...');
+  }
+  const args: Partial<MigrateArgs> & { workspaces: string[] } = { command, workspaces: [] };
+  for (let i = 0; i < rest.length; i += 1) {
+    const flag = rest[i];
+    const value = rest[i + 1];
+    if (value === undefined || value.startsWith('--')) throw new UsageError(`${flag} needs a value`);
+    i += 1;
+    if (flag === '--dir') args.dir = value;
+    else if (flag === '--gateway') args.gateway = gatewayOrigin(value);
+    else if (flag === '--from') args.from = value;
+    else if (flag === '--workspace') args.workspaces.push(value);
+    else throw new UsageError(`unknown argument ${flag}`);
+  }
+  if (!args.dir && command !== 'verify-realtime') throw new UsageError('--dir is required');
+  if (command !== 'files' && !args.gateway) throw new UsageError('--gateway is required');
+  if (command === 'files' && !args.from) throw new UsageError('--from is required');
+  if (command === 'abort' && args.workspaces.length !== 1) throw new UsageError('abort takes exactly one --workspace');
+  return args as MigrateArgs;
+}
+
+async function workspaceDirs(dir: string, only: readonly string[]): Promise<string[]> {
+  if (only.length > 0) return [...only];
+  const entries = await readdir(dir, { withFileTypes: true });
+  return entries.filter((entry) => entry.isDirectory() && /^[0-9]+$/.test(entry.name)).map((entry) => entry.name).sort();
+}
+
+async function readManifest(dir: string, workspaceId: string): Promise<Manifest> {
+  const manifest = JSON.parse(await readFile(join(dir, workspaceId, 'manifest.json'), 'utf8')) as Manifest;
+  if (manifest.format !== 1 || manifest.workspace_id !== workspaceId) {
+    throw new Error(`${workspaceId}: not a format 1 export of this workspace`);
+  }
+  return manifest;
+}
+
+/** One sealed block per line, streamed (a table's file can be far larger than memory should hold) and opened. */
+async function* blocks(dir: string, workspaceId: string, table: string, key: CryptoKey): AsyncGenerator<unknown[][]> {
+  const lines = createInterface({ input: createReadStream(join(dir, workspaceId, `${table}.ndjson`), 'utf8'), crlfDelay: Infinity });
+  let seq = 0;
+  for await (const line of lines) {
+    if (!line) continue;
+    yield JSON.parse(await openBlock(key, blockPlace(workspaceId, table, seq), line)) as unknown[][];
+    seq += 1;
+  }
+}
+
+// ---------------------------------------------------------------- files
+
+/** sha256 and size of a stream. */
+async function digestStream(stream: NodeJS.ReadableStream): Promise<{ sha256: string; size: number }> {
+  const hash = createHash('sha256');
+  let size = 0;
+  for await (const chunk of stream) {
+    const bytes = chunk as Buffer;
+    size += bytes.byteLength;
+    hash.update(bytes);
+  }
+  return { sha256: hash.digest('hex'), size };
+}
+
+export async function copyFiles(args: MigrateArgs, store: FileStore, secret: string, out: Out): Promise<boolean> {
+  const root = resolve(args.from!);
+  let ok = true;
+  for (const workspaceId of await workspaceDirs(args.dir, args.workspaces)) {
+    const manifest = await readManifest(args.dir, workspaceId);
+    const columns = manifest.tables.find((table) => table.name === 'files')!.columns;
+    const at = (name: string) => 1 + columns.indexOf(name);
+    let copied = 0;
+    let present = 0;
+    let failed = 0;
+    const key = await exportKey(secret, manifest.run_id);
+    for await (const block of blocks(args.dir, workspaceId, 'files', key)) {
+      for (const row of block) {
+        if (row[at('status')] !== 'complete') continue;
+        const key = String(row[at('storage_key')]);
+        const size = Number(row[at('size_bytes')]);
+        const contentType = String(row[at('content_type')]);
+        const source = resolve(root, ...key.split('/'));
+        try {
+          if (!source.startsWith(root + sep)) throw new Error('storage key escapes the source directory');
+          const local = await stat(source);
+          if (local.size !== size) throw new Error(`source has ${local.size} bytes, the row says ${size}`);
+          const expected = await digestStream(createReadStream(source));
+          const existing = await store.get(key);
+          if (existing && existing.size === size && existing.contentType === contentType
+            && (await digestStream(existing.stream)).sha256 === expected.sha256) {
+            present += 1;
+            continue;
+          }
+          await store.put(key, createReadStream(source), { size, contentType });
+          const stored = await store.get(key);
+          if (!stored) throw new Error('object missing after upload');
+          const readBack = await digestStream(stored.stream);
+          if (readBack.size !== size || readBack.sha256 !== expected.sha256) throw new Error('object differs after upload');
+          copied += 1;
+        } catch (error) {
+          failed += 1;
+          ok = false;
+          out(`files ${workspaceId}: ${key}: ${(error as Error).message}`);
+        }
+      }
+    }
+    out(`files ${workspaceId}: ${copied} copied, ${present} already present, ${failed} failed`);
+  }
+  return ok;
+}
+
+// ---------------------------------------------------------------- import
+
+interface Envelope { ok: boolean; data?: Record<string, unknown>; error?: { code: string; message: string; details?: unknown } }
+
+async function send(args: MigrateArgs, secret: string, workspaceId: string, body: unknown): Promise<{ status: number; json: Envelope }> {
+  for (let attempt = 1; ; attempt += 1) {
+    try {
+      const response = await fetch(`${args.gateway}/internal/workspaces/${workspaceId}/import`, {
+        method: 'POST',
+        headers: { authorization: `Bearer ${secret}`, 'content-type': 'application/json' },
+        body: JSON.stringify(body),
+        redirect: 'manual',
+      });
+      const json = (await response.json().catch(() => ({ ok: false, error: { code: 'not_json', message: `HTTP ${response.status}` } }))) as Envelope;
+      // The gateway's 502/503 (actor host unavailable) is retried: every step is idempotent.
+      if ((response.status === 502 || response.status === 503) && attempt < 5) {
+        await new Promise((r) => setTimeout(r, 2000 * attempt));
+        continue;
+      }
+      return { status: response.status, json };
+    } catch (error) {
+      if (attempt >= 5) throw error;
+      await new Promise((r) => setTimeout(r, 2000 * attempt));
+    }
+  }
+}
+
+export async function importWorkspaces(args: MigrateArgs, secret: string, out: Out): Promise<boolean> {
+  let ok = true;
+  for (const workspaceId of await workspaceDirs(args.dir, args.workspaces)) {
+    const manifest = await readManifest(args.dir, workspaceId);
+    const fail = (what: string, result: { status: number; json: Envelope }) => {
+      ok = false;
+      out(`import ${workspaceId}: ${what} failed (HTTP ${result.status} ${result.json.error?.code ?? ''}: ${result.json.error?.message ?? ''})`);
+      if (result.json.error?.details !== undefined) out(`import ${workspaceId}: details ${JSON.stringify(result.json.error.details)}`);
+    };
+    const begun = await send(args, secret, workspaceId, {
+      op: 'begin',
+      run_id: manifest.run_id,
+      tables: manifest.tables.map(({ name, columns }) => ({ name, columns })),
+    });
+    if (begun.status !== 200 && begun.status !== 201) {
+      fail('begin', begun);
+      continue;
+    }
+    const status = begun.json.data?.status;
+    if (status === 'complete') {
+      out(`import ${workspaceId}: already imported and open (run ${manifest.run_id})`);
+      continue;
+    }
+    const key = await exportKey(secret, manifest.run_id);
+    // Verified already: skip the blocks, `finish` replays the verification.
+    const done = (status === 'verified' ? {} : begun.json.data?.tables ?? {}) as Record<string, { chunks: number }>;
+    let sent = 0;
+    let failed = false;
+    for (const table of status === 'verified' ? [] : manifest.tables) {
+      let seq = 0;
+      for await (const rows of blocks(args.dir, workspaceId, table.name, key)) {
+        if (seq >= (done[table.name]?.chunks ?? 0)) {
+          const result = await send(args, secret, workspaceId, { op: 'chunk', run_id: manifest.run_id, table: table.name, seq, rows });
+          if (result.status !== 200) {
+            fail(`${table.name} block ${seq}`, result);
+            failed = true;
+            break;
+          }
+          sent += 1;
+        }
+        seq += 1;
+      }
+      if (failed) break;
+    }
+    if (failed) continue;
+    const finished = await send(args, secret, workspaceId, {
+      op: 'finish',
+      run_id: manifest.run_id,
+      manifest: Object.fromEntries(manifest.tables.map(({ name, count, sha256 }) => [name, { count, sha256 }])),
+    });
+    if (finished.status !== 200) {
+      fail('finish', finished);
+      continue;
+    }
+    const rows = manifest.tables.reduce((sum, table) => sum + table.count, 0);
+    out(`import ${workspaceId}: verified ${rows} rows in ${manifest.tables.length} tables (${sent} blocks sent); closed until open`);
+  }
+  return ok;
+}
+
+/** Go-live for every (or each named) workspace of the export. */
+export async function openWorkspaces(args: MigrateArgs, secret: string, out: Out): Promise<boolean> {
+  let ok = true;
+  for (const workspaceId of await workspaceDirs(args.dir, args.workspaces)) {
+    const manifest = await readManifest(args.dir, workspaceId);
+    const result = await send(args, secret, workspaceId, { op: 'open', run_id: manifest.run_id });
+    if (result.status === 200) out(`open ${workspaceId}: serving`);
+    else {
+      ok = false;
+      out(`open ${workspaceId}: failed (HTTP ${result.status} ${result.json.error?.code ?? ''}: ${result.json.error?.message ?? ''})`);
+    }
+  }
+  return ok;
+}
+
+export async function abortImport(args: MigrateArgs, secret: string, out: Out): Promise<boolean> {
+  const [workspaceId] = args.workspaces;
+  const manifest = await readManifest(args.dir, workspaceId!);
+  const result = await send(args, secret, workspaceId!, { op: 'abort', run_id: manifest.run_id });
+  out(`abort ${workspaceId}: HTTP ${result.status} ${result.json.ok ? 'aborted' : result.json.error?.code ?? ''}`);
+  return result.status === 200;
+}
+
+export async function verifyRealtime(args: MigrateArgs, secret: string, out: Out, timeoutMs = 30_000): Promise<boolean> {
+  const call = async (method: string, path: string, token: string, body?: unknown) => {
+    const response = await fetch(`${args.gateway}${path}`, {
+      method,
+      headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
+      ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+      redirect: 'manual',
+    });
+    const json = (await response.json().catch(() => ({}))) as Envelope;
+    if (!response.ok) throw new Error(`${method} ${path}: HTTP ${response.status} ${json.error?.code ?? ''}`);
+    return (json.data ?? {}) as Record<string, string>;
+  };
+  let workspaceId: string | undefined;
+  try {
+    const workspace = await call('POST', '/internal/workspaces', secret, { name: 'relaycast-migrate-verify-realtime' });
+    workspaceId = workspace.workspace_id;
+    const key = workspace.api_key!;
+    const agent = await call('POST', '/v1/agents', key, { name: 'verify-realtime' });
+    const observer = await call('POST', '/v1/observer-tokens', key, { name: 'verify-realtime', scopes: ['stream:read', 'messages:read', 'channels:read'] });
+    const text = `verify-realtime ${Date.now()}`;
+    const socket = new WebSocket(`${args.gateway!.replace(/^http/, 'ws')}/v1/ws?token=${encodeURIComponent(observer.token!)}`);
+    const opened = new Promise<void>((resolve, reject) => {
+      socket.addEventListener('open', () => resolve());
+      socket.addEventListener('error', () => reject(new Error('the /v1/ws upgrade failed')));
+    });
+    const received = new Promise<void>((resolve, reject) => {
+      const timer = setTimeout(() => reject(new Error(`no realtime event within ${timeoutMs} ms`)), timeoutMs);
+      socket.addEventListener('message', (event) => { if (String(event.data).includes(text)) { clearTimeout(timer); resolve(); } });
+      socket.addEventListener('close', (event) => { clearTimeout(timer); reject(new Error(`the socket closed (${event.code}${event.reason ? ` ${event.reason}` : ''})`)); });
+    });
+    received.catch(() => {});
+    await call('POST', '/v1/channels', agent.token!, { name: 'verify-realtime' });
+    await opened;
+    socket.send(JSON.stringify({ type: 'subscribe', channels: ['verify-realtime'] }));
+    await new Promise((resolve) => setTimeout(resolve, 1000));
+    await call('POST', '/v1/channels/verify-realtime/messages', agent.token!, { text });
+    await received;
+    socket.close();
+    out('verify-realtime: a new post streamed over /v1/ws through the gateway');
+    return true;
+  } catch (error) {
+    out(`verify-realtime: FAILED: ${(error as Error).message}`);
+    return false;
+  } finally {
+    if (workspaceId) await call('DELETE', `/internal/workspaces/${workspaceId}`, secret).catch(() => out('verify-realtime: could not delete the throwaway workspace'));
+  }
+}
+
+export async function main(argv: readonly string[], env: NodeJS.ProcessEnv = process.env, out: Out = (line) => process.stdout.write(`${line}\n`)): Promise<number> {
+  let args: MigrateArgs;
+  try {
+    args = parseArgs(argv);
+  } catch (error) {
+    out(`relaycast-migrate: ${(error as Error).message}`);
+    return 64;
+  }
+  try {
+    const secret = secretFromEnv(env, 'RELAYCAST_INTERNAL_SECRET');
+    if (!secret) throw new UsageError('RELAYCAST_INTERNAL_SECRET (or _FILE) is required');
+    if (args.command === 'files') {
+      const kind = (env.RELAYCAST_FILE_STORE ?? 'local') as FileStoreKind;
+      if (kind === 'local' && !env.RELAYCAST_FILE_DIR) throw new UsageError('RELAYCAST_FILE_DIR is required for a local file store');
+      const store = createFileStore({ kind, fileDir: env.RELAYCAST_FILE_DIR ?? '', env });
+      return (await copyFiles(args, store, secret, out)) ? 0 : 1;
+    }
+    if (args.command === 'verify-realtime') return (await verifyRealtime(args, secret, out)) ? 0 : 1;
+    if (args.command === 'open') return (await openWorkspaces(args, secret, out)) ? 0 : 1;
+    return (await (args.command === 'import' ? importWorkspaces(args, secret, out) : abortImport(args, secret, out))) ? 0 : 1;
+  } catch (error) {
+    out(`relaycast-migrate: ${(error as Error).message}`);
+    return error instanceof UsageError || error instanceof ConfigError ? 64 : 1;
+  }
+}
+
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+  process.exitCode = await main(process.argv.slice(2));
+}

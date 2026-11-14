@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { eq } from 'drizzle-orm';
-import { agents } from '../../db/schema.js';
+import { agents } from '../../db/tables.js';
 import { invokeAction } from '../../engine/action.js';
 import { createTrigger, fireMessageTriggers, type TriggerMessageInput } from '../../engine/trigger.js';
 import { createWorkspace, makeNodeStack, registerAgent, type TestStack } from './harness.js';

@@ -1,0 +1,50 @@
+{
+  "id": "compact_pgjgx84gvbeo",
+  "version": 1,
+  "type": "compacted",
+  "compactedAt": "2026-11-08T17:39:17.306Z",
+  "sourceTrajectories": [
+    "traj_6zg3szo8obnb"
+  ],
+  "dateRange": {
+    "start": "2026-11-08T17:36:14.075Z",
+    "end": "2026-11-08T17:38:28.817Z"
+  },
+  "summary": {
+    "totalDecisions": 1,
+    "totalEvents": 1,
+    "uniqueAgents": [
+      "default"
+    ]
+  },
+  "decisionGroups": [
+    {
+      "category": "api",
+      "decisions": [
+        {
+          "question": "Project workspace versions onto the source lock and validate the exact commit before publishing",
+          "chosen": "Project workspace versions onto the source lock and validate the exact commit before publishing",
+          "reasoning": "Avoid dependency re-resolution and flag repair. Move the existing exact validator and full-history checkout to build, transport the prevalidated metadata commit with a bundle bound to an independent job-output digest, and restore it after publication. Keep integration fixtures in PR CI to avoid adding release build/test/pack work.",
+          "fromTrajectory": "traj_6zg3szo8obnb"
+        }
+      ]
+    }
+  ],
+  "keyLearnings": [],
+  "keyFindings": [],
+  "filesAffected": [
+    ".github/workflows/ci.yml",
+    ".github/workflows/publish-npm.yml",
+    "CHANGELOG.md",
+    "package.json",
+    "scripts/prepared-release.mjs",
+    "scripts/prepared-release.test.mjs",
+    "scripts/project-release-lock.mjs",
+    "scripts/project-release-lock.test.mjs",
+    "scripts/release-workflow-contract.test.mjs",
+    "scripts/restore-release-lock-metadata.mjs"
+  ],
+  "commits": [
+    "4822281"
+  ]
+}

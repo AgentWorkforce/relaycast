@@ -67,7 +67,7 @@ function sleep(ms: number): Promise<void> {
 
 /** Retry a D1 write only for Cloudflare's documented transient error classes. */
 export async function retryD1Write<T>(
-  write: () => Promise<T>,
+  write: () => PromiseLike<T>,
   maxAttempts = 5,
 ): Promise<T> {
   for (let attempt = 1; ; attempt += 1) {

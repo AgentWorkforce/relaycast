@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { eq } from 'drizzle-orm';
-import { agents, channelMembers } from '../../db/schema.js';
+import { agents, channelMembers } from '../../db/tables.js';
 import { makeNodeStack, createWorkspace, FakeSocket, type TestStack } from './harness.js';
 
 describe('authenticated node registration contract', () => {

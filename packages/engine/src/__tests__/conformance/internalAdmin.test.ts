@@ -56,6 +56,7 @@ describe('internal admin API', () => {
         ['/workspaces', 'POST'],
         ['/workspaces/ws1', 'DELETE'],
         ['/workspaces/ws1/api-key', 'POST'],
+        ['/workspaces/ws1/expiry', 'POST'],
       ] as const) {
         const res = await internal(path, { method, body: method === 'POST' ? {} : undefined });
         expect(res.status).toBe(404);
@@ -88,7 +89,7 @@ describe('internal admin API', () => {
           revocation_markers: true,
           previous_key_slot: true,
         },
-        workspace_admin: { create: true, delete: true, server_minted_key: true },
+        workspace_admin: { create: true, delete: true, server_minted_key: true, expiry: true },
       });
     });
 
@@ -130,6 +131,54 @@ describe('internal admin API', () => {
       expect((await stack.app.request('/v1/inbox', {
         headers: { authorization: `Bearer ${alice.token}` },
       })).status).toBe(401);
+    });
+
+    it('extends and clears a live workspace deadline, and never revives an expired or deleted one', async () => {
+      vi.useFakeTimers({ toFake: ['Date'] });
+      try {
+        stack = makeNodeStack({ internalSecret: SECRET });
+        const created = await stack.app.request('/v1/workspaces', {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ name: 'temp', expires_in_seconds: 3600 }),
+        });
+        expect(created.status).toBe(201);
+        const ws = await data<{ workspace_id: string; api_key: string; expires_at: string }>(created);
+        const expiry = (id: string, expires_in_seconds: unknown) =>
+          internal(`/workspaces/${id}/expiry`, { method: 'POST', body: { expires_in_seconds } });
+
+        // Extend: seven days from now.
+        const extended = await expiry(ws.workspace_id, 7 * 86400);
+        expect(extended.status).toBe(200);
+        const { expires_at } = await data<{ expires_at: string }>(extended);
+        expect(Date.parse(expires_at) - Date.now()).toBeGreaterThan(7 * 86400 * 1000 - 5000);
+        vi.setSystemTime(Date.now() + 2 * 3600 * 1000); // past the original hour
+        expect((await readWorkspace(ws.api_key)).status).toBe(200);
+
+        // Claim: no deadline at all.
+        const cleared = await expiry(ws.workspace_id, null);
+        expect(await data(cleared)).toEqual({ workspace_id: ws.workspace_id, expires_at: null });
+        vi.setSystemTime(Date.now() + 30 * 86400 * 1000);
+        expect((await readWorkspace(ws.api_key)).status).toBe(200);
+
+        // Validation, unknown ids.
+        expect((await expiry(ws.workspace_id, 10)).status).toBe(400);
+        expect((await expiry(ws.workspace_id, 91 * 86400)).status).toBe(400);
+        expect((await expiry(ws.workspace_id, '600')).status).toBe(400);
+        expect((await internal(`/workspaces/${ws.workspace_id}/expiry`, { method: 'POST', body: {} })).status).toBe(400);
+        expect((await expiry('nope', 600)).status).toBe(404);
+        expect((await internal(`/workspaces/${ws.workspace_id}/expiry`, { method: 'POST', body: { expires_in_seconds: 600 }, secret: ws.api_key })).status).toBe(401);
+
+        // A workspace past its deadline stays expired.
+        await expiry(ws.workspace_id, 60);
+        vi.setSystemTime(Date.now() + 120 * 1000);
+        const revived = await expiry(ws.workspace_id, null);
+        expect(revived.status).toBe(409);
+        expect(await revived.json()).toMatchObject({ ok: false, error: { code: 'workspace_expired' } });
+        expect((await readWorkspace(ws.api_key)).status).toBe(401);
+      } finally {
+        vi.useRealTimers();
+      }
     });
 
     it('validates delete ids and fences a concurrent key push', async () => {

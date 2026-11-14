@@ -36,7 +36,7 @@ import {
   WORKSPACE_EVENT_LIST_MAX_LIMIT,
   type WorkspaceEventRecord,
 } from '../engine/workspaceEvents.js';
-import { channels, type WorkspaceProvenanceRecord } from '../db/schema.js';
+import { channels, type WorkspaceProvenanceRecord } from '../db/tables.js';
 import { and, eq, inArray } from 'drizzle-orm';
 import { emitServerEvent } from '../lib/serverTelemetry.js';
 import { asCodedError, errorResponse, safeErrorDiagnostics } from '../lib/httpError.js';

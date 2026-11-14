@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { and, eq } from 'drizzle-orm';
 import { FLEET_DELIVERY_CURSOR_CAPABILITY } from '@relaycast/types';
 import { createWorkspace, FakeSocket, makeNodeStack, type TestStack } from './harness.js';
-import { actionInvocations, agentNodeBindings, agents } from '../../db/schema.js';
+import { actionInvocations, agentNodeBindings, agents } from '../../db/tables.js';
 import { ACTION_DISPATCH_TIMEOUT_MS } from '../../engine/action.js';
 
 type Workspace = Awaited<ReturnType<typeof createWorkspace>>;

@@ -2,8 +2,8 @@ import { and, eq, or, gt, isNull, inArray, ne } from 'drizzle-orm';
 import { OBSERVER_SCOPES } from '@relaycast/types';
 import type { ObserverScope as SharedObserverScope } from '@relaycast/types';
 import type { getDb } from '../db/index.js';
-import { channels, dmConversations, files as fileRows, messageAttachments, messages, observerTokens } from '../db/schema.js';
-import type { ObserverTokenFilters } from '../db/schema.js';
+import { channels, dmConversations, files as fileRows, messageAttachments, messages, observerTokens } from '../db/tables.js';
+import type { ObserverTokenFilters } from '../db/tables.js';
 import { sha256Hex } from '../lib/crypto.js';
 import { codedError } from '../lib/httpError.js';
 import { generateId } from './snowflake.js';
@@ -167,6 +167,7 @@ export function isObserverTokenNameConflict(err: unknown): boolean {
     );
     const isGenericUniqueViolation = (
       candidate.code === 'SQLITE_CONSTRAINT_UNIQUE'
+      || candidate.code === '23505'
       || lowerMessage.includes('unique constraint failed')
       || (candidate.code === 'SQLITE_CONSTRAINT' && lowerMessage.includes('unique'))
     );

@@ -4,7 +4,7 @@ import type { Context } from 'hono';
 import { and, eq } from 'drizzle-orm';
 import { z } from 'zod';
 import type { AppEnv } from '../env.js';
-import { a2aAgents, a2aInbound, agents, messages, workspaces } from '../db/schema.js';
+import { a2aAgents, a2aInbound, agents, messages, workspaces } from '../db/tables.js';
 import { requireAuth, hashToken } from '../middleware/auth.js';
 import {
   authenticateUnexpired,

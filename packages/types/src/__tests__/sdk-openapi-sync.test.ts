@@ -25,6 +25,9 @@ const IGNORED_SEGMENTS = new Set([
 
 const NON_SDK_OPENAPI_PATHS = new Set([
   '/v1/health',
+  // Orchestrator readiness/liveness probes, not an agent-SDK surface.
+  '/v1/health/ready',
+  '/v1/health/live',
   '/v1/.well-known/agent-card.json',
   // Path-scoped form of the same unauthenticated A2A discovery endpoint. Served
   // for counterparties that name the workspace explicitly; like the bare form
@@ -44,6 +47,10 @@ const NON_SDK_OPENAPI_PATHS = new Set([
   // node-providers work; the engine surface ships first.
   '/v1/nodes/{param}/actions/{param}/invoke',
   '/v1/nodes/{param}/providers/{param}',
+  // Service-caller spawn transport: consumed by Relay's node/core bridge for
+  // exact-node invocation and receipt recovery, not by the public agent SDKs.
+  '/v1/actions/spawn/strict-invoke',
+  '/v1/actions/spawn/replay',
   // Operator-only, one-time recovery for legacy registrations. Agent SDKs do
   // not expose it because normal registration establishes the verifier.
   '/v1/agents/{param}/legacy-identity',
@@ -61,6 +68,8 @@ const NON_SDK_OPENAPI_PATHS = new Set([
   '/v1/internal/workspaces',
   '/v1/internal/workspaces/{param}',
   '/v1/internal/workspaces/{param}/api-key',
+  '/v1/internal/workspaces/{param}/expiry',
+  '/v1/internal/workspaces/{param}/import',
 ]);
 
 const CORE_SDK_PATHS = new Set([

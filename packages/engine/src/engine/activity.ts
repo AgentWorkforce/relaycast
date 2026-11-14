@@ -1,6 +1,6 @@
 import { eq, desc } from 'drizzle-orm';
 import type { getDb } from '../db/index.js';
-import { messages, channels, agents, dmConversations } from '../db/schema.js';
+import { messages, channels, agents, dmConversations } from '../db/tables.js';
 
 type Db = ReturnType<typeof getDb>;
 

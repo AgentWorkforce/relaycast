@@ -54,7 +54,7 @@ describe('internal admin API', () => {
     const response = await fetch(`${harness.baseUrl}/internal/capabilities`, { headers: { authorization: `Bearer ${INTERNAL_SECRET}` } });
     expect(response.status).toBe(200);
     expect(await readJson(response)).toEqual({ ok: true, data: INTERNAL_CAPABILITIES });
-    expect(INTERNAL_CAPABILITIES.workspace_admin).toEqual({ create: true, delete: true, server_minted_key: true });
+    expect(INTERNAL_CAPABILITIES.workspace_admin).toEqual({ create: true, delete: true, server_minted_key: true, expiry: true });
   });
 
   it('creates a workspace: the gateway mints the id and tag, the actor answers 201', async () => {
@@ -174,7 +174,7 @@ describe('internal admin API', () => {
     expect(harness.controlPlane.invocations).toHaveLength(0);
   });
 
-  it('forwards delete and key push to the named workspace actor with the Authorization header', async () => {
+  it('forwards delete, key push and expiry to the named workspace actor with the Authorization header', async () => {
     harness = await startHarness({ workspace: adminWorkspace, env: { RELAYCAST_INTERNAL_SECRET: INTERNAL_SECRET } });
     const deleted = await fetch(`${harness.baseUrl}/internal/workspaces/${WORKSPACE_ID}`, { method: 'DELETE', headers: { authorization: `Bearer ${INTERNAL_SECRET}` } });
     expect(deleted.status).toBe(200);
@@ -187,7 +187,14 @@ describe('internal admin API', () => {
     });
     expect(pushed.status).toBe(200);
     expect((await readJson(pushed)).data).toMatchObject({ url: `${harness.baseUrl}/internal/workspaces/${WORKSPACE_ID}/api-key`, body: '{"key_generation":2}' });
-    expect(harness.controlPlane.invocations.map((call) => [call.method, call.actorId])).toEqual([['handle', WORKSPACE_ID], ['handle', WORKSPACE_ID]]);
+    const expiry = await fetch(`${harness.baseUrl}/internal/workspaces/${WORKSPACE_ID}/expiry`, {
+      method: 'POST',
+      headers: { authorization: `Bearer ${INTERNAL_SECRET}`, 'content-type': 'application/json' },
+      body: JSON.stringify({ expires_in_seconds: null }),
+    });
+    expect(expiry.status).toBe(200);
+    expect((await readJson(expiry)).data).toMatchObject({ url: `${harness.baseUrl}/internal/workspaces/${WORKSPACE_ID}/expiry`, body: '{"expires_in_seconds":null}' });
+    expect(harness.controlPlane.invocations.map((call) => [call.method, call.actorId])).toEqual([['handle', WORKSPACE_ID], ['handle', WORKSPACE_ID], ['handle', WORKSPACE_ID]]);
   });
 
   it('answers 400 for a workspace id segment whose percent-encoding is malformed', async () => {
@@ -226,5 +233,36 @@ describe('internal admin API', () => {
     const unknown = await fetch(`${harness.baseUrl}/internal/other`, { headers: { authorization: `Bearer ${INTERNAL_SECRET}` } });
     expect(unknown.status).toBe(404);
     expect(harness.controlPlane.invocations).toHaveLength(0);
+  });
+
+  it('forwards a migration import step to the actor for that id, with the tag its keyring signs', async () => {
+    const seen: { body: unknown; tag: string }[] = [];
+    harness = await startHarness({
+      workspace: (id) => ({
+        ...adminWorkspace(id),
+        importData: (body, tag) => {
+          seen.push({ body, tag });
+          return jsonResponse(201, { ok: true, data: { run_id: 'run-0001-import', status: 'in_progress' } });
+        },
+      }),
+      env: { RELAYCAST_INTERNAL_SECRET: INTERNAL_SECRET },
+    });
+    const post = (path: string, body: unknown, secret = INTERNAL_SECRET) => fetch(`${harness!.baseUrl}${path}`, {
+      method: 'POST',
+      headers: { authorization: `Bearer ${secret}`, 'content-type': 'application/json' },
+      body: typeof body === 'string' ? body : JSON.stringify(body),
+    });
+    const begin = { op: 'begin', run_id: 'run-0001-import', tables: [{ name: 'workspaces', columns: ['id'] }] };
+
+    expect((await post(`/internal/workspaces/${WORKSPACE_ID}/import`, begin, 'wrong-secret')).status).toBe(401);
+    expect((await post('/internal/workspaces/not-a-snowflake/import', begin)).status).toBe(400);
+    expect((await post(`/internal/workspaces/${WORKSPACE_ID}/import`, '{nope')).status).toBe(400);
+    expect(seen).toHaveLength(0);
+
+    const response = await post(`/internal/workspaces/${WORKSPACE_ID}/import`, begin);
+    expect(response.status).toBe(201);
+    expect((await readJson(response)).data).toEqual({ run_id: 'run-0001-import', status: 'in_progress' });
+    expect(seen).toEqual([{ body: begin, tag: await harness.signer.tag(WORKSPACE_ID) }]);
+    expect(harness.controlPlane.invocations.at(-1)).toMatchObject({ actorId: WORKSPACE_ID, method: 'importData' });
   });
 });

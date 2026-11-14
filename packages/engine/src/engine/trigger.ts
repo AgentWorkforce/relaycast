@@ -1,6 +1,6 @@
 import { and, eq, isNull, lt, or } from 'drizzle-orm';
 import type { getDb } from '../db/index.js';
-import { triggers } from '../db/schema.js';
+import { triggers } from '../db/tables.js';
 import { codedError } from '../lib/httpError.js';
 import type { NodeConnectionRegistry } from '../ports/realtime.js';
 import { generateId } from './snowflake.js';

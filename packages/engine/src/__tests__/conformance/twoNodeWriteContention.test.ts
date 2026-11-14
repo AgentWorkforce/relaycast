@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createEngine } from '../../engine.js';
 import { createNodeRuntime, type NodeRuntime } from '../../adapters/node/index.js';
-import { nodes } from '../../db/schema.js';
+import { nodes } from '../../db/tables.js';
 import { enqueueEvent, sweepPendingEvents } from '../../engine/eventQueue.js';
 import { FakeSocket, createWorkspace } from './harness.js';
 

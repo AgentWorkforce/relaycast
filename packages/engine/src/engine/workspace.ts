@@ -1,7 +1,7 @@
 import { WorkspaceMetadataSchema } from '@relaycast/types';
 import { and, asc, eq, gt, inArray, isNull, like, lte, or, sql } from 'drizzle-orm';
 import type { getDb } from '../db/index.js';
-import { workspaces, channels, fileCleanupQueue, workspaceEvents, workspaceCreateIdempotency } from '../db/schema.js';
+import { workspaces, channels, fileCleanupQueue, workspaceEvents, workspaceCreateIdempotency } from '../db/tables.js';
 import { constantTimeEqual, hmacSha256Hex, sha256Hex } from '../lib/crypto.js';
 import { generateId } from './snowflake.js';
 import { derivationFamilies, credentialFormat, credentialFromHex, credentialTagger, issueCredential, type DerivationFamily } from '../auth/credentials.js';
@@ -9,7 +9,7 @@ import { codedError } from '../lib/httpError.js';
 import { D1WriteRetryExhaustedError, retryD1Write } from '../lib/d1Retry.js';
 import { runAtomicWrites } from '../ports/database.js';
 import type { FileStorage } from '../ports/files.js';
-import type { WorkspaceProvenanceRecord } from '../db/schema.js';
+import type { WorkspaceProvenanceRecord } from '../db/tables.js';
 import { resolveEffectiveMessageRetention } from './retention.js';
 import { reportEngineProgress, withEngineOperation } from '../lib/engineDiagnostics.js';
 import {
@@ -273,6 +273,7 @@ function isUniqueConstraintError(error: unknown): boolean {
     if (
       code === 'SQLITE_CONSTRAINT_UNIQUE' ||
       code === 'SQLITE_CONSTRAINT_PRIMARYKEY' ||
+      code === '23505' ||
       (
         code === 'SQLITE_CONSTRAINT' &&
         (message.includes('unique constraint failed') || message.includes('sqlite_constraint_unique'))

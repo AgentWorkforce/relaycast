@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { eq } from 'drizzle-orm';
 import { makeNodeStack, createWorkspace, registerAgent, FakeSocket, type TestStack } from './harness.js';
-import { actionInvocations, actions, agentNodeBindings, agents, nodes, workspaceEvents } from '../../db/schema.js';
+import { actionInvocations, actions, agentNodeBindings, agents, nodes, workspaceEvents } from '../../db/tables.js';
 import { claimNodeOffline, deleteNode as deleteNodeById } from '../../engine/node.js';
 import { emitNodeStatusEffects } from '../../engine/invocationCompletion.js';
 import { NODE_LIVENESS_TTL_MS } from '../../engine/placement.js';

@@ -43,6 +43,8 @@ export interface HarnessOptions {
   controlPlane?: Partial<Omit<FakeControlPlaneOptions, 'workspace'>>;
   workspace?: FakeControlPlaneOptions['workspace'];
   gateway?: GatewayOptions;
+  /** Dial actor sockets through the fake control plane's own origin (DURABLE_ACTORS_SOCKET_ORIGIN). */
+  socketOriginIsControlPlane?: boolean;
 }
 
 export async function startHarness(options: HarnessOptions = {}): Promise<Harness> {
@@ -51,7 +53,12 @@ export async function startHarness(options: HarnessOptions = {}): Promise<Harnes
     workspace: options.workspace ?? (() => undefined),
   });
   const fileDir = await mkdtemp(join(tmpdir(), 'relaycast-gateway-files-'));
-  const env = baseEnv(controlPlane.url, { RELAYCAST_FILE_DIR: fileDir, RELAYCAST_SHUTDOWN_GRACE_MS: '500', ...options.env });
+  const env = baseEnv(controlPlane.url, {
+    RELAYCAST_FILE_DIR: fileDir,
+    RELAYCAST_SHUTDOWN_GRACE_MS: '500',
+    ...(options.socketOriginIsControlPlane ? { DURABLE_ACTORS_SOCKET_ORIGIN: controlPlane.url } : {}),
+    ...options.env,
+  });
   const config = loadConfig(env);
   const logs: Record<string, unknown>[] = [];
   const logger = createLogger({ format: 'json', write: (line) => { logs.push(JSON.parse(line) as Record<string, unknown>); } });

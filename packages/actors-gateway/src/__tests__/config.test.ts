@@ -180,3 +180,13 @@ describe('configuration', () => {
     expect(secretFromEnv({ X: '   ' }, 'X', readFile)).toBeUndefined();
   });
 });
+
+describe('DURABLE_ACTORS_SOCKET_ORIGIN', () => {
+  it('is optional, normalized to an origin, and refuses a path', async () => {
+    const { loadConfig, ConfigError } = await import('../config.js');
+    const { baseEnv } = await import('./harness.js');
+    expect(loadConfig(baseEnv('http://127.0.0.1:1')).socketOrigin).toBeUndefined();
+    expect(loadConfig(baseEnv('http://127.0.0.1:1', { DURABLE_ACTORS_SOCKET_ORIGIN: 'http://cp.ns.svc:7100/' })).socketOrigin).toBe('http://cp.ns.svc:7100');
+    expect(() => loadConfig(baseEnv('http://127.0.0.1:1', { DURABLE_ACTORS_SOCKET_ORIGIN: 'http://cp.ns.svc:7100/x' }))).toThrow(ConfigError);
+  });
+});
