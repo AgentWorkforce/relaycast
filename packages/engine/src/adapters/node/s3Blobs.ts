@@ -149,6 +149,33 @@ export class S3BlobStore implements FileBlobStore {
     }));
   }
 
+  /**
+   * Create-only PutObject (If-None-Match: *). Returns false, writing nothing,
+   * when the key already exists: S3 answers 412 PreconditionFailed, or 409
+   * ConditionalRequestConflict when a concurrent write to the key is in flight.
+   */
+  async writeIfAbsent(key: string, bytes: Buffer, contentType: string): Promise<boolean> {
+    const Key = objectName(this.prefix, key);
+    const { sdk, client } = await this.load();
+    try {
+      await client.send(new sdk.PutObjectCommand({
+        Bucket: this.bucket,
+        Key,
+        Body: bytes,
+        ContentType: contentType || DEFAULT_CONTENT_TYPE,
+        ContentLength: bytes.byteLength,
+        ChecksumSHA256: sha256Base64(bytes),
+        IfNoneMatch: '*',
+      }));
+      return true;
+    } catch (error) {
+      const e = error as { name?: unknown; $metadata?: { httpStatusCode?: unknown } } | null;
+      const status = e?.$metadata?.httpStatusCode;
+      if (e?.name === 'PreconditionFailed' || e?.name === 'ConditionalRequestConflict' || status === 412 || status === 409) return false;
+      throw error;
+    }
+  }
+
   async read(key: string): Promise<{ bytes: Buffer; contentType: string } | null> {
     const Key = objectName(this.prefix, key);
     const { sdk, client } = await this.load();

@@ -51,7 +51,15 @@ async function listFiles(dir: string): Promise<Set<string>> {
   const found = new Set<string>();
   const walk = async (path: string): Promise<void> => {
     let entries;
-    try { entries = await readdir(path, { withFileTypes: true }); } catch { return; }
+    try {
+      entries = await readdir(path, { withFileTypes: true });
+    } catch (error) {
+      // Only a directory that does not exist (yet, or any more) is empty.
+      // EACCES, EIO and the like must fail the migration: treating them as
+      // empty would skip comparing those files and let it exit 0.
+      if ((error as NodeJS.ErrnoException)?.code === 'ENOENT') return;
+      throw new Error(`cannot read ${path}: ${error instanceof Error ? error.message : String(error)}`, { cause: error });
+    }
     for (const entry of entries) {
       const full = join(path, entry.name);
       if (entry.isDirectory()) await walk(full);
@@ -132,7 +140,14 @@ export async function migrateLocalFilesToS3(opts: {
       if (row.status === 'complete' && onDisk.bytes.byteLength !== row.sizeBytes) {
         throw new Error(`local file is ${onDisk.bytes.byteLength} bytes, the row says ${row.sizeBytes}`);
       }
-      await opts.store.write(key, onDisk.bytes, onDisk.contentType);
+      // Create-only: a live server may have stored newer bytes for this key
+      // since the absence check. Never replace them; compare instead.
+      if (!(await opts.store.writeIfAbsent(key, onDisk.bytes, onDisk.contentType))) {
+        const now = await opts.store.statWithChecksum(key);
+        if (now && (await bucketMatches(opts.store, key, onDisk.bytes, now))) summary.alreadyPresent += 1;
+        else summary.mismatched.push(key);
+        return;
+      }
       const written = await opts.store.statWithChecksum(key);
       if (!written || !(await bucketMatches(opts.store, key, onDisk.bytes, written))) {
         throw new Error('uploaded object does not match the local bytes');

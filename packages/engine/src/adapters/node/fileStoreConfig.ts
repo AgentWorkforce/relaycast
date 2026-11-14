@@ -52,6 +52,10 @@ export function loadFileStoreConfig(env: NodeJS.ProcessEnv, defaultDir: string):
     let url: URL;
     try { url = new URL(endpoint); } catch { throw new ConfigError('RELAYCAST_FILE_S3_ENDPOINT must be a URL'); }
     if (url.protocol !== 'https:' && url.protocol !== 'http:') throw new ConfigError('RELAYCAST_FILE_S3_ENDPOINT must be http(s)');
+    // The endpoint is logged at startup and by the migration: it must carry no
+    // secret. Credentials come from the AWS SDK's default chain, never the URL.
+    if (url.username || url.password) throw new ConfigError('RELAYCAST_FILE_S3_ENDPOINT must not contain credentials; use the AWS SDK credential chain');
+    if (url.search || url.hash) throw new ConfigError('RELAYCAST_FILE_S3_ENDPOINT must not contain a query string or fragment');
   }
   const pathStyle = read(env, 'RELAYCAST_FILE_S3_FORCE_PATH_STYLE');
   if (pathStyle !== undefined && pathStyle !== 'true' && pathStyle !== 'false') {

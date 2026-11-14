@@ -45,5 +45,9 @@ describe('RELAYCAST_FILE_STORE', () => {
     refuse({ RELAYCAST_FILE_STORE: 's3', RELAYCAST_FILE_S3_BUCKET: 'ok-bucket', RELAYCAST_FILE_S3_REGION: 'us-east-1', RELAYCAST_FILE_S3_PREFIX: 'a/../b' }, /PREFIX/);
     refuse({ RELAYCAST_FILE_STORE: 's3', RELAYCAST_FILE_S3_BUCKET: 'ok-bucket', RELAYCAST_FILE_S3_REGION: 'us-east-1', RELAYCAST_FILE_S3_ENDPOINT: 'not a url' }, /ENDPOINT/);
     refuse({ RELAYCAST_FILE_STORE: 's3', RELAYCAST_FILE_S3_BUCKET: 'ok-bucket', RELAYCAST_FILE_S3_REGION: 'us-east-1', RELAYCAST_FILE_S3_FORCE_PATH_STYLE: 'yes' }, /FORCE_PATH_STYLE/);
+    // The endpoint is logged, so it may carry no secret.
+    const s3 = { RELAYCAST_FILE_STORE: 's3', RELAYCAST_FILE_S3_BUCKET: 'ok-bucket', RELAYCAST_FILE_S3_REGION: 'us-east-1' };
+    refuse({ ...s3, RELAYCAST_FILE_S3_ENDPOINT: 'https://user:secret@minio.internal' }, /must not contain credentials/);
+    refuse({ ...s3, RELAYCAST_FILE_S3_ENDPOINT: 'https://minio.internal/?X-Amz-Signature=abc' }, /query string or fragment/);
   });
 });
