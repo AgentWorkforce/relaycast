@@ -2,7 +2,9 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { brandSqliteEngineDb } from '../../adapters/sqlite-handle.js';
 import { drizzle } from 'drizzle-orm/better-sqlite3';
 import * as schema from '../../db/tables.js';
-import { makeNodeStack, createWorkspace, registerAgent, FakeSocket, type TestStack } from './harness.js';
+import {
+  makeNodeStack, createWorkspace, registerAgent, FakeSocket, interceptStatements, pgMode, rawAll, rawGet, type TestStack,
+} from './harness.js';
 import { handleNodeControlMessage, type WorkspaceDeadlineHolder } from '../../node-control.js';
 import { bindAgentToNode, deregisterAgentViaNode, settleNodeOffline, unbindAgentFromNode } from '../../engine/node.js';
 import { deleteAgent } from '../../engine/agent.js';
@@ -49,6 +51,15 @@ describe('node control D1 statements per frame', () => {
   function counting() {
     const statements: string[] = [];
     const raw: Array<{ sql: string; params: unknown[] }> = [];
+    if (pgMode) {
+      interceptStatements(stack, (sql, _count, params) => {
+        // Transaction control is the driver's framing, not a frame statement.
+        if (/^(begin|commit|rollback|savepoint|release)\b/i.test(sql)) return;
+        statements.push(label(sql));
+        raw.push({ sql, params: [...(params ?? [])] });
+      });
+      return { db: stack.runtime.deps.db, raw, take() { return statements.splice(0); } };
+    }
     const sqlite = stack.runtime.handle.sqlite;
     const prepare = sqlite.prepare.bind(sqlite);
     sqlite.prepare = ((sql: string) => {
@@ -115,6 +126,9 @@ describe('node control D1 statements per frame', () => {
       });
 
     await broker({ v: 1, id: 'r', type: 'node.register', name: 'nb', node_id: 'nb', provider: { name: 'broker', instance_id: 'i1' }, capabilities: brokerCapabilities, max_agents: 4, tags: [], version: 'v1', resume_cursor: null });
+    // pg drains the register frame's workspace event in the background;
+    // settle so the whole drain is counted against this frame.
+    if (pgMode) await stack.settle();
     const register = take();
     await broker(brokerBeat([]));
     take();
@@ -152,8 +166,62 @@ describe('node control D1 statements per frame', () => {
     await settleNodeOffline(db, stack.runtime.realtime, ws.workspaceId, directNodeId, { claimRevision: Number.MAX_SAFE_INTEGER });
     const offlineSettle = take();
 
+    // Register is a one-off frame, so its statements differ by dialect: on pg
+    // it adds the sequence advisory lock, and the settled event drain includes
+    // a webhook pass. Both lists are exact.
+    expect(register).toEqual(pgMode ? [
+      'select from "workspaces"',
+      'select from "nodes"',
+      'select from "nodes"',
+      'select from "nodes"',
+      'delete from "actions"',
+      'update "actions"',
+      'select from "actions"',
+      'insert into "actions"',
+      'select from "node_providers"',
+      'insert into "node_providers"',
+      'update "nodes"',
+      'select from "node_providers"',
+      'update "nodes"',
+      'select from "nodes"',
+      'SELECT pg_advisory_xact_lock(hashtextext',
+      'insert into "workspace_events"',
+      'insert into "pending_events"',
+      'update "pending_events"',
+      'select from "agents"',
+      'update "pending_events"',
+      'select from "event_subscriptions"',
+      'select from "pending_events"',
+      'update "pending_events"',
+      'update "webhook_deliveries"',
+      'select from "webhook_deliveries"',
+      'update "pending_events"',
+    ] : [
+      'select from "workspaces"',
+      'select from "nodes"',
+      'select from "nodes"',
+      'select from "nodes"',
+      'delete from "actions"',
+      'update "actions"',
+      'select from "actions"',
+      'insert into "actions"',
+      'select from "node_providers"',
+      'insert into "node_providers"',
+      'update "nodes"',
+      'select from "node_providers"',
+      'update "nodes"',
+      'select from "nodes"',
+      'insert into "workspace_events"',
+      'insert into "pending_events"',
+      'update "pending_events"',
+      'update "pending_events"',
+      'select from "event_subscriptions"',
+      'select from "agents"',
+      'select from "pending_events"',
+      'update "pending_events"',
+    ]);
     expect({
-      register, changedBeat, unchangedBeat, brokerCheckpoint, inventorySync, directBeat, directCheckpoint, offlineSettle,
+      changedBeat, unchangedBeat, brokerCheckpoint, inventorySync, directBeat, directCheckpoint, offlineSettle,
     }).toMatchInlineSnapshot(`
       {
         "brokerCheckpoint": [
@@ -195,30 +263,6 @@ describe('node control D1 statements per frame', () => {
           "update "agents"",
           "select from "action_invocations"",
         ],
-        "register": [
-          "select from "workspaces"",
-          "select from "nodes"",
-          "select from "nodes"",
-          "select from "nodes"",
-          "delete from "actions"",
-          "update "actions"",
-          "select from "actions"",
-          "insert into "actions"",
-          "select from "node_providers"",
-          "insert into "node_providers"",
-          "update "nodes"",
-          "select from "node_providers"",
-          "update "nodes"",
-          "select from "nodes"",
-          "insert into "workspace_events"",
-          "insert into "pending_events"",
-          "update "pending_events"",
-          "update "pending_events"",
-          "select from "event_subscriptions"",
-          "select from "agents"",
-          "select from "pending_events"",
-          "update "pending_events"",
-        ],
         "unchangedBeat": [
           "select from "nodes"",
           "select from "node_providers"",
@@ -247,8 +291,8 @@ describe('node control D1 statements per frame', () => {
 
     await broker({ ...brokerBeat(['worker-a', 'worker-b']), capabilities: [...brokerBeat([]).capabilities, { name: 'deploy', kind: 'action' }] });
     expect(actionWrites(take())).not.toEqual([]);
-    const actions = stack.runtime.handle.sqlite
-      .prepare('SELECT name FROM actions WHERE workspace_id = ? AND handler_node_id = ? ORDER BY name').all(ws.workspaceId, 'nb');
+    const actions = await rawAll(stack.runtime.deps.db,
+      'SELECT name FROM actions WHERE workspace_id = ? AND handler_node_id = ? ORDER BY name', [ws.workspaceId, 'nb']);
     expect(actions).toEqual([{ name: 'deploy' }, { name: 'echo' }]);
   });
 
@@ -292,7 +336,8 @@ describe('node control D1 statements per frame', () => {
     await settleNodeOffline(db, stack.runtime.realtime, ws.workspaceId, 'node_direct_x');
     const routeLoss = raw.filter((statement) => statement.sql.startsWith('update "agents" set "status"'));
     expect(routeLoss).toHaveLength(2);
-    for (const statement of routeLoss) {
+    // The plan assertions read SQLite's EXPLAIN QUERY PLAN; no PostgreSQL counterpart.
+    for (const statement of pgMode ? [] : routeLoss) {
       expect(plan(statement)).toContain('idx_agents_location_node_liveness_revision (workspace_id=? AND location_node_id=?');
     }
 
@@ -301,6 +346,9 @@ describe('node control D1 statements per frame', () => {
       subjectAgentId: 'a', event: 'agent.status.offline', data: {},
     });
     const [fanout] = raw;
+    expect(fanout).toBeDefined();
+    // SQLite query-plan check (EXPLAIN QUERY PLAN); no PostgreSQL counterpart.
+    if (pgMode) return;
     const fanoutPlan = plan(fanout);
     expect(fanoutPlan.indexOf('idx_nodes_context_reachable')).toBeGreaterThan(-1);
     expect(fanoutPlan.indexOf('idx_nodes_context_reachable')).toBeLessThan(fanoutPlan.indexOf('agent_node_bindings'));
@@ -363,9 +411,9 @@ describe('node control D1 statements per frame', () => {
       { agent_id: bob.agentId, name: 'bob', session_ref: 'pty://b' },
     ] });
     expect(sock.ofType('error').at(-1)).toMatchObject({ id: 'inv', code: 'node_capacity_exceeded' });
-    const location = await stack.runtime.handle.sqlite
-      .prepare('SELECT location_node_id FROM agents WHERE id = ?').get(alice.agentId) as { location_node_id: string | null };
-    expect(location.location_node_id).toBe('tight');
+    const location = await rawGet<{ location_node_id: string | null }>(stack.runtime.deps.db,
+      'SELECT location_node_id FROM agents WHERE id = ?', [alice.agentId]);
+    expect(location?.location_node_id).toBe('tight');
     expect(invalidated).toEqual([`node_direct_${alice.agentId}`]);
   });
 });

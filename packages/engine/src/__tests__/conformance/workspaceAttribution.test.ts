@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { makeNodeStack, type TestStack } from './harness.js';
+import { makeNodeStack, rawRun, withCauseMessages, type TestStack } from './harness.js';
 
 describe('workspace creation attribution', () => {
   let stack: TestStack;
@@ -131,24 +131,25 @@ describe('workspace creation attribution', () => {
     });
     expect(response.status).toBe(201);
     const created = await response.json() as { data: { workspace_id: string } };
-    const sqlite = stack.runtime.handle.sqlite;
+    const db = stack.runtime.deps.db;
+    const update = (text: string) => withCauseMessages(rawRun(db, text, [created.data.workspace_id]));
 
-    expect(() => sqlite.prepare(`
+    await expect(update(`
       UPDATE workspaces
       SET usage_classification = 'internal'
       WHERE id = ?
-    `).run(created.data.workspace_id)).toThrow(/workspaces_usage_classification_source_check/);
+    `)).rejects.toThrow(/workspaces_usage_classification_source_check/);
 
-    expect(() => sqlite.prepare(`
+    await expect(update(`
       UPDATE workspaces
       SET classification_source = 'operator'
       WHERE id = ?
-    `).run(created.data.workspace_id)).toThrow(/workspaces_usage_classification_source_check/);
+    `)).rejects.toThrow(/workspaces_usage_classification_source_check/);
 
-    expect(() => sqlite.prepare(`
+    await expect(update(`
       UPDATE workspaces
       SET usage_classification = 'external', classification_source = 'operator'
       WHERE id = ?
-    `).run(created.data.workspace_id)).not.toThrow();
+    `)).resolves.toBeUndefined();
   });
 });

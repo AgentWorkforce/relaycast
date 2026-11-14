@@ -383,6 +383,14 @@ RELAYCAST_PG_TEST_CA_FILE=/path/to/ca.crt \
   npx vitest run src/adapters/postgres
 ```
 
+For a local fixture, `bash packages/engine/scripts/pg-fixture/up.sh [cert-dir] [env-file]`
+starts a disposable `postgres:16` container with TLS, the two roles and the
+schema `public` layout from [What the platform provides](#what-the-platform-provides),
+the refusal roles and the neighbour schemas (`scripts/pg-fixture/bootstrap.sql`,
+dev-only passwords). It writes an env file with the variables for both suites;
+`source` it before running them, and stop the fixture with `down.sh`. CI runs
+the same fixture in the "Engine on PostgreSQL" job.
+
 Without those variables the integration tests skip. **They drop every object
 the owner role owns in schema `public`**, so point them only at a
 disposable database. See the header of
@@ -426,10 +434,13 @@ back to SQLite.
   table, as the owner.
 
 Files run one at a time (`fileParallelism: false`) because they share the
-schema. Tests that need the SQLite handle (`runtime.handle`) fail in this mode
-with an explicit error. The pg-mode result is a baseline for the query-surface
-work, not a gate. As with the integration tests, use only a disposable
-database.
+schema. Tests that need SQLite itself (pragmas, backups, a second SQLite
+file, a raw SQLite connection, or foreign-key-off fixtures that would need a
+superuser on PostgreSQL) are marked `sqliteOnly` with a one-line reason and
+are skipped in this mode; every other test must pass. The CI job
+`engine-postgres` runs this suite and the adapter integration tests against
+the fixture, so a pg-mode failure fails the build. As with the integration
+tests, use only a disposable database.
 
 ## Moving a deployment to durable-actors
 

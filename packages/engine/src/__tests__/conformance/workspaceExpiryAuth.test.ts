@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { eq } from 'drizzle-orm';
-import { createWorkspace, makeNodeStack, registerAgent, type TestStack } from './harness.js';
+import { createWorkspace, makeNodeStack, registerAgent, sqliteOnly, type TestStack } from './harness.js';
 import { workspaces } from '../../db/tables.js';
 import { MIN_BOOTSTRAP_IDEMPOTENCY_KEY_LENGTH } from '../../engine/workspace.js';
 import { authenticateNodeWs, authenticateRealtimeWs } from '../../engine/wsAuth.js';
@@ -161,7 +161,9 @@ describe('workspace expiry at authentication', () => {
     expect((await get('/v1/agents', ws.workspaceKey)).status).toBe(200);
   });
 
-  it('refuses a node whose workspace row is gone rather than admitting it', async () => {
+  // Deletes the workspace row under foreign_keys = OFF; PostgreSQL FKs cannot be
+  // disabled by the test roles (needs superuser), so the orphan has no pg form.
+  sqliteOnly('refuses a node whose workspace row is gone rather than admitting it', async () => {
     const room = await makeRoom('orphaned-node-room');
     const deps = { auth: stack.runtime.deps.auth, db: stack.runtime.deps.db };
     expect(await authenticateNodeWs(deps, room.nodeToken)).toMatchObject({ ok: true });

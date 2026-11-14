@@ -1,5 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { makeNodeStack, createWorkspace, registerAgent, type TestStack } from './harness.js';
+import {
+  makeNodeStack, createWorkspace, interceptStatements, pgMode, rawInsertRows, registerAgent, sqliteOnly, type TestStack,
+} from './harness.js';
 
 /**
  * Regression for the captured cross-channel leak: a native MCP post result
@@ -12,6 +14,8 @@ import { makeNodeStack, createWorkspace, registerAgent, type TestStack } from '.
  * {name, topic, metadata} (no private flag), so privacy is proven by a
  * non-member never seeing the mention.
  */
+const MESSAGE_COLUMNS = ['id', 'workspace_id', 'channel_id', 'agent_id', 'body'];
+
 describe('inbox mention scope', () => {
   let stack: TestStack;
   beforeEach(() => { stack = makeNodeStack(); });
@@ -121,25 +125,21 @@ describe('inbox mention scope', () => {
     // length-then-lexical DESC: the newer valid id is longer but lexically
     // smaller than the 22-digit `9…` false candidates, so bare-text DESC would
     // emit the older valid mention first. Assert ordered ids, not set membership.
-    const sqlite = stack.runtime.handle.sqlite;
-    const insertMessage = sqlite.prepare(
-      'INSERT INTO messages (id, workspace_id, channel_id, agent_id, body) VALUES (?, ?, ?, ?, ?)',
-    );
     const longId = (n: number) => `9${String(n).padStart(21, '0')}`; // 22 digits, starts with 9
     const idNewerValid = `1${'0'.repeat(22)}`; // 23 digits, starts with 1 — length-first, lexically after 9…
     const idOlderValid = '123456789012345678'; // 18 digits -> after the 22-digit false candidates
-    sqlite.transaction(() => {
-      insertMessage.run(idNewerValid, ws.workspaceId, liveChannelId, sender.agentId, '@gh-target-0908 newer-valid');
-      for (let i = 0; i < 205; i++) {
-        insertMessage.run(longId(i), ws.workspaceId, liveChannelId, sender.agentId, `\\@gh-target-0908 false-${i}`);
-      }
-      insertMessage.run(idOlderValid, ws.workspaceId, liveChannelId, sender.agentId, '@gh-target-0908 older-valid');
-    })();
+    await rawInsertRows(stack.runtime.deps.db, 'messages', MESSAGE_COLUMNS, [
+      [idNewerValid, ws.workspaceId, liveChannelId, sender.agentId, '@gh-target-0908 newer-valid'],
+      ...Array.from({ length: 205 }, (_, i) => [longId(i), ws.workspaceId, liveChannelId, sender.agentId, `\\@gh-target-0908 false-${i}`]),
+      [idOlderValid, ws.workspaceId, liveChannelId, sender.agentId, '@gh-target-0908 older-valid'],
+    ]);
 
     const inbox = await inboxOf(target.token);
     expect(inbox.mentions.map((m) => m.id)).toEqual([idNewerValid, idOlderValid]);
 
-    const plan = sqlite.prepare(`
+    // SQLite planner check (EXPLAIN QUERY PLAN); no PostgreSQL counterpart.
+    if (pgMode) return;
+    const plan = stack.runtime.handle.sqlite.prepare(`
       EXPLAIN QUERY PLAN
       SELECT messages.id FROM messages
       WHERE messages.workspace_id = ?
@@ -158,19 +158,15 @@ describe('inbox mention scope', () => {
     const liveChannelId = (await liveRes.json()).data.id as string;
     await joinOk(target.token, 'live');
 
-    const sqlite = stack.runtime.handle.sqlite;
-    const insertMessage = sqlite.prepare(
-      'INSERT INTO messages (id, workspace_id, channel_id, agent_id, body) VALUES (?, ?, ?, ?, ?)',
-    );
     const idNewestValid = '9'.repeat(23); // 23 digits -> sorts first
     const idOldestValid = '123456789012345678'; // 18 digits -> sorts last
-    sqlite.transaction(() => {
-      insertMessage.run(idNewestValid, ws.workspaceId, liveChannelId, sender.agentId, '@gh-target-0908 newest-valid');
-      for (let i = 0; i < 10_050; i++) {
-        insertMessage.run(`9${String(i).padStart(21, '0')}`, ws.workspaceId, liveChannelId, sender.agentId, `\\@gh-target-0908 false-${i}`);
-      }
-      insertMessage.run(idOldestValid, ws.workspaceId, liveChannelId, sender.agentId, '@gh-target-0908 oldest-valid');
-    })();
+    await rawInsertRows(stack.runtime.deps.db, 'messages', MESSAGE_COLUMNS, [
+      [idNewestValid, ws.workspaceId, liveChannelId, sender.agentId, '@gh-target-0908 newest-valid'],
+      ...Array.from({ length: 10_050 }, (_, i) => [
+        `9${String(i).padStart(21, '0')}`, ws.workspaceId, liveChannelId, sender.agentId, `\\@gh-target-0908 false-${i}`,
+      ]),
+      [idOldestValid, ws.workspaceId, liveChannelId, sender.agentId, '@gh-target-0908 oldest-valid'],
+    ]);
 
     const inbox = await inboxOf(target.token);
     const ids = new Set(inbox.mentions.map((m) => m.id));
@@ -183,7 +179,9 @@ describe('inbox mention scope', () => {
   // Production D1 regression: with few or no mentions, a body-filter candidate
   // walk read the target's whole workspace history on every inbox call (avg
   // ~14k rows, up to 12s under load; ~20% of all D1 time over 7 days).
-  it('drives mention candidates from messages_fts, not a workspace history walk', async () => {
+  // Asserts the SQLite FTS5 MATCH and its query plan; the PostgreSQL search
+  // implementation (search port) owns its own candidate strategy.
+  sqliteOnly('drives mention candidates from messages_fts, not a workspace history walk', async () => {
     const ws = await createWorkspace(stack.app, 'inbox-fts');
     const sender = await registerAgent(stack.app, ws.workspaceKey, 'sender');
     const target = await registerAgent(stack.app, ws.workspaceKey, 'gh-target-0908');
@@ -260,21 +258,17 @@ describe('inbox mention scope', () => {
     await joinOk(target.token, 'live');
     const idGlued = await send(sender.token, 'live', '@bob你好');
 
-    const sqlite = stack.runtime.handle.sqlite;
     const statements: string[] = [];
-    const prepare = sqlite.prepare.bind(sqlite);
-    sqlite.prepare = ((source: string) => {
-      statements.push(source);
-      return prepare(source);
-    }) as typeof sqlite.prepare;
+    const restore = interceptStatements(stack, (source) => { statements.push(source); });
     let inbox: Awaited<ReturnType<typeof inboxOf>>;
     try {
       inbox = await inboxOf(target.token);
     } finally {
-      sqlite.prepare = prepare;
+      restore();
     }
     expect(inbox.mentions.map((mention) => mention.id)).toEqual([idGlued]);
-    const mentionSql = statements.find((source) => source.includes('instr(') && source.includes('"messages"."body"'));
+    // sqlx.contains: instr() on SQLite, strpos() on PostgreSQL.
+    const mentionSql = statements.find((source) => /\b(instr|strpos)\(/.test(source) && source.includes('"messages"."body"'));
     expect(mentionSql).toBeDefined();
     expect(mentionSql).not.toContain('messages_mention_fts');
   });
@@ -300,7 +294,9 @@ describe('inbox mention scope', () => {
   // an agent with a long name. This connection is given the same cap.
   // bun:sqlite (the standalone driver under `npm run test:bun`) has no
   // user-defined SQL functions, which the cap emulation relies on.
-  it.skipIf(Boolean(process.versions.bun))('finds mentions of a handle longer than D1 allows in a LIKE pattern', async () => {
+  // PostgreSQL: the cap is emulated with a SQLite user-defined `like`, and the
+  // engine's pg form uses strpos (sqlx.contains), not LIKE.
+  it.skipIf(Boolean(process.versions.bun) || pgMode)('finds mentions of a handle longer than D1 allows in a LIKE pattern', async () => {
     const handle = 'orchestrator-review-lead-'.padEnd(64, 'x');
     const ws = await createWorkspace(stack.app, 'inbox-long-handle');
     const sender = await registerAgent(stack.app, ws.workspaceKey, 'sender');
@@ -331,17 +327,12 @@ describe('inbox mention scope', () => {
     await registerAgent(stack.app, ws.workspaceKey, 'sender');
     const target = await registerAgent(stack.app, ws.workspaceKey, 'dotted.name');
 
-    const sqlite = stack.runtime.handle.sqlite;
     const statements: string[] = [];
-    const prepare = sqlite.prepare.bind(sqlite);
-    sqlite.prepare = ((source: string) => {
-      statements.push(source);
-      return prepare(source);
-    }) as typeof sqlite.prepare;
+    const restore = interceptStatements(stack, (source) => { statements.push(source); });
     try {
       expect((await inboxOf(target.token)).mentions).toEqual([]);
     } finally {
-      sqlite.prepare = prepare;
+      restore();
     }
     expect(statements.some((source) => source.includes('instr(') && source.includes('"messages"."body"'))).toBe(false);
   });

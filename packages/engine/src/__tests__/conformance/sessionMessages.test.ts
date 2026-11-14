@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
-import { makeNodeStack, createWorkspace, registerAgent, type TestStack } from './harness.js';
+import { makeNodeStack, createWorkspace, rawGet, rawInsertRows, rawRun, registerAgent, sqliteOnly, type TestStack } from './harness.js';
 import {
   getMessagesBySessionRef,
   SessionRefSchema,
@@ -30,9 +30,9 @@ describe('session_ref message lookup and effective retention', () => {
     const { workspaceId, workspaceKey } = await createWorkspace(stack.app, 'session-lookup');
     const agent = await registerAgent(stack.app, workspaceKey, 'session-writer');
     if (retention !== undefined) {
-      stack.runtime.handle.sqlite.prepare(
+      await rawRun(stack.runtime.deps.db,
         'UPDATE workspaces SET retention = ? WHERE id = ?',
-      ).run(JSON.stringify({ message_ttl_days: retention }), workspaceId);
+        [JSON.stringify({ message_ttl_days: retention }), workspaceId]);
     }
 
     const post = await stack.app.request('/v1/channels/general/messages', {
@@ -98,12 +98,12 @@ describe('session_ref message lookup and effective retention', () => {
   it('must-fire: reports an aged-out session without rendering it replayable', async () => {
     const { workspaceId, workspaceKey } = await seedSessionMessage(30, 'expired message');
     const oldSeconds = Math.floor(Date.now() / 1_000) - 45 * 24 * 60 * 60;
-    stack.runtime.handle.sqlite.prepare(
+    await rawRun(stack.runtime.deps.db,
       'UPDATE messages SET created_at = ? WHERE workspace_id = ? AND session_ref = ?',
-    ).run(oldSeconds, workspaceId, SESSION_REF);
-    stack.runtime.handle.sqlite.prepare(
+      [oldSeconds, workspaceId, SESSION_REF]);
+    await rawRun(stack.runtime.deps.db,
       'UPDATE message_sessions SET first_message_at = ?, last_message_at = ? WHERE workspace_id = ? AND session_ref = ?',
-    ).run(oldSeconds, oldSeconds, workspaceId, SESSION_REF);
+      [oldSeconds, oldSeconds, workspaceId, SESSION_REF]);
 
     const { body } = await query(workspaceKey);
 
@@ -115,12 +115,12 @@ describe('session_ref message lookup and effective retention', () => {
   it('keeps a never-prune workspace retained regardless of session age', async () => {
     const { workspaceId, workspaceKey } = await seedSessionMessage(null, 'cold-storage message');
     const oldSeconds = Math.floor(Date.now() / 1_000) - 400 * 24 * 60 * 60;
-    stack.runtime.handle.sqlite.prepare(
+    await rawRun(stack.runtime.deps.db,
       'UPDATE messages SET created_at = ? WHERE workspace_id = ? AND session_ref = ?',
-    ).run(oldSeconds, workspaceId, SESSION_REF);
-    stack.runtime.handle.sqlite.prepare(
+      [oldSeconds, workspaceId, SESSION_REF]);
+    await rawRun(stack.runtime.deps.db,
       'UPDATE message_sessions SET first_message_at = ?, last_message_at = ? WHERE workspace_id = ? AND session_ref = ?',
-    ).run(oldSeconds, oldSeconds, workspaceId, SESSION_REF);
+      [oldSeconds, oldSeconds, workspaceId, SESSION_REF]);
 
     const { body } = await query(workspaceKey);
 
@@ -151,9 +151,9 @@ describe('session_ref message lookup and effective retention', () => {
   it('reports partial coverage when a session crosses the live boundary', async () => {
     const { workspaceId, workspaceKey } = await seedSessionMessage(30, 'retained tail');
     const oldSeconds = Math.floor(Date.now() / 1_000) - 45 * 24 * 60 * 60;
-    stack.runtime.handle.sqlite.prepare(
+    await rawRun(stack.runtime.deps.db,
       'UPDATE message_sessions SET first_message_at = ? WHERE workspace_id = ? AND session_ref = ?',
-    ).run(oldSeconds, workspaceId, SESSION_REF);
+      [oldSeconds, workspaceId, SESSION_REF]);
 
     const { body } = await query(workspaceKey);
 
@@ -166,9 +166,9 @@ describe('session_ref message lookup and effective retention', () => {
 
   it('reports migrated session history as partial when the true start is unknowable', async () => {
     const { workspaceId, workspaceKey } = await seedSessionMessage(30, 'surviving history');
-    stack.runtime.handle.sqlite.prepare(
-      'UPDATE message_sessions SET start_is_known = 0 WHERE workspace_id = ? AND session_ref = ?',
-    ).run(workspaceId, SESSION_REF);
+    await rawRun(stack.runtime.deps.db,
+      'UPDATE message_sessions SET start_is_known = FALSE WHERE workspace_id = ? AND session_ref = ?',
+      [workspaceId, SESSION_REF]);
 
     const { body } = await query(workspaceKey);
 
@@ -352,9 +352,9 @@ describe('session_ref message lookup and effective retention', () => {
     expect(nullMetadataReplay.status).toBe(201);
     expect(nullMetadataReplay.headers.get('idempotency-replayed')).toBe('true');
 
-    const channel = stack.runtime.handle.sqlite.prepare(
+    const channel = (await rawGet<{ id: string }>(stack.runtime.deps.db,
       'SELECT id FROM channels WHERE workspace_id = ? AND name = ?',
-    ).get(workspaceId, 'general') as { id: string };
+      [workspaceId, 'general']))!;
     await triggerIntegrationMessage(
       stack.runtime.handle.db,
       workspaceId,
@@ -381,7 +381,8 @@ describe('session_ref message lookup and effective retention', () => {
     )).toBe(true);
   });
 
-  it('uses the composite session index and does not fall back to JSON history scans', async () => {
+  // Asserts SQLite EXPLAIN QUERY PLAN rows; PostgreSQL has no counterpart output.
+  sqliteOnly('uses the composite session index and does not fall back to JSON history scans', async () => {
     const { workspaceId } = await seedSessionMessage(30);
     const indexedPlan = stack.runtime.handle.sqlite.prepare(
       'EXPLAIN QUERY PLAN SELECT id FROM messages WHERE workspace_id = ? AND session_ref = ? ORDER BY length(id), id LIMIT 10',
@@ -452,7 +453,9 @@ describe('session_ref message lookup and effective retention', () => {
     expect(response.headers.get('idempotency-replayed')).toBe('true');
   });
 
-  it('does not silently drop retained messages with missing relational display rows', async () => {
+  // Deletes parent rows under foreign_keys = OFF; PostgreSQL FKs cannot be
+  // disabled by the test roles (needs superuser), so the orphan has no pg form.
+  sqliteOnly('does not silently drop retained messages with missing relational display rows', async () => {
     const { workspaceId, agent } = await seedSessionMessage(30, 'orphaned display rows');
     stack.runtime.handle.sqlite.exec('PRAGMA foreign_keys = OFF');
     stack.runtime.handle.sqlite.prepare('DELETE FROM agents WHERE id = ?').run(agent.agentId);
@@ -536,12 +539,12 @@ describe('session_ref message lookup and effective retention', () => {
   it('orders, filters, and paginates snowflakes numerically across a digit transition', async () => {
     const { workspaceId, workspaceKey } = await createWorkspace(stack.app, 'numeric-session-order');
     const agent = await registerAgent(stack.app, workspaceKey, 'numeric-writer');
-    stack.runtime.handle.sqlite.prepare(
+    await rawRun(stack.runtime.deps.db,
       'UPDATE workspaces SET retention = ? WHERE id = ?',
-    ).run(JSON.stringify({ message_ttl_days: 30 }), workspaceId);
-    const channel = stack.runtime.handle.sqlite.prepare(
+      [JSON.stringify({ message_ttl_days: 30 }), workspaceId]);
+    const channel = (await rawGet<{ id: string }>(stack.runtime.deps.db,
       'SELECT id FROM channels WHERE workspace_id = ? AND name = ?',
-    ).get(workspaceId, 'general') as { id: string };
+      [workspaceId, 'general']))!;
 
     const firstEighteenDigitId = 100_000_000_000_000_000n;
     const snowflakeTick = 1n << 22n;
@@ -554,36 +557,16 @@ describe('session_ref message lookup and effective retention', () => {
 
     const oldSeconds = Math.floor(boundaryMs / 1_000) - 1;
     const newSeconds = Math.ceil(boundaryMs / 1_000);
-    const insertMessage = stack.runtime.handle.sqlite.prepare(`
-      INSERT INTO messages (
-        id, workspace_id, channel_id, agent_id, body, metadata, session_ref, created_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-    `);
-    insertMessage.run(
-      oldId,
-      workspaceId,
-      channel.id,
-      agent.agentId,
-      'before transition',
-      JSON.stringify({ session_ref: SESSION_REF }),
-      SESSION_REF,
-      oldSeconds,
-    );
-    insertMessage.run(
-      newId,
-      workspaceId,
-      channel.id,
-      agent.agentId,
-      'after transition',
-      JSON.stringify({ session_ref: SESSION_REF }),
-      SESSION_REF,
-      newSeconds,
-    );
-    stack.runtime.handle.sqlite.prepare(`
+    await rawInsertRows(stack.runtime.deps.db, 'messages',
+      ['id', 'workspace_id', 'channel_id', 'agent_id', 'body', 'metadata', 'session_ref', 'created_at'], [
+        [oldId, workspaceId, channel.id, agent.agentId, 'before transition', JSON.stringify({ session_ref: SESSION_REF }), SESSION_REF, oldSeconds],
+        [newId, workspaceId, channel.id, agent.agentId, 'after transition', JSON.stringify({ session_ref: SESSION_REF }), SESSION_REF, newSeconds],
+      ]);
+    await rawRun(stack.runtime.deps.db, `
       INSERT INTO message_sessions (
         workspace_id, session_ref, first_message_at, last_message_at, start_is_known
-      ) VALUES (?, ?, ?, ?, 1)
-    `).run(workspaceId, SESSION_REF, oldSeconds, newSeconds);
+      ) VALUES (?, ?, ?, ?, TRUE)
+    `, [workspaceId, SESSION_REF, oldSeconds, newSeconds]);
 
     const windowed = await getMessagesBySessionRef(
       stack.runtime.handle.db,
@@ -594,9 +577,9 @@ describe('session_ref message lookup and effective retention', () => {
     expect(windowed.availability).toBe('partial');
     expect(windowed.messages.map((message) => message.id)).toEqual([newId]);
 
-    stack.runtime.handle.sqlite.prepare(
+    await rawRun(stack.runtime.deps.db,
       'UPDATE workspaces SET retention = ? WHERE id = ?',
-    ).run(JSON.stringify({ message_ttl_days: null }), workspaceId);
+      [JSON.stringify({ message_ttl_days: null }), workspaceId]);
     const firstPage = await getMessagesBySessionRef(
       stack.runtime.handle.db,
       workspaceId,

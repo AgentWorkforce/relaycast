@@ -6,10 +6,10 @@
  *   RELAYCAST_PG_TEST_URL_RUNTIME  postgres://relaycast_runtime:...@host:port/db
  *   RELAYCAST_PG_TEST_CA_FILE      CA bundle that signs the server certificate
  *
- * The fixture must already have schema `relaycast` owned by relaycast_owner,
+ * The fixture must already have schema `public` owned by relaycast_owner,
  * default privileges giving relaycast_runtime DML on the owner's tables, and
  * the refusal roles relaycast_admin (superuser), relaycast_runtime_member
- * (member of relaycast_owner) and relaycast_creator (CREATE on relaycast).
+ * (member of relaycast_owner) and relaycast_creator (CREATE on public).
  * Their URLs default to the owner URL with the dev fixture passwords and can be
  * overridden with RELAYCAST_PG_TEST_URL_ADMIN / _MEMBER / _CREATOR.
  *
@@ -144,12 +144,15 @@ describe.skipIf(!enabled)(
     beforeAll(async () => {
       owner = poolFor(OWNER_URL!, "owner");
       runtime = poolFor(RUNTIME_URL!, "runtime");
+      // Waits for the fixture lock while other PostgreSQL test files hold it.
       releaseFixture = await holdFixtureLock(owner);
       await resetSchema(owner);
-    });
+    }, 180_000);
 
     afterAll(async () => {
-      if (owner) await resetSchema(owner).catch(() => {});
+      // Only the lock holder may reset: a beforeAll that timed out waiting must
+      // not drop the schema under the file that holds it.
+      if (owner && releaseFixture) await resetSchema(owner).catch(() => {});
       await releaseFixture?.().catch(() => {});
       await Promise.all(pools.map((p) => p.end().catch(() => {})));
     });
