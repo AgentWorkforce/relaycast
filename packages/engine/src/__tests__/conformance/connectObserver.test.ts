@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { eq } from 'drizzle-orm';
 import { messages, observerTokens } from '../../db/tables.js';
 import { dmFilteredCountConversationChunkSize, dmMessagePageLimit } from '../../engine/dmAll.js';
-import { createWorkspace, makeNodeStack, registerAgent, type TestStack } from './harness.js';
+import { createWorkspace, interceptStatements, makeNodeStack, registerAgent, type TestStack } from './harness.js';
 
 async function mintConnectObserver(
   stack: TestStack,
@@ -77,15 +77,11 @@ describe('Relay Connect observer capability', () => {
     );
 
     // Emulate D1's 100-bound-parameter ceiling against the SQL Drizzle emits.
-    const sqlite = stack.runtime.handle.sqlite;
-    const prepare = sqlite.prepare.bind(sqlite);
-    sqlite.prepare = ((source: string) => {
-      const parameterCount = (source.match(/\?/g) ?? []).length;
+    let restore = interceptStatements(stack, (_source, parameterCount) => {
       if (parameterCount > 100) {
         throw new Error(`D1_ERROR: too many SQL variables at offset 100 (${parameterCount})`);
       }
-      return prepare(source);
-    }) as typeof sqlite.prepare;
+    });
 
     const legacyResponse = await stack.app.request('/v1/dm/conversations/all', {
       headers: { authorization: `Bearer ${room.workspaceKey}` },
@@ -96,10 +92,8 @@ describe('Relay Connect observer capability', () => {
     expect(legacyBody.cursor).toBeUndefined();
 
     const workspaceListingSql: string[] = [];
-    sqlite.prepare = ((source: string) => {
-      workspaceListingSql.push(source);
-      return prepare(source);
-    }) as typeof sqlite.prepare;
+    restore();
+    restore = interceptStatements(stack, (source) => { workspaceListingSql.push(source); });
     const firstPage = await stack.app.request('/v1/dm/conversations/all?limit=500', {
       headers: { authorization: `Bearer ${room.workspaceKey}` },
     });
@@ -122,7 +116,7 @@ describe('Relay Connect observer capability', () => {
     // into six D1-safe chunks for 500 conversations.
     expect(firstPageListingQueries).toHaveLength(25);
 
-    sqlite.prepare = prepare as typeof sqlite.prepare;
+    restore();
     const secondPage = await stack.app.request(
       `/v1/dm/conversations/all?cursor=${encodeURIComponent(firstPageBody.cursor.next)}`,
       { headers: { authorization: `Bearer ${room.workspaceKey}` } },
@@ -165,17 +159,14 @@ describe('Relay Connect observer capability', () => {
     }
 
     const preparedSql: string[] = [];
-    sqlite.prepare = ((source: string) => {
-      preparedSql.push(source);
-      return prepare(source);
-    }) as typeof sqlite.prepare;
+    restore = interceptStatements(stack, (source) => { preparedSql.push(source); });
     let scopedResponse: Response;
     try {
       scopedResponse = await stack.app.request('/v1/dm/conversations/all', {
         headers: { authorization: `Bearer ${scopedObserver.token}` },
       });
     } finally {
-      sqlite.prepare = prepare as typeof sqlite.prepare;
+      restore();
     }
     expect(scopedResponse.status).toBe(200);
     const scopedBody = (await scopedResponse.json()) as {

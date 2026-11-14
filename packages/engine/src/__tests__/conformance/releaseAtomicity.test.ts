@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { eq } from 'drizzle-orm';
 import {
-  attachDirectNodeSocket, attachFakeBatch, createWorkspace, makeNodeStack,
+  attachDirectNodeSocket, attachFakeBatch, createWorkspace, installFaultTrigger, makeNodeStack, withCauseMessages,
   registerAgent, stripTransactionCapability, type TestStack,
 } from './harness.js';
 import {
@@ -83,15 +83,14 @@ describe('irreversible release atomicity', () => {
         if (adapter === 'batch') attachFakeBatch(stack, db);
         // A late tombstone failure reproduces the review's lost-message case.
         // Atomic adapters must roll back; sequential adapters must refuse first.
-        stack.runtime.handle.sqlite.exec(`
-          CREATE TRIGGER refuse_release_tombstone BEFORE UPDATE ON agents
-          WHEN NEW.status = 'released'
-          BEGIN SELECT RAISE(ABORT, 'forced tombstone failure'); END
-        `);
+        await installFaultTrigger(stack, {
+          name: 'refuse_release_tombstone', table: 'agents', event: 'UPDATE',
+          when: "NEW.status = 'released'", message: 'forced tombstone failure',
+        });
         const release = complete ?? (() => path === 'delete'
           ? deleteAgent(db, ws.workspaceId, target.name)
           : dispatchAgentRelease(db, ws.workspaceId, { input }));
-        await expect(release()).rejects.toThrow(adapter === 'sequential'
+        await expect(withCauseMessages(release())).rejects.toThrow(adapter === 'sequential'
           ? /Atomic write capability required/ : /forced tombstone failure/);
         expect(await snapshot()).toEqual(before);
         if (invocationId) {

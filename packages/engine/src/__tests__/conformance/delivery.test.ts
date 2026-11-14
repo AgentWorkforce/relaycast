@@ -10,6 +10,9 @@ import {
   deliverFramesOfType,
   contextUpdatesOfType,
   type TestStack,
+  interceptStatements,
+  pgMode,
+  sqliteOnly,
 } from './harness.js';
 import { agents, deliveries, messages, nodeProviders } from '../../db/tables.js';
 import * as messageEngine from '../../engine/message.js';
@@ -368,6 +371,8 @@ describe('durable delivery api', () => {
       .where(eq(deliveries.id, item.id as string));
     expect(stored.status).toBe('queued');
 
+    // SQLite planner check (EXPLAIN QUERY PLAN); no PostgreSQL counterpart.
+    if (pgMode) return;
     const plan = stack.runtime.handle.sqlite
       .prepare(`EXPLAIN QUERY PLAN
         SELECT id FROM deliveries
@@ -381,7 +386,8 @@ describe('durable delivery api', () => {
     expect(plan.some((step) => step.detail.includes('idx_deliveries_agent_active_created'))).toBe(true);
   });
 
-  it('serves an explicit-status listing with an agent-scoped seek, never a workspace status walk', async () => {
+  // SQLite planner check (EXPLAIN QUERY PLAN and its index names).
+  sqliteOnly('serves an explicit-status listing with an agent-scoped seek, never a workspace status walk', async () => {
     const { ws, bob } = await seed();
     for (const status of ['dead_lettered', 'acked', 'failed', 'queued', 'delivered']) {
       const plan = stack.runtime.handle.sqlite
@@ -1370,6 +1376,8 @@ describe('durable delivery api', () => {
       body: JSON.stringify({ text: 'stranded while offline' }),
     });
     expect(second.status).toBe(201);
+    // Let the post's background dispatch stamp first, so the reset below wins.
+    await stack.settle();
     const db = stack.runtime.deps.db;
     const strandedRow = and(eq(deliveries.workspaceId, ws.workspaceId), eq(deliveries.agentId, bob.agentId), eq(deliveries.seq, 2));
     await db
@@ -1707,6 +1715,8 @@ describe('durable delivery api', () => {
       });
       expect(post.status).toBe(201);
     }
+    // Let the posts' background dispatches stamp first, so the reset below wins.
+    await stack.settle();
     const db = stack.runtime.deps.db;
     const seq2 = and(eq(deliveries.workspaceId, ws.workspaceId), eq(deliveries.agentId, bob.agentId), eq(deliveries.seq, 2));
     const seq3 = and(eq(deliveries.workspaceId, ws.workspaceId), eq(deliveries.agentId, bob.agentId), eq(deliveries.seq, 3));
@@ -2776,6 +2786,8 @@ describe('durable delivery api', () => {
       .set({ expiresAt: bobExpiredAt })
       .where(eq(deliveries.messageId, messageId));
 
+    // SQLite planner checks (EXPLAIN QUERY PLAN); no PostgreSQL counterpart.
+    if (!pgMode) {
     const expiryPlan = stack.runtime.handle.sqlite
       .prepare(`EXPLAIN QUERY PLAN
         SELECT id FROM deliveries
@@ -2799,18 +2811,15 @@ describe('durable delivery api', () => {
         LIMIT 50`)
       .all(Math.floor(Date.now() / 1000), Math.floor(Date.now() / 1000)) as Array<{ detail: string }>;
     expect(retryPlan.some((step) => step.detail.includes('idx_deliveries_retry_due'))).toBe(true);
+    }
 
     // Emulate D1's documented ceiling against the real SQL emitted by Drizzle.
     // The regression used to put all 121 delivery IDs in one UPDATE and trip this guard.
-    const sqlite = stack.runtime.handle.sqlite;
-    const prepare = sqlite.prepare.bind(sqlite);
-    sqlite.prepare = ((source: string) => {
-      const parameterCount = (source.match(/\?/g) ?? []).length;
+    interceptStatements(stack, (_source, parameterCount) => {
       if (parameterCount > 100) {
         throw new Error(`D1_ERROR: too many SQL variables at offset 100 (${parameterCount})`);
       }
-      return prepare(source);
-    }) as typeof sqlite.prepare;
+    });
 
     const deadLetteredCount = async () => (await stack.runtime.deps.db
       .select({ id: deliveries.id })
@@ -2879,16 +2888,13 @@ describe('durable delivery api', () => {
       .set({ expiresAt: expiredAt })
       .where(eq(deliveries.messageId, messageId));
 
-    const sqlite = stack.runtime.handle.sqlite;
-    const prepare = sqlite.prepare.bind(sqlite);
     let expiryUpdates = 0;
-    sqlite.prepare = ((source: string) => {
+    interceptStatements(stack, (source) => {
       if (source.startsWith('update "deliveries"') && source.includes('"dead_lettered_at"')) {
         expiryUpdates++;
         if (expiryUpdates === 2) throw new Error('simulated later expiry batch failure');
       }
-      return prepare(source);
-    }) as typeof sqlite.prepare;
+    });
 
     await expect(sweepExpiredDeliveries(stack.runtime.deps, { maxBatches: 2 }))
       .rejects.toThrow('simulated later expiry batch failure');
@@ -2913,14 +2919,11 @@ describe('durable delivery api', () => {
       .set({ expiresAt: new Date(Date.now() - 60_000) })
       .where(eq(deliveries.messageId, messageId));
 
-    const sqlite = stack.runtime.handle.sqlite;
-    const prepare = sqlite.prepare.bind(sqlite);
-    sqlite.prepare = ((source: string) => {
+    interceptStatements(stack, (source) => {
       if (source.startsWith('update "deliveries"') && source.includes('"dead_lettered_at"')) {
         throw new Error('simulated scheduled expiry failure');
       }
-      return prepare(source);
-    }) as typeof sqlite.prepare;
+    });
 
     await expect(sweepExpiredDeliveries(stack.runtime.deps, { workspaceId: ws.workspaceId }))
       .rejects.toThrow('simulated scheduled expiry failure');

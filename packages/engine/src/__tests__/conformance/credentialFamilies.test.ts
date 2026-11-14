@@ -7,7 +7,7 @@ import { hmacSha256Hex, sha256Hex } from '../../lib/crypto.js';
 import { SqliteApiKeyAuthProvider } from '../../auth/index.js';
 import { WorkspaceIdNotSnowflakeError, configureCredentials, issueCredential } from '../../auth/credentials.js';
 import { createCredentialTagSigner } from '../../auth/credentialTags.js';
-import { createWorkspace, makeNodeStack, registerAgent, type TestStack } from './harness.js';
+import { createWorkspace, interceptStatements, makeNodeStack, registerAgent, type TestStack } from './harness.js';
 import type { CredentialTagger } from '../../auth/credentialTags.js';
 
 const tagger = createCredentialTagSigner({ current: 'a', keys: { a: 'credential-tag-secret-a' } });
@@ -126,7 +126,11 @@ describe('credential families', () => {
     const agent = await registerAgent(stack.app, workspace.workspaceKey, 'alice');
     const { db } = stack.runtime.deps;
     const auth = new SqliteApiKeyAuthProvider();
-    const prepare = vi.spyOn(stack.runtime.handle.sqlite, 'prepare');
+    // Drain the startup outbox poll first: its retention pass writes a
+    // maintenance cursor that would otherwise be counted on a slow backend.
+    await stack.settle();
+    const prepare = vi.fn();
+    interceptStatements(stack, prepare);
 
     for (const [token, require] of [[workspace.workspaceKey, 'workspace'], [agent.token, 'agent']] as const) {
       prepare.mockClear();

@@ -5,7 +5,17 @@ import { deleteAgent } from '../../engine/agent.js';
 import { createChannel, getChannel, joinChannel, inviteAgent, leaveChannel, ensureAgentSubscriptionChannel } from '../../engine/channel.js';
 import type { EngineDb, TransactionCapability } from '../../ports/database.js';
 import { requireTransactionCapability } from '../../ports/database.js';
-import { makeNodeStack, createWorkspace, registerAgent, type TestStack } from './harness.js';
+import { makeNodeStack, createWorkspace, pgMode, registerAgent, type TestStack } from './harness.js';
+
+/**
+ * Spy on the method db/sqlx.ts `run` executes raw writes through: `db.run`
+ * on SQLite, `db.execute` on PostgreSQL.
+ */
+function spyRawWrite(db: object) {
+  const target = db as Record<'run' | 'execute', (query: unknown) => Promise<unknown>>;
+  const method = pgMode ? 'execute' : 'run';
+  return { original: target[method].bind(target), spy: vi.spyOn(target, method) };
+}
 
 describe('agent subscription channels', () => {
   let stack: TestStack;
@@ -46,8 +56,8 @@ describe('agent subscription channels', () => {
     const ws = await createWorkspace(stack.app, 'release-during-ensure');
     await registerAgent(stack.app, ws.workspaceKey, 'racing-recipient');
     const db = stack.runtime.handle.db;
-    const original = db.run.bind(db);
-    const hook = vi.spyOn(db, 'run').mockImplementationOnce(async (query) => {
+    const { original, spy } = spyRawWrite(db);
+    const hook = spy.mockImplementationOnce(async (query) => {
       await deleteAgent(db, ws.workspaceId, 'racing-recipient');
       return original(query);
     });
@@ -72,8 +82,8 @@ describe('agent subscription channels', () => {
     const db = stack.runtime.handle.db;
     const channel = await ensureAgentSubscriptionChannel(db, ws.workspaceId, 'racing-join-target');
     await leaveChannel(db, ws.workspaceId, channel.name, target.agentId);
-    const original = db.run.bind(db);
-    const hook = vi.spyOn(db, 'run').mockImplementationOnce(async query => {
+    const { original, spy } = spyRawWrite(db);
+    const hook = spy.mockImplementationOnce(async query => {
       await deleteAgent(db, ws.workspaceId, 'racing-join-target');
       return original(query);
     });

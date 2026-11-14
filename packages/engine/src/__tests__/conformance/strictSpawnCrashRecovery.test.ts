@@ -30,7 +30,6 @@ import {
   registerAgent,
   type TestStack,
 } from './harness.js';
-import { conformancePgDb } from './pgMode.js';
 
 const schema = 'relay.spawn.invoke.logical/1';
 
@@ -1124,7 +1123,6 @@ describe('strict spawn crash recovery', () => {
   });
 
   it('does not fail a newer strict redispatch restored after the detach snapshot', async () => {
-    if (conformancePgDb()) return;
     const fixture = await setup();
     const key = 'restored-before-detach';
     const heldAt = new Date('2026-11-10T00:00:00.000Z');
@@ -1305,7 +1303,6 @@ describe('strict spawn crash recovery', () => {
   });
 
   it('does not clear a reservation acquired after the expiry snapshot', async () => {
-    if (conformancePgDb()) return;
     const fixture = await setup();
     const heldAt = new Date(Date.now() - 5_000);
     await insertStrictClaim(fixture, 'expiry-held-first', {
@@ -1375,7 +1372,6 @@ describe('strict spawn crash recovery', () => {
   });
 
   it('rolls back handler snapshot and reservation when a D1 batch statement fails', async () => {
-    if (conformancePgDb()) return;
     const fixture = await setup();
     await insertStrictClaim(fixture, 'd1-batch-crash');
     attachFakeBatch(stack, fixture.db);

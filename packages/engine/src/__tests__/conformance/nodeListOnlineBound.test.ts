@@ -5,9 +5,10 @@ import { listNodes, NODE_ONLINE_CANDIDATE_RECENCY_MS } from '../../engine/node.j
 import { configureNodeLiveness } from '../../engine/nodeLiveness.js';
 import { NODE_LIVENESS_TTL_MS } from '../../engine/placement.js';
 import { NODE_LIVENESS_CHECKPOINT_INTERVAL_MS, type NodeLivenessSnapshot } from '../../ports/nodeLiveness.js';
-import { createWorkspace, FakeSocket, makeNodeStack, type TestStack } from './harness.js';
+import { createWorkspace, FakeSocket, makeNodeStack, rawInsertRows, type TestStack } from './harness.js';
 
 const T0 = Date.UTC(2026, 10, 2, 12, 0, 0);
+const NODE_COLUMNS = ['id', 'workspace_id', 'name', 'token_hash', 'status', 'last_heartbeat_at'];
 
 const live = (): NodeLivenessSnapshot => ({ status: 'online', providers: [{
   name: 'default', live: true, handlers_live: true, last_received_at: Date.now() - 1_000, expires_at: Date.now() + 44_000,
@@ -70,28 +71,22 @@ describe('GET /v1/nodes?status=online under a liveness authority', () => {
 
   /** Long-dead rows a large hosted workspace retains: offline, or never claimed offline. */
   function seedStaleRows(count: number) {
-    const insert = stack.runtime.handle.sqlite.prepare(
-      'INSERT INTO nodes (id, workspace_id, name, token_hash, status, last_heartbeat_at) VALUES (?, ?, ?, ?, ?, ?)',
-    );
     const staleSecond = Math.floor((T0 - NODE_ONLINE_CANDIDATE_RECENCY_MS) / 1_000) - 60;
-    for (let i = 0; i < count; i += 1) {
-      insert.run(`nd_stale_${String(i).padStart(3, '0')}`, workspaceId, `stale-${i}`, `hash-${i}`, i % 3 === 0 ? 'online' : 'offline', staleSecond - i);
-    }
+    return rawInsertRows(stack.runtime.deps.db, 'nodes', NODE_COLUMNS, Array.from({ length: count }, (_, i) => [
+      `nd_stale_${String(i).padStart(3, '0')}`, workspaceId, `stale-${i}`, `hash-${i}`, i % 3 === 0 ? 'online' : 'offline', staleSecond - i,
+    ]));
   }
 
   /** Rows inside the online candidate bound that the authority answers for: checkpointed recently, stored offline. */
   function seedRecentRows(count: number) {
-    const insert = stack.runtime.handle.sqlite.prepare(
-      'INSERT INTO nodes (id, workspace_id, name, token_hash, status, last_heartbeat_at) VALUES (?, ?, ?, ?, ?, ?)',
-    );
     const recentSecond = Math.floor(T0 / 1_000) - 10;
-    for (let i = 0; i < count; i += 1) {
-      insert.run(`nd_recent_${String(i).padStart(3, '0')}`, workspaceId, `recent-${i}`, `rhash-${i}`, 'offline', recentSecond);
-    }
+    return rawInsertRows(stack.runtime.deps.db, 'nodes', NODE_COLUMNS, Array.from({ length: count }, (_, i) => [
+      `nd_recent_${String(i).padStart(3, '0')}`, workspaceId, `recent-${i}`, `rhash-${i}`, 'offline', recentSecond,
+    ]));
   }
 
   it('probes only checkpoint-recent online rows: 3 live among 303 rows costs 3 probes', async () => {
-    seedStaleRows(300);
+    await seedStaleRows(300);
     for (const id of ['nd_live_a', 'nd_live_b', 'nd_live_c']) await checkpointedNode(id);
     inspected = [];
 
@@ -133,7 +128,7 @@ describe('GET /v1/nodes?status=online under a liveness authority', () => {
   });
 
   it('keeps offline selection over every row, probing only checkpoint-recent ones', async () => {
-    seedStaleRows(4);
+    await seedStaleRows(4);
     await checkpointedNode('nd_recent_down');
     await checkpointedNode('nd_recent_up');
     liveIds.delete('nd_recent_down');
@@ -147,7 +142,7 @@ describe('GET /v1/nodes?status=online under a liveness authority', () => {
   });
 
   it('stops probing at limit matches and returns the first matches in id order', async () => {
-    seedRecentRows(30);
+    await seedRecentRows(30);
     const page = await listNodes(stack.runtime.deps.db, workspaceId, { status: 'offline', limit: 5 });
     expect(page.nodes.map(node => node.id)).toEqual(['nd_recent_000', 'nd_recent_001', 'nd_recent_002', 'nd_recent_003', 'nd_recent_004']);
     // Eight probes are in flight when the fifth match lands; none start after.
@@ -201,11 +196,9 @@ describe('GET /v1/nodes status limit without an authority', () => {
 
   it('honors limit in SQL over id order', async () => {
     const { workspaceId, workspaceKey } = await createWorkspace(stack.app, 'node-list-limit');
-    const insert = stack.runtime.handle.sqlite.prepare(
-      'INSERT INTO nodes (id, workspace_id, name, token_hash, status, last_heartbeat_at) VALUES (?, ?, ?, ?, ?, ?)',
-    );
     const now = Math.floor(Date.now() / 1_000);
-    for (const id of ['nd_c', 'nd_a', 'nd_d', 'nd_b']) insert.run(id, workspaceId, id, `hash-${id}`, 'online', now);
+    await rawInsertRows(stack.runtime.deps.db, 'nodes', NODE_COLUMNS,
+      ['nd_c', 'nd_a', 'nd_d', 'nd_b'].map((id) => [id, workspaceId, id, `hash-${id}`, 'online', now]));
     const res = await stack.app.request('/v1/nodes?status=online&limit=2', { headers: { authorization: `Bearer ${workspaceKey}` } });
     expect(res.status).toBe(200);
     const body = await res.json() as { data: Array<{ id: string }> };

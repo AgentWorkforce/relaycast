@@ -5,7 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { eq } from 'drizzle-orm';
 import { workspaces } from '../../db/tables.js';
 import type { TelemetryEvent } from '../../ports/telemetry.js';
-import { createWorkspace, makeNodeStack, type TestStack } from './harness.js';
+import { createWorkspace, makeNodeStack, rawRun, type TestStack } from './harness.js';
 
 /**
  * Emitters without an authenticated workspace in context load the workspace
@@ -52,8 +52,8 @@ describe('server telemetry attribution without workspace auth', () => {
     const human = (await created.json() as { data: { id: string; token: string } }).data;
     const oldHash = await hashToken(human.token);
     const newHash = await hashToken('at_live_new_generation');
-    stack.runtime.handle.sqlite.prepare('UPDATE agents SET token_hash = ?, previous_token_hash = ?, previous_token_expires_at = ? WHERE id = ?')
-      .run(newHash, oldHash, Math.floor(Date.now() / 1000) + 60, human.id);
+    await rawRun(stack.runtime.deps.db, 'UPDATE agents SET token_hash = ?, previous_token_hash = ?, previous_token_expires_at = ? WHERE id = ?',
+      [newHash, oldHash, Math.floor(Date.now() / 1000) + 60, human.id]);
     const capture = vi.spyOn(stack.runtime.deps.telemetry, 'capture');
     const sent = await stack.app.request('/v1/channels/general/messages', { method: 'POST', headers: {
       'content-type': 'application/json', authorization: `Bearer ${human.token}`,
