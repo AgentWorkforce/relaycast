@@ -334,7 +334,7 @@ describe('inbox mention scope', () => {
     } finally {
       restore();
     }
-    expect(statements.some((source) => source.includes('instr(') && source.includes('"messages"."body"'))).toBe(false);
+    expect(statements.some((source) => /\b(instr|strpos)\(/.test(source) && source.includes('"messages"."body"'))).toBe(false);
   });
 });
 
