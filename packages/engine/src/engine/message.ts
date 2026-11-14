@@ -214,7 +214,6 @@ export async function getMessages(
   const replyCounts = await db
     .select({
       threadId: messages.threadId,
-      replyToMessageId: messages.replyToMessageId,
       count: sql<number>`count(*)`,
     })
     .from(messages)
