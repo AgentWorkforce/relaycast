@@ -522,7 +522,7 @@ describe('atomic write paths', () => {
       expect(batches[0]).toHaveLength(5);
       expectStatementOn(batches[0], 'insert', 'read_receipts');
       // The rows whose pending reply link the transition stamps, read inside the batch.
-      expect(batches[0][1]).toMatch(/^select "id" from "deliveries"/);
+      expect(batches[0][1]).toMatch(/^select "id", "reply_message_id", "replied_at" from "deliveries"/);
       expectStatementOn(batches[0], 'update', 'deliveries');
       expectStatementOn(batches[0], 'update', 'channel_members');
       expectStatementOn(batches[0], 'update', 'dm_participants');
@@ -559,7 +559,7 @@ describe('atomic write paths', () => {
 
       expect(batches).toHaveLength(1);
       expect(batches[0]).toHaveLength(2);
-      expect(batches[0][0]).toMatch(/^select "id" from "deliveries"/);
+      expect(batches[0][0]).toMatch(/^select "id", "reply_message_id", "replied_at" from "deliveries"/);
       expectStatementOn(batches[0], 'update', 'deliveries');
     });
 
@@ -576,7 +576,7 @@ describe('atomic write paths', () => {
       expect(accepted).toMatchObject({ accepted_delivery_ids: [delivery.id], replied_delivery_ids: [] });
       expect(batches).toHaveLength(1);
       expect(batches[0]).toHaveLength(2);
-      expect(batches[0][0]).toMatch(/^select "id" from "deliveries"/);
+      expect(batches[0][0]).toMatch(/^select "id", "reply_message_id", "replied_at" from "deliveries"/);
       expectStatementOn(batches[0], 'update', 'deliveries');
     });
 

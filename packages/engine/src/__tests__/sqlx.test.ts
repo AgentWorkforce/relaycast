@@ -1,5 +1,5 @@
 import { sql, type SQL } from 'drizzle-orm';
-import { PgDialect } from 'drizzle-orm/pg-core';
+import { PgDialect, QueryBuilder as PgQueryBuilder, pgTable, text as pgText } from 'drizzle-orm/pg-core';
 import { describe, expect, it } from 'vitest';
 import { compileSqliteQuery } from '../adapters/sqlite-handle.js';
 import * as sqlx from '../db/sqlx.js';
@@ -389,6 +389,32 @@ describe('sqlx.lockSeq', () => {
       expect(() => sqlx.inPgTransaction(source as sqlx.DialectSource)).toThrow();
     }
     expect(() => sqlx.lockSeq('pg', { kind: 'nope' } as unknown as sqlx.SeqLockTarget)).toThrow(/unknown lock kind/);
+  });
+});
+
+describe('sqlx.lockSelectedRows', () => {
+  const pgRows = pgTable('deliveries', { id: pgText('id').primaryKey(), status: pgText('status') });
+  const pgSelect = () => new PgQueryBuilder().select({ id: pgRows.id }).from(pgRows).where(sql`${pgRows.status} = ${'queued'}`).orderBy(pgRows.id);
+
+  it('returns the select unchanged on SQLite, whose writer lock already serializes it', () => {
+    const query = sql`select "id" from "deliveries" where "status" = ${'queued'} order by "id"`;
+    expect(sqlx.lockSelectedRows('sqlite', query)).toBe(query);
+    expect(lite(sqlx.lockSelectedRows('sqlite', query))).toEqual({
+      sql: 'select "id" from "deliveries" where "status" = ? order by "id"', params: ['queued'],
+    });
+  });
+
+  it('locks the selected rows FOR NO KEY UPDATE on PostgreSQL', () => {
+    expect(pick(sqlx.lockSelectedRows({ engineDialect: 'pg' }, pgSelect()).toSQL())).toEqual({
+      sql: 'select "id" from "deliveries" where "deliveries"."status" = $1 order by "deliveries"."id" for no key update', params: ['queued'],
+    });
+  });
+
+  it('throws for unbranded sources and for a PostgreSQL query that cannot lock', () => {
+    for (const [, source] of UNBRANDED) {
+      expect(() => sqlx.lockSelectedRows(source as sqlx.DialectSource, pgSelect())).toThrow();
+    }
+    expect(() => sqlx.lockSelectedRows('pg', sql`select 1`)).toThrow(/PostgreSQL select builder/);
   });
 });
 

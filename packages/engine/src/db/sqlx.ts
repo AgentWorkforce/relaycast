@@ -745,6 +745,30 @@ export function lockSeq(source: DialectSource, target: SeqLockTarget): SQL {
   });
 }
 
+/**
+ * Lock the rows a SELECT reads until the enclosing transaction ends, so a
+ * later statement in that transaction sees them exactly as this read did.
+ * PostgreSQL appends `FOR NO KEY UPDATE` (the mode an UPDATE that leaves keys
+ * alone takes itself, so it never conflicts with FK share locks; see the
+ * `delivery` {@link SeqLockTarget}); under READ COMMITTED an unlocked read
+ * followed by an UPDATE lets a concurrent commit land in between. SQLite
+ * returns the query unchanged: its writers are already serialized, and a D1
+ * batch or a SQLite transaction runs the read and the write as one unit.
+ * Order the query by a key so concurrent lockers take rows in one order.
+ */
+export function lockSelectedRows<T extends SQLWrapper>(source: DialectSource, query: T): T {
+  return pick(source, {
+    sqlite: () => query,
+    pg: () => {
+      const lockable = query as unknown as { for?: (strength: 'no key update') => T };
+      if (typeof lockable.for !== 'function') {
+        throw new Error('sqlx.lockSelectedRows: expected a PostgreSQL select builder');
+      }
+      return lockable.for('no key update');
+    },
+  });
+}
+
 /** True when {@link lockSeq} is a no-op for `source` (SQLite). */
 export function isNoopLock(source: DialectSource): boolean {
   return pick(source, { sqlite: () => true, pg: () => false });

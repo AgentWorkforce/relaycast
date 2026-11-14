@@ -268,6 +268,42 @@ export function repliedAtOnTransition(source: sqlx.DialectSource): SQL<Date | nu
   return sql<Date | null>`CASE WHEN ${pendingReplyLink()} THEN ${sqlx.now(source)} ELSE ${deliveries.repliedAt} END`;
 }
 
+/** A row's reply-link columns as {@link lockReplyLinks} read them. */
+export type ReplyLinkState = { id: string; replyMessageId: string | null; repliedAt: Date | null };
+
+/**
+ * The read that opens a transition's atomic unit: every delivery row `scope`
+ * names, in id order, locked until the unit commits on PostgreSQL
+ * ({@link sqlx.lockSelectedRows}). `scope` must cover every row the
+ * transition's UPDATE can match (its ids, not its status filter), and not only
+ * the rows carrying a pending link: under READ COMMITTED an unlocked read lets
+ * a reply ({@link markDeliveriesReplied}) commit a link between this read and
+ * the UPDATE, which then applies it unreported. Locked, such a reply waits for
+ * this unit and, finding the row no longer `queued`, stamps and reports it
+ * itself. On SQLite / D1 the unit is already serialized.
+ */
+export function lockReplyLinks(tx: Db, scope: SQL) {
+  return sqlx.lockSelectedRows(tx, tx
+    .select({ id: deliveries.id, replyMessageId: deliveries.replyMessageId, repliedAt: deliveries.repliedAt })
+    .from(deliveries)
+    .where(scope)
+    .orderBy(asc(deliveries.id)));
+}
+
+/**
+ * The rows a transition applied a reply link to: pending when
+ * {@link lockReplyLinks} read them, stamped in the UPDATE's RETURNING rows
+ * (which carry only the new values). A reply a concurrent write stamped
+ * before the unit began is not pending, so it is never reported twice.
+ */
+export function appliedReplyLinks(
+  locked: readonly ReplyLinkState[],
+  updated: readonly { id: string; repliedAt: Date | null }[],
+): string[] {
+  const pending = new Set(locked.filter((row) => row.replyMessageId !== null && row.repliedAt === null).map((row) => row.id));
+  return updated.filter((row) => pending.has(row.id) && row.repliedAt !== null).map((row) => row.id);
+}
+
 /**
  * Idempotently transition a delivery to `acked`. `acked` is terminal,
  * so repeated acks are no-ops (reported as `changed: false`). Returns null if
@@ -460,11 +496,8 @@ async function ackRows(
   advanceCursorTo?: number,
 ): Promise<{ rows: DeliveryRow[]; repliedIds: string[] }> {
   const ids = rows.map((row) => row.id);
-  const ackable = and(
-    eq(deliveries.workspaceId, workspaceId),
-    inArray(deliveries.id, ids),
-    notInArray(deliveries.status, ['acked', 'dead_lettered']),
-  );
+  const scope = and(eq(deliveries.workspaceId, workspaceId), inArray(deliveries.id, ids))!;
+  const ackable = and(scope, notInArray(deliveries.status, ['acked', 'dead_lettered']));
   // One batch with the ack. On D1, `runAtomic` would commit the ack before the
   // cursor write, and a retry skips an already-acked delivery.
   const results = await runAtomicWrites(db, (tx) => {
@@ -485,13 +518,9 @@ async function ackRows(
     ];
     for (const row of rows) writes.push(...readCursorWrites(tx, workspaceId, agentId, row));
     if (ids.length > 0) {
-      // The ackable rows carrying a pending reply link, read inside the same
-      // atomic unit just before the ack: exactly the rows whose `replied_at`
-      // the ack below stamps (RETURNING sees only the new values).
-      writes.push(tx
-        .select({ id: deliveries.id })
-        .from(deliveries)
-        .where(and(ackable, pendingReplyLink())));
+      // Lock the rows and read their links just before the ack, so the
+      // links seen pending are exactly the ones it applies.
+      writes.push(lockReplyLinks(tx, scope));
       writes.push(tx
         .update(deliveries)
         .set({
@@ -512,13 +541,10 @@ async function ackRows(
   });
   if (ids.length === 0) return { rows: [], repliedIds: [] };
   // The status update is the last statement, so its RETURNING rows are last;
-  // the pending-link read immediately precedes it.
+  // the locked link read immediately precedes it.
   const updated = results[results.length - 1] as DeliveryRow[];
-  const pendingLinks = new Set((results[results.length - 2] as { id: string }[]).map((row) => row.id));
-  return {
-    rows: updated,
-    repliedIds: updated.filter((row) => pendingLinks.has(row.id) && row.repliedAt !== null).map((row) => row.id),
-  };
+  const locked = results[results.length - 2] as ReplyLinkState[];
+  return { rows: updated, repliedIds: appliedReplyLinks(locked, updated) };
 }
 
 /**
@@ -636,30 +662,28 @@ function onlyIdIndex(db: Db, column: AnyColumn, rest: SQL): SQL {
 }
 
 /**
- * One atomic unit (see {@link ackRows}): read the rows `where` matches that
- * carry a pending reply link, then move every row `where` matches with `set`,
- * applying those links in the same UPDATE ({@link repliedAtOnTransition}).
- * A row reports a reply only if this unit saw its link pending and the UPDATE
- * returned it stamped, never because its `replied_at` equals some timestamp: a
- * reply a concurrent write stamped before this unit began is not reported twice.
+ * One atomic unit (see {@link ackRows}): lock and read the rows `scope` names
+ * ({@link lockReplyLinks}), then move the ones that also match `where` with
+ * `set`, applying their pending reply links in the same UPDATE
+ * ({@link repliedAtOnTransition}). A row reports a reply only if this unit saw
+ * its link pending and the UPDATE returned it stamped, never because its
+ * `replied_at` equals some timestamp: a reply a concurrent write stamped
+ * before this unit began is not reported twice.
  */
 async function transitionWithReplyLinks(
   db: Db,
+  scope: SQL,
   where: SQL,
   set: EngineUpdateSet<typeof deliveries>,
 ): Promise<{ updated: { id: string }[]; appliedReplies: string[] }> {
-  const [pending, updated] = await runAtomicWrites(db, (tx) => [
-    tx.select({ id: deliveries.id }).from(deliveries).where(and(where, pendingReplyLink())),
+  const [locked, updated] = await runAtomicWrites(db, (tx) => [
+    lockReplyLinks(tx, scope),
     tx.update(deliveries)
       .set({ ...set, repliedAt: repliedAtOnTransition(tx) })
-      .where(where)
+      .where(and(scope, where))
       .returning({ id: deliveries.id, repliedAt: deliveries.repliedAt }),
-  ]) as [{ id: string }[], { id: string; repliedAt: Date | null }[]];
-  const pendingIds = new Set(pending.map((row) => row.id));
-  return {
-    updated,
-    appliedReplies: updated.filter((row) => pendingIds.has(row.id) && row.repliedAt !== null).map((row) => row.id),
-  };
+  ]) as [ReplyLinkState[], { id: string; repliedAt: Date | null }[]];
+  return { updated, appliedReplies: appliedReplyLinks(locked, updated) };
 }
 
 /**
@@ -686,8 +710,7 @@ export async function markDeliveriesDelivered(
     const { updated, appliedReplies } = await transitionWithReplyLinks(db, and(
       onlyIdIndex(db, deliveries.workspaceId, sql`= ${workspaceId}`),
       inArray(deliveries.id, page),
-      onlyIdIndex(db, deliveries.status, sql`= 'queued'`),
-    )!, {
+    )!, onlyIdIndex(db, deliveries.status, sql`= 'queued'`), {
       status: 'delivered',
       nextAttemptAt: null,
       lastDispatchError: null,
@@ -769,6 +792,7 @@ export async function acceptDeliveries(
     const { updated, appliedReplies } = await transitionWithReplyLinks(db, and(
       onlyIdIndex(db, deliveries.workspaceId, sql`= ${workspaceId}`),
       inArray(deliveries.id, page.map((row) => row.id)),
+    )!, and(
       onlyIdIndex(db, deliveries.status, sql`IN ('queued', 'delivered')`),
       onlyIdIndex(db, deliveries.acceptedAt, sql`IS NULL`),
     )!, {

@@ -11,7 +11,7 @@ import {
   dmParticipants,
 } from '../db/tables.js';
 import { runAtomicWrites } from '../ports/database.js';
-import { pendingReplyLink, repliedAtOnTransition } from './delivery.js';
+import { appliedReplyLinks, lockReplyLinks, repliedAtOnTransition, type ReplyLinkState } from './delivery.js';
 import * as sqlx from '../db/sqlx.js';
 
 type Db = ReturnType<typeof getDb>;
@@ -93,11 +93,8 @@ export async function markReadAndApplyReplies(
   }
   if (!authorized) return null;
 
-  const consumable = and(
-    eq(deliveries.messageId, messageId),
-    eq(deliveries.agentId, agentId),
-    inArray(deliveries.status, ['queued', 'delivered']),
-  );
+  const scope = and(eq(deliveries.messageId, messageId), eq(deliveries.agentId, agentId))!;
+  const consumable = and(scope, inArray(deliveries.status, ['queued', 'delivered']));
   // The three read-state writes (receipt + delivery transition + lastReadId)
   // run as one atomic unit when the adapter supports it.
   const results = await runAtomicWrites(db, (writeDb) => [
@@ -107,13 +104,9 @@ export async function markReadAndApplyReplies(
       .values({ messageId, agentId })
       .onConflictDoNothing(),
 
-    // The consumable rows carrying a pending reply link, read in the same
-    // atomic unit just before the transition: exactly the rows whose
-    // `replied_at` it stamps (RETURNING sees only the new values).
-    writeDb
-      .select({ id: deliveries.id })
-      .from(deliveries)
-      .where(and(consumable, pendingReplyLink())),
+    // Lock the row and read its link just before the transition, so a link
+    // seen pending is exactly one the transition applies.
+    lockReplyLinks(writeDb, scope),
 
     // Transition delivery status to acked. Reading consumes the message, so
     // clear any in-flight mailbox state; otherwise a delivery would linger in
@@ -152,7 +145,7 @@ export async function markReadAndApplyReplies(
       ),
     );
 
-  const pendingLinks = new Set((results[1] as { id: string }[]).map((row) => row.id));
+  const locked = results[1] as ReplyLinkState[];
   const transitioned = results[2] as { id: string; repliedAt: Date | null }[];
   return {
     receipt: {
@@ -160,9 +153,7 @@ export async function markReadAndApplyReplies(
       agent_id: receipt.agentId,
       read_at: receipt.readAt.toISOString(),
     },
-    repliedDeliveryIds: transitioned
-      .filter((row) => pendingLinks.has(row.id) && row.repliedAt !== null)
-      .map((row) => row.id),
+    repliedDeliveryIds: appliedReplyLinks(locked, transitioned),
   };
 }
 
