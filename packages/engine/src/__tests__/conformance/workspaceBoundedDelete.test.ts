@@ -304,6 +304,9 @@ describe('bounded workspace deletion', () => {
   it('never lets an older large expired workspace starve a smaller one behind it', async () => {
     const { ws: large } = await seedLargeWorkspace('bounded-starve-large');
     const small = await createWorkspace(stack.app, 'bounded-starve-small');
+    // Each real create schedules its own bounded reap; let those finish before
+    // backdating, so only the explicit call below can reap the small workspace.
+    await stack.settle();
     await stack.runtime.handle.db.update(workspaces).set({ expiresAt: new Date(Date.now() - 60_000) })
       .where(eq(workspaces.id, large.workspaceId));
     await stack.runtime.handle.db.update(workspaces).set({ expiresAt: new Date(Date.now() - 1_000) })
