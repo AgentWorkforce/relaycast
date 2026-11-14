@@ -75,6 +75,13 @@ export interface GatewayConfig {
   shutdownGraceMs: number;
   logFormat: 'json' | 'text';
   environment: string;
+  /**
+   * `workspace` (default): one Workspace actor serves everything of a
+   * workspace. `split` (prototype): DM sends, channel posts, their delivery
+   * and acks run on per-entity Channel, Conversation and Inbox actors; every
+   * other route still goes to the Workspace actor (`src/split.ts`).
+   */
+  actorsTopology: 'workspace' | 'split';
 }
 
 /**
@@ -140,6 +147,7 @@ const EnvSchema = z.object({
   RELAYCAST_SHUTDOWN_GRACE_MS: integer(0).default(10_000),
   RELAYCAST_LOG_FORMAT: z.enum(['json', 'text']).default('json'),
   RELAYCAST_ENV: z.string().min(1).default('production'),
+  RELAYCAST_ACTORS_TOPOLOGY: z.enum(['workspace', 'split']).default('workspace'),
 });
 
 /**
@@ -255,5 +263,6 @@ export function loadConfig(env: Env = process.env, readFile?: (path: string) => 
     shutdownGraceMs: settings.RELAYCAST_SHUTDOWN_GRACE_MS,
     logFormat: settings.RELAYCAST_LOG_FORMAT,
     environment: settings.RELAYCAST_ENV,
+    actorsTopology: settings.RELAYCAST_ACTORS_TOPOLOGY,
   };
 }

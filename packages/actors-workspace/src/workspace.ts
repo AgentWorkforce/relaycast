@@ -136,6 +136,20 @@ export class Workspace extends Actor {
         return this.db.transaction(() => this.runtime.fileStored(key, size))
     }
 
+    /**
+     * Split topology (gateway `RELAYCAST_ACTORS_TOPOLOGY=split`): authenticate
+     * an agent token and resolve a hot-path send's DM recipient or channel
+     * roster. Read-only; the gateway caches the answer briefly.
+     */
+    async splitResolve(input: unknown): Promise<Awaited<ReturnType<ActorRuntime["splitResolve"]>>> {
+        return this.db.transaction(() => this.runtime.splitResolve(input))
+    }
+
+    /** Split topology: the agents bound to a node, for the gateway's inbox sockets. Read-only. */
+    async splitNodeAgents(nodeId: string): Promise<Awaited<ReturnType<ActorRuntime["splitNodeAgents"]>>> {
+        return this.db.transaction(() => this.runtime.splitNodeAgents(nodeId))
+    }
+
     /** Outbound HTTP (webhooks, http_push, A2A egress) and maintenance run here, never inside a request. */
     async onAlarm(): Promise<void> {
         await this.db.transaction(() => this.runtime.maintain())

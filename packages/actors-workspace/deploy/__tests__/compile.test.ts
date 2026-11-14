@@ -25,14 +25,21 @@ describe("compileActor", () => {
 
         const contract = compiled.contract as unknown as Contract
         expect(contract.version).toBe(1)
-        expect(contract.actors.map((actor) => actor.actorName)).toEqual(["Workspace"])
-        const [workspace] = contract.actors
+        // The split topology's per-entity actors ship in the same bundle; the gateway decides whether they are used.
+        expect(contract.actors.map((actor) => actor.actorName).sort()).toEqual(["Channel", "Conversation", "Inbox", "Workspace"])
+        const workspace = contract.actors.find((actor) => actor.actorName === "Workspace")
         expect(workspace!.rpc.methods.map((method) => [method.name, method.parameters.length, method.result.kind])).toEqual([
             ["create", 2, "value"],
             ["fileStored", 2, "value"],
             ["handle", 1, "value"],
             ["importData", 2, "value"],
+            ["splitNodeAgents", 1, "value"],
+            ["splitResolve", 1, "value"],
         ])
+        const methodsOf = (name: string) => contract.actors.find((actor) => actor.actorName === name)!.rpc.methods.map((method) => method.name)
+        expect(methodsOf("Channel")).toEqual(["confirm", "history", "post"])
+        expect(methodsOf("Conversation")).toEqual(["confirm", "history", "post"])
+        expect(methodsOf("Inbox")).toEqual(["accept"])
         // The socket lifecycle (onConnect/onMessage/onDisconnect) is described by the socket contract, never as RPC.
         expect(workspace!.socket.actorName).toBe("Workspace")
         expect(Object.keys(workspace!.socket.schema.definitions)).toEqual(expect.arrayContaining(["Metadata", "Incoming", "Outgoing", "State"]))

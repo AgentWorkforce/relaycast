@@ -29,6 +29,21 @@ export {
   type SocketPrincipal,
   type SocketPrincipalVerdict,
 } from './adapters/actor/socket-grant.js';
+export {
+  INBOX_SEQ_BASE,
+  InboxSocketMetadataSchema,
+  channelActorId,
+  conversationActorId,
+  inboxActorId,
+  type AgentRef,
+  type Confirmation,
+  type InboxAcceptResult,
+  type InboxHandoff,
+  type InboxSocketMetadata,
+  type SourcePost,
+  type SourcePostResult,
+  type SplitResolveResult,
+} from './adapters/actor/split/protocol.js';
 
 /** A new workspace id: a snowflake, as every relaycast deployment uses. */
 export function generateWorkspaceId(): string {
