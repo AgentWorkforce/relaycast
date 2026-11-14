@@ -3,9 +3,12 @@ export type { NodeLivenessAuthority, NodeLivenessSnapshot } from './ports/nodeLi
 export {
   InProcessDeliveryWaiters,
   MAX_DELIVERY_WAIT_MS,
+  MAX_SEND_WAIT_MS,
+  RECOMMENDED_SEND_WAIT_MS,
   DELIVERY_NOTIFY_MEMORY_MS,
   type DeliveryWaiters,
   type DeliveryWaitArgs,
+  type DeliveryStateWaitArgs,
 } from './ports/deliveryWaiters.js';
 export const SERVER_VERSION = '0.1.0' as const;
 

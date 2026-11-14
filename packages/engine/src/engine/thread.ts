@@ -23,6 +23,7 @@ import {
   senderAddressField,
 } from './address.js';
 import * as sqlx from '../db/sqlx.js';
+import { buildReplyLinkWrite, repliedByReplyLinkWrite } from './delivery.js';
 
 type Db = ReturnType<typeof getDb>;
 
@@ -94,6 +95,9 @@ export async function postReply(
           channelId: parent.channelId,
           agentId,
           threadId,
+          // The message this reply answers (the thread root when the parent
+          // is itself a reply): the sender's `replied` correlation.
+          replyToMessageId: parent.id,
           body: data.text,
           blocks: data.blocks || null,
           metadata,
@@ -143,9 +147,17 @@ export async function postReply(
         }),
     );
 
+    // A thread reply answers its parent: that message's delivery to the
+    // replier is marked with the reply itself, so a crash after commit cannot
+    // lose it and a replayed retry has nothing left to mark. Last statement.
+    writes.push(buildReplyLinkWrite(writeDb, workspaceId, {
+      messageId: parent.id, recipientAgentId: agentId, replyMessageId: replyId,
+    }));
+
     return writes;
   }, { requireAtomic: Boolean(options.workspaceDeliveryPolicy) });
   const [reply] = results[0] as (typeof messages.$inferSelect)[];
+  const repliedDeliveryIds = repliedByReplyLinkWrite(results[results.length - 1] as { id: string; repliedAt: Date | null }[]);
   const deliveryOutcomes: DeliveryOutcomeRecords = dmConversation
     ? await fetchGroupDeliveryOutcomes(db, {
       messageId: replyId,
@@ -173,6 +185,7 @@ export async function postReply(
     agent_name: agent?.name || 'unknown',
     ...senderAddressField(reply.metadata),
     thread_id: reply.threadId,
+    reply_to_message_id: reply.replyToMessageId,
     text: reply.body,
     blocks: (reply.blocks as unknown[] | null) || null,
     metadata: publicMessageMetadata(reply.metadata),
@@ -181,6 +194,8 @@ export async function postReply(
     // Internal: delivery records for recipients — stripped by route before response
     _deliveries: deliveryOutcomes.deliveries,
     _delivery_rejections: deliveryOutcomes.rejections,
+    // Internal: deliveries this reply marked `replied`; the route tells their senders.
+    _replied_delivery_ids: repliedDeliveryIds,
   };
 }
 
@@ -200,6 +215,7 @@ export async function getThread(
       agentId: messages.agentId,
       agentName: agents.name,
       threadId: messages.threadId,
+      replyToMessageId: messages.replyToMessageId,
       body: messages.body,
       blocks: messages.blocks,
       metadata: messages.metadata,
@@ -240,6 +256,7 @@ export async function getThread(
       agentId: sql`${messages.agentId}`.mapWith(messages.agentId),
       agentName: agents.name,
       threadId: sql`${messages.threadId}`.mapWith(messages.threadId),
+      replyToMessageId: sql`${messages.replyToMessageId}`.mapWith(messages.replyToMessageId),
       body: sql`${messages.body}`.mapWith(messages.body),
       blocks: sql`${messages.blocks}`.mapWith(messages.blocks),
       metadata: sql`${messages.metadata}`.mapWith(messages.metadata),
@@ -266,6 +283,7 @@ export async function getThread(
       metadata: publicMessageMetadata(parent.metadata),
       has_attachments: parent.hasAttachments,
       thread_id: parent.threadId,
+      reply_to_message_id: parent.replyToMessageId,
       created_at: parent.createdAt.toISOString(),
       reply_count: replyCount?.count ?? 0,
     },
@@ -276,6 +294,7 @@ export async function getThread(
       agent_name: displayAgentName(r.metadata, r.agentName),
       ...senderAddressField(r.metadata),
       thread_id: r.threadId,
+      reply_to_message_id: r.replyToMessageId,
       text: r.body,
       blocks: (r.blocks as unknown[] | null) || null,
       metadata: publicMessageMetadata(r.metadata),

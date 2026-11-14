@@ -75,18 +75,14 @@ export class Relay implements RelayLike {
   onMessage(cb: MessageCallback): () => void {
     this.agents.connect();
 
-    const stopMessageCreated = this.agents.on.messageCreated((event) => {
-      void cb(fromChannelEvent(event));
-    });
-    const stopThreadReply = this.agents.on.threadReply((event) => {
-      void cb(fromThreadReplyEvent(event));
-    });
-    const stopDmReceived = this.agents.on.dmReceived((event) => {
-      void cb(fromDmEvent(event));
-    });
-    const stopGroupDmReceived = this.agents.on.groupDmReceived((event) => {
-      void cb(fromDmEvent(event));
-    });
+    // The callback's result is returned to the transport: on the node
+    // transport `delivery.ack` waits for a returned promise and a throw or
+    // rejection leaves the delivery unacked for re-delivery. Discarding it
+    // here (`void cb(...)`) would ack while the callback is still running.
+    const stopMessageCreated = this.agents.on.messageCreated((event) => cb(fromChannelEvent(event)));
+    const stopThreadReply = this.agents.on.threadReply((event) => cb(fromThreadReplyEvent(event)));
+    const stopDmReceived = this.agents.on.dmReceived((event) => cb(fromDmEvent(event)));
+    const stopGroupDmReceived = this.agents.on.groupDmReceived((event) => cb(fromDmEvent(event)));
 
     return () => {
       stopGroupDmReceived();

@@ -9,7 +9,7 @@ import * as threadEngine from '../engine/thread.js';
 import { resolveMailboxConfig } from '../engine/mailboxConfig.js';
 import { resolveWorkspaceDeliveryPolicyFor } from '../engine/workspaceDeliveryPolicy.js';
 import { publishWorkspaceEvent } from './fanout.js';
-import { notifyDeliveryRejections, routeDeliveryOutcomes } from './deliveryRouting.js';
+import { notifyDeliveryRejections, routeDeliveryOutcomes, notifyRepliedDeliveries } from './deliveryRouting.js';
 import { buildThreadReplyEventData } from '../engine/deliveryWire.js';
 import {
   getMessageObserverResource,
@@ -99,6 +99,7 @@ threadRoutes.post(
         const {
           _deliveries,
           _delivery_rejections,
+          _replied_delivery_ids,
           ...publicReplyData
         } = idempotent.data as typeof idempotent.data & {
           _deliveries?: Parameters<typeof routeDeliveryOutcomes>[1];
@@ -126,6 +127,12 @@ threadRoutes.post(
             notifyDeliveryRejections(c, agentId, _delivery_rejections),
             'fanout delivery rejected',
           );
+        }
+
+        // A thread reply answers its parent: the reply's own write marked
+        // that message's delivery to the replier; tell the parent's sender.
+        if (_replied_delivery_ids && _replied_delivery_ids.length > 0) {
+          runInBackground(c, notifyRepliedDeliveries(c, _replied_delivery_ids), 'notify replied delivery');
         }
 
         emitServerEvent(c, workspace.id, 'thread.reply.created', {

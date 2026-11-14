@@ -60,7 +60,7 @@ describe('sqlx.insertSelect on PostgreSQL', () => {
       { onConflictDoNothing: true });
     const { sql: text } = write.toSQL();
     const columns = pgColumns.filter((name) => name !== 'rowid');
-    expect(columns).toHaveLength(29);
+    expect(columns).toHaveLength(32);
     expect(text).toBe(
       `insert into "deliveries" (${columns.map((n) => `"${n}"`).join(', ')}) ` +
         `select ${columns.map(() => 'null').join(', ')} from "agents" on conflict do nothing`,

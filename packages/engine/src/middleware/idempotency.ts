@@ -30,6 +30,7 @@ type DeliveryInternals = {
   _delivery?: unknown;
   _deliveries?: unknown;
   _delivery_rejections?: unknown;
+  _replied_delivery_ids?: unknown;
   _idempotency_replayed?: boolean;
   _idempotency_ttl_seconds?: number;
 };
@@ -135,6 +136,7 @@ export function stripDeliveryInternals<T extends object>(data: T) {
     _delivery: _dropDelivery,
     _deliveries: _dropDeliveries,
     _delivery_rejections: _dropRejections,
+    _replied_delivery_ids: _dropReplied,
     _idempotency_replayed: _dropIdempotencyReplay,
     _idempotency_ttl_seconds: _dropIdempotencyTtl,
     ...publicData

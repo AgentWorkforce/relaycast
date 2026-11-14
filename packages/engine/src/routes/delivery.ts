@@ -3,7 +3,7 @@ import type { AppEnv } from '../env.js';
 import { requireAgentToken, requireWorkspaceRead } from '../middleware/auth.js';
 import { rateLimit } from '../middleware/rateLimit.js';
 import * as deliveryEngine from '../engine/delivery.js';
-import { notifySenderDeliveryReceipts } from '../engine/deliveryReceipts.js';
+import { notifySenderDeliveryReceipts, wakeDeliveryStateWaiters } from '../engine/deliveryReceipts.js';
 import {
   getMessageObserverResource,
   getObserverTokenFromContext,
@@ -93,9 +93,18 @@ deliveryRoutes.post(
           }),
           'fanout delivery.delivered',
         );
+      }
+      // A reply sent while the row was still queued is applied by this ack
+      // and lands after its `acked`, so both go out in one ordered task.
+      const repliedIds = result.repliedDeliveryIds ?? [];
+      if (result.changed || repliedIds.length > 0) {
         runInBackground(
           c,
-          notifySenderDeliveryReceipts({ db, engine: c.get('engine') }, workspace.id, [result.delivery.id], 'acked'),
+          (async () => {
+            const deps = { db, engine: c.get('engine') };
+            if (result.changed) await notifySenderDeliveryReceipts(deps, workspace.id, [result.delivery.id], 'acked');
+            if (repliedIds.length > 0) await notifySenderDeliveryReceipts(deps, workspace.id, repliedIds, 'replied');
+          })(),
           'notify sender delivery.acked',
         );
       }
@@ -165,6 +174,11 @@ deliveryRoutes.post(
         return jsonNotFound(c, 'delivery_not_found', 'Delivery not found');
       }
       if (result.changed) {
+        runInBackground(
+          c,
+          wakeDeliveryStateWaiters({ db, engine: c.get('engine') }, workspace.id, [result.delivery.id]),
+          'wake sends parked on failed delivery',
+        );
         runInBackground(
           c,
           fanoutToAgents(c, [agent!.id], 'delivery.failed', {

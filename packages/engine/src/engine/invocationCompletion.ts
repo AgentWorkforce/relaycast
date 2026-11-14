@@ -10,7 +10,7 @@ import { appendAndPublishWorkspaceEvent, appendAndPublishWorkspaceEventWhen } fr
 import { ephemeralEventFetch } from '../ports/index.js';
 import * as sqlx from '../db/sqlx.js';
 
-export type InvocationCompletionDeps = Pick<EngineDeps, 'db' | 'realtime' | 'webhookQueue' | 'nodeConnections' | 'config'>;
+export type InvocationCompletionDeps = Pick<EngineDeps, 'db' | 'realtime' | 'webhookQueue' | 'nodeConnections' | 'config' | 'deliveryWaiters'>;
 
 type CompletionResult = {
   invocation_id: string;

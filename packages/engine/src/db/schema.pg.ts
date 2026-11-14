@@ -863,6 +863,9 @@ export const messages = pgTable(
       .notNull()
       .references(() => agents.id),
     threadId: text('thread_id').references((): AnyPgColumn => messages.id),
+    // The message this one explicitly answers (DM `reply_to_message_id`, or a
+    // thread reply's parent); drives the sender's `replied` delivery state.
+    replyToMessageId: text('reply_to_message_id'),
     body: text('body').notNull(),
     blocks: jsonb('blocks'),
     metadata: jsonb('metadata').$type<Record<string, unknown>>().default({}),
@@ -1545,7 +1548,12 @@ export const deliveries = pgTable(
     lastDispatchError: text('last_dispatch_error'),
     expiresAt: epochSeconds('expires_at'),
     deliveredAt: epochSeconds('delivered_at'),
+    // The receiving software's acceptance (`delivery.accepted` / http_push 2xx).
+    acceptedAt: epochSeconds('accepted_at'),
     ackedAt: epochSeconds('acked_at'),
+    // The recipient's DM reply in the same conversation (DMs only).
+    repliedAt: epochSeconds('replied_at'),
+    replyMessageId: text('reply_message_id'),
     deadLetteredAt: epochSeconds('dead_lettered_at'),
     retryable: boolean('retryable'),
     availableAt: epochSeconds('available_at'),

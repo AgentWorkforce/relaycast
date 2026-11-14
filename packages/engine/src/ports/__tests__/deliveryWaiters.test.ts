@@ -63,3 +63,43 @@ describe('InProcessDeliveryWaiters', () => {
     expect(await parked).toBe('timeout');
   });
 });
+
+describe('InProcessDeliveryWaiters delivery-state waits (send wait_ms)', () => {
+  it('wakes a send parked on any of its rows, and only for those rows', async () => {
+    const waiters = new InProcessDeliveryWaiters();
+    const since = Date.now();
+    const parked = waiters.waitForDeliveryState({ workspaceId: 'w', deliveryIds: ['d1', 'd2'], since, timeoutMs: 5_000 });
+    const other = waiters.waitForDeliveryState({ workspaceId: 'w', deliveryIds: ['d9'], since, timeoutMs: 30 });
+    const otherWorkspace = waiters.waitForDeliveryState({ workspaceId: 'x', deliveryIds: ['d1'], since, timeoutMs: 30 });
+    await waiters.notifyDeliveryState('w', ['d2']);
+    expect(await Promise.all([parked, other, otherWorkspace])).toEqual(['notified', 'timeout', 'timeout']);
+  });
+
+  it('resolves a registration whose read started before the row moved, and keeps agent waits apart', async () => {
+    let now = 1_000;
+    const waiters = new InProcessDeliveryWaiters(() => now);
+    await waiters.notifyDeliveryState('w', ['d1']);
+    expect(await waiters.waitForDeliveryState({ workspaceId: 'w', deliveryIds: ['d1'], since: 900, timeoutMs: 5_000 })).toBe('notified');
+    expect(await waiters.waitForDeliveryState({ workspaceId: 'w', deliveryIds: ['d1'], since: 1_001, timeoutMs: 10 })).toBe('timeout');
+    // A delivery id never wakes an agent long-poll, nor the reverse.
+    expect(await waiters.wait({ workspaceId: 'w', agentId: 'd1', since: 0, timeoutMs: 10 })).toBe('timeout');
+    await waiters.notify('w', ['d2']);
+    expect(await waiters.waitForDeliveryState({ workspaceId: 'w', deliveryIds: ['d2'], since: 0, timeoutMs: 10 })).toBe('timeout');
+    now += DELIVERY_NOTIFY_MEMORY_MS + 1;
+    await waiters.notifyDeliveryState('w', ['d3']);
+    expect(await waiters.waitForDeliveryState({ workspaceId: 'w', deliveryIds: ['d1'], since: 0, timeoutMs: 10 })).toBe('timeout');
+  });
+
+  it('answers an empty, aborted or zero-length state wait with timeout, and every parked one on close', async () => {
+    const waiters = new InProcessDeliveryWaiters();
+    const aborted = new AbortController();
+    aborted.abort();
+    expect(await waiters.waitForDeliveryState({ workspaceId: 'w', deliveryIds: ['d1'], since: 0, timeoutMs: 5_000, signal: aborted.signal })).toBe('timeout');
+    expect(await waiters.waitForDeliveryState({ workspaceId: 'w', deliveryIds: ['d1'], since: 0, timeoutMs: 0 })).toBe('timeout');
+    expect(await waiters.waitForDeliveryState({ workspaceId: 'w', deliveryIds: [], since: 0, timeoutMs: 5_000 })).toBe('timeout');
+    const parked = waiters.waitForDeliveryState({ workspaceId: 'w', deliveryIds: ['d1'], since: Date.now(), timeoutMs: 5_000 });
+    waiters.close();
+    expect(await parked).toBe('timeout');
+    expect(await waiters.waitForDeliveryState({ workspaceId: 'w', deliveryIds: ['d1'], since: 0, timeoutMs: 5_000 })).toBe('timeout');
+  });
+});

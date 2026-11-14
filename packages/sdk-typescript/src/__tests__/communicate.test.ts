@@ -223,4 +223,83 @@ describe('communicate Relay wrapper', () => {
 
     expect(handler).toHaveBeenCalledTimes(4);
   });
+
+  // --- after-handlers ack through the wrapper (node transport) ---
+
+  /** The engine's reply to this socket's `node.register`, listing the frames it understands. */
+  async function replyToRegistration(ws: MockWebSocket): Promise<void> {
+    for (let i = 0; i < 10 && !ws.send.mock.calls.some(([p]) => JSON.parse(String(p)).type === 'node.register'); i += 1) {
+      await Promise.resolve();
+    }
+    const register = ws.send.mock.calls.map(([p]) => JSON.parse(String(p))).find((frame) => frame.type === 'node.register');
+    expect(register).toBeDefined();
+    ws.simulateMessage({
+      v: 1, id: register.id, type: 'reply', ok: true,
+      data: {
+        provider: { name: 'default', instance_id: 'i1' }, accepted_capabilities: [],
+        capabilities: ['delivery.accepted', 'delivery.ack.delivery_id'],
+      },
+    });
+  }
+
+  const deliverFrame = (seq: number) => ({
+    v: 1, type: 'deliver', delivery_id: `del_${seq}`, agent_id: 'agent_1', agent: 'worker', msg_id: `m_${seq}`, seq, mode: 'wait',
+    payload: {
+      type: 'dm.received',
+      data: {
+        conversation_id: 'conv_1', id: `m_${seq}`, from_agent_id: 'bot_1', from_name: 'Bot', to: 'worker',
+        text: 'confirm me', created_at: '2026-09-24T05:00:00.000Z', attachments: [], metadata: {},
+        message: { id: `m_${seq}`, agent_id: 'bot_1', agent_name: 'Bot', text: 'confirm me', attachments: [], metadata: {} },
+      },
+    },
+  });
+  const acks = (ws: MockWebSocket) =>
+    ws.send.mock.calls.map(([p]) => JSON.parse(String(p))).filter((frame) => frame.type === 'delivery.ack');
+  async function settleDeliveries(): Promise<void> {
+    for (let i = 0; i < 40; i += 1) await Promise.resolve();
+  }
+
+  it('onMessage() holds the delivery.ack until an async handler resolves', async () => {
+    const { relay } = createRelay();
+    let release!: () => void;
+    const working = new Promise<void>((resolve) => { release = resolve; });
+    const seen: string[] = [];
+    relay.onMessage(async (message) => {
+      seen.push(message.id);
+      await working;
+    });
+    const ws = await nextSocket();
+    ws.simulateOpen();
+    await replyToRegistration(ws);
+
+    ws.simulateMessage(deliverFrame(1));
+    await settleDeliveries();
+    expect(seen).toEqual(['m_1']);
+    // The handler is still running: nothing is acked yet.
+    expect(acks(ws)).toEqual([]);
+
+    release();
+    await settleDeliveries();
+    expect(acks(ws)).toEqual([{ v: 1, type: 'delivery.ack', agent: 'worker', delivery_id: 'del_1' }]);
+  });
+
+  it('onMessage() leaves a delivery unacked when the async handler rejects, and acks the next one on its own', async () => {
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    const { relay } = createRelay();
+    relay.onMessage(async (message) => {
+      if (message.id === 'm_2') throw new Error('model crashed');
+    });
+    const ws = await nextSocket();
+    ws.simulateOpen();
+    await replyToRegistration(ws);
+
+    ws.simulateMessage(deliverFrame(2));
+    ws.simulateMessage(deliverFrame(3));
+    await settleDeliveries();
+    expect(acks(ws)).toEqual([{ v: 1, type: 'delivery.ack', agent: 'worker', delivery_id: 'del_3' }]);
+    expect(warnSpy).toHaveBeenCalledWith(
+      expect.stringContaining('delivery handler failed; delivery left unconsumed'),
+      expect.objectContaining({ deliveryId: 'del_2', seq: 2 }),
+    );
+  });
 });

@@ -33,7 +33,7 @@ import { sendDm } from '../engine/dm.js';
 import { createGroupDm, postGroupMessage } from '../engine/groupDm.js';
 import { postReply } from '../engine/thread.js';
 import { markRead } from '../engine/receipt.js';
-import { ackDelivery, ackDeliveriesUpToSeq, DELIVERY_EXPIRY_BATCH_SIZE } from '../engine/delivery.js';
+import { acceptDeliveries, ackDelivery, ackDeliveriesUpToSeq, DELIVERY_EXPIRY_BATCH_SIZE, markDeliveriesDelivered } from '../engine/delivery.js';
 import { rotateAgentIdentity } from '../engine/agentIdentity.js';
 import {
   applyStatusEventEffect,
@@ -491,7 +491,7 @@ describe('atomic write paths', () => {
       expect(delivery.messageId).toBe(sent.message.id);
     });
 
-    it('thread reply issues exactly one batch: reply + deliveries', async () => {
+    it('thread reply issues exactly one batch: reply + deliveries + the parent\'s reply link', async () => {
       const { ws, alice, bob, channelId, db } = await seed();
       const parent = await postMessage(db, ws.workspaceId, channelId, alice.agentId, { text: 'root' });
       const batches = attachFakeBatch(db);
@@ -499,9 +499,11 @@ describe('atomic write paths', () => {
       const reply = await postReply(db, ws.workspaceId, parent.id, bob.agentId, { text: 'on it' });
 
       expect(batches).toHaveLength(1);
-      expect(batches[0]).toHaveLength(2);
+      expect(batches[0]).toHaveLength(3);
       expectStatementOn(batches[0], 'insert', 'messages');
       expectStatementOn(batches[0], 'insert', 'deliveries');
+      // The parent's delivery to the replier is marked inside the reply's batch.
+      expectStatementOn(batches[0], 'update', 'deliveries');
 
       expect(reply.thread_id).toBe(parent.id);
       const [delivery] = await db
@@ -511,7 +513,7 @@ describe('atomic write paths', () => {
       expect(delivery.agentId).toBe(alice.agentId);
     });
 
-    it('markRead issues exactly one batch: receipt + delivery transition + read cursors', async () => {
+    it('markRead issues exactly one batch: receipt + pending-reply read + delivery transition + read cursors', async () => {
       const { ws, alice, bob, channelId, db } = await seed();
       const sent = await postMessage(db, ws.workspaceId, channelId, alice.agentId, { text: 'hello' });
       const batches = attachFakeBatch(db);
@@ -519,8 +521,10 @@ describe('atomic write paths', () => {
       const receipt = await markRead(db, ws.workspaceId, sent.id, bob.agentId);
 
       expect(batches).toHaveLength(1);
-      expect(batches[0]).toHaveLength(4);
+      expect(batches[0]).toHaveLength(5);
       expectStatementOn(batches[0], 'insert', 'read_receipts');
+      // The rows whose pending reply link the transition stamps, read inside the batch.
+      expect(batches[0][1]).toMatch(/^select "id", "reply_message_id", "replied_at" from "deliveries"/);
       expectStatementOn(batches[0], 'update', 'deliveries');
       expectStatementOn(batches[0], 'update', 'channel_members');
       expectStatementOn(batches[0], 'update', 'dm_participants');
@@ -544,6 +548,38 @@ describe('atomic write paths', () => {
       expectStatementOn(batches[0], 'update', 'dm_participants');
       const [cursor] = await db.select().from(dmParticipants).where(eq(dmParticipants.agentId, bob.agentId));
       expect(cursor.lastReadId).toBe(sent.id);
+    });
+
+    it('marks a delivery delivered in one batch: pending-reply read + transition', async () => {
+      const { ws, alice, db } = await seed();
+      const sent = await sendDm(db, ws.workspaceId, alice.agentId, { to: 'bob', text: 'psst' });
+      const [delivery] = await db.select().from(deliveries).where(eq(deliveries.messageId, sent.id));
+      await db.update(deliveries).set({ status: 'queued', deliveredAt: null }).where(eq(deliveries.id, delivery.id));
+      const batches = attachFakeBatch(db);
+
+      expect(await markDeliveriesDelivered(db, ws.workspaceId, [delivery.id])).toEqual({ delivered: [delivery.id], replied: [] });
+
+      expect(batches).toHaveLength(1);
+      expect(batches[0]).toHaveLength(2);
+      expect(batches[0][0]).toMatch(/^select "id", "reply_message_id", "replied_at" from "deliveries"/);
+      expectStatementOn(batches[0], 'update', 'deliveries');
+    });
+
+    it('accepts a node delivery in one batch: pending-reply read + transition', async () => {
+      const { ws, alice, bob, db } = await seed();
+      stack.runtime.handle.sqlite.prepare("INSERT INTO nodes(id,workspace_id,name,token_hash) VALUES ('node_atomic',?,'node','node-key')").run(ws.workspaceId);
+      await db.update(agents).set({ locationType: 'via_node', locationNodeId: 'node_atomic', providerName: 'provider' }).where(eq(agents.id, bob.agentId));
+      const sent = await sendDm(db, ws.workspaceId, alice.agentId, { to: 'bob', text: 'psst' });
+      const [delivery] = await db.select().from(deliveries).where(eq(deliveries.messageId, sent.id));
+      const batches = attachFakeBatch(db);
+
+      const accepted = await acceptDeliveries(db, ws.workspaceId, 'node_atomic', 'provider', 'bob', { deliveryId: delivery.id });
+
+      expect(accepted).toMatchObject({ accepted_delivery_ids: [delivery.id], replied_delivery_ids: [] });
+      expect(batches).toHaveLength(1);
+      expect(batches[0]).toHaveLength(2);
+      expect(batches[0][0]).toMatch(/^select "id", "reply_message_id", "replied_at" from "deliveries"/);
+      expectStatementOn(batches[0], 'update', 'deliveries');
     });
 
     it('a failed batch applies nothing — no orphan message rows', async () => {

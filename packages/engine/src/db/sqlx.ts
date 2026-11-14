@@ -565,6 +565,18 @@ export function notIndexed(source: DialectSource): SQL {
 }
 
 /**
+ * `+expr`: SQLite's unary plus, which keeps a term out of index selection when
+ * an UPDATE builder cannot emit `INDEXED BY`; the bare term on PostgreSQL
+ * (where unary plus is undefined for text).
+ */
+export function unindexed<T = unknown>(source: DialectSource, expr: Fragment): SQL<T> {
+  return pick(source, {
+    sqlite: () => sql<T>`+${expr}`,
+    pg: () => sql<T>`${expr}`,
+  });
+}
+
+/**
  * The row-order key: SQLite's implicit `rowid`, and on PostgreSQL the explicit
  * `rowid bigint GENERATED ALWAYS AS IDENTITY` column every table carries. The
  * text is the same on both; `table` qualifies it (a table, or an alias name).
@@ -729,6 +741,30 @@ export function lockSeq(source: DialectSource, target: SeqLockTarget): SQL {
         default:
           throw new Error(`sqlx.lockSeq: unknown lock kind ${JSON.stringify((target as { kind?: unknown }).kind)}`);
       }
+    },
+  });
+}
+
+/**
+ * Lock the rows a SELECT reads until the enclosing transaction ends, so a
+ * later statement in that transaction sees them exactly as this read did.
+ * PostgreSQL appends `FOR NO KEY UPDATE` (the mode an UPDATE that leaves keys
+ * alone takes itself, so it never conflicts with FK share locks; see the
+ * `delivery` {@link SeqLockTarget}); under READ COMMITTED an unlocked read
+ * followed by an UPDATE lets a concurrent commit land in between. SQLite
+ * returns the query unchanged: its writers are already serialized, and a D1
+ * batch or a SQLite transaction runs the read and the write as one unit.
+ * Order the query by a key so concurrent lockers take rows in one order.
+ */
+export function lockSelectedRows<T extends SQLWrapper>(source: DialectSource, query: T): T {
+  return pick(source, {
+    sqlite: () => query,
+    pg: () => {
+      const lockable = query as unknown as { for?: (strength: 'no key update') => T };
+      if (typeof lockable.for !== 'function') {
+        throw new Error('sqlx.lockSelectedRows: expected a PostgreSQL select builder');
+      }
+      return lockable.for('no key update');
     },
   });
 }

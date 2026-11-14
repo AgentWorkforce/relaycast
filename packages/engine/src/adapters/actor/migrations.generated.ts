@@ -841,6 +841,15 @@ export const ACTOR_MIGRATIONS: readonly (readonly [string, readonly string[]])[]
     ]
   ],
   [
+    "0081_delivery_confirmation.sql",
+    [
+      "ALTER TABLE deliveries ADD COLUMN accepted_at INTEGER",
+      "ALTER TABLE deliveries ADD COLUMN replied_at INTEGER",
+      "ALTER TABLE deliveries ADD COLUMN reply_message_id TEXT",
+      "ALTER TABLE messages ADD COLUMN reply_to_message_id TEXT"
+    ]
+  ],
+  [
     "0082_pending_events_settled_retention.sql",
     [
       "CREATE INDEX IF NOT EXISTS idx_pending_events_settled_retention\n  ON pending_events(status, completed_at, id)"

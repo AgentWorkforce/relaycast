@@ -190,6 +190,7 @@ describe("loadBundledPostgresMigrations", () => {
       "0002_even_silverclaw.sql",
       "0003_previous_lila_cheney.sql",
       "0004_handler_snapshot_backfill.sql",
+      "0005_delivery_confirmation.sql",
     ]);
     expect(bundled.every((m) => m.statements.length > 0)).toBe(true);
   });
