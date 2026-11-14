@@ -7,7 +7,7 @@ import { createEngine } from '../../engine.js';
 import { createNodeRuntime, type NodeRuntime } from '../../adapters/node/index.js';
 import { nodes } from '../../db/tables.js';
 import { enqueueEvent, sweepPendingEvents } from '../../engine/eventQueue.js';
-import { FakeSocket, createWorkspace } from './harness.js';
+import { FakeSocket, createWorkspace, makeNodeStack, pgMode } from './harness.js';
 
 // File-backed so transactions run on isolated connections like production
 // self-host (not the shared :memory: connection). Two nodes registering at
@@ -21,6 +21,12 @@ import { FakeSocket, createWorkspace } from './harness.js';
 // providerAttachRace suite cannot surface because it has no second node to
 // contend the writer and no concurrent raw-write traffic.
 function fileStack() {
+  // PostgreSQL: the conformance pool already gives every transaction its own
+  // connection, which is the isolation this file-backed SQLite stack provides.
+  if (pgMode) {
+    const stack = makeNodeStack();
+    return { app: stack.app, runtime: stack.runtime, close: () => stack.close() };
+  }
   const dir = mkdtempSync(join(tmpdir(), 'relaycast-two-node-'));
   const runtime: NodeRuntime = createNodeRuntime({
     dbPath: join(dir, 'test.db'),

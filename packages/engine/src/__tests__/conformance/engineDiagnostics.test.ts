@@ -4,7 +4,7 @@ import { configureEngineDiagnostics } from '../../lib/engineDiagnostics.js';
 import type { EngineDb } from '../../ports/index.js';
 import type { EngineOperationSample, EngineProgressSample } from '../../ports/diagnostics.js';
 import { backfillMessageMentionFts } from '../../engine/inbox.js';
-import { createWorkspace, makeNodeStack, registerAgent, type TestStack } from './harness.js';
+import { createWorkspace, makeNodeStack, pgMode, rawRun, registerAgent, sqliteOnly, type TestStack } from './harness.js';
 
 describe('engine diagnostics', () => {
   let stack: TestStack;
@@ -32,6 +32,16 @@ describe('engine diagnostics', () => {
       },
     });
 
+  /**
+   * A view of the stack's handle whose raw reads (db/sqlx.ts `all`: `db.all`
+   * on SQLite, `db.execute` on PostgreSQL) reject with `rejection`.
+   */
+  const rejectingRawReads = (rejection: unknown): EngineDb => {
+    const db: EngineDb = Object.create(stack.runtime.deps.db);
+    Object.defineProperty(db, pgMode ? 'execute' : 'all', { value: () => Promise.reject(rejection) });
+    return db;
+  };
+
   it('labels inbox and delivery reads with their workspace', async () => {
     const ws = await createWorkspace(stack.app, 'diagnostics-labels');
     const agent = await registerAgent(stack.app, ws.workspaceKey, 'diag-agent');
@@ -50,8 +60,7 @@ describe('engine diagnostics', () => {
     const ws = await createWorkspace(stack.app, 'diagnostics-errors');
     const agent = await registerAgent(stack.app, ws.workspaceKey, 'diag-failing-agent');
     // Fail only the inbox's raw unread-count query; auth and everything else are real.
-    const db: EngineDb & { all: unknown } = Object.create(stack.runtime.deps.db);
-    db.all = () => Promise.reject(new Error('injected inbox failure'));
+    const db = rejectingRawReads(new Error('injected inbox failure'));
     const captureException = vi.fn();
     const app = appWithDiagnostics({ db, captureException });
     const response = await app.request('/v1/inbox', { headers: { authorization: `Bearer ${agent.token}` } });
@@ -72,8 +81,7 @@ describe('engine diagnostics', () => {
   ])('keeps the operation when the database rejects with %s', async (_kind, rejection) => {
     const ws = await createWorkspace(stack.app, 'diagnostics-odd-rejection');
     const agent = await registerAgent(stack.app, ws.workspaceKey, 'diag-odd-rejection');
-    const db: EngineDb & { all: unknown } = Object.create(stack.runtime.deps.db);
-    db.all = () => Promise.reject(rejection);
+    const db = rejectingRawReads(rejection);
     const captureException = vi.fn();
     const app = appWithDiagnostics({ db, captureException });
     const response = await app.request('/v1/inbox', { headers: { authorization: `Bearer ${agent.token}` } });
@@ -88,8 +96,7 @@ describe('engine diagnostics', () => {
     const ws = await createWorkspace(stack.app, 'diagnostics-plain-rejection');
     const agent = await registerAgent(stack.app, ws.workspaceKey, 'diag-plain-rejection');
     // A database adapter that rejects with a non-Error object.
-    const db: EngineDb & { all: unknown } = Object.create(stack.runtime.deps.db);
-    db.all = () => Promise.reject({ message: 'adapter failure' });
+    const db = rejectingRawReads({ message: 'adapter failure' });
     const captureException = vi.fn();
     const app = appWithDiagnostics({ db, captureException });
     const response = await app.request('/v1/inbox', { headers: { authorization: `Bearer ${agent.token}` } });
@@ -100,7 +107,8 @@ describe('engine diagnostics', () => {
     }));
   });
 
-  it('reports backfill progress through to completion', async () => {
+  // pg: the mention FTS backfill (cursor row and copy statement) exists only in the SQLite schema.
+  sqliteOnly('reports backfill progress through to completion', async () => {
     // Maintenance runs outside any app request: hosts configure the fallback sink.
     configureEngineDiagnostics({
       operation: sample => { operations.push(sample); },
@@ -108,9 +116,7 @@ describe('engine diagnostics', () => {
     });
     const db = stack.runtime.deps.db;
     // A pending copy whose remaining range holds no rows: one call completes it.
-    stack.runtime.handle.sqlite.prepare(
-      "UPDATE maintenance_cursors SET cursor = '0/5' WHERE id = 'mention-fts-backfill'",
-    ).run();
+    await rawRun(db, "UPDATE maintenance_cursors SET cursor = '0/5' WHERE id = 'mention-fts-backfill'");
     await backfillMessageMentionFts(db);
     expect(progress.at(-1)).toMatchObject({ operation: 'backfill.mention_fts', phase: 'completed', remaining: 0 });
     expect(operations).toContainEqual(expect.objectContaining({ label: 'backfill.mention_fts', outcome: 'ok' }));

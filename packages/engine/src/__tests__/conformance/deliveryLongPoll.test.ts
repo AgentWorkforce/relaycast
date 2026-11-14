@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { makeNodeStack, createWorkspace, registerAgent, attachDirectNodeSocket, deliverFramesOfType, type TestStack } from './harness.js';
+import { makeNodeStack, createWorkspace, registerAgent, attachDirectNodeSocket, deliverFramesOfType, interceptStatements, type TestStack } from './harness.js';
 
 /**
  * `GET /v1/deliveries?wait=`: an empty answer parks until a delivery is
@@ -37,12 +37,7 @@ describe('delivery long-poll', () => {
 
   function countStatements() {
     const statements: string[] = [];
-    const sqlite = stack.runtime.handle.sqlite;
-    const prepare = sqlite.prepare.bind(sqlite);
-    sqlite.prepare = ((sql: string) => {
-      statements.push(sql);
-      return prepare(sql);
-    }) as typeof sqlite.prepare;
+    interceptStatements(stack, (sql) => { statements.push(sql); });
     return { take: () => statements.splice(0) };
   }
 
@@ -98,11 +93,15 @@ describe('delivery long-poll', () => {
   it('issues the same statements as an immediate poll when the wait expires', async () => {
     const { bob } = await seed();
     await items(await poll(bob.token, ''));
+    // Settle background work around each poll so only the poll's own statements are counted.
+    await stack.settle();
     const counter = countStatements();
 
     await items(await poll(bob.token, ''));
+    await stack.settle();
     const immediate = counter.take();
     expect(await items(await poll(bob.token, '?wait=200'))).toEqual([]);
+    await stack.settle();
     const parked = counter.take();
 
     expect(immediate.length).toBeGreaterThan(0);

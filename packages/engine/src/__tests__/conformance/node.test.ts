@@ -9,6 +9,8 @@ import {
   attachDirectNodeSocket,
   contextUpdatesOfType,
   deliverFramesOfType,
+  installFaultTrigger,
+  pgMode,
   type TestStack,
 } from './harness.js';
 import { actionInvocations, actions, agentNodeBindings, agents, channelMembers, deliveries, nodeProviders, nodes } from '../../db/tables.js';
@@ -48,7 +50,7 @@ describe('node adapter conformance', () => {
       await presence.heartbeat(ws.workspaceId, bob.agentId, 'bob');
       expect(await presence.getOnline(ws.workspaceId)).toEqual(expect.arrayContaining([alice.agentId, bob.agentId]));
       // Bob should have learned Alice (and itself) became active through node-scoped context.
-      expect(contextUpdatesOfType(bSock, 'agent.status.active').length).toBeGreaterThanOrEqual(1);
+      await vi.waitFor(() => expect(contextUpdatesOfType(bSock, 'agent.status.active').length).toBeGreaterThanOrEqual(1));
 
       // Advance the presence clock past its TTL, then run the real sweep.
       vi.setSystemTime(Date.now() + 1100);
@@ -57,8 +59,13 @@ describe('node adapter conformance', () => {
       await presence.sweep();
 
       expect(await presence.getOnline(ws.workspaceId)).toEqual([bob.agentId]);
-      const offline = contextUpdatesOfType(bSock, 'agent.status.offline');
-      expect(offline.length).toBeGreaterThanOrEqual(1);
+      // Node presence context is sent fire-and-forget after the sweep's
+      // broadcast; on an async driver (PostgreSQL) it lands a tick later.
+      const offline = await vi.waitFor(() => {
+        const frames = contextUpdatesOfType(bSock, 'agent.status.offline');
+        expect(frames.length).toBeGreaterThanOrEqual(1);
+        return frames;
+      });
       expect(offline[0]).toMatchObject({
         type: 'context.update',
         event: 'agent.status.offline',
@@ -1184,13 +1191,12 @@ describe('node adapter conformance', () => {
       });
       const db = stack.runtime.handle.db;
       delete (db as Partial<TransactionCapability>).withTransaction;
-      stack.runtime.handle.sqlite.exec(`
-        CREATE TRIGGER fail_d1_agent_binding
-        BEFORE INSERT ON agent_node_bindings
-        BEGIN
-          SELECT RAISE(ABORT, 'forced binding failure');
-        END
-      `);
+      await installFaultTrigger(stack, {
+        name: 'fail_d1_agent_binding',
+        table: 'agent_node_bindings',
+        event: 'INSERT',
+        message: 'forced binding failure',
+      });
 
       await alpha.handle.handleMessage(JSON.stringify({
         v: 1,
@@ -2067,6 +2073,8 @@ describe('node adapter conformance', () => {
         status: 'pending',
       });
 
+      // SQLite planner check (EXPLAIN QUERY PLAN); no PostgreSQL counterpart.
+      if (!pgMode) {
       const drainPlan = stack.runtime.handle.sqlite.prepare(`
         EXPLAIN QUERY PLAN
         SELECT action_invocations.id
@@ -2097,6 +2105,7 @@ describe('node adapter conformance', () => {
       ) as Array<{ detail: string }>;
       expect(drainPlan.some((step) =>
         step.detail.includes('idx_action_invocations_pending_workspace'))).toBe(true);
+      }
 
       alpha.sock.received.length = 0;
       const drained = await drainNodeInvocations(db, stack.runtime.realtime, ws.workspaceId, 'node_alpha');

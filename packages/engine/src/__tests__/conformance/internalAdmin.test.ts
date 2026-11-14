@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { startServer } from '../../entrypoints/node.js';
 import { beginInternalWorkspaceDeletion, pushWorkspaceKey } from '../../engine/internalAdmin.js';
-import { makeNodeStack, registerAgent, type TestStack } from './harness.js';
+import { makeNodeStack, rawGet, rawRun, registerAgent, runBeforeExecute, type TestStack } from './harness.js';
 import { encodeArCredential, parseCredential } from '@relaycast/types';
 import { createCredentialTagSigner } from '../../auth/credentialTags.js';
 
@@ -258,9 +258,12 @@ describe('internal admin API', () => {
         get(target, prop, receiver) {
           if (prop === 'update' && !raced) {
             raced = true;
-            stack.runtime.handle.sqlite
-              .prepare('UPDATE workspaces SET api_key_hash = ?, api_key_generation = 1 WHERE id = ?')
-              .run('concurrent-winner-hash', ws.workspace_id);
+            const update = Reflect.get(target, prop, receiver) as (table: unknown) => object;
+            return (table: unknown) => runBeforeExecute(update.call(target, table), () => rawRun(
+              realDb,
+              'UPDATE workspaces SET api_key_hash = ?, api_key_generation = 1 WHERE id = ?',
+              ['concurrent-winner-hash', ws.workspace_id],
+            ));
           }
           return Reflect.get(target, prop, receiver);
         },
@@ -308,7 +311,7 @@ describe('internal admin API', () => {
           error: { code: 'invalid_request', message: 'workspace ids must be snowflakes on deployments that mint ar_ credentials' },
         });
       }
-      expect(stack.runtime.handle.sqlite.prepare("SELECT COUNT(*) AS n FROM workspaces WHERE id = 'tenant123'").get()).toEqual({ n: 0 });
+      expect(await rawGet(stack.runtime.deps.db, "SELECT COUNT(*) AS n FROM workspaces WHERE id = 'tenant123'")).toEqual({ n: 0 });
       // Workspaces the engine creates itself are snowflakes.
       const ws = await createViaAdmin();
       expect(ws.workspace_id).toMatch(/^[1-9][0-9]{0,19}$/);

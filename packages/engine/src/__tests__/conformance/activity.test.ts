@@ -1,7 +1,7 @@
 import { eq } from 'drizzle-orm';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { channels, messages } from '../../db/tables.js';
-import { createWorkspace, makeNodeStack, registerAgent, type TestStack } from './harness.js';
+import { createWorkspace, makeNodeStack, pgMode, registerAgent, type TestStack } from './harness.js';
 
 describe('activity feed', () => {
   let stack: TestStack;
@@ -51,6 +51,8 @@ describe('activity feed', () => {
     expect(response.status).toBe(200);
     expect(body.data.map((item) => item.id)).toEqual([higherId, lowerId]);
 
+    // SQLite planner check (EXPLAIN QUERY PLAN); no PostgreSQL counterpart.
+    if (pgMode) return;
     const plan = stack.runtime.handle.sqlite.prepare(`
       EXPLAIN QUERY PLAN
       SELECT messages.id
