@@ -172,7 +172,9 @@ describe('Relay Connect observer capability', () => {
     const scopedBody = (await scopedResponse.json()) as {
       data: Array<{ id: string; participants: string[]; message_count: number; last_message: { text: string } | null }>;
     };
-    expect(scopedBody.data).toEqual([
+    // Participant order is insertion order on SQLite but unspecified on
+    // PostgreSQL (the lookup has no ORDER BY), so compare it sorted.
+    expect(scopedBody.data.map((c) => ({ ...c, participants: [...c.participants].sort() }))).toEqual([
       expect.objectContaining({
         id: conversationIds[0],
         participants: ['alice', peers[0]],
@@ -226,7 +228,7 @@ describe('Relay Connect observer capability', () => {
       data: Array<{ id: string; participants: string[] }>;
     };
     expect(conversationBody.data).toHaveLength(1);
-    expect(conversationBody.data[0]).toMatchObject({
+    expect({ ...conversationBody.data[0], participants: [...conversationBody.data[0]!.participants].sort() }).toMatchObject({
       id: historicalA.data.conversation_id,
       participants: ['alice', 'bob'],
     });
