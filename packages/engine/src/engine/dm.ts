@@ -38,6 +38,7 @@ import {
 } from './workspaceDeliveryPolicy.js';
 import { A2A_EGRESS_RETRY_WINDOW_MS, dispatchA2aEgress, expireA2aEgressForReuse } from './a2aEgress.js';
 import { buildDmReceivedEventData } from './deliveryWire.js';
+import { buildReplyLinkWrite, repliedByReplyLinkWrite } from './delivery.js';
 import { buildWorkspaceEventWrite } from './workspaceEvents.js';
 import { seqLockedWrite } from './seqLock.js';
 import { transformForClient } from './wsTransform.js';
@@ -435,6 +436,12 @@ export type AcceptedDmResult = ReturnType<typeof buildDmResult>;
 export type SendDmResult = AcceptedDmResult & {
   _delivery: DeliveryOutcomeRecords['deliveries'][number] | null;
   _delivery_rejections: DeliveryOutcomeRecords['rejections'];
+  /**
+   * The deliveries this send's `reply_to_message_id` marked `replied`, in the
+   * admission's own atomic unit; the caller tells their senders. Absent on a
+   * replay, which created nothing new.
+   */
+  _replied_delivery_ids?: string[];
   _notifications_durable?: boolean;
   _idempotency_replayed?: boolean;
   _idempotency_ttl_seconds?: number;
@@ -773,9 +780,10 @@ export async function sendDm(
   const directClaimId = directRequestId;
   const notificationsDurable = Boolean(egressId || options.receivedA2aAgentId || inboundId || directClaimId);
   const persistWebhookOutbox = notificationsDurable && options.hasWebhookSubscriptions !== false;
-  // The optional webhook outbox, observer cursor log, response context and
-  // delivery share admission. None can escape a capacity rollback, or depend
-  // on external transport success.
+  // The optional webhook outbox, observer cursor log, response context,
+  // delivery and reply link share admission. None can escape a capacity
+  // rollback, or depend on external transport success.
+  let replyLinkIndex = -1;
   const persist = () => runAtomicWrites(db, (writeDb) => {
     const writes = buildDmMessageWrites(writeDb, workspaceId, fromAgentId, conv.channelId, data, attachments, messageId, createdAt,
       options.receivedA2aAgentId ? { id: options.receivedA2aAgentId, tokenHash: options.receivedA2aTokenHash } : undefined,
@@ -843,6 +851,15 @@ export async function sendDm(
       }),
     );
 
+    if (data.reply_to_message_id !== undefined) {
+      // The answered message's delivery to this sender (verified above) is
+      // marked with the reply itself: a crash after commit cannot lose it,
+      // and a replayed retry has nothing left to mark.
+      replyLinkIndex = writes.length;
+      writes.push(buildReplyLinkWrite(writeDb, workspaceId, {
+        messageId: data.reply_to_message_id, recipientAgentId: fromAgentId, replyMessageId: messageId,
+      }));
+    }
     if (inboundId) writes.push(writeDb.insert(a2aInbound).values({ id: inboundId, workspaceId, messageId, fingerprint: inboundFingerprint, response: publicResult }));
     if (egressId) writes.push(writeDb.insert(a2aEgressContext).values({ id: egressId, messageId, response: publicResult }));
     if (deliveryId && (directClaimId || egressId)) {
@@ -888,9 +905,13 @@ export async function sendDm(
     return writes;
   }, { requireAtomic: Boolean(workspacePolicy || a2aTarget || options.receivedA2aAgentId || inboundId || directClaimId) });
   let admittedEventSeq: number | undefined;
+  let repliedDeliveryIds: string[] | undefined;
   try {
     const results = await persist();
     if (notificationsDurable) admittedEventSeq = (results[results.length - 1] as { seq: number }[])[0].seq;
+    if (replyLinkIndex >= 0) {
+      repliedDeliveryIds = repliedByReplyLinkWrite(results[replyLinkIndex] as { id: string; repliedAt: Date | null }[]);
+    }
   } catch (error) {
     if (options.address !== undefined && databaseConstraintKind(error) === 'address_changed') {
       throw addressNotFound(options.address);
@@ -934,6 +955,7 @@ export async function sendDm(
     ...publicResult,
     _delivery: dmDelivery,
     _delivery_rejections: deliveryOutcomes.rejections,
+    ...(repliedDeliveryIds ? { _replied_delivery_ids: repliedDeliveryIds } : {}),
     ...(notificationsDurable ? { _notifications_durable: true } : {}),
   };
   if (notificationsDurable) {

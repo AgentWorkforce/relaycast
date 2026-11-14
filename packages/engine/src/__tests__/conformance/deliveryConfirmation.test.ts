@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   attachDirectNodeSocket,
   contextUpdatesOfType,
@@ -15,6 +15,19 @@ import { sweepExpiredDeliveries } from '../../routes/deliveryRouting.js';
 import { createEngine } from '../../engine.js';
 import * as deliveryEngine from '../../engine/delivery.js';
 import { markReadAndApplyReplies } from '../../engine/receipt.js';
+
+// Lets a test drop the best-effort `delivery.replied` sender notification a
+// reply schedules in the background, as if the process died right after the
+// reply committed.
+const backgroundReplyNotifier = vi.hoisted(() => ({ skip: false }));
+vi.mock('../../routes/deliveryRouting.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../routes/deliveryRouting.js')>();
+  return {
+    ...actual,
+    notifyRepliedDeliveries: (...args: Parameters<typeof actual.notifyRepliedDeliveries>) =>
+      backgroundReplyNotifier.skip ? Promise.resolve() : actual.notifyRepliedDeliveries(...args),
+  };
+});
 
 type SentDelivery = {
   id: string;
@@ -40,7 +53,7 @@ type Receipt = Record<string, unknown> & { id: string; state: string };
 describe('delivery confirmation', () => {
   let stack: TestStack;
   beforeEach(() => { stack = makeNodeStack({ ttlMs: 60_000 }); });
-  afterEach(() => stack.close());
+  afterEach(() => { backgroundReplyNotifier.skip = false; return stack.close(); });
 
   const authed = (token: string, init: RequestInit = {}) => ({
     ...init,
@@ -585,6 +598,38 @@ describe('delivery confirmation', () => {
     expect(await deliveryEngine.markDeliveriesDelivered(db, ws.workspaceId, [deliveryId]))
       .toEqual({ delivered: [deliveryId], replied: [] });
     expect(pendingLink(deliveryId)).toEqual({ reply_message_id: answer.data.id, replied_at: now });
+  });
+
+  it('marks the answered delivery replied with the reply itself, even if the background notifier never runs', async () => {
+    const ws = await createWorkspace(stack.app, 'confirm-reply-atomic');
+    const alice = await registerAgent(stack.app, ws.workspaceKey, 'alice');
+    const node = await enrollBrokerNode(ws);
+    const bob = await registerViaNode(node, 'bob');
+    const stream = new FakeSocket();
+    stack.runtime.realtime.attachWorkspaceSocket(ws.workspaceId, stream);
+
+    const question = await sendDm(alice.token, { to: 'bob', text: 'free at 3?' });
+    const post = await stack.app.request('/v1/channels/general/messages', authed(alice.token, { method: 'POST', body: JSON.stringify({ text: 'thoughts?' }) }));
+    const posted = ((await post.json()) as { data: { id: string } }).data;
+    await stack.settle();
+    expect(node.sock.ofType('deliver')).toHaveLength(2);
+
+    backgroundReplyNotifier.skip = true;
+    const answer = await sendDm(bob.token, { to: 'alice', text: 'yes, 3', reply_to_message_id: question.data.id });
+    expect(answer.status).toBe(201);
+    const threadReply = await stack.app.request(`/v1/messages/${posted.id}/replies`, authed(bob.token, { method: 'POST', body: JSON.stringify({ text: 'two' }) }));
+    expect(threadReply.status).toBe(201);
+    const threadReplyId = ((await threadReply.json()) as { data: { id: string } }).data.id;
+    await stack.settle();
+
+    // Nobody was told, yet both rows committed `replied` with their replies.
+    expect(stream.ofType('delivery.replied')).toEqual([]);
+    expect((await receipts(alice.token, question.data.id))[0]).toMatchObject({
+      state: 'replied', replied_at: expect.any(String), reply_message_id: answer.data.id,
+    });
+    expect((await receipts(alice.token, posted.id))[0]).toMatchObject({
+      state: 'replied', replied_at: expect.any(String), reply_message_id: threadReplyId,
+    });
   });
 
   it('marks a channel message replied when a thread reply answers it', async () => {

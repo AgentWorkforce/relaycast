@@ -53,7 +53,9 @@ Decisions:
 - **`replied` is explicit correlation only.** A DM names what it answers
   with `reply_to_message_id` (verified: the recipient's own message, in that
   conversation, else `400 invalid_request`); a thread reply answers its
-  parent. Exactly that message's delivery to the replier is marked. Nothing
+  parent. Exactly that message's delivery to the replier is marked, in the
+  same atomic write as the reply message (a crash after the send cannot lose
+  the mark; only the sender's `delivery.replied` is sent afterwards). Nothing
   is inferred from conversation order (the earlier draft's "mark every
   unanswered DM" heuristic was dropped entirely), and a row still raw
   `queued` (it may already be in flight: a reconnect-replay page is written

@@ -891,8 +891,22 @@ export async function markDeliveriesReplied(
   workspaceId: string,
   input: { messageId: string; recipientAgentId: string; replyMessageId: string },
 ): Promise<string[]> {
+  return repliedByReplyLinkWrite(await buildReplyLinkWrite(db, workspaceId, input));
+}
+
+/**
+ * {@link markDeliveriesReplied}'s UPDATE, built but not executed, so a reply's
+ * send joins it to the atomic unit that inserts the reply message: the link is
+ * durable with the reply, and an idempotent retry that replays the send has
+ * nothing left to redo. Read its rows with {@link repliedByReplyLinkWrite}.
+ */
+export function buildReplyLinkWrite(
+  db: Db,
+  workspaceId: string,
+  input: { messageId: string; recipientAgentId: string; replyMessageId: string },
+) {
   const now = new Date();
-  const updated = await db
+  return db
     .update(deliveries)
     .set({
       // Transitions apply a pending link in their own write, so a delivered
@@ -910,7 +924,11 @@ export async function markDeliveriesReplied(
       sql`(${deliveries.status} IN ('delivered', 'acked') OR (${deliveries.status} = 'queued' AND ${deliveries.replyMessageId} IS NULL))`,
     ))
     .returning({ id: deliveries.id, repliedAt: deliveries.repliedAt });
-  return updated.filter((row) => row.repliedAt !== null).map((row) => row.id);
+}
+
+/** The ids a {@link buildReplyLinkWrite} statement marked `replied` now; a pending link is not one. */
+export function repliedByReplyLinkWrite(rows: readonly { id: string; repliedAt: Date | null }[]): string[] {
+  return rows.filter((row) => row.repliedAt !== null).map((row) => row.id);
 }
 
 /** Most delivery rows `getMessageDeliveries` returns for one message. */

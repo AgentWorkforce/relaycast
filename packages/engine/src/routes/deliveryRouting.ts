@@ -845,21 +845,18 @@ export async function sweepUnreachableDeliveries(
 }
 
 /**
- * The replier explicitly answered `messageId` (a DM's `reply_to_message_id`,
- * a thread reply's parent): mark that message's delivery to the replier
- * `replied` and tell its sender (`delivery.replied` with the reply's id).
- * A row still `queued` keeps the reply as a pending link and tells nothing
- * yet; its transition out of `queued` applies and reports it (see
- * `markDeliveriesReplied`). Best-effort after the reply committed.
+ * Tell the senders of `deliveryIds` that the recipient explicitly answered
+ * (`delivery.replied` with the reply's id). The send that carried the reply
+ * (a DM's `reply_to_message_id`, a thread reply's parent) already marked the
+ * rows in its own atomic unit (`buildReplyLinkWrite`), so only this
+ * notification is best-effort. A row still `queued` kept the reply as a
+ * pending link and is not among the ids; its transition out of `queued`
+ * applies and reports it.
  */
-export async function notifyMessageReplied(
-  c: HonoContext,
-  input: { messageId: string; recipientAgentId: string; replyMessageId: string },
-): Promise<void> {
+export async function notifyRepliedDeliveries(c: HonoContext, deliveryIds: readonly string[] | undefined): Promise<void> {
+  if (!deliveryIds || deliveryIds.length === 0) return;
   const ctx = routingContextFromHono(c);
-  const replied = await deliveryEngine.markDeliveriesReplied(ctx.db, ctx.workspaceId, input);
-  if (replied.length === 0) return;
-  await notifySenderDeliveryReceipts({ db: ctx.db, engine: ctx.engine }, ctx.workspaceId, replied, 'replied');
+  await notifySenderDeliveryReceipts({ db: ctx.db, engine: ctx.engine }, ctx.workspaceId, [...deliveryIds], 'replied');
 }
 
 export async function notifyDeliveryRejections(

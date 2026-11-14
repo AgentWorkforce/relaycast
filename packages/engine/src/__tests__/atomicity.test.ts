@@ -491,7 +491,7 @@ describe('atomic write paths', () => {
       expect(delivery.messageId).toBe(sent.message.id);
     });
 
-    it('thread reply issues exactly one batch: reply + deliveries', async () => {
+    it('thread reply issues exactly one batch: reply + deliveries + the parent\'s reply link', async () => {
       const { ws, alice, bob, channelId, db } = await seed();
       const parent = await postMessage(db, ws.workspaceId, channelId, alice.agentId, { text: 'root' });
       const batches = attachFakeBatch(db);
@@ -499,9 +499,11 @@ describe('atomic write paths', () => {
       const reply = await postReply(db, ws.workspaceId, parent.id, bob.agentId, { text: 'on it' });
 
       expect(batches).toHaveLength(1);
-      expect(batches[0]).toHaveLength(2);
+      expect(batches[0]).toHaveLength(3);
       expectStatementOn(batches[0], 'insert', 'messages');
       expectStatementOn(batches[0], 'insert', 'deliveries');
+      // The parent's delivery to the replier is marked inside the reply's batch.
+      expectStatementOn(batches[0], 'update', 'deliveries');
 
       expect(reply.thread_id).toBe(parent.id);
       const [delivery] = await db

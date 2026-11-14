@@ -11,7 +11,7 @@ import { requireAgentAddress } from '../engine/address.js';
 import { resolveMailboxConfig } from '../engine/mailboxConfig.js';
 import { resolveWorkspaceDeliveryPolicyFor } from '../engine/workspaceDeliveryPolicy.js';
 import { publishWorkspaceEvent } from './fanout.js';
-import { notifyDeliveryRejections, notifyMessageReplied, routeDeliveryOutcomes } from './deliveryRouting.js';
+import { notifyDeliveryRejections, notifyRepliedDeliveries, routeDeliveryOutcomes } from './deliveryRouting.js';
 import { buildDmReceivedEventData, sentDmDeliveryReceipt, withoutRecipient } from '../engine/deliveryWire.js';
 import { awaitSentDeliveries, resolveSendWaitMs, sendWaitMsSchema } from './sendWait.js';
 import { runInBackground } from './background.js';
@@ -217,15 +217,16 @@ dmRoutes.post(
         trackDmSent(publicDmData);
       }
 
-      // An explicit answer settles the named message's delivery to this
-      // agent as `replied` (the engine already verified the reference).
-      // Fresh sends only: a replay created nothing new.
-      if (!effectiveIdempotent.replayed && replyToMessageId !== undefined) {
-        runInBackground(c, notifyMessageReplied(c, {
-          messageId: replyToMessageId,
-          recipientAgentId: agent!.id,
-          replyMessageId: effectiveIdempotent.data.id,
-        }), 'mark replied delivery');
+      // An explicit answer marked the named message's delivery to this agent
+      // `replied` in the send's own atomic unit (after the engine verified
+      // the reference); tell its sender. Fresh sends only: a replay created
+      // nothing new.
+      if (!effectiveIdempotent.replayed && effectiveIdempotent.data._replied_delivery_ids?.length) {
+        runInBackground(
+          c,
+          notifyRepliedDeliveries(c, effectiveIdempotent.data._replied_delivery_ids),
+          'notify replied delivery',
+        );
       }
 
       // The sender's handle on the recipient's delivery row: `null` when no

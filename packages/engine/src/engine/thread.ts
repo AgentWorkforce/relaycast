@@ -23,6 +23,7 @@ import {
   senderAddressField,
 } from './address.js';
 import * as sqlx from '../db/sqlx.js';
+import { buildReplyLinkWrite, repliedByReplyLinkWrite } from './delivery.js';
 
 type Db = ReturnType<typeof getDb>;
 
@@ -146,9 +147,17 @@ export async function postReply(
         }),
     );
 
+    // A thread reply answers its parent: that message's delivery to the
+    // replier is marked with the reply itself, so a crash after commit cannot
+    // lose it and a replayed retry has nothing left to mark. Last statement.
+    writes.push(buildReplyLinkWrite(writeDb, workspaceId, {
+      messageId: parent.id, recipientAgentId: agentId, replyMessageId: replyId,
+    }));
+
     return writes;
   }, { requireAtomic: Boolean(options.workspaceDeliveryPolicy) });
   const [reply] = results[0] as (typeof messages.$inferSelect)[];
+  const repliedDeliveryIds = repliedByReplyLinkWrite(results[results.length - 1] as { id: string; repliedAt: Date | null }[]);
   const deliveryOutcomes: DeliveryOutcomeRecords = dmConversation
     ? await fetchGroupDeliveryOutcomes(db, {
       messageId: replyId,
@@ -185,6 +194,8 @@ export async function postReply(
     // Internal: delivery records for recipients — stripped by route before response
     _deliveries: deliveryOutcomes.deliveries,
     _delivery_rejections: deliveryOutcomes.rejections,
+    // Internal: deliveries this reply marked `replied`; the route tells their senders.
+    _replied_delivery_ids: repliedDeliveryIds,
   };
 }
 
