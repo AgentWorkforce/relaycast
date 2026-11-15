@@ -12,7 +12,7 @@ class MockWebSocket {
   url: string;
   readyState = MockWebSocket.OPEN;
   onopen: (() => void) | null = null;
-  onclose: (() => void) | null = null;
+  onclose: ((event?: { code: number; reason: string }) => void) | null = null;
   onmessage: ((event: { data: string }) => void) | null = null;
   onerror: (() => void) | null = null;
   send = vi.fn();
@@ -34,9 +34,11 @@ class MockWebSocket {
     this.onmessage?.({ data: JSON.stringify(data) });
   }
 
-  simulateClose(): void {
+  /** Server-side close; `code` is passed as the close event's code when given. */
+  simulateClose(code?: number): void {
     this.readyState = MockWebSocket.CLOSED;
-    this.onclose?.();
+    if (code === undefined) this.onclose?.();
+    else this.onclose?.({ code, reason: '' });
   }
 }
 
@@ -1676,6 +1678,55 @@ describe('AgentClient WebSocket integration', () => {
     await vi.advanceTimersByTimeAsync(4000);
     await nextSocket(3);
     expect(mints()).toBe(2);
+  });
+
+  it('keeps reusing the direct node token across bare 4009 refusals and reports each once', async () => {
+    const agent = createAgent();
+    const rejected = vi.fn();
+    agent.on.registrationRejected(rejected);
+    const mints = () =>
+      mockFetch.mock.calls.filter(([url]) => String(url).endsWith('/v1/agent/node-token')).length;
+
+    agent.connect();
+    // More refusals than the token-reuse bound: a 4009 with no error frame
+    // still proves the token authenticates, so it must not rotate.
+    for (let attempt = 0; attempt < 4; attempt += 1) {
+      const socket = await nextSocket(attempt);
+      socket.simulateOpen();
+      await vi.advanceTimersByTimeAsync(0);
+      socket.simulateClose(4009);
+      expect(rejected).toHaveBeenCalledTimes(attempt + 1);
+      await vi.advanceTimersByTimeAsync(30_000);
+    }
+    await nextSocket(4);
+
+    expect(mints()).toBe(1);
+    expect(rejected).toHaveBeenCalledWith({
+      code: 'provider_instance_conflict',
+      message: 'provider_instance_conflict (close 4009)',
+      retryAfterMs: null,
+    });
+    agent.disconnect();
+  });
+
+  it('reports an error-frame refusal once, not again for the close 4009 that follows it', async () => {
+    const agent = createAgent();
+    const rejected = vi.fn();
+    agent.on.registrationRejected(rejected);
+    agent.connect();
+    const socket = await nextSocket();
+    socket.simulateOpen();
+    for (let i = 0; i < 10 && !socket.send.mock.calls.some(([p]) => JSON.parse(String(p)).type === 'node.register'); i += 1) {
+      await Promise.resolve();
+    }
+    const register = socket.send.mock.calls.map(([p]) => JSON.parse(String(p))).find((frame) => frame.type === 'node.register');
+    socket.simulateMessage({
+      v: 1, id: register.id, type: 'error', ok: false, code: 'provider_instance_conflict', message: 'held',
+    });
+    socket.simulateClose(4009);
+    expect(rejected).toHaveBeenCalledTimes(1);
+    expect(rejected).toHaveBeenCalledWith({ code: 'provider_instance_conflict', message: 'held', retryAfterMs: 30_000 });
+    agent.disconnect();
   });
 
   it('keeps a single minted token while a connection that opens keeps flapping', async () => {

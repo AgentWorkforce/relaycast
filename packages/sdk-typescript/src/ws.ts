@@ -283,7 +283,16 @@ export class WsClient {
   private refusedSocket: WebSocket | null = null;
   /** Fallback close for a refused socket the server never closes. */
   private refusalCloseTimer: ReturnType<typeof setTimeout> | null = null;
+  /**
+   * Consecutive failed reconnects: the backoff level and the circuit-breaker
+   * streak. A conflict refusal neither raises nor resets it.
+   */
   private reconnectAttempt = 0;
+  /**
+   * Every reconnect scheduled since the last accepted connection, conflict
+   * refusals included; checked against {@link maxReconnectAttempts}.
+   */
+  private totalReconnectAttempts = 0;
   private maxReconnectAttempts: number;
   private reconnectJitter: boolean;
   private reconnectBaseDelayMs: number;
@@ -557,6 +566,7 @@ export class WsClient {
     if (this.ws !== ws || this.closed || this.isOpen) return;
     this.isOpen = true;
     this.reconnectAttempt = 0;
+    this.totalReconnectAttempts = 0;
     this.refusedUntil = null;
     this.refusedSocket = null;
     this.clearRefusalCloseTimer();
@@ -629,10 +639,20 @@ export class WsClient {
     this.ws = null;
     this.pendingRegistrationId = null;
     // A 4009 close is the gateway's conflict refusal. If its error reply
-    // already started the wait, keep that deadline (the server may have held
-    // the socket for it); otherwise the wait starts now.
+    // already started the wait (and announced registration_rejected), keep
+    // that deadline (the server may have held the socket for it); otherwise
+    // the wait starts now and this close is the refusal's only notice.
     if (code === PROVIDER_INSTANCE_CONFLICT_CLOSE_CODE && this.refusedSocket !== ws) {
       this.recordRefusal(ws, PROVIDER_INSTANCE_CONFLICT_MIN_RETRY_MS);
+      if (this.nodeMode) {
+        const event: WsRegistrationRejectedEvent = {
+          type: 'registration_rejected',
+          code: PROVIDER_INSTANCE_CONFLICT_CODE,
+          message: `${PROVIDER_INSTANCE_CONFLICT_CODE} (close ${PROVIDER_INSTANCE_CONFLICT_CLOSE_CODE})`,
+          retryAfterMs: null,
+        };
+        this.emit('registration_rejected', event);
+      }
     }
     if (!this.closed) {
       this.scheduleReconnect();
@@ -685,6 +705,7 @@ export class WsClient {
     this.connecting = false;
     this.permanentlyDisconnected = false;
     this.reconnectAttempt = 0;
+    this.totalReconnectAttempts = 0;
     this.clearConnectTimer();
     this.clearRegisterTimer();
     this.clearRefusalCloseTimer();
@@ -1284,7 +1305,7 @@ export class WsClient {
     }
     const event: WsPermanentlyDisconnectedEvent = {
       type: 'permanently_disconnected',
-      attempt: this.reconnectAttempt,
+      attempt: this.totalReconnectAttempts,
     };
     this.emit('permanently_disconnected', event);
   }
@@ -1295,21 +1316,22 @@ export class WsClient {
     this.refusedUntil = null;
     this.refusedSocket = null;
     // A conflict refusal is the server saying "not yet", not a failure: it
-    // does not count toward the circuit breaker (which would leave the client
-    // detached for good once the incumbent goes away), only toward an
-    // explicit maxReconnectAttempts.
+    // leaves the backoff level and circuit-breaker streak (reconnectAttempt)
+    // alone, so it neither trips the breaker (which would leave the client
+    // detached for good once the incumbent goes away) nor brings it closer
+    // for later ordinary failures. Every scheduled reconnect, refused or not,
+    // counts toward maxReconnectAttempts.
     const refused = refusedUntil !== null;
     if (
-      this.reconnectAttempt >= this.maxReconnectAttempts ||
+      this.totalReconnectAttempts >= this.maxReconnectAttempts ||
       (!refused && this.reconnectAttempt >= this.circuitBreakerMaxAttempts)
     ) {
       this.tripCircuitBreaker();
       return;
     }
-    this.reconnectAttempt = refused
-      ? Math.max(1, Math.min(this.reconnectAttempt + 1, this.circuitBreakerMaxAttempts - 1))
-      : this.reconnectAttempt + 1;
-    const reconnectingEvent: WsReconnectingEvent = { type: 'reconnecting', attempt: this.reconnectAttempt };
+    this.totalReconnectAttempts += 1;
+    if (!refused) this.reconnectAttempt += 1;
+    const reconnectingEvent: WsReconnectingEvent = { type: 'reconnecting', attempt: this.totalReconnectAttempts };
     this.emit('reconnecting', reconnectingEvent);
     const computed = this.computeReconnectDelayMs(this.reconnectAttempt);
     const delay = refused ? Math.max(computed, refusedUntil - Date.now()) : computed;

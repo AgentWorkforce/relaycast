@@ -7,7 +7,7 @@ See the [root changelog](../../CHANGELOG.md) for cross-package release highlight
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [Unreleased - Minor]
 
 ### Changed
 
@@ -21,7 +21,7 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Fixed
 
-- A `provider_instance_conflict` refusal of the direct-node registration (or a close with code 4009) makes the next attach wait at least `max(retry_after_ms, retry_after * 1000, 30 s)`, capped at 300 s and measured from the refusal. The server closes the refused socket; the client closes it itself only if the server has not once the wait has passed. These refusals do not trip the reconnect circuit breaker. The refused attach reuses its node token.
+- A `provider_instance_conflict` refusal of the direct-node registration (or a close with code 4009) makes the next attach wait at least `max(retry_after_ms, retry_after * 1000, 30 s)`, capped at 300 s and measured from the refusal. The server closes the refused socket; the client closes it itself only if the server has not once the wait has passed. These refusals do not trip the reconnect circuit breaker or raise the backoff for later failures, but every retry counts toward `maxReconnectAttempts`. The refused attach, including a bare 4009 close (reported as `registration_rejected` with `retryAfterMs: null`), reuses its node token.
 - `NodeProviderClient` retries a `provider_instance_conflict` registration refusal (and a 4009 close) after the same wait instead of failing `serve()` / `whenRegistered()`; other registration errors stay fatal. `NodeRegistrationError` gains `retryAfterMs`. Error replies carrying retry hints are no longer dropped by the strict wire parse.
 - The direct-node transport and `NodeProviderClient` time out a `node.register` that gets no reply after 15 s: the socket is dropped and reconnects with the normal backoff instead of staying attached but unannounced.
 

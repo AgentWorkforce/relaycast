@@ -367,4 +367,56 @@ describe('AgentClient direct-node attach refusal', () => {
     expect(gaveUp).not.toHaveBeenCalled();
     agent.disconnect();
   });
+
+  it('counts conflict retries toward an explicit maxReconnectAttempts above the breaker', async () => {
+    const agent = createAgent({ ws: { circuitBreakerMaxAttempts: 2, maxReconnectAttempts: 5 } });
+    const gaveUp = vi.fn();
+    const reconnecting = vi.fn();
+    agent.on.permanentlyDisconnected(gaveUp);
+    agent.on.reconnecting(reconnecting);
+    agent.connect();
+    for (let i = 0; i < 5; i += 1) {
+      const ws = await opened(i);
+      refuse(ws);
+      ws.simulateClose(4009);
+      await expectReconnectAfter(30_000, i + 1);
+    }
+    expect(reconnecting.mock.calls.map(([attempt]) => attempt)).toEqual([1, 2, 3, 4, 5]);
+    expect(gaveUp).not.toHaveBeenCalled();
+
+    // The sixth refusal is not retried: the max-attempts failure path fires.
+    const sixth = await opened(5);
+    refuse(sixth);
+    sixth.simulateClose(4009);
+    expect(gaveUp).toHaveBeenCalledTimes(1);
+    expect(gaveUp).toHaveBeenCalledWith(5);
+    await vi.advanceTimersByTimeAsync(600_000);
+    expect(MockWebSocket.instances).toHaveLength(6);
+    agent.disconnect();
+  });
+
+  it('conflicts leave the backoff level and breaker streak for ordinary failures untouched', async () => {
+    const agent = createAgent({ ws: { circuitBreakerMaxAttempts: 2 } });
+    const gaveUp = vi.fn();
+    agent.on.permanentlyDisconnected(gaveUp);
+    agent.connect();
+    for (let i = 0; i < 3; i += 1) {
+      const ws = await opened(i);
+      refuse(ws);
+      ws.simulateClose(4009);
+      await expectReconnectAfter(30_000, i + 1);
+    }
+    // Two failed upgrades back off from the first level and do not trip the
+    // breaker, exactly as two failures alone would.
+    (await socketAt(3)).simulateClose();
+    await expectReconnectAfter(1_000, 4);
+    (await socketAt(4)).simulateClose();
+    await expectReconnectAfter(2_000, 5);
+    expect(gaveUp).not.toHaveBeenCalled();
+
+    // The third consecutive failure trips it.
+    (await socketAt(5)).simulateClose();
+    expect(gaveUp).toHaveBeenCalledTimes(1);
+    agent.disconnect();
+  });
 });
