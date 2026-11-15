@@ -90,13 +90,30 @@ Receipts to collect:
 - the GitHub release URL
 - the image digest and its attestation (`gh attestation verify`)
 
+> **Status 2026-11-15:** Publish NPM Packages was dispatched with exactly the proposed inputs (`custom_version` 12.10.0, `tag` latest, `dry_run` false) from main `b6cc6e1a` by `khaliqgant` via the codex-relay-control-session: run 43669541261. Receipts are recorded below once the run completes.
+
 ## Live self-host evidence
 
 A test image was built from main `b6cc6e1a` by Publish Container run https://github.com/AgentWorkforce/relaycast/actions/runs/43668851096 with tag `12.8.0-dc625.1` and `latest=false` (engine skeleton from the npm 12.8.0 pin, with `dist` from main overlaid). It is being exercised on live-cast (k3s, chart 0.3.3, SQLite) and then rolled back to the pinned 12.7.0 image.
 
 ## Live-cast evidence
 
-_To be filled in by the agent host after the run._
+Captured 2026-11-15 on https://live-cast.agentrelay.com (Helm chart relaycast 0.3.3, SQLite, namespace `live-cast`). Secrets redacted; ids are real. Full captures and the reusable script live on the agent host under `/tmp/rel625/evidence/` (`evidence.mjs`, `old-12.7.0.json`, `new-dc625.json`).
+
+- Test image: `ghcr.io/agentworkforce/relaycast-self-host@sha256:44f7edfd41928ab7fbb4caaf98a036ff45c4fdfc783bebbb6a7455d944cb4590` (tag `12.8.0-dc625.1`, Publish Container run 43668851096 from main `b6cc6e1a`, attestation id 67691123), deployed as Helm revision 4 with `--reuse-values --set image.digest=...`.
+- Migrations applied on first boot of the test image, read from `_engine_migrations` in `/data/relaycast.db`: `0081_delivery_confirmation.sql`, `0082_pending_events_settled_retention.sql`, `0083_strict_spawn_placement_token.sql`, `0084_strict_spawn_dispatch_generation.sql` (all `applied_at` 1794711551). `deliveries` gained `accepted_at`, `replied_at`, `reply_message_id`; `messages` gained `reply_to_message_id`. The 0081-after-0082 ordering is expected: the SQLite migrator is set-based.
+- Old engine 12.7.0 (pinned digest `sha256:81274dca7ab58673383dc7a9c777f422f29606c7422e81b5ea15724770f1455e`, workspace 247553604966010880): `GET /v1/messages/:id/deliveries` returns 404 `{"code":"not_found","message":"Route not found"}` for sender, non-sender, workspace key and unknown id; `POST /v1/dm` ignores `wait_ms` and returns no `delivery` object; `node.register` reply `capabilities` is `[]`; the sender's socket receives no `delivery.*` events.
+- New engine (#625 test image, workspace 247556086941388800):
+  - `POST /v1/dm` with `wait_ms: 2000` returned 201 in 113 ms with `delivery: {id, status: "delivered", state: "delivered", accepted_at, replied_at: null, reply_message_id: null, error: null, expires_at}` and `message.reply_to_message_id: null`.
+  - `GET /v1/messages/:id/deliveries` as the sender: 200 `{message_id, deliveries: [{id, agent_id, agent_name, status, state, created_at, delivered_at, accepted_at, acked_at, replied_at, reply_message_id, dead_lettered_at, error, read_at}]}`. As a non-sender agent token: 404 `{"code":"message_not_found","message":"Message not found"}`. With the workspace key: 200. Unknown message id: 404 `message_not_found`.
+  - After the recipient acked (`POST /v1/deliveries/:id/ack`) and replied (`POST /v1/dm` with `reply_to_message_id`), the sender view showed `status: "acked"`, `state: "replied"`, `reply_message_id` and `read_at` set.
+  - `node.register` reply `capabilities`: `["delivery.accepted", "delivery.ack.delivery_id"]`; the server accepted the recipient's `{"v":1,"type":"delivery.accepted","agent":"bob","delivery_id":"..."}` frame.
+  - Sender socket received `context.update` (`topic: "agent"`) events `delivery.delivered` with `accepted: false`, then `delivery.delivered` with `accepted: true`, then `delivery.acked`, then `delivery.replied` carrying `reply_message_id`. The recipient's own socket still receives the legacy minimal `delivery.delivered {delivery_id, message_id}`.
+- Rollback: Helm revision 5 restored the pinned 12.7.0 digest; `/health` returned `{"ok":true}` and the pod image matched `sha256:81274dca...`. Both throwaway workspaces were deleted. The applied 0081–0084 rows remain in the live SQLite database and 12.7.0 runs fine beside them.
+
+## Publish receipts (12.10.0)
+
+_Pending: run 43669541261 in progress at the time of writing._
 
 ## Gate
 
