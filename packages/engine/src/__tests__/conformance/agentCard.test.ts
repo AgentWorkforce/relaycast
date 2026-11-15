@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { and, eq } from 'drizzle-orm';
 import { AgentCardSchema } from '@relaycast/types';
 import { createWorkspace, makeNodeStack, registerAgent, type TestStack } from './harness.js';
-import { agents } from '../../db/tables.js';
+import { agents, directoryAgents } from '../../db/tables.js';
 
 const CARD = {
   description: 'Operates AWS infrastructure: cost reports, drift checks and safe rollouts.',
@@ -200,6 +200,36 @@ describe('agent cards', () => {
     expect(stale.status).toBe(409);
     expect(((await stale.json()) as { error: { code: string } }).error.code).toBe('agent_identity_changed');
     expect((await storedMetadata(ws.workspaceId, 'reused'))?.card).toBeUndefined();
+  });
+
+  it('a re-registered name publishes skills over the directory entry its released predecessor left', async () => {
+    const ws = await createWorkspace(stack.app, 'card-reregister');
+    const first = await registerAgent(stack.app, ws.workspaceKey, 'lead');
+    expect((await send('PATCH', '/v1/agents/lead', ws.workspaceKey, { metadata: { card: CARD }, skills: SKILLS })).status).toBe(200);
+
+    // A reboot: the name is released and registered again under a new id.
+    await stack.runtime.deps.db.update(agents)
+      .set({ status: 'released', name: `lead#released-${first.agentId}` })
+      .where(eq(agents.id, first.agentId));
+    const second = await registerAgent(stack.app, ws.workspaceKey, 'lead');
+
+    const republished = await send('PATCH', '/v1/agents/lead', ws.workspaceKey, {
+      metadata: { card: { ...CARD, version: '3' } }, skills: SKILLS, expected_agent_id: second.agentId,
+    });
+    expect(republished.status).toBe(200);
+    const rows = await stack.runtime.deps.db.select({ source: directoryAgents.sourceAgentId })
+      .from(directoryAgents).where(eq(directoryAgents.workspaceId, ws.workspaceId));
+    expect(rows).toEqual([{ source: second.agentId }]);
+  });
+
+  it('a live agent whose name has the same directory slug gets a clean conflict, not a 500', async () => {
+    const ws = await createWorkspace(stack.app, 'card-slug-taken');
+    await registerAgent(stack.app, ws.workspaceKey, 'ops.lead');
+    await registerAgent(stack.app, ws.workspaceKey, 'ops-lead');
+    expect((await send('PATCH', '/v1/agents/ops.lead', ws.workspaceKey, { skills: SKILLS })).status).toBe(200);
+    const taken = await send('PATCH', '/v1/agents/ops-lead', ws.workspaceKey, { skills: SKILLS });
+    expect(taken.status).toBe(409);
+    expect(((await taken.json()) as { error: { code: string } }).error.code).toBe('directory_slug_taken');
   });
 
   it('publishes declared skill ids unchanged, even after a derived id that matches', async () => {

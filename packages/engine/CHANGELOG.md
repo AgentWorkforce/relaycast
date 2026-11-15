@@ -9,6 +9,10 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ## [Unreleased]
 
+### Fixed
+
+- An agent whose name was released and registered again can publish skills again. Its predecessor's directory entry still held the workspace-unique slug, so `PATCH /v1/agents/:name` with skills, and registration with skills, returned `500`. The released agent's entry is now adopted. A slug held by a live agent returns `409 directory_slug_taken`.
+
 ## [12.10.0] - 2026-11-15
 
 ### Added

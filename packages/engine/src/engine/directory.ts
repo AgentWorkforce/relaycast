@@ -702,19 +702,38 @@ export async function syncSourceAgentDirectoryEntry(
     ? metadata.capabilities as Record<string, unknown>
     : {};
 
-  const existing = await db
+  let existing = await db
     .select()
     .from(directoryAgents)
     .where(and(
       eq(directoryAgents.workspaceId, workspaceId),
       eq(directoryAgents.sourceAgentId, sourceAgent.id),
     ));
+  if (!existing[0]) {
+    // The slug is unique per workspace. A name released and registered again
+    // gets a new agent id, and the entry its predecessor left still holds the
+    // slug: adopt that entry. A live agent's entry is never taken.
+    const holder = await db
+      .select()
+      .from(directoryAgents)
+      .where(and(eq(directoryAgents.workspaceId, workspaceId), eq(directoryAgents.slug, slug)));
+    if (holder[0]) {
+      const owner = holder[0].sourceAgentId
+        ? (await db.select({ status: agents.status }).from(agents).where(eq(agents.id, holder[0].sourceAgentId)))[0]
+        : undefined;
+      if (owner && owner.status !== 'released') {
+        throw codedError(`Directory slug "${slug}" is held by another agent`, 'directory_slug_taken', 409);
+      }
+      existing = holder;
+    }
+  }
 
   const now = new Date();
   if (existing[0]) {
     await db
       .update(directoryAgents)
       .set({
+        sourceAgentId: sourceAgent.id,
         slug,
         name: sourceAgent.name,
         description,
