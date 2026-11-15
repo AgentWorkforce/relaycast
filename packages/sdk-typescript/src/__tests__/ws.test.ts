@@ -34,9 +34,10 @@ class MockWebSocket {
     this.onmessage?.({ data: JSON.stringify(data) });
   }
 
-  simulateClose(): void {
+  simulateClose(code?: number): void {
     this.readyState = MockWebSocket.CLOSED;
-    this.onclose?.();
+    if (code === undefined) this.onclose?.();
+    else (this.onclose as ((event: { code: number; reason: string }) => void) | null)?.({ code, reason: '' });
   }
 }
 
@@ -462,6 +463,28 @@ describe('WsClient', () => {
     expect(handler).toHaveBeenLastCalledWith(
       expect.objectContaining({ type: 'reconnecting', attempt: 2 }),
     );
+  });
+
+  it('treats a 4009 close on the workspace stream as an ordinary close', () => {
+    const client = new WsClient({ token: 'at_live_test', reconnectJitter: false });
+    const reconnecting = vi.fn();
+    const rejected = vi.fn();
+    client.on('reconnecting', reconnecting);
+    client.on('registration_rejected', rejected);
+
+    client.connect();
+    const ws = MockWebSocket.instances[0]!;
+    ws.simulateOpen();
+    ws.simulateClose(4009);
+
+    // No node.register was sent, so the code is not a conflict refusal: the
+    // ordinary backoff applies (1 s, not the 30 s conflict wait).
+    expect(rejected).not.toHaveBeenCalled();
+    expect(reconnecting).toHaveBeenCalledWith(expect.objectContaining({ attempt: 1 }));
+    vi.advanceTimersByTime(999);
+    expect(MockWebSocket.instances).toHaveLength(1);
+    vi.advanceTimersByTime(1);
+    expect(MockWebSocket.instances).toHaveLength(2);
   });
 
   it('does not send if WebSocket is not open', () => {

@@ -18,7 +18,7 @@ class MockWebSocket {
   url: string;
   readyState = MockWebSocket.OPEN;
   onopen: (() => void) | null = null;
-  onclose: (() => void) | null = null;
+  onclose: ((event?: { code: number; reason: string }) => void) | null = null;
   onmessage: ((event: { data: string }) => void) | null = null;
   onerror: (() => void) | null = null;
   sent: Record<string, unknown>[] = [];
@@ -45,9 +45,11 @@ class MockWebSocket {
     this.onmessage?.({ data: JSON.stringify(data) });
   }
 
-  drop(): void {
+  /** Server-side close; omit `code` to mimic runtimes that pass no close event. */
+  drop(code?: number): void {
     this.readyState = MockWebSocket.CLOSED;
-    this.onclose?.();
+    if (code === undefined) this.onclose?.();
+    else this.onclose?.({ code, reason: '' });
   }
 
   sentOfType(type: string): Record<string, unknown>[] {
@@ -148,15 +150,199 @@ describe('NodeProviderClient', () => {
     await expect(served).rejects.toThrow(/rejected/i);
   });
 
-  it('hard-fails registration on an engine error frame (duplicate live instance)', async () => {
+  it('hard-fails registration on a non-retryable engine error frame', async () => {
     const node = new NodeProviderClient(baseOptions);
     const served = node.serve();
     const sock = newSocket();
     sock.open();
     const register = sock.lastRegister();
-    sock.emit({ v: 1, id: register.id, type: 'error', ok: false, code: 'provider_instance_conflict', message: 'already connected' });
-    await expect(node.whenRegistered()).rejects.toMatchObject({ code: 'provider_instance_conflict' });
-    await expect(served).rejects.toMatchObject({ code: 'provider_instance_conflict' });
+    sock.emit({ v: 1, id: register.id, type: 'error', ok: false, code: 'node_not_enrolled', message: 'unknown node' });
+    await expect(node.whenRegistered()).rejects.toMatchObject({ code: 'node_not_enrolled' });
+    await expect(served).rejects.toMatchObject({ code: 'node_not_enrolled' });
+    await vi.advanceTimersByTimeAsync(600_000);
+    expect(MockWebSocket.instances).toHaveLength(1);
+  });
+
+  it('reconnects when the node.register reply never arrives', async () => {
+    const errors: Error[] = [];
+    const node = new NodeProviderClient({ ...baseOptions, onError: (err) => errors.push(err) });
+    let settled = false;
+    void node.serve().then(() => { settled = true; }, () => { settled = true; });
+    const first = newSocket();
+    first.open();
+    await vi.advanceTimersByTimeAsync(14_999);
+    expect(first.readyState).toBe(MockWebSocket.OPEN);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(first.readyState).toBe(MockWebSocket.CLOSED);
+    expect(errors.at(-1)?.message).toBe('node.register reply timed out');
+    expect(settled).toBe(false);
+    await vi.advanceTimersByTimeAsync(10);
+    expect(MockWebSocket.instances).toHaveLength(2);
+
+    const second = newSocket();
+    second.open();
+    second.emit(acceptAll(second.lastRegister()));
+    await expect(node.whenRegistered()).resolves.toBeTruthy();
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(second.readyState).toBe(MockWebSocket.OPEN);
+    expect(MockWebSocket.instances).toHaveLength(2);
+    await node.stop();
+  });
+
+  describe('provider_instance_conflict refusal', () => {
+    function refuse(sock: MockWebSocket, extra: Record<string, unknown> = {}): void {
+      const register = sock.lastRegister();
+      sock.emit({
+        v: 1,
+        id: register.id,
+        type: 'error',
+        ok: false,
+        code: 'provider_instance_conflict',
+        message: 'another instance is attached',
+        ...extra,
+      });
+    }
+
+    it('keeps serving, does not close client-side, and re-attaches no sooner than 30s', async () => {
+      const errors: Error[] = [];
+      const node = new NodeProviderClient({ ...baseOptions, onError: (err) => errors.push(err) });
+      let settled = false;
+      void node.serve().then(() => { settled = true; }, () => { settled = true; });
+      let registered = false;
+      void node.whenRegistered().then(() => { registered = true; }, () => { registered = true; });
+      const first = newSocket();
+      first.open();
+      refuse(first);
+      await vi.advanceTimersByTimeAsync(0);
+
+      expect(errors.at(-1)).toMatchObject({ code: 'provider_instance_conflict', retryAfterMs: 30_000 });
+      expect(first.readyState).toBe(MockWebSocket.OPEN); // the server owns the close
+      expect(settled).toBe(false);
+      expect(registered).toBe(false);
+
+      // The gateway closes with 4009 right away; the wait still runs from the refusal.
+      first.drop(4009);
+      await vi.advanceTimersByTimeAsync(29_999);
+      expect(MockWebSocket.instances).toHaveLength(1);
+      await vi.advanceTimersByTimeAsync(1);
+      expect(MockWebSocket.instances).toHaveLength(2);
+
+      const second = newSocket();
+      second.open();
+      second.emit(acceptAll(second.lastRegister()));
+      await expect(node.whenRegistered()).resolves.toBeTruthy();
+      expect(settled).toBe(false);
+      await node.stop();
+    });
+
+    it('does not add a second wait when the server holds the socket before closing 4009', async () => {
+      const node = new NodeProviderClient({ ...baseOptions, onError: () => {} });
+      void node.serve().catch(() => {});
+      const first = newSocket();
+      first.open();
+      refuse(first);
+      await vi.advanceTimersByTimeAsync(29_000);
+      first.drop(4009);
+      await vi.advanceTimersByTimeAsync(999);
+      expect(MockWebSocket.instances).toHaveLength(1);
+      await vi.advanceTimersByTimeAsync(1);
+      expect(MockWebSocket.instances).toHaveLength(2);
+      await node.stop();
+    });
+
+    it('honours retry_after_ms / retry_after and caps the wait at 300s', async () => {
+      for (const [extra, expected] of [
+        [{ retry_after_ms: 45_000 }, 45_000],
+        [{ retry_after: 60 }, 60_000],
+        [{ retry_after_ms: 5_000 }, 30_000],
+        [{ retry_after_ms: 10_000_000 }, 300_000],
+      ] as const) {
+        MockWebSocket.instances = [];
+        const errors: Error[] = [];
+        const node = new NodeProviderClient({ ...baseOptions, onError: (err) => errors.push(err) });
+        void node.serve().catch(() => {});
+        const first = newSocket();
+        first.open();
+        refuse(first, extra);
+        await vi.advanceTimersByTimeAsync(0);
+        expect(errors.at(-1)).toMatchObject({ retryAfterMs: expected });
+        first.drop(4009);
+        await vi.advanceTimersByTimeAsync(expected - 1);
+        expect(MockWebSocket.instances).toHaveLength(1);
+        await vi.advanceTimersByTimeAsync(1);
+        expect(MockWebSocket.instances).toHaveLength(2);
+        await node.stop();
+      }
+    });
+
+    it('closes client-side once the wait passes if the server never closes', async () => {
+      const node = new NodeProviderClient({ ...baseOptions, onError: () => {} });
+      void node.serve().catch(() => {});
+      const first = newSocket();
+      first.open();
+      refuse(first);
+      await vi.advanceTimersByTimeAsync(29_999);
+      expect(first.readyState).toBe(MockWebSocket.OPEN);
+      await vi.advanceTimersByTimeAsync(1);
+      expect(first.readyState).toBe(MockWebSocket.CLOSED);
+      // The deadline has already passed, so the reconnect uses the ordinary backoff.
+      await vi.advanceTimersByTimeAsync(10);
+      expect(MockWebSocket.instances).toHaveLength(2);
+      await node.stop();
+    });
+
+    it('treats a bare 4009 close (no error frame) as a conflict and waits 30s', async () => {
+      const node = new NodeProviderClient({ ...baseOptions, onError: () => {} });
+      void node.serve().catch(() => {});
+      const first = newSocket();
+      first.open();
+      first.drop(4009);
+      await vi.advanceTimersByTimeAsync(29_999);
+      expect(MockWebSocket.instances).toHaveLength(1);
+      await vi.advanceTimersByTimeAsync(1);
+      expect(MockWebSocket.instances).toHaveLength(2);
+      await node.stop();
+    });
+
+    it('conflict retries leave the backoff level for later ordinary failures untouched', async () => {
+      const node = new NodeProviderClient({ ...baseOptions, onError: () => {} });
+      void node.serve().catch(() => {});
+      for (let i = 0; i < 3; i += 1) {
+        const sock = newSocket();
+        sock.open();
+        refuse(sock);
+        await vi.advanceTimersByTimeAsync(0);
+        sock.drop(4009);
+        await vi.advanceTimersByTimeAsync(30_000);
+        expect(MockWebSocket.instances).toHaveLength(i + 2);
+      }
+      // A plain drop after three conflicts backs off from the first level
+      // (base delay), not from the fourth (base * 2^3).
+      newSocket().drop();
+      await vi.advanceTimersByTimeAsync(baseOptions.reconnectBaseDelayMs - 1);
+      expect(MockWebSocket.instances).toHaveLength(4);
+      await vi.advanceTimersByTimeAsync(1);
+      expect(MockWebSocket.instances).toHaveLength(5);
+      newSocket().drop();
+      await vi.advanceTimersByTimeAsync(baseOptions.reconnectBaseDelayMs * 2 - 1);
+      expect(MockWebSocket.instances).toHaveLength(5);
+      await vi.advanceTimersByTimeAsync(1);
+      expect(MockWebSocket.instances).toHaveLength(6);
+      await node.stop();
+    });
+
+    it('stop() during the refusal wait cancels the client-side close and the reconnect', async () => {
+      const node = new NodeProviderClient({ ...baseOptions, onError: () => {} });
+      const served = node.serve();
+      const first = newSocket();
+      first.open();
+      refuse(first);
+      await vi.advanceTimersByTimeAsync(0);
+      await node.stop();
+      await expect(served).resolves.toBeUndefined();
+      await vi.advanceTimersByTimeAsync(600_000);
+      expect(MockWebSocket.instances).toHaveLength(1);
+    });
   });
 
   it('runs a handler on action.invoke and replies with the output', async () => {

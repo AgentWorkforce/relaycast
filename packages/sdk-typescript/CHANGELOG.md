@@ -7,7 +7,23 @@ See the [root changelog](../../CHANGELOG.md) for cross-package release highlight
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [Unreleased - Minor]
+
+### Changed
+
+- **Direct-node `connected` timing:** on the agent's direct-node transport, `'open'` / `on.connected` (and the open hooks: presence `markOnline`, auto-heartbeat, subscription sync, node heartbeat) fire only after the engine accepts `node.register`, not on the socket upgrade. `'close'` / `on.disconnected` fires only for a connection that announced `'open'`. The workspace `/v1/ws` stream is unchanged.
+- The direct-node `node.register` frame carries `provider: { name: 'default', instance_id: 'sdk-<uuid>' }`, generated once per `AgentClient` and kept across reconnects, so several clients of one agent no longer share the implicit `instance_id = node_id` and supersede each other in a loop.
+- The reconnect backoff counter resets only on an accepted `node.register`, so a socket that opens and is then refused keeps backing off.
+
+### Added
+
+- `on.registrationRejected({ code, message, retryAfterMs })` on the agent and the `registration_rejected` WsClient event, emitted when the engine refuses the direct-node registration.
+
+### Fixed
+
+- A `provider_instance_conflict` refusal of the direct-node registration (or a close with code 4009) makes the next attach wait at least `max(retry_after_ms, retry_after * 1000, 30 s)`, capped at 300 s and measured from the refusal. The server closes the refused socket; the client closes it itself only if the server has not once the wait has passed. These refusals do not trip the reconnect circuit breaker or raise the backoff for later failures, but every retry counts toward `maxReconnectAttempts`. The refused attach, including a bare 4009 close (reported as `registration_rejected` with `retryAfterMs: 30000`), reuses its node token. On the workspace `/v1/ws` stream a 4009 close is an ordinary close.
+- `NodeProviderClient` retries a `provider_instance_conflict` registration refusal (and a 4009 close) after the same wait instead of failing `serve()` / `whenRegistered()`; other registration errors stay fatal, and conflict retries count toward `maxReconnectAttempts` without raising the backoff level for later ordinary failures. `NodeRegistrationError` gains `retryAfterMs`. Error replies carrying retry hints are no longer dropped by the strict wire parse.
+- The direct-node transport and `NodeProviderClient` time out a `node.register` that gets no reply after 15 s: the socket is dropped and reconnects with the normal backoff instead of staying attached but unannounced.
 
 ## [12.10.0] - 2026-11-15
 
