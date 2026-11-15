@@ -8,7 +8,7 @@ Source: relaycast#625 "delivery confirmation", merged to main as `b6cc6e1a57935d
 
 Sender-facing delivery confirmation. The summary below is deliberately short; the detail lives in two places and is not duplicated here:
 
-- `CHANGELOG.md`, section `## [Unreleased - Minor]`
+- `CHANGELOG.md`, section `## [12.10.0] - 2026-11-15` (it was `## [Unreleased - Minor]` until the `chore(release): v12.10.0` commit-back cut it)
 - `docs/delivery-confirmation.md`
 
 In short:
