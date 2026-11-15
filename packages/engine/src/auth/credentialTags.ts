@@ -59,6 +59,33 @@ export interface CredentialTagSigner extends CredentialTagger {
   verify(token: string): Promise<boolean>;
 }
 
+/** A plain tagger has nothing to vouch for until its gateway hands over a tag. Callers map this to a client error, not a 500. */
+export class CredentialTagNotReadyError extends Error {
+  constructor() {
+    super('This workspace has no credential tag yet; its gateway supplies one at create');
+    this.name = 'CredentialTagNotReadyError';
+  }
+}
+
+/**
+ * Whether a tagger stands behind an `ar_` credential's tag: a signer's
+ * `verify`, or membership in the tags a plain tagger lists for the workspace
+ * (that list is everything a tagger without `verify` can vouch for). A tagger
+ * with no tag yet answers false; any other failure propagates.
+ */
+export async function credentialTagAccepted(tagger: CredentialTagger, token: string): Promise<boolean> {
+  if ('verify' in tagger) return (tagger as CredentialTagSigner).verify(token);
+  const parsed = parseCredential(token);
+  if (parsed?.family !== 'ar') return false;
+  try {
+    return (await tagger.tags(parsed.workspaceId)).includes(parsed.tag);
+  } catch (error) {
+    // Remote fetch failures still propagate: a tagger that cannot reach its authority fails closed.
+    if (error instanceof CredentialTagNotReadyError) return false;
+    throw error;
+  }
+}
+
 const TAG_BODY_LENGTH = 10;
 const TAG_MODULUS = 62n ** BigInt(TAG_BODY_LENGTH);
 const encoder = new TextEncoder();
@@ -119,7 +146,7 @@ export function fixedCredentialTagger(workspaceId: string, tag: () => string | u
   const current = (forWorkspace: string): string => {
     if (forWorkspace !== workspaceId) throw new Error(`No credential tag for workspace ${forWorkspace}`);
     const value = tag();
-    if (!value) throw new Error('This workspace has no credential tag yet; its gateway supplies one at create');
+    if (!value) throw new CredentialTagNotReadyError();
     return value;
   };
   return {

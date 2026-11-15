@@ -1,11 +1,11 @@
 /**
  * The gateway as a Node HTTP server: `createGateway(config)` wires the
- * control-plane client, keyring, file store, routes and WebSocket bridge, and
+ * control-plane client, credential tagger, file store, routes and WebSocket bridge, and
  * `close()` drains it for a restart.
  */
 import { createServer, type Server, type ServerResponse } from 'node:http';
 import type { AddressInfo } from 'node:net';
-import { createCredentialTagSigner } from '@relaycast/engine/gateway';
+import { createCredentialTagSigner, remoteCredentialTagger, type CredentialTagSigner } from '@relaycast/engine/gateway';
 import { createActorClient, type ActorClient } from './actors.js';
 import type { GatewayConfig } from './config.js';
 import type { GatewayContext } from './context.js';
@@ -50,6 +50,13 @@ export interface Gateway {
 
 const DRAIN_POLL_MS = 25;
 
+/** A local keyring signs tags; otherwise RelayAuth supplies them. `loadConfig` sets exactly one. */
+function credentialTaggerFor(config: GatewayConfig): CredentialTagSigner {
+  if (config.credentialKeyring) return createCredentialTagSigner(config.credentialKeyring);
+  if (config.relayauth) return remoteCredentialTagger(config.relayauth);
+  throw new Error('A gateway needs a credential keyring or RelayAuth');
+}
+
 export function createGateway(config: GatewayConfig, options: GatewayOptions = {}): Gateway {
   const logger = options.logger ?? createLogger({ format: config.logFormat });
   const actors = options.actors ?? createActorClient({
@@ -66,7 +73,7 @@ export function createGateway(config: GatewayConfig, options: GatewayOptions = {
     config,
     actors,
     files,
-    credentialTags: createCredentialTagSigner(config.credentialKeyring),
+    credentialTags: credentialTaggerFor(config),
     logger,
     fallbackHost: () => {
       const address = server.address();

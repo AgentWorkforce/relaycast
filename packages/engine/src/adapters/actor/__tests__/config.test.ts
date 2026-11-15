@@ -104,20 +104,14 @@ describe('internal admin routes inside a workspace actor', () => {
     headers: [['content-type', 'application/json'], ['authorization', `Bearer ${INTERNAL_SECRET}`]] as [string, string][],
   });
 
-  it('keeps the routing tag of an ar_ws_ key whose push created the workspace, so it can mint credentials', async () => {
+  it('refuses an ar_ws_ push before the gateway has handed over a tag', async () => {
     const actor = new FakeWorkspaceActor(WORKSPACE_ID, { config: { internalSecret: INTERNAL_SECRET } });
     const signer = createCredentialTagSigner({ current: 'a', keys: { a: 'test-credential-tag-secret-0123456789' } });
     const apiKey = encodeArCredential({ kind: 'workspace', workspaceId: WORKSPACE_ID, tag: await signer.tag(WORKSPACE_ID), secret: new Uint8Array(32).fill(5) });
-    const pushed = await actor.handle(internal('POST', `/internal/workspaces/${WORKSPACE_ID}/api-key`, { api_key: apiKey }));
-    expect(pushed.status).toBe(201);
-    // The pushed key authenticates, and the workspace can mint an agent token under the same tag.
-    const agent = await actor.handle(jsonRequest('POST', '/v1/agents', { name: 'alice' }, apiKey));
-    expect(agent.status).toBe(201);
-    expect(JSON.parse(agent.body).data.token).toMatch(new RegExp(`^ar_ag_[0-9A-Za-z]+_${await signer.tag(WORKSPACE_ID)}_`));
-    // A rotation afterwards keeps the tag.
-    const rotated = await actor.handle(internal('POST', `/internal/workspaces/${WORKSPACE_ID}/api-key`, {}));
-    expect(rotated.status).toBe(200);
-    expect(JSON.parse(rotated.body).data.api_key).toContain(`_${await signer.tag(WORKSPACE_ID)}_`);
+    const pushed = await actor.handle(internal('POST', `/internal/workspaces/${WORKSPACE_ID}/api-key`, { api_key: apiKey, key_generation: 1 }));
+    expect(pushed.status).toBe(400);
+    expect(JSON.parse(pushed.body)).toMatchObject({ ok: false, error: { code: 'invalid_request' } });
+    expect(actor.sql.exec('SELECT COUNT(*) AS n FROM workspaces')).toEqual([{ n: 0 }]);
   });
 
   it('serves only this actor\'s workspace', async () => {
