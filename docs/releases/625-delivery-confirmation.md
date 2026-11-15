@@ -113,7 +113,20 @@ Captured 2026-11-15 on https://live-cast.agentrelay.com (Helm chart relaycast 0.
 
 ## Publish receipts (12.10.0)
 
-_Pending: run 43669541261 in progress at the time of writing._
+Publish NPM Packages run [43669541261](https://github.com/AgentWorkforce/relaycast/actions/runs/43669541261) (workflow_dispatch on `main` `b6cc6e1a`, actor `khaliqgant`, inputs `package=all version=minor custom_version=12.10.0 dry_run=false tag=latest`). All publish jobs green; "Create Release" completed 2026-11-15T03:18Z.
+
+| Package | Version | `dist.shasum` | `dist.integrity` |
+| --- | --- | --- | --- |
+| `@relaycast/engine` | 12.10.0 | `f50ab9ca8d7a86ef4842fd29ea7f8e0c463ff3ed` | `sha512-DwZVYXsPbpbQfPnnRThky7RvKITq0JnRbV2lmPquaiSR4XKkxrNKRrvsi/nk4VAsw5gREK1mJOifX7q9+kTveg==` |
+| `@relaycast/types` | 12.10.0 | `f7ec7e9f92e245aff07bd34350a32e4fbc9c1c3d` | `sha512-onXSI+sqSuqHHF5uUPeR/WFvGpa4hvWQZHmCjjbZrUMjme3Ajo25MrDqRXkJo06g09/ib6pBbrZ7t+2Yvri4cQ==` |
+| `@relaycast/a2a` | 12.10.0 | `d93f1c2fb16128243f30d120f2bd85a6c1264774` | `sha512-+zuvzmoEZ/i8fw2wGef+byTecEz1W/uIA2cawIpxeXRY+KD3ylIRpyLhZJBKZSAGFsbouQy0biPFQ3vgqPkSow==` |
+| `@relaycast/sdk` | 12.10.0 | `f772660a357b5ec62319a3cede150847919f2f08` | `sha512-4IkDmOcZw/z4z/KR9Tw+tUlP9B0yWQ064ukE0iePxOzJiqGeHlxSQUnQkmSOX/rs3emRWTAB7JGkj5Y4zRIoZw==` |
+
+`dist-tags.latest` is 12.10.0 for all four (checked with `npm view` on 2026-11-15, independently confirmed by codex-relay-control-session).
+
+- Commit-back: `fd10195436054d97c75504d1c803df0d1f2fed98` `chore(release): v12.10.0` on `main` (parent `b6cc6e1a`, author GitHub Actions). `packages/types/package.json` and `docker/package.json` now read 12.10.0, with the docker engine pin at 12.10.0.
+- GitHub release: https://github.com/AgentWorkforce/relaycast/releases/tag/v12.10.0 (published 2026-11-15T03:18:02Z by github-actions).
+- Container: Publish Container run [43671881371](https://github.com/AgentWorkforce/relaycast/actions/runs/43671881371) dispatched from `fd101954` with tag 12.10.0 by the codex-relay-control-session; digest and attestation to be recorded when it completes.
 
 ## Gate
 
