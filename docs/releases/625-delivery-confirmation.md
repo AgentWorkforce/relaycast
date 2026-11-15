@@ -1,6 +1,6 @@
 # Release preparation for delivery confirmation (#625)
 
-Status: preparation only. Proposed release: **12.10.0** (minor), published through the existing Publish NPM Packages workflow with `custom_version`. No release has been published, tagged, or dispatched by this preparation, and no version, CHANGELOG, or package.json was edited.
+Status: released. **12.10.0** (minor) was published through the existing Publish NPM Packages workflow with `custom_version` on 2026-11-15; receipts are in "Publish receipts" below. The sections up to "Dispatch sequence" record the state at preparation time, before the `chore(release): v12.10.0` commit-back.
 
 Source: relaycast#625 "delivery confirmation", merged to main as `b6cc6e1a57935ddfe36aac33f105ba8d185ee28c` (2026-11-14T22:37:04Z on GitHub; the commit timestamp in git is 22:37:03Z).
 
@@ -8,7 +8,7 @@ Source: relaycast#625 "delivery confirmation", merged to main as `b6cc6e1a57935d
 
 Sender-facing delivery confirmation. The summary below is deliberately short; the detail lives in two places and is not duplicated here:
 
-- `CHANGELOG.md`, section `## [Unreleased - Minor]`
+- `CHANGELOG.md`, section `## [12.10.0] - 2026-11-15` (was `## [Unreleased - Minor]` at preparation time)
 - `docs/delivery-confirmation.md`
 
 In short:
@@ -23,9 +23,9 @@ In short:
 
 The Unreleased section also carries other entries merged since 12.8.0 (strict spawn, PostgreSQL self-host, A2A cards, and others); they ship in the same release.
 
-## Repository version state
+## Repository version state (at preparation time)
 
-Every `package.json` (root workspace packages, `packages/*`), `ARG RELAYCAST_ENGINE_VERSION` in the `Dockerfile`, and the `@relaycast/engine` pin and version in `docker/package.json` are **12.8.0** on main. The latest git tag is `v12.8.0`. `CHANGELOG.md` already contains `## [12.8.0] - 2026-11-04` with the pending entries above it.
+Every `package.json` (root workspace packages, `packages/*`), `ARG RELAYCAST_ENGINE_VERSION` in the `Dockerfile`, and the `@relaycast/engine` pin and version in `docker/package.json` were **12.8.0** on main before the commit-back, and the latest git tag was `v12.8.0`. `CHANGELOG.md` already contains `## [12.8.0] - 2026-11-04` with the pending entries above it.
 
 ## npm state and the 12.9.0 anomaly
 
