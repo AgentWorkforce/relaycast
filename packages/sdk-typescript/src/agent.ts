@@ -75,6 +75,7 @@ import type {
   PostMessageResponse,
   WsReconnectingEvent,
   WsPermanentlyDisconnectedEvent,
+  WsRegistrationRejectedEvent,
   WsResyncedEvent,
 } from './types.js';
 import { HttpClient, type RequestOptions } from './client.js';
@@ -137,6 +138,25 @@ function normalizeAutoHeartbeatMs(value?: number | false): number | false {
   }
   return 30_000;
 }
+
+/**
+ * A provider instance id for this client's direct-node attachment. One per
+ * client object, kept across its reconnects: the engine reads a reconnect of
+ * the same client as the same instance (the new socket supersedes the old),
+ * and another process attaching to the same agent's direct node as a
+ * different instance (refused while this one is live) instead of the two
+ * superseding each other forever.
+ */
+function generateProviderInstanceId(): string {
+  const randomUuid = globalThis.crypto?.randomUUID?.();
+  if (typeof randomUuid === 'string' && randomUuid.length > 0) {
+    return `sdk-${randomUuid}`;
+  }
+  return `sdk-${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}${Math.random().toString(36).slice(2)}`;
+}
+
+/** The engine's synthetic provider name for a node client that names none. */
+const DIRECT_NODE_PROVIDER_NAME = 'default';
 
 function generateIdempotencyKey(): string {
   const randomUuid = globalThis.crypto?.randomUUID?.();
@@ -206,6 +226,8 @@ export class AgentClient {
   private wsOptions: Omit<WsClientOptions, 'token' | 'baseUrl' | 'path' | 'nodeRegistration' | 'autoAckDeliveries'>;
   private directNodeToken: DirectNodeToken | null = null;
   private directNodeTokenUses = 0;
+  /** Provider instance id sent on every direct-node `node.register` of this client. */
+  private readonly providerInstanceId = generateProviderInstanceId();
   private manualSubscriptions = new Set<string>();
   private managedSubscriptions = new Map<symbol, ManagedSubscription>();
   private activeWsChannels = new Set<string>();
@@ -306,6 +328,7 @@ export class AgentClient {
       type: 'node.register',
       node_id: this.directNodeToken.nodeId,
       name: this.directNodeToken.nodeName,
+      provider: { name: DIRECT_NODE_PROVIDER_NAME, instance_id: this.providerInstanceId },
       capabilities: [],
       max_agents: 1,
       tags: ['implicit', 'direct', 'sdk'],
@@ -333,6 +356,7 @@ export class AgentClient {
         },
         this.client.internalOrigin,
       ));
+      // 'open' follows an accepted node.register, not the socket upgrade.
       this.ws.on('open', () => {
         this.directNodeTokenUses = 0;
         void this.presence.markOnline().catch(() => {});
@@ -342,6 +366,11 @@ export class AgentClient {
       this.ws.on('close', () => {
         this.stopAutoHeartbeat();
         this.activeWsChannels.clear();
+      });
+      // A refused register still proves the token authenticates (the upgrade
+      // succeeded): keep reusing it rather than minting while we wait.
+      this.ws.on('registration_rejected', () => {
+        this.directNodeTokenUses = 0;
       });
       this.ws.on('permanently_disconnected', () => {
         this.stopAutoHeartbeat();
@@ -537,6 +566,19 @@ export class AgentClient {
     permanentlyDisconnected: (handler: (attempt: number) => void): (() => void) =>
       this.ensureWs().on('permanently_disconnected', (e: WsClientEvent) =>
         handler((e as WsPermanentlyDisconnectedEvent).attempt)),
+    /**
+     * The engine refused this client's direct-node registration. For
+     * `provider_instance_conflict` (another live client holds this agent's
+     * direct node) `retryAfterMs` is the wait before the next attach (>= 30 s);
+     * no `connected` event fires for a refused attach.
+     */
+    registrationRejected: (
+      handler: (info: { code: string; message: string; retryAfterMs: number | null }) => void,
+    ): (() => void) =>
+      this.ensureWs().on('registration_rejected', (e: WsClientEvent) => {
+        const event = e as WsRegistrationRejectedEvent;
+        handler({ code: event.code, message: event.message, retryAfterMs: event.retryAfterMs });
+      }),
     resynced: (handler: (info: { replayed: number; gapDetected: boolean }) => void): (() => void) =>
       this.ensureWs().on('resynced', (e: WsClientEvent) => {
         const event = e as WsResyncedEvent;

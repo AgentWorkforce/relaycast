@@ -777,6 +777,7 @@ export type WsErrorEvent = Camelize<Raw.WsErrorEvent>;
 export type WsOpenEvent = Camelize<Raw.WsOpenEvent>;
 export type WsPermanentlyDisconnectedEvent = Camelize<Raw.WsPermanentlyDisconnectedEvent>;
 export type WsReconnectingEvent = Camelize<Raw.WsReconnectingEvent>;
+export type WsRegistrationRejectedEvent = Camelize<Raw.WsRegistrationRejectedEvent>;
 export type WsResyncedEvent = Camelize<Raw.WsResyncedEvent>;
 
 // === Compile-level contract assertions =====================================

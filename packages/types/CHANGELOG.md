@@ -9,6 +9,10 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ## [Unreleased]
 
+### Added
+
+- `WsRegistrationRejectedEventSchema` (`registration_rejected`: `code`, `message`, `retry_after_ms` nullable) in `WsClientEventSchema`, the SDK-side event for a refused direct-node `node.register`.
+
 ## [12.10.0] - 2026-11-15
 
 ### Added

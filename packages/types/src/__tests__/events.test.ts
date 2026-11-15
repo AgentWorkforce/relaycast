@@ -762,6 +762,19 @@ describe('WsClientEventSchema — client-only frames', () => {
     expect(hasIssueAtPath(r, 'gap_detected')).toBe(true);
   });
 
+  it('accepts registration_rejected and routes it', () => {
+    expectRoutes(
+      WsClientEventSchema,
+      { type: 'registration_rejected', code: 'provider_instance_conflict', message: 'busy', retry_after_ms: 30_000 },
+      'registration_rejected',
+    );
+    expectRoutes(
+      WsClientEventSchema,
+      { type: 'registration_rejected', code: 'forbidden', message: 'no', retry_after_ms: null },
+      'registration_rejected',
+    );
+  });
+
   it('also carries server events (e.g. pong) in the WsClient union', () => {
     expectRoutes(WsClientEventSchema, { type: 'pong' }, 'pong');
   });

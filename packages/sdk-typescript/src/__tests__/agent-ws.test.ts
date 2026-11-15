@@ -98,6 +98,12 @@ describe('AgentClient WebSocket integration', () => {
     throw new Error(`Mock WebSocket ${index} was not created`);
   }
 
+  /** Open the socket and accept its `node.register`: 'open' (on.connected) follows the reply. */
+  async function openRegistered(socket: MockWebSocket, capabilities?: string[]): Promise<void> {
+    socket.simulateOpen();
+    await replyToRegistration(socket, capabilities);
+  }
+
   // --- connect / disconnect ---
 
   it('connect() creates WebSocket with correct URL', async () => {
@@ -118,7 +124,7 @@ describe('AgentClient WebSocket integration', () => {
     const agent = createAgent();
     agent.connect();
     const ws = await nextSocket();
-    ws.simulateOpen();
+    await openRegistered(ws);
 
     await vi.advanceTimersByTimeAsync(30_000);
     const frames = ws.send.mock.calls.map(([raw]) => JSON.parse(String(raw)) as Record<string, unknown>);
@@ -1589,7 +1595,7 @@ describe('AgentClient WebSocket integration', () => {
     const handler = vi.fn();
     agent.on.connected(handler);
 
-    ws.simulateOpen();
+    await openRegistered(ws);
     await Promise.resolve();
 
     expect(handler).toHaveBeenCalledTimes(1);
@@ -1599,7 +1605,7 @@ describe('AgentClient WebSocket integration', () => {
     const agent = createAgent();
     agent.connect();
     const ws = await nextSocket();
-    ws.simulateOpen();
+    await openRegistered(ws);
     await Promise.resolve();
 
     const handler = vi.fn();
@@ -1613,7 +1619,7 @@ describe('AgentClient WebSocket integration', () => {
     const agent = createAgent();
     agent.connect();
     const ws = await nextSocket();
-    ws.simulateOpen();
+    await openRegistered(ws);
 
     const handler = vi.fn();
     agent.on.disconnected(handler);
@@ -1680,7 +1686,7 @@ describe('AgentClient WebSocket integration', () => {
     agent.connect();
     for (let attempt = 0; attempt < 4; attempt += 1) {
       const socket = await nextSocket(attempt);
-      socket.simulateOpen();
+      await openRegistered(socket);
       // `open` is emitted only after node registration is sent, so let that settle:
       // reaching a usable connection is what marks the cached token good.
       await vi.advanceTimersByTimeAsync(0);
@@ -1753,7 +1759,7 @@ describe('AgentClient WebSocket integration', () => {
     const agent = createAgent();
     agent.connect();
     const socket = await nextSocket();
-    socket.simulateOpen();
+    await openRegistered(socket);
     await vi.advanceTimersByTimeAsync(27_000);
     const frame = JSON.parse(socket.send.mock.calls.at(-1)![0]);
     socket.simulateMessage({ v: 1, type: 'reply', id: frame.id, ok: true,
@@ -1769,7 +1775,7 @@ describe('AgentClient WebSocket integration', () => {
     const agent = createAgent();
     agent.connect();
     const socket = await nextSocket();
-    socket.simulateOpen();
+    await openRegistered(socket);
     await vi.advanceTimersByTimeAsync(27_000);
     const frame = JSON.parse(socket.send.mock.calls.at(-1)![0]);
     vi.setSystemTime(Date.now() + 30_000);
@@ -1786,7 +1792,7 @@ describe('AgentClient WebSocket integration', () => {
     const agent = createAgent({ autoHeartbeatMs: false });
     agent.connect();
     const socket = await nextSocket();
-    socket.simulateOpen();
+    await openRegistered(socket);
     const frames = () => socket.send.mock.calls.map(([raw]) => JSON.parse(raw)).filter(f => f.type === 'node.heartbeat');
     await vi.advanceTimersByTimeAsync(26_999);
     expect(frames()).toHaveLength(0);
@@ -1803,7 +1809,7 @@ describe('AgentClient WebSocket integration', () => {
     const agent = createAgent();
     agent.connect();
     const ws = await nextSocket();
-    ws.simulateOpen();
+    await openRegistered(ws);
     await vi.advanceTimersByTimeAsync(27_000);
     const heartbeat = () => ws.send.mock.calls.map(([raw]) => JSON.parse(raw)).filter(f => f.type === 'node.heartbeat').at(-1)!;
     const reply = (id: string, agentId = 'agent_1') => ws.simulateMessage({
@@ -1831,7 +1837,7 @@ describe('AgentClient WebSocket integration', () => {
     const agent = createAgent();
     agent.connect();
     const ws = await nextSocket();
-    ws.simulateOpen();
+    await openRegistered(ws);
     await vi.advanceTimersByTimeAsync(27_000);
     const frame = JSON.parse(ws.send.mock.calls.at(-1)![0]);
     const reply = (id: string) => ({ v: 1, type: 'reply', id, ok: true, data: { agent_presence: true, agent_id: 'agent_1' } });
@@ -1847,7 +1853,7 @@ describe('AgentClient WebSocket integration', () => {
     ws.simulateClose();
     await vi.advanceTimersByTimeAsync(1_000);
     const next = await nextSocket(1);
-    next.simulateOpen();
+    await openRegistered(next);
     await vi.advanceTimersByTimeAsync(0);
     next.simulateMessage(reply(frame.id));
     await vi.advanceTimersByTimeAsync(30_000);
@@ -1860,7 +1866,7 @@ describe('AgentClient WebSocket integration', () => {
     const agent = createAgent({ autoHeartbeatMs: 30_000 });
     agent.connect();
     const ws = await nextSocket();
-    ws.simulateOpen();
+    await openRegistered(ws);
     await Promise.resolve();
 
     expect(mockFetch).toHaveBeenCalledTimes(2);
@@ -1876,7 +1882,7 @@ describe('AgentClient WebSocket integration', () => {
     const agent = createAgent({ autoHeartbeatMs: 30_000 });
     agent.connect();
     const ws = await nextSocket();
-    ws.simulateOpen();
+    await openRegistered(ws);
     await Promise.resolve();
 
     vi.advanceTimersByTime(30_000);
@@ -1896,7 +1902,7 @@ describe('AgentClient WebSocket integration', () => {
     const agent = createAgent({ autoHeartbeatMs: false });
     agent.connect();
     const ws = await nextSocket();
-    ws.simulateOpen();
+    await openRegistered(ws);
     await Promise.resolve();
 
     expect(mockFetch).toHaveBeenCalledTimes(2);
@@ -1914,7 +1920,7 @@ describe('AgentClient WebSocket integration', () => {
     const handler = vi.fn();
     agent.on.any(handler);
 
-    ws.simulateOpen();
+    await openRegistered(ws);
     await Promise.resolve();
     // 'open' synthetic event
 
@@ -1956,7 +1962,7 @@ describe('AgentClient WebSocket integration', () => {
     agent.on.connected(handler);
     agent.connect();
     const ws = await nextSocket();
-    ws.simulateOpen();
+    await openRegistered(ws);
     await Promise.resolve();
 
     expect(handler).toHaveBeenCalledTimes(1);
@@ -1999,7 +2005,7 @@ describe('AgentClient WebSocket integration', () => {
     agent.on.any(handler);
     agent.connect();
     const ws = await nextSocket();
-    ws.simulateOpen();
+    await openRegistered(ws);
     await Promise.resolve();
     ws.simulateMessage({
       type: 'message.created',
