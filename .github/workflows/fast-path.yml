@@ -10,12 +10,16 @@
 #
 # Publishes, linux/amd64+linux/arm64, tagged fast-<sha> only:
 #   ghcr.io/agentworkforce/relaycast-self-host      (as publish-container.yml,
-#                                                   SBOM, max provenance, attestation)
+#                                                   SBOM, max-mode provenance)
 #   ghcr.io/agentworkforce/relaycast-actors-gateway  (as publish-actors-images.yml)
 #   ghcr.io/agentworkforce/relaycast-actors-deployer (as publish-actors-images.yml)
 # It never pushes or moves :latest or a version tag, and it does not publish
 # npm or crates packages or deploy the hosted site. Pin the digests printed in
 # the run summary.
+#
+# No signed GitHub attestation is pushed: attest-build-provenance records the
+# dispatch commit, not the `ref` actually built. BuildKit's SBOM and max-mode
+# provenance (which read the checkout) are attached to the image.
 name: fast-path
 run-name: fast-path ${{ inputs.ref }} (${{ inputs.reason }})
 on:
@@ -197,8 +201,6 @@ jobs:
     permissions:
       contents: read
       packages: write
-      id-token: write
-      attestations: write
     env:
       SHA: ${{ needs.ci.outputs.sha }}
     steps:
@@ -230,11 +232,6 @@ jobs:
             org.opencontainers.image.revision=${{ needs.ci.outputs.sha }}
           provenance: mode=max
           sbom: true
-      - uses: actions/attest-build-provenance@v2
-        with:
-          subject-name: ${{ env.REGISTRY_OWNER }}/relaycast-self-host
-          subject-digest: ${{ steps.selfhost.outputs.digest }}
-          push-to-registry: true
       - name: Build and push the actors gateway
         id: gateway
         uses: docker/build-push-action@v6
