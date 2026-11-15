@@ -126,7 +126,10 @@ Publish NPM Packages run [43669541261](https://github.com/AgentWorkforce/relayca
 
 - Commit-back: `fd10195436054d97c75504d1c803df0d1f2fed98` `chore(release): v12.10.0` on `main` (parent `b6cc6e1a`, author GitHub Actions). `packages/types/package.json` and `docker/package.json` now read 12.10.0, with the docker engine pin at 12.10.0.
 - GitHub release: https://github.com/AgentWorkforce/relaycast/releases/tag/v12.10.0 (published 2026-11-15T03:18:02Z by github-actions).
-- Container: Publish Container run [43671881371](https://github.com/AgentWorkforce/relaycast/actions/runs/43671881371) dispatched from `fd101954` with tag 12.10.0 by the codex-relay-control-session; digest and attestation to be recorded when it completes.
+- Container: Publish Container run [43671881371](https://github.com/AgentWorkforce/relaycast/actions/runs/43671881371), workflow_dispatch from main `fd10195436054d97c75504d1c803df0d1f2fed98` with `tag=12.10.0`, `latest=true`, dispatched by the codex-relay-control-session. Job "Build and push" concluded `success` (created 2026-11-15T03:20:04Z, completed 2026-11-15T03:32:50Z).
+  - Image: `ghcr.io/agentworkforce/relaycast-self-host@sha256:ec062ef901af15cf575b53a71d7eb09f2e6ab6e7c0d5be2da35339a275a5c6cc`. The GHCR package version for that digest was created 2026-11-15T03:31:57Z and carries tags `12.10.0` and `latest`.
+  - Attestation: `gh attestation verify oci://ghcr.io/agentworkforce/relaycast-self-host@sha256:ec062ef901af15cf575b53a71d7eb09f2e6ab6e7c0d5be2da35339a275a5c6cc -R AgentWorkforce/relaycast` passes. The SLSA v1 provenance statement names subject digest `ec062ef9...a5c6cc`, source `git+https://github.com/AgentWorkforce/relaycast@refs/heads/main` at gitCommit `fd10195436054d97c75504d1c803df0d1f2fed98`, builder `.github/workflows/publish-container.yml@refs/heads/main`, invocation `actions/runs/43671881371/attempts/1`, signed by the Public Good Sigstore instance.
+  - Self-host pin: the chart default and the live-cast release still point at the pinned 12.7.0 digest; moving the chart or live-cast to 12.10.0 is a separate step and is not done by this release.
 
 ## Gate
 
