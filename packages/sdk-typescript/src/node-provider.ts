@@ -9,6 +9,13 @@ import {
   type NodeRegisterReplyData,
 } from '@relaycast/types';
 import { SDK_VERSION } from './version.js';
+import {
+  PROVIDER_INSTANCE_CONFLICT_CLOSE_CODE,
+  PROVIDER_INSTANCE_CONFLICT_CODE,
+  PROVIDER_INSTANCE_CONFLICT_MIN_RETRY_MS,
+  conflictRetryDelayMs,
+  readCloseEvent,
+} from './attach-conflict.js';
 
 /**
  * A node provider client: it attaches a process to a node, registers a subset
@@ -113,7 +120,16 @@ export interface NodeProviderOptions {
 
 /** Thrown when the engine rejects the provider's registration. */
 export class NodeRegistrationError extends Error {
-  constructor(message: string, readonly code: string) {
+  constructor(
+    message: string,
+    readonly code: string,
+    /**
+     * For a retryable refusal (`provider_instance_conflict`): the minimum wait
+     * before the next attempt, honouring the server's `retry_after_ms` /
+     * `retry_after` hint (floor 30s, cap 300s).
+     */
+    readonly retryAfterMs?: number,
+  ) {
     super(message);
     this.name = 'NodeRegistrationError';
   }
@@ -160,6 +176,15 @@ export class NodeProviderClient {
   private reconnectAttempt = 0;
   private stopped = false;
   private registered = false;
+  /** Earliest time the next attach may start after a conflict refusal. */
+  private conflictUntil: number | null = null;
+  /** The socket whose conflict refusal set {@link conflictUntil}. */
+  private conflictSocket: WebSocket | null = null;
+  /** Bounds the wait for the `node.register` reply (see {@link sendRegister}). */
+  private readonly registerTimeoutMs = 15_000;
+  private registerTimer: ReturnType<typeof setTimeout> | null = null;
+  /** Client-side close for a refused socket the server never closes. */
+  private conflictCloseTimer: ReturnType<typeof setTimeout> | null = null;
 
   private servePromise: Promise<void> | null = null;
   private resolveServe: (() => void) | null = null;
@@ -258,6 +283,10 @@ export class NodeProviderClient {
   async stop(): Promise<void> {
     this.stopped = true;
     this.clearReconnect();
+    this.clearConflictCloseTimer();
+    this.clearRegisterTimer();
+    this.conflictUntil = null;
+    this.conflictSocket = null;
     this.stopHeartbeat();
     // Let in-flight invoke handlers finish (and send their results) before the
     // socket closes; bound the wait so a slow handler can't hang shutdown.
@@ -317,28 +346,60 @@ export class NodeProviderClient {
       if (this.ws !== ws) return;
       this.handleFrame(String(event.data));
     };
-    ws.onclose = () => {
-      if (this.ws !== ws) return;
-      this.ws = null;
-      this.stopHeartbeat();
-      const wasRegistered = this.registered;
-      this.registered = false;
-      this.rejectPending(new Error('node provider connection closed'));
-      if (this.stopped) {
-        this.settleServe();
-        return;
-      }
-      // A rejected registration is deterministic — do not reconnect into the same
-      // rejection; surface it and stop.
-      if (this.rejectRegister && !wasRegistered && this.registrationRejected) {
-        return;
-      }
-      this.scheduleReconnect();
+    // Some runtimes invoke onclose without an event; readCloseEvent tolerates that.
+    ws.onclose = (event: unknown) => {
+      this.handleSocketClosed(ws, readCloseEvent(event).code);
     };
     ws.onerror = () => {
       if (this.ws !== ws) return;
       this.reportError(new Error('node provider websocket error'));
     };
+  }
+
+  private handleSocketClosed(ws: WebSocket, code: number | null): void {
+    if (this.ws !== ws) return;
+    this.ws = null;
+    this.clearConflictCloseTimer();
+    this.clearRegisterTimer();
+    this.stopHeartbeat();
+    const wasRegistered = this.registered;
+    this.registered = false;
+    this.rejectPending(new Error('node provider connection closed'));
+    if (this.stopped) {
+      this.settleServe();
+      return;
+    }
+    // A 4009 close is the gateway's conflict refusal. When it was preceded by
+    // the error reply the wait already runs from that refusal; otherwise start
+    // the floor now.
+    if (code === PROVIDER_INSTANCE_CONFLICT_CLOSE_CODE && this.conflictSocket !== ws) {
+      this.recordConflict(ws, PROVIDER_INSTANCE_CONFLICT_MIN_RETRY_MS);
+    }
+    // A rejected registration is deterministic — do not reconnect into the same
+    // rejection; surface it and stop.
+    if (this.rejectRegister && !wasRegistered && this.registrationRejected) {
+      return;
+    }
+    this.scheduleReconnect();
+  }
+
+  private recordConflict(ws: WebSocket, waitMs: number): void {
+    this.conflictSocket = ws;
+    this.conflictUntil = Date.now() + waitMs;
+  }
+
+  private clearRegisterTimer(): void {
+    if (this.registerTimer) {
+      clearTimeout(this.registerTimer);
+      this.registerTimer = null;
+    }
+  }
+
+  private clearConflictCloseTimer(): void {
+    if (this.conflictCloseTimer) {
+      clearTimeout(this.conflictCloseTimer);
+      this.conflictCloseTimer = null;
+    }
   }
 
   private registrationRejected = false;
@@ -359,6 +420,18 @@ export class NodeProviderClient {
         [FLEET_ACTION_CALLER_METADATA_KEY]: FLEET_ACTION_CALLER_METADATA_VERSION,
       },
     }));
+    // A server that never answers would leave the provider attached but
+    // unregistered forever: fail the request as a transport error (not a
+    // NodeRegistrationError), which closes the socket and reconnects.
+    this.clearRegisterTimer();
+    const registerTimer = setTimeout(() => {
+      if (this.registerTimer === registerTimer) this.registerTimer = null;
+      const p = this.pending.get(id);
+      if (!p) return;
+      this.pending.delete(id);
+      p.reject(new Error('node.register reply timed out'));
+    }, this.registerTimeoutMs);
+    this.registerTimer = registerTimer;
     this.request(id, {
       type: 'node.register',
       name: this.nodeName,
@@ -371,6 +444,9 @@ export class NodeProviderClient {
       ...(this.machineId ? { machine_id: this.machineId } : {}),
       resume_cursor: null,
     })
+      .finally(() => {
+        if (this.registerTimer === registerTimer) this.clearRegisterTimer();
+      })
       .then((data) => this.onRegistered(data as NodeRegisterReplyData, capabilities.map((c) => c.name)))
       .catch((err) => this.onRegisterFailed(err as Error));
   }
@@ -428,6 +504,10 @@ export class NodeProviderClient {
       }
       return;
     }
+    if (err.code === PROVIDER_INSTANCE_CONFLICT_CODE) {
+      this.onConflictRefusal(err);
+      return;
+    }
     this.registrationRejected = true;
     this.rejectRegister?.(err);
     this.rejectRegister = null;
@@ -441,10 +521,59 @@ export class NodeProviderClient {
     }
   }
 
+  /**
+   * Another live instance holds this provider identity. That is transient (the
+   * incumbent goes away or stops heartbeating), so keep serving: whenRegistered()
+   * and serve() stay pending, and the next attach waits out the refusal. The
+   * gateway closes the socket (4009) itself, possibly after holding it; leave
+   * that to the server and only close client-side if it never does.
+   */
+  private onConflictRefusal(err: NodeRegistrationError): void {
+    this.reportError(err);
+    const ws = this.ws;
+    if (this.stopped || !ws) return;
+    const waitMs = err.retryAfterMs ?? conflictRetryDelayMs();
+    this.recordConflict(ws, waitMs);
+    this.clearConflictCloseTimer();
+    this.conflictCloseTimer = setTimeout(() => {
+      this.conflictCloseTimer = null;
+      if (this.ws !== ws) return;
+      this.closeSocket();
+      // closeSocket() detached the handlers, so run the close path directly.
+      this.ws = ws;
+      this.handleSocketClosed(ws, null);
+    }, waitMs);
+  }
+
   private handleFrame(raw: string): void {
+    let json: unknown;
+    try {
+      json = JSON.parse(raw);
+    } catch (err) {
+      if (this.debug) this.reportError(err);
+      return;
+    }
+    // Error replies are read before the strict wire parse: a refusal may carry
+    // retry hints (`retry_after_ms` / `retry_after`) the strict schema rejects,
+    // and dropping the frame would leave the request hanging.
+    if (json && typeof json === 'object' && (json as { type?: unknown }).type === 'error') {
+      const frame = json as Record<string, unknown>;
+      const p = typeof frame.id === 'string' ? this.pending.get(frame.id) : undefined;
+      if (p) {
+        this.pending.delete(frame.id as string);
+        const code = typeof frame.code === 'string' ? frame.code : 'error';
+        const text = typeof frame.message === 'string' ? frame.message : code;
+        p.reject(new NodeRegistrationError(
+          text,
+          code,
+          code === PROVIDER_INSTANCE_CONFLICT_CODE ? conflictRetryDelayMs(frame) : undefined,
+        ));
+      }
+      return;
+    }
     let message;
     try {
-      message = parseFleetRelaycastToBrokerMessage(JSON.parse(raw));
+      message = parseFleetRelaycastToBrokerMessage(json);
     } catch (err) {
       if (this.debug) this.reportError(err);
       return;
@@ -455,14 +584,6 @@ export class NodeProviderClient {
         if (p) {
           this.pending.delete(message.id);
           p.resolve(message.data);
-        }
-        return;
-      }
-      case 'error': {
-        const p = this.pending.get(message.id);
-        if (p) {
-          this.pending.delete(message.id);
-          p.reject(new NodeRegistrationError(message.message, message.code));
         }
         return;
       }
@@ -622,7 +743,12 @@ export class NodeProviderClient {
     }
     this.reconnectAttempt += 1;
     const exp = Math.min(this.reconnectBaseDelayMs * 2 ** (this.reconnectAttempt - 1), this.reconnectMaxDelayMs);
-    const delay = this.reconnectJitter ? Math.round(exp * (0.5 + Math.random())) : exp;
+    const computed = this.reconnectJitter ? Math.round(exp * (0.5 + Math.random())) : exp;
+    // After a conflict refusal, never re-attach before the refusal's wait has
+    // elapsed (measured from the refusal, not from the close).
+    const delay = this.conflictUntil !== null ? Math.max(computed, this.conflictUntil - Date.now()) : computed;
+    this.conflictUntil = null;
+    this.conflictSocket = null;
     this.reconnectTimer = setTimeout(() => {
       this.reconnectTimer = null;
       this.openSocket();

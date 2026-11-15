@@ -6,6 +6,7 @@ import type {
   WsPermanentlyDisconnectedEvent,
   WsCloseEvent,
   WsResyncedEvent,
+  WsRegistrationRejectedEvent,
 } from './types.js';
 import { ServerEventSchema } from '@relaycast/types';
 import {
@@ -18,6 +19,13 @@ import {
 } from './origin.js';
 import { camelizeKeys, decamelizeKey } from './casing.js';
 import { stableRelaycastEventId } from './event-id.js';
+import {
+  PROVIDER_INSTANCE_CONFLICT_CLOSE_CODE,
+  PROVIDER_INSTANCE_CONFLICT_CODE,
+  PROVIDER_INSTANCE_CONFLICT_MIN_RETRY_MS,
+  conflictRetryDelayMs,
+  readCloseEvent,
+} from './attach-conflict.js';
 
 export type EventHandler<T = WsClientEvent> = (event: T) => void;
 
@@ -259,8 +267,32 @@ export class WsClient {
   private ws: WebSocket | null = null;
   private connecting = false;
   private handlers: Map<string, Set<EventHandler>> = new Map();
+  /**
+   * `'open'` has been emitted for the current socket. On the node transport
+   * that happens only once the engine accepted `node.register`; elsewhere at
+   * socket open.
+   */
   private isOpen = false;
+  /**
+   * Earliest epoch-ms the next reconnect may open a socket, after the server
+   * refused this client's attach (`provider_instance_conflict` reply or a 4009
+   * close). Consumed by the next {@link scheduleReconnect}.
+   */
+  private refusedUntil: number | null = null;
+  /** The socket the last conflict refusal arrived on, so its close does not restart the wait. */
+  private refusedSocket: WebSocket | null = null;
+  /** Fallback close for a refused socket the server never closes. */
+  private refusalCloseTimer: ReturnType<typeof setTimeout> | null = null;
+  /**
+   * Consecutive failed reconnects: the backoff level and the circuit-breaker
+   * streak. A conflict refusal neither raises nor resets it.
+   */
   private reconnectAttempt = 0;
+  /**
+   * Every reconnect scheduled since the last accepted connection, conflict
+   * refusals included; checked against {@link maxReconnectAttempts}.
+   */
+  private totalReconnectAttempts = 0;
   private maxReconnectAttempts: number;
   private reconnectJitter: boolean;
   private reconnectBaseDelayMs: number;
@@ -270,6 +302,12 @@ export class WsClient {
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
   private connectTimer: ReturnType<typeof setTimeout> | null = null;
   private connectTimeoutMs = 10_000;
+  /**
+   * Node transport: how long to wait for the `node.register` reply before
+   * treating the socket as failed (it is not announced until that reply).
+   */
+  private registerTimeoutMs = 15_000;
+  private registerTimer: ReturnType<typeof setTimeout> | null = null;
   private pingTimer: ReturnType<typeof setTimeout> | null = null;
   private heartbeatSequence = 0;
   private pendingPresence: { id: string; sentAt: number; agentId: string } | null = null;
@@ -380,8 +418,10 @@ export class WsClient {
       }
     }, this.connectTimeoutMs);
 
+    let socketOpened = false;
     ws.onopen = () => {
       if (this.ws !== ws) return;
+      socketOpened = true;
       void this.handleOpen(ws).catch((err) => {
         if (this.ws !== ws || this.closed) return;
         if (this.debug) {
@@ -450,17 +490,8 @@ export class WsClient {
       }
     };
 
-    ws.onclose = () => {
-      if (this.ws !== ws) return;
-      this.clearConnectTimer();
-      this.isOpen = false;
-      this.stopPing();
-      this.ws = null;
-      if (!this.closed) {
-        this.scheduleReconnect();
-      }
-      const closeEvent: WsCloseEvent = { type: 'close' };
-      this.emit('close', closeEvent);
+    ws.onclose = (event: unknown) => {
+      this.handleSocketClosed(ws, readCloseEvent(event).code);
     };
 
     ws.onerror = () => {
@@ -470,7 +501,7 @@ export class WsClient {
 
       // Some runtimes report handshake failures via `error` without a
       // corresponding `close`. Ensure reconnect still progresses.
-      if (!this.isOpen && !this.closed) {
+      if (!socketOpened && !this.isOpen && !this.closed) {
         this.clearConnectTimer();
         this.ws = null;
         this.scheduleReconnect();
@@ -481,8 +512,6 @@ export class WsClient {
   private async handleOpen(ws: WebSocket): Promise<void> {
     if (this.ws !== ws) return;
     this.clearConnectTimer();
-    this.isOpen = true;
-    this.reconnectAttempt = 0;
     this.permanentlyDisconnected = false;
     // A new connection replays from the server's cursor: watermarks restart,
     // and deliveries still in flight from the previous one may not confirm.
@@ -499,8 +528,48 @@ export class WsClient {
       this.engineCapabilities = new Set();
       this.pendingRegistrationId = typeof registration.id === 'string' ? registration.id : null;
       this.sendJson(registration);
+      if (this.pendingRegistrationId !== null) this.armRegisterTimer(ws);
+      // The connection is usable only once the engine accepted the
+      // registration: 'open' (and the reconnect-counter reset) waits for the
+      // reply, so a server that upgrades the socket and then refuses the
+      // attach neither resets the backoff nor runs open hooks.
+      if (this.pendingRegistrationId !== null) return;
     }
 
+    this.announceOpen(ws);
+  }
+
+  /**
+   * A server that upgrades the socket but never answers `node.register` would
+   * otherwise leave it unannounced (no 'open', no ping, no reconnect) forever:
+   * drop it as a transport failure and reconnect with the normal backoff.
+   */
+  private armRegisterTimer(ws: WebSocket): void {
+    this.clearRegisterTimer();
+    this.registerTimer = setTimeout(() => {
+      this.registerTimer = null;
+      if (this.ws !== ws || this.closed || this.pendingRegistrationId === null) return;
+      if (this.debug) this.warn('node.register reply timed out', { timeoutMs: this.registerTimeoutMs });
+      this.dropSocket(ws);
+    }, this.registerTimeoutMs);
+  }
+
+  private clearRegisterTimer(): void {
+    if (this.registerTimer) {
+      clearTimeout(this.registerTimer);
+      this.registerTimer = null;
+    }
+  }
+
+  /** The connection is established (and, on the node transport, registered): emit 'open'. */
+  private announceOpen(ws: WebSocket): void {
+    if (this.ws !== ws || this.closed || this.isOpen) return;
+    this.isOpen = true;
+    this.reconnectAttempt = 0;
+    this.totalReconnectAttempts = 0;
+    this.refusedUntil = null;
+    this.refusedSocket = null;
+    this.clearRefusalCloseTimer();
     this.startPing();
     const openEvent: WsOpenEvent = { type: 'open' };
     this.emit('open', openEvent);
@@ -509,12 +578,110 @@ export class WsClient {
     this.sendResync();
   }
 
+  /**
+   * The engine refused this socket's `node.register`. A
+   * `provider_instance_conflict` means another live instance holds the
+   * binding: wait at least the server's retry hint (>= 30 s) before the next
+   * attach. The server owns the close and may hold the socket for that
+   * window; if it never closes, close client-side once the wait has passed.
+   * Any other refusal closes the socket now and reconnects with the normal
+   * (non-reset) backoff.
+   */
+  private handleRegistrationRejected(ws: WebSocket, frame: Record<string, unknown>): void {
+    const code = typeof frame.code === 'string' && frame.code.length > 0 ? frame.code : 'registration_rejected';
+    const message = typeof frame.message === 'string' ? frame.message : '';
+    const conflict = code === PROVIDER_INSTANCE_CONFLICT_CODE;
+    const retryAfterMs = conflict ? conflictRetryDelayMs(frame) : null;
+    if (retryAfterMs !== null) this.recordRefusal(ws, retryAfterMs);
+    if (this.debug) this.warn('node.register rejected', { code, message, retryAfterMs });
+    const event: WsRegistrationRejectedEvent = { type: 'registration_rejected', code, message, retryAfterMs };
+    this.emit('registration_rejected', event);
+    if (this.ws !== ws) return;
+    if (retryAfterMs === null) {
+      this.dropSocket(ws);
+      return;
+    }
+    this.clearRefusalCloseTimer();
+    this.refusalCloseTimer = setTimeout(() => {
+      this.refusalCloseTimer = null;
+      this.dropSocket(ws);
+    }, retryAfterMs);
+  }
+
+  private recordRefusal(ws: WebSocket, waitMs: number): void {
+    this.refusedSocket = ws;
+    this.refusedUntil = Date.now() + waitMs;
+  }
+
+  /** Close a socket client-side and continue through the normal close path. */
+  private dropSocket(ws: WebSocket): void {
+    if (this.ws !== ws) return;
+    this.handleSocketClosed(ws, null);
+    ws.onopen = null;
+    ws.onmessage = null;
+    ws.onclose = null;
+    ws.onerror = null;
+    try {
+      ws.close();
+    } catch {
+      // noop
+    }
+  }
+
+  private handleSocketClosed(ws: WebSocket, code: number | null): void {
+    if (this.ws !== ws) return;
+    this.clearConnectTimer();
+    this.clearRegisterTimer();
+    this.clearRefusalCloseTimer();
+    const wasOpen = this.isOpen;
+    this.isOpen = false;
+    this.stopPing();
+    this.ws = null;
+    this.pendingRegistrationId = null;
+    // A 4009 close is the gateway's conflict refusal. If its error reply
+    // already started the wait (and announced registration_rejected), keep
+    // that deadline (the server may have held the socket for it); otherwise
+    // the wait starts now and this close is the refusal's only notice.
+    if (code === PROVIDER_INSTANCE_CONFLICT_CLOSE_CODE && this.refusedSocket !== ws) {
+      this.recordRefusal(ws, PROVIDER_INSTANCE_CONFLICT_MIN_RETRY_MS);
+      if (this.nodeMode) {
+        const event: WsRegistrationRejectedEvent = {
+          type: 'registration_rejected',
+          code: PROVIDER_INSTANCE_CONFLICT_CODE,
+          message: `${PROVIDER_INSTANCE_CONFLICT_CODE} (close ${PROVIDER_INSTANCE_CONFLICT_CLOSE_CODE})`,
+          retryAfterMs: null,
+        };
+        this.emit('registration_rejected', event);
+      }
+    }
+    if (!this.closed) {
+      this.scheduleReconnect();
+    }
+    // The node transport never announced a socket whose registration was not
+    // accepted, so its close is not a disconnect either.
+    if (wasOpen || !this.nodeMode) {
+      const closeEvent: WsCloseEvent = { type: 'close' };
+      this.emit('close', closeEvent);
+    }
+  }
+
+  private clearRefusalCloseTimer(): void {
+    if (this.refusalCloseTimer) {
+      clearTimeout(this.refusalCloseTimer);
+      this.refusalCloseTimer = null;
+    }
+  }
+
   disconnect(): void {
     this.closed = true;
     this.isOpen = false;
     this.connecting = false;
     this.permanentlyDisconnected = false;
     this.clearConnectTimer();
+    this.clearRegisterTimer();
+    this.clearRefusalCloseTimer();
+    this.refusedUntil = null;
+    this.refusedSocket = null;
     this.stopPing();
     if (this.reconnectTimer) {
       clearTimeout(this.reconnectTimer);
@@ -538,7 +705,10 @@ export class WsClient {
     this.connecting = false;
     this.permanentlyDisconnected = false;
     this.reconnectAttempt = 0;
+    this.totalReconnectAttempts = 0;
     this.clearConnectTimer();
+    this.clearRegisterTimer();
+    this.clearRefusalCloseTimer();
     this.stopPing();
     if (this.reconnectTimer) {
       clearTimeout(this.reconnectTimer);
@@ -679,12 +849,18 @@ export class WsClient {
 
     if (this.pendingRegistrationId !== null && parsed.id === this.pendingRegistrationId) {
       this.pendingRegistrationId = null;
-      const capabilities = parsed.type === 'reply' && parsed.ok === true && isRecord(parsed.data)
-        ? parsed.data.capabilities
-        : undefined;
+      this.clearRegisterTimer();
+      const accepted = parsed.type === 'reply' && parsed.ok === true;
+      const capabilities = accepted && isRecord(parsed.data) ? parsed.data.capabilities : undefined;
       this.engineCapabilities = new Set(
         Array.isArray(capabilities) ? capabilities.filter((value): value is string => typeof value === 'string') : [],
       );
+      const ws = this.ws;
+      if (ws) {
+        if (accepted) this.announceOpen(ws);
+        else this.handleRegistrationRejected(ws, parsed);
+      }
+      return true;
     }
 
     const pending = this.pendingPresence;
@@ -1129,24 +1305,36 @@ export class WsClient {
     }
     const event: WsPermanentlyDisconnectedEvent = {
       type: 'permanently_disconnected',
-      attempt: this.reconnectAttempt,
+      attempt: this.totalReconnectAttempts,
     };
     this.emit('permanently_disconnected', event);
   }
 
   private scheduleReconnect(): void {
     if (this.reconnectTimer || this.closed || this.permanentlyDisconnected) return;
+    const refusedUntil = this.refusedUntil;
+    this.refusedUntil = null;
+    this.refusedSocket = null;
+    // A conflict refusal is the server saying "not yet", not a failure: it
+    // leaves the backoff level and circuit-breaker streak (reconnectAttempt)
+    // alone, so it neither trips the breaker (which would leave the client
+    // detached for good once the incumbent goes away) nor brings it closer
+    // for later ordinary failures. Every scheduled reconnect, refused or not,
+    // counts toward maxReconnectAttempts.
+    const refused = refusedUntil !== null;
     if (
-      this.reconnectAttempt >= this.maxReconnectAttempts ||
-      this.reconnectAttempt >= this.circuitBreakerMaxAttempts
+      this.totalReconnectAttempts >= this.maxReconnectAttempts ||
+      (!refused && this.reconnectAttempt >= this.circuitBreakerMaxAttempts)
     ) {
       this.tripCircuitBreaker();
       return;
     }
-    this.reconnectAttempt += 1;
-    const reconnectingEvent: WsReconnectingEvent = { type: 'reconnecting', attempt: this.reconnectAttempt };
+    this.totalReconnectAttempts += 1;
+    if (!refused) this.reconnectAttempt += 1;
+    const reconnectingEvent: WsReconnectingEvent = { type: 'reconnecting', attempt: this.totalReconnectAttempts };
     this.emit('reconnecting', reconnectingEvent);
-    const delay = this.computeReconnectDelayMs(this.reconnectAttempt);
+    const computed = this.computeReconnectDelayMs(this.reconnectAttempt);
+    const delay = refused ? Math.max(computed, refusedUntil - Date.now()) : computed;
     this.reconnectTimer = setTimeout(() => {
       this.reconnectTimer = null;
       this.connect();

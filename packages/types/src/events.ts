@@ -414,6 +414,17 @@ export const WsPermanentlyDisconnectedEventSchema = z.object({
 });
 export type WsPermanentlyDisconnectedEvent = z.infer<typeof WsPermanentlyDisconnectedEventSchema>;
 
+// Emitted by WsClient (node transport) when the server refuses its
+// `node.register`. `retry_after_ms` is the minimum wait before the next attach
+// (set for `provider_instance_conflict`, null otherwise).
+export const WsRegistrationRejectedEventSchema = z.object({
+  type: z.literal('registration_rejected'),
+  code: z.string(),
+  message: z.string(),
+  retry_after_ms: z.number().nullable(),
+});
+export type WsRegistrationRejectedEvent = z.infer<typeof WsRegistrationRejectedEventSchema>;
+
 export const WsCloseEventSchema = z.object({
   type: z.literal('close'),
 });
@@ -525,6 +536,7 @@ export const WsClientEventSchema = z.discriminatedUnion('type', [
   WsPermanentlyDisconnectedEventSchema,
   WsCloseEventSchema,
   WsResyncedEventSchema,
+  WsRegistrationRejectedEventSchema,
 ]);
 export type WsClientEvent = z.infer<typeof WsClientEventSchema>;
 export type WsClientEventType = WsClientEvent['type'];
