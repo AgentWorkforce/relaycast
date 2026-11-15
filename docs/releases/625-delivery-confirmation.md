@@ -1,6 +1,6 @@
 # Release preparation for delivery confirmation (#625)
 
-Status: preparation only. Proposed release: **12.10.0** (minor), published through the existing Publish NPM Packages workflow with `custom_version`. No release has been published, tagged, or dispatched by this preparation, and no version, CHANGELOG, or package.json was edited. Khaliq dispatched the publish directly after this note was written; see "Dispatch status" below.
+Status: npm publish dispatched by Khaliq and in progress. Release **12.10.0** (minor) through the existing Publish NPM Packages workflow with `custom_version`; see "Dispatch status" below. This note itself edits no version, CHANGELOG, or package.json; the workflow's commit-back does that. The container publish and the relaycast-cloud pin bump have not been requested.
 
 Source: relaycast#625 "delivery confirmation", merged to main as `b6cc6e1a57935ddfe36aac33f105ba8d185ee28c` (2026-11-14T22:37:04Z on GitHub; the commit timestamp in git is 22:37:03Z).
 
@@ -40,7 +40,7 @@ State of the registry when this note was written (2026-11-15T02:46Z), before the
 
 Dispatching with `version=minor` recomputes 12.9.0 from 12.8.0 and fails the integrity assertion again. Use a custom version.
 
-Proposed inputs (workflow "Publish NPM Packages", ref `main`):
+Inputs used for the dispatch (workflow "Publish NPM Packages", ref `main`):
 
 | Input | Value |
 | --- | --- |
@@ -50,9 +50,9 @@ Proposed inputs (workflow "Publish NPM Packages", ref `main`):
 | `dry_run` | `false` |
 | `tag` | `latest` |
 
-### Open question for Khaliq
+### Open follow-up: 12.9.0 is still unreconciled on main
 
-The simplest path is 12.10.0 via `custom_version`, as above. The alternative is to first reconcile main to 12.9.0 (a `chore(release)` commit recording the already-published 12.9.0) and then publish 12.10.0 from there. This is Khaliq's decision; this document proposes 12.10.0 via `custom_version` and leaves the reconciliation open.
+Khaliq chose 12.10.0 via `custom_version` without first reconciling main to 12.9.0. Main therefore still has no `chore(release): v12.9.0` commit, no `v12.9.0` tag and no 12.9.0 CHANGELOG section. That is harmless for 12.10.0, whose commit-back moves the version past 12.9.0. It stays recorded here so that nobody reads the gap as a missing release later.
 
 ## Migrations shipped by this release
 
@@ -81,7 +81,7 @@ The SQLite migrator is set-based (`packages/engine/src/db/migrationPlan.ts`: sor
 
 Khaliq (`khaliqgant`) dispatched Publish NPM Packages on main `b6cc6e1a` at 2026-11-15T02:49:19Z, run https://github.com/AgentWorkforce/relaycast/actions/runs/43669541261, resolving to **12.10.0**. Do not dispatch the inputs above again: npm refuses a republish of an existing version and the integrity assertion fails.
 
-Verified on npm at 2026-11-15T03:08Z while that run was still publishing (`react`, `openclaw` and `mcp` jobs queued; no `chore(release): v12.10.0` commit and no `v12.10.0` tag yet):
+Verified on npm at 2026-11-15T03:20Z: all eight publish jobs and "Verify all packages published" succeeded, and every package has 12.10.0. The "Create Release" job was still queued, so there was no `chore(release): v12.10.0` commit on main, no `v12.10.0` tag and no GitHub release yet.
 
 | Package | 12.10.0 published |
 | --- | --- |
@@ -89,6 +89,10 @@ Verified on npm at 2026-11-15T03:08Z while that run was still publishing (`react
 | `@relaycast/engine` | 2026-11-15T03:05:21Z |
 | `@relaycast/types` | 2026-11-15T03:05:58Z |
 | `@relaycast/a2a` | 2026-11-15T03:06:27Z |
+| `relaycast` (cli) | 2026-11-15T03:11:34Z |
+| `@relaycast/react` | 2026-11-15T03:12:26Z |
+| `@relaycast/mcp` | 2026-11-15T03:13:00Z |
+| `@relaycast/openclaw` | 2026-11-15T03:13:10Z |
 
 The run's final result, the commit-back and the release URL belong in the receipts below.
 
@@ -96,7 +100,7 @@ The run's final result, the commit-back and the release URL belong in the receip
 
 Every step needs Khaliq's direct ask. The hourly batch flow and the agent host never dispatch publishing.
 
-1. **Publish NPM Packages** on main with the inputs above. Wait for the `chore(release): v12.10.0` commit-back and the GitHub release `v12.10.0`.
+1. **Publish NPM Packages**: done, see "Dispatch status". Do not dispatch again. What remains is to wait for the `chore(release): v12.10.0` commit-back and the GitHub release `v12.10.0`.
 2. **Publish Container** on main, at or after that commit, with `tag=12.10.0`, `latest=true`. The workflow refuses a tag that does not equal the `docker/package.json` engine pin (a `<pin>-<suffix>` tag is also accepted), and refuses non-main refs.
 3. **relaycast-cloud pin bump PR** (separate repo; runbook `docs/rollouts/engine-12.10.0-delivery-confirmation.md` in that repo). Merging deploys production.
 
@@ -109,11 +113,7 @@ Receipts to collect:
 
 ## Live self-host evidence
 
-A test image was built from main `b6cc6e1a` by Publish Container run https://github.com/AgentWorkforce/relaycast/actions/runs/43668851096 with tag `12.8.0-dc625.1` and `latest=false` (engine skeleton from the npm 12.8.0 pin, with `dist` from main overlaid). It is being exercised on live-cast (k3s, chart 0.3.3, SQLite) and then rolled back to the pinned 12.7.0 image.
-
-## Live-cast evidence
-
-_To be filled in by the agent host after the run._
+A test image was built from main `b6cc6e1a` by Publish Container run https://github.com/AgentWorkforce/relaycast/actions/runs/43668851096 with tag `12.8.0-dc625.1` and `latest=false` (engine skeleton from the npm 12.8.0 pin, with `dist` from main overlaid). It is being exercised on live-cast (k3s, chart 0.3.3, SQLite) and then rolled back to the pinned 12.7.0 image. The live-cast results are not yet recorded; add them to this section when the run finishes.
 
 ## Gate
 
