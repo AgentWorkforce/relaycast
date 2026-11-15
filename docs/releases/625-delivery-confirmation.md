@@ -1,6 +1,6 @@
 # Release preparation for delivery confirmation (#625)
 
-Status: preparation only. Proposed release: **12.10.0** (minor), published through the existing Publish NPM Packages workflow with `custom_version`. No release has been published, tagged, or dispatched by this preparation, and no version, CHANGELOG, or package.json was edited.
+Status: preparation only. Proposed release: **12.10.0** (minor), published through the existing Publish NPM Packages workflow with `custom_version`. No release has been published, tagged, or dispatched by this preparation, and no version, CHANGELOG, or package.json was edited. Khaliq dispatched the publish directly after this note was written; see "Dispatch status" below.
 
 Source: relaycast#625 "delivery confirmation", merged to main as `b6cc6e1a57935ddfe36aac33f105ba8d185ee28c` (2026-11-14T22:37:04Z on GitHub; the commit timestamp in git is 22:37:03Z).
 
@@ -28,6 +28,8 @@ The Unreleased section also carries other entries merged since 12.8.0 (strict sp
 Every `package.json` (root workspace packages, `packages/*`), `ARG RELAYCAST_ENGINE_VERSION` in the `Dockerfile`, and the `@relaycast/engine` pin and version in `docker/package.json` are **12.8.0** on main. The latest git tag is `v12.8.0`. `CHANGELOG.md` already contains `## [12.8.0] - 2026-11-04` with the pending entries above it.
 
 ## npm state and the 12.9.0 anomaly
+
+State of the registry when this note was written (2026-11-15T02:46Z), before the dispatch recorded under "Dispatch status".
 
 - `@relaycast/engine`, `@relaycast/types` and `@relaycast/sdk` have `latest` = **12.9.0**, published 2026-11-08T08:15Z from main commit `a14e189e`.
 - That publish never committed back: there is no `chore(release): v12.9.0` commit, no `v12.9.0` tag and no GitHub release.
@@ -74,6 +76,21 @@ The SQLite migrator is set-based (`packages/engine/src/db/migrationPlan.ts`: sor
 - `npm run test:release`: passed, 0 failures.
 - `npm run check:pg-migrations -w packages/engine`: PostgreSQL migrations in sync with `src/db/schema.pg.ts` (6 files).
 - `node scripts/check-release-contract.mjs --version 12.10.0 --allow-placeholder-docker-lock` fails before the bump, by design: version parity (packages are still 12.8.0), and with `--version 12.8.0` it reports that `CHANGELOG.md` already contains 12.8.0 but still has pending entries. The workflow runs this check after `npm version` and the lockfile projection, so the failure here is expected and not a defect.
+
+## Dispatch status
+
+Khaliq (`khaliqgant`) dispatched Publish NPM Packages on main `b6cc6e1a` at 2026-11-15T02:49:19Z, run https://github.com/AgentWorkforce/relaycast/actions/runs/43669541261, resolving to **12.10.0**. Do not dispatch the inputs above again: npm refuses a republish of an existing version and the integrity assertion fails.
+
+Verified on npm at 2026-11-15T03:08Z while that run was still publishing (`react`, `openclaw` and `mcp` jobs queued; no `chore(release): v12.10.0` commit and no `v12.10.0` tag yet):
+
+| Package | 12.10.0 published |
+| --- | --- |
+| `@relaycast/sdk` | 2026-11-15T03:03:07Z |
+| `@relaycast/engine` | 2026-11-15T03:05:21Z |
+| `@relaycast/types` | 2026-11-15T03:05:58Z |
+| `@relaycast/a2a` | 2026-11-15T03:06:27Z |
+
+The run's final result, the commit-back and the release URL belong in the receipts below.
 
 ## Dispatch sequence
 
