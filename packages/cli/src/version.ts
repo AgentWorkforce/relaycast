@@ -1,1 +1,1 @@
-export const CLI_VERSION = "12.10.1" as const;
+export const CLI_VERSION = "12.11.0" as const;
