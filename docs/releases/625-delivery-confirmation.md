@@ -21,7 +21,7 @@ In short:
 - `node.register` replies list `capabilities`, so nodes send new frames by capability.
 - TypeScript SDK: `agent.messageDeliveries(id)` and `relay.messages.deliveries(id)`, plus the `on.deliveryDelivered` hook (see `packages/sdk-typescript/CHANGELOG.md`).
 
-The Unreleased section also carries other entries merged since 12.8.0 (strict spawn, PostgreSQL self-host, A2A cards, and others); they ship in the same release.
+The 12.10.0 section also carries the other entries merged since 12.8.0 (strict spawn, PostgreSQL self-host, A2A cards, and others); they shipped in the same release.
 
 ## Repository version state (at preparation time)
 
@@ -50,7 +50,7 @@ Proposed inputs (workflow "Publish NPM Packages", ref `main`):
 
 ### Open question for Khaliq
 
-The simplest path is 12.10.0 via `custom_version`, as above. The alternative is to first reconcile main to 12.9.0 (a `chore(release)` commit recording the already-published 12.9.0) and then publish 12.10.0 from there. This is Khaliq's decision; this document proposes 12.10.0 via `custom_version` and leaves the reconciliation open.
+The simplest path was 12.10.0 via `custom_version`, as above, and that is what was dispatched. The alternative was to first reconcile main to 12.9.0 (a `chore(release)` commit recording the already-published 12.9.0) and then publish 12.10.0 from there. Reconciling main with the published 12.9.0 remains open and is Khaliq's decision.
 
 ## Migrations shipped by this release
 
@@ -85,16 +85,16 @@ Every step needs Khaliq's direct ask. The hourly batch flow and the agent host n
 
 Receipts to collect:
 
-- npm `dist.integrity` and `dist.shasum` for `@relaycast/engine`, `@relaycast/types` and `@relaycast/sdk` at 12.10.0 (`npm view <pkg>@12.10.0 dist.integrity dist.shasum`)
+- npm `dist.integrity` and `dist.shasum` for `@relaycast/engine`, `@relaycast/types`, `@relaycast/a2a` and `@relaycast/sdk` at 12.10.0 (`npm view <pkg>@12.10.0 dist.integrity dist.shasum`)
 - the workflow run URLs
 - the GitHub release URL
 - the image digest and its attestation (`gh attestation verify`)
 
-> **Status 2026-11-15:** Publish NPM Packages was dispatched with exactly the proposed inputs (`custom_version` 12.10.0, `tag` latest, `dry_run` false) from main `b6cc6e1a` by `khaliqgant` via the codex-relay-control-session: run 43669541261. Receipts are recorded below once the run completes.
+> **Status 2026-11-15:** Publish NPM Packages was dispatched with exactly the proposed inputs (`custom_version` 12.10.0, `tag` latest, `dry_run` false) from main `b6cc6e1a` by `khaliqgant` via the codex-relay-control-session: run 43669541261. Receipts are recorded in "Publish receipts" below.
 
 ## Live self-host evidence
 
-A test image was built from main `b6cc6e1a` by Publish Container run https://github.com/AgentWorkforce/relaycast/actions/runs/43668851096 with tag `12.8.0-dc625.1` and `latest=false` (engine skeleton from the npm 12.8.0 pin, with `dist` from main overlaid). It is being exercised on live-cast (k3s, chart 0.3.3, SQLite) and then rolled back to the pinned 12.7.0 image.
+A test image was built from main `b6cc6e1a` by Publish Container run https://github.com/AgentWorkforce/relaycast/actions/runs/43668851096 with tag `12.8.0-dc625.1` and `latest=false` (engine skeleton from the npm 12.8.0 pin, with `dist` from main overlaid). It was exercised on live-cast (k3s, chart 0.3.3, SQLite) and then rolled back to the pinned 12.7.0 image; the capture is in "Live-cast evidence" below.
 
 ## Live-cast evidence
 
@@ -124,7 +124,7 @@ Publish NPM Packages run [43669541261](https://github.com/AgentWorkforce/relayca
 
 `dist-tags.latest` is 12.10.0 for all four (checked with `npm view` on 2026-11-15, independently confirmed by codex-relay-control-session).
 
-- Commit-back: `fd10195436054d97c75504d1c803df0d1f2fed98` `chore(release): v12.10.0` on `main` (parent `b6cc6e1a`, author GitHub Actions). `packages/types/package.json` and `docker/package.json` now read 12.10.0, with the docker engine pin at 12.10.0.
+- Commit-back: `fd10195436054d97c75504d1c803df0d1f2fed98` `chore(release): v12.10.0` on `main` (parent `b6cc6e1a`, author GitHub Actions). It bumps every `package.json` (root workspace packages, `packages/*`, including `packages/a2a`), `ARG RELAYCAST_ENGINE_VERSION` in the `Dockerfile`, `packages/cli/src/version.ts`, `packages/sdk-typescript/src/version.ts`, and `docker/package.json` with its `@relaycast/engine` pin to 12.10.0, and moves the changelog entries under `## [12.10.0] - 2026-11-15`.
 - GitHub release: https://github.com/AgentWorkforce/relaycast/releases/tag/v12.10.0 (published 2026-11-15T03:18:02Z by github-actions).
 - Container: Publish Container run [43671881371](https://github.com/AgentWorkforce/relaycast/actions/runs/43671881371), workflow_dispatch from main `fd10195436054d97c75504d1c803df0d1f2fed98` with `tag=12.10.0`, `latest=true`, dispatched by the codex-relay-control-session. Job "Build and push" concluded `success` (created 2026-11-15T03:20:04Z, completed 2026-11-15T03:32:50Z).
   - Image: `ghcr.io/agentworkforce/relaycast-self-host@sha256:ec062ef901af15cf575b53a71d7eb09f2e6ab6e7c0d5be2da35339a275a5c6cc`. The GHCR package version for that digest was created 2026-11-15T03:31:57Z and carries tags `12.10.0` and `latest`.
