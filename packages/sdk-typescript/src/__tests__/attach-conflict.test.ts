@@ -262,6 +262,34 @@ describe('AgentClient direct-node attach refusal', () => {
     agent.disconnect();
   });
 
+  it('still retries after a bare 4009 when a registration_rejected listener throws', async () => {
+    const agent = createAgent();
+    agent.on.registrationRejected(() => {
+      throw new Error('listener boom');
+    });
+    agent.connect();
+    const first = await opened(0);
+    first.simulateClose(4009);
+    await expectReconnectAfter(30_000, 1);
+    agent.disconnect();
+  });
+
+  it('still arms the refusal close fallback when a registration_rejected listener throws', async () => {
+    const agent = createAgent();
+    agent.on.registrationRejected(() => {
+      throw new Error('listener boom');
+    });
+    agent.connect();
+    const first = await opened(0);
+    refuse(first);
+    await vi.advanceTimersByTimeAsync(29_999);
+    expect(first.close).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(1);
+    expect(first.close).toHaveBeenCalledTimes(1);
+    await expectReconnectAfter(1_000, 1);
+    agent.disconnect();
+  });
+
   it('closes client-side once the wait passes if the server never closes', async () => {
     const agent = createAgent();
     agent.connect();

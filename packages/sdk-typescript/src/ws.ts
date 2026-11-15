@@ -595,7 +595,7 @@ export class WsClient {
     if (retryAfterMs !== null) this.recordRefusal(ws, retryAfterMs);
     if (this.debug) this.warn('node.register rejected', { code, message, retryAfterMs });
     const event: WsRegistrationRejectedEvent = { type: 'registration_rejected', code, message, retryAfterMs };
-    this.emit('registration_rejected', event);
+    this.emitSafely('registration_rejected', event);
     if (this.ws !== ws) return;
     if (retryAfterMs === null) {
       this.dropSocket(ws);
@@ -651,7 +651,7 @@ export class WsClient {
           message: `${PROVIDER_INSTANCE_CONFLICT_CODE} (close ${PROVIDER_INSTANCE_CONFLICT_CLOSE_CODE})`,
           retryAfterMs: null,
         };
-        this.emit('registration_rejected', event);
+        this.emitSafely('registration_rejected', event);
       }
     }
     if (!this.closed) {
@@ -765,6 +765,18 @@ export class WsClient {
 
   get connected(): boolean {
     return this.isOpen;
+  }
+
+  /**
+   * {@link emit} for callers with state-critical work still to do: a handler
+   * that throws synchronously is logged and skipped instead of escaping.
+   */
+  private emitSafely(event: string, data: WsClientEvent): void {
+    try {
+      this.emit(event, data);
+    } catch (err) {
+      this.warn('event handler failed', { event, error: err });
+    }
   }
 
   /**
