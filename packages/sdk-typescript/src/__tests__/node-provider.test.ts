@@ -304,6 +304,33 @@ describe('NodeProviderClient', () => {
       await node.stop();
     });
 
+    it('conflict retries leave the backoff level for later ordinary failures untouched', async () => {
+      const node = new NodeProviderClient({ ...baseOptions, onError: () => {} });
+      void node.serve().catch(() => {});
+      for (let i = 0; i < 3; i += 1) {
+        const sock = newSocket();
+        sock.open();
+        refuse(sock);
+        await vi.advanceTimersByTimeAsync(0);
+        sock.drop(4009);
+        await vi.advanceTimersByTimeAsync(30_000);
+        expect(MockWebSocket.instances).toHaveLength(i + 2);
+      }
+      // A plain drop after three conflicts backs off from the first level
+      // (base delay), not from the fourth (base * 2^3).
+      newSocket().drop();
+      await vi.advanceTimersByTimeAsync(baseOptions.reconnectBaseDelayMs - 1);
+      expect(MockWebSocket.instances).toHaveLength(4);
+      await vi.advanceTimersByTimeAsync(1);
+      expect(MockWebSocket.instances).toHaveLength(5);
+      newSocket().drop();
+      await vi.advanceTimersByTimeAsync(baseOptions.reconnectBaseDelayMs * 2 - 1);
+      expect(MockWebSocket.instances).toHaveLength(5);
+      await vi.advanceTimersByTimeAsync(1);
+      expect(MockWebSocket.instances).toHaveLength(6);
+      await node.stop();
+    });
+
     it('stop() during the refusal wait cancels the client-side close and the reconnect', async () => {
       const node = new NodeProviderClient({ ...baseOptions, onError: () => {} });
       const served = node.serve();

@@ -173,7 +173,10 @@ export class NodeProviderClient {
   private instanceId: string | null = null;
   private heartbeatTimer: ReturnType<typeof setInterval> | null = null;
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
+  /** Reconnects scheduled since the last accepted register, conflict retries included; checked against maxReconnectAttempts. */
   private reconnectAttempt = 0;
+  /** Consecutive failed reconnects, the backoff level. A conflict refusal is "not yet", not a failure, and leaves it alone. */
+  private failedAttempts = 0;
   private stopped = false;
   private registered = false;
   /** Earliest time the next attach may start after a conflict refusal. */
@@ -486,6 +489,7 @@ export class NodeProviderClient {
     }
     this.registered = true;
     this.reconnectAttempt = 0;
+    this.failedAttempts = 0;
     this.startHeartbeat();
     this.resolveRegister?.(data);
     this.resolveRegister = null;
@@ -742,13 +746,17 @@ export class NodeProviderClient {
       return;
     }
     this.reconnectAttempt += 1;
-    const exp = Math.min(this.reconnectBaseDelayMs * 2 ** (this.reconnectAttempt - 1), this.reconnectMaxDelayMs);
+    const conflictUntil = this.conflictUntil;
+    this.conflictUntil = null;
+    this.conflictSocket = null;
+    // A conflict retry does not raise the backoff level for later ordinary
+    // failures (the same rule as WsClient).
+    if (conflictUntil === null) this.failedAttempts += 1;
+    const exp = Math.min(this.reconnectBaseDelayMs * 2 ** Math.max(0, this.failedAttempts - 1), this.reconnectMaxDelayMs);
     const computed = this.reconnectJitter ? Math.round(exp * (0.5 + Math.random())) : exp;
     // After a conflict refusal, never re-attach before the refusal's wait has
     // elapsed (measured from the refusal, not from the close).
-    const delay = this.conflictUntil !== null ? Math.max(computed, this.conflictUntil - Date.now()) : computed;
-    this.conflictUntil = null;
-    this.conflictSocket = null;
+    const delay = conflictUntil !== null ? Math.max(computed, conflictUntil - Date.now()) : computed;
     this.reconnectTimer = setTimeout(() => {
       this.reconnectTimer = null;
       this.openSocket();

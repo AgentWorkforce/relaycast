@@ -638,21 +638,22 @@ export class WsClient {
     this.stopPing();
     this.ws = null;
     this.pendingRegistrationId = null;
-    // A 4009 close is the gateway's conflict refusal. If its error reply
-    // already started the wait (and announced registration_rejected), keep
-    // that deadline (the server may have held the socket for it); otherwise
-    // the wait starts now and this close is the refusal's only notice.
-    if (code === PROVIDER_INSTANCE_CONFLICT_CLOSE_CODE && this.refusedSocket !== ws) {
-      this.recordRefusal(ws, PROVIDER_INSTANCE_CONFLICT_MIN_RETRY_MS);
-      if (this.nodeMode) {
-        const event: WsRegistrationRejectedEvent = {
-          type: 'registration_rejected',
-          code: PROVIDER_INSTANCE_CONFLICT_CODE,
-          message: `${PROVIDER_INSTANCE_CONFLICT_CODE} (close ${PROVIDER_INSTANCE_CONFLICT_CLOSE_CODE})`,
-          retryAfterMs: null,
-        };
-        this.emit('registration_rejected', event);
-      }
+    // On the node transport a 4009 close is the gateway's conflict refusal.
+    // If its error reply already started the wait (and announced
+    // registration_rejected), keep that deadline (the server may have held
+    // the socket for it); otherwise the wait starts now and this close is the
+    // refusal's only notice. The workspace stream never registers, so there
+    // the code is an ordinary close.
+    if (this.nodeMode && code === PROVIDER_INSTANCE_CONFLICT_CLOSE_CODE && this.refusedSocket !== ws) {
+      const retryAfterMs = PROVIDER_INSTANCE_CONFLICT_MIN_RETRY_MS;
+      this.recordRefusal(ws, retryAfterMs);
+      const event: WsRegistrationRejectedEvent = {
+        type: 'registration_rejected',
+        code: PROVIDER_INSTANCE_CONFLICT_CODE,
+        message: `${PROVIDER_INSTANCE_CONFLICT_CODE} (close ${PROVIDER_INSTANCE_CONFLICT_CLOSE_CODE})`,
+        retryAfterMs,
+      };
+      this.emit('registration_rejected', event);
     }
     if (!this.closed) {
       this.scheduleReconnect();
@@ -706,6 +707,8 @@ export class WsClient {
     this.permanentlyDisconnected = false;
     this.reconnectAttempt = 0;
     this.totalReconnectAttempts = 0;
+    this.refusedUntil = null;
+    this.refusedSocket = null;
     this.clearConnectTimer();
     this.clearRegisterTimer();
     this.clearRefusalCloseTimer();

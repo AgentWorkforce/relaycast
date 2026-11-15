@@ -67,7 +67,12 @@ Lifecycle handlers:
 ```ts
 me.on.reconnecting((attempt) => console.log(`reconnecting (attempt ${attempt})`));
 me.on.permanentlyDisconnected(() => console.log('gave up reconnecting'));
+// The engine refused the direct-node attach (e.g. `provider_instance_conflict`:
+// another live client holds this agent's node; retryAfterMs is the wait, >= 30 s).
+me.on.registrationRejected(({ code, retryAfterMs }) => console.log(`attach refused: ${code}`, retryAfterMs));
 ```
+
+`on.connected` fires once the engine accepts the direct-node registration, not on the socket upgrade; a refused attach never fires it.
 
 ## Self-hosting
 

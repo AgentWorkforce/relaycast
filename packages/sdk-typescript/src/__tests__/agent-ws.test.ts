@@ -1704,7 +1704,7 @@ describe('AgentClient WebSocket integration', () => {
     expect(rejected).toHaveBeenCalledWith({
       code: 'provider_instance_conflict',
       message: 'provider_instance_conflict (close 4009)',
-      retryAfterMs: null,
+      retryAfterMs: 30_000,
     });
     agent.disconnect();
   });
