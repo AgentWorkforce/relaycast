@@ -1,6 +1,6 @@
 # Release preparation for delivery confirmation (#625)
 
-Status: preparation only. Proposed release: **12.10.0** (minor), published through the existing Publish NPM Packages workflow with `custom_version`. No release has been published, tagged, or dispatched by this preparation, and no version, CHANGELOG, or package.json was edited.
+Status: **12.10.0 published** (2026-11-15). The sections below are in the order they happened: the preparation (written against main at 12.8.0, before any dispatch), the live-cast evidence, and the publish receipts. npm `latest`, tag `v12.10.0`, the GitHub release, the `chore(release): v12.10.0` commit-back and the container image `12.10.0`/`latest` all exist. Still open: the relaycast-cloud pin bump (step 3 of the dispatch sequence) and moving the chart and live-cast to 12.10.0.
 
 Source: relaycast#625 "delivery confirmation", merged to main as `b6cc6e1a57935ddfe36aac33f105ba8d185ee28c` (2026-11-14T22:37:04Z on GitHub; the commit timestamp in git is 22:37:03Z).
 
