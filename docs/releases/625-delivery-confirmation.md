@@ -1,6 +1,6 @@
 # Release preparation for delivery confirmation (#625)
 
-Status: npm publish dispatched by Khaliq and in progress. Release **12.10.0** (minor) through the existing Publish NPM Packages workflow with `custom_version`; see "Dispatch status" below. This note itself edits no version, CHANGELOG, or package.json; the workflow's commit-back does that. The container publish and the relaycast-cloud pin bump have not been requested.
+Status: npm release **12.10.0** published. Khaliq dispatched Publish NPM Packages with `custom_version`; the run succeeded, every package is on npm, and the commit-back, tag and GitHub release exist; see "Dispatch status" below. Khaliq then dispatched Publish Container on the commit-back; it was still running when this note was last updated (2026-11-15T03:28Z). The relaycast-cloud pin bump has not been requested. This note itself edits no version, CHANGELOG, or package.json; the workflow's commit-back did that.
 
 Source: relaycast#625 "delivery confirmation", merged to main as `b6cc6e1a57935ddfe36aac33f105ba8d185ee28c` (2026-11-14T22:37:04Z on GitHub; the commit timestamp in git is 22:37:03Z).
 
@@ -25,7 +25,9 @@ The Unreleased section also carries other entries merged since 12.8.0 (strict sp
 
 ## Repository version state
 
-Every `package.json` (root workspace packages, `packages/*`), `ARG RELAYCAST_ENGINE_VERSION` in the `Dockerfile`, and the `@relaycast/engine` pin and version in `docker/package.json` are **12.8.0** on main. The latest git tag is `v12.8.0`. `CHANGELOG.md` already contains `## [12.8.0] - 2026-11-04` with the pending entries above it.
+Before the release (main `b6cc6e1a`): every `package.json` (root workspace packages, `packages/*`), `ARG RELAYCAST_ENGINE_VERSION` in the `Dockerfile`, and the `@relaycast/engine` pin and version in `docker/package.json` were **12.8.0**. The latest git tag was `v12.8.0`. `CHANGELOG.md` contained `## [12.8.0] - 2026-11-04` with the pending entries above it.
+
+After the commit-back (main `fd10195436054d97c75504d1c803df0d1f2fed98`, `chore(release): v12.10.0`): all of those are **12.10.0**, the tag `v12.10.0` points at that commit, and `CHANGELOG.md` has `## [12.10.0] - 2026-11-15` under an empty `## [Unreleased]`.
 
 ## npm state and the 12.9.0 anomaly
 
@@ -81,7 +83,7 @@ The SQLite migrator is set-based (`packages/engine/src/db/migrationPlan.ts`: sor
 
 Khaliq (`khaliqgant`) dispatched Publish NPM Packages on main `b6cc6e1a` at 2026-11-15T02:49:19Z, run https://github.com/AgentWorkforce/relaycast/actions/runs/43669541261, resolving to **12.10.0**. Do not dispatch the inputs above again: npm refuses a republish of an existing version and the integrity assertion fails.
 
-Verified on npm at 2026-11-15T03:20Z: all eight publish jobs and "Verify all packages published" succeeded, and every package has 12.10.0. The "Create Release" job was still queued, so there was no `chore(release): v12.10.0` commit on main, no `v12.10.0` tag and no GitHub release yet.
+The run concluded **success** at 2026-11-15T03:22:08Z. All eight publish jobs and "Verify all packages published" succeeded, and every package has 12.10.0. "Create Release" completed at 03:18:04Z: it pushed the commit-back `fd101954` (`chore(release): v12.10.0`, committed in the build job at 02:54:54Z and pushed to main by this job), the tag `v12.10.0` at that commit, and the GitHub release https://github.com/AgentWorkforce/relaycast/releases/tag/v12.10.0 (published 03:18:02Z). The Engine binaries build, smoke and attach jobs then succeeded (14 release assets).
 
 | Package | 12.10.0 published |
 | --- | --- |
@@ -94,22 +96,30 @@ Verified on npm at 2026-11-15T03:20Z: all eight publish jobs and "Verify all pac
 | `@relaycast/mcp` | 2026-11-15T03:13:00Z |
 | `@relaycast/openclaw` | 2026-11-15T03:13:10Z |
 
-The run's final result, the commit-back and the release URL belong in the receipts below.
+npm receipts at 12.10.0 (`npm view <pkg>@12.10.0 dist.integrity dist.shasum`, read 2026-11-15T03:25Z):
+
+| Package | `dist.integrity` | `dist.shasum` |
+| --- | --- | --- |
+| `@relaycast/engine` | `sha512-DwZVYXsPbpbQfPnnRThky7RvKITq0JnRbV2lmPquaiSR4XKkxrNKRrvsi/nk4VAsw5gREK1mJOifX7q9+kTveg==` | `f50ab9ca8d7a86ef4842fd29ea7f8e0c463ff3ed` |
+| `@relaycast/types` | `sha512-onXSI+sqSuqHHF5uUPeR/WFvGpa4hvWQZHmCjjbZrUMjme3Ajo25MrDqRXkJo06g09/ib6pBbrZ7t+2Yvri4cQ==` | `f7ec7e9f92e245aff07bd34350a32e4fbc9c1c3d` |
+| `@relaycast/sdk` | `sha512-4IkDmOcZw/z4z/KR9Tw+tUlP9B0yWQ064ukE0iePxOzJiqGeHlxSQUnQkmSOX/rs3emRWTAB7JGkj5Y4zRIoZw==` | `f772660a357b5ec62319a3cede150847919f2f08` |
+
+Container publish: Khaliq dispatched Publish Container on main `fd101954` at 2026-11-15T03:20:04Z, run https://github.com/AgentWorkforce/relaycast/actions/runs/43671881371. At 03:28Z the "Verify the tag matches the pinned engine version" step had passed against the 12.10.0 pin and "Build and push by digest" was running; the tag input, the image digest and the attestation are not readable until the run finishes. Add them to the receipts when it does.
 
 ## Dispatch sequence
 
 Every step needs Khaliq's direct ask. The hourly batch flow and the agent host never dispatch publishing.
 
-1. **Publish NPM Packages**: done, see "Dispatch status". Do not dispatch again. What remains is to wait for the `chore(release): v12.10.0` commit-back and the GitHub release `v12.10.0`.
-2. **Publish Container** on main, at or after that commit, with `tag=12.10.0`, `latest=true`. The workflow refuses a tag that does not equal the `docker/package.json` engine pin (a `<pin>-<suffix>` tag is also accepted), and refuses non-main refs.
-3. **relaycast-cloud pin bump PR** (separate repo; runbook `docs/rollouts/engine-12.10.0-delivery-confirmation.md` in that repo). Merging deploys production.
+1. **Publish NPM Packages**: done, including the `chore(release): v12.10.0` commit-back, the `v12.10.0` tag and the GitHub release; see "Dispatch status". Do not dispatch again.
+2. **Publish Container** on main at the commit-back, intended inputs `tag=12.10.0`, `latest=true`: dispatched by Khaliq and in progress, inputs not yet confirmable; see "Dispatch status". The workflow refuses a tag that does not equal the `docker/package.json` engine pin (a `<pin>-<suffix>` tag is also accepted), and refuses non-main refs.
+3. **relaycast-cloud pin bump PR** (separate repo). Not requested. That repo has no rollout runbook for 12.10.0 yet; its `docs/rollouts/` holds `566-database-overload.md` and `engine-12.8.1-integration-delivery.md`, and no PR there mentions 12.10.0. Merging the pin bump deploys production.
 
 Receipts to collect:
 
-- npm `dist.integrity` and `dist.shasum` for `@relaycast/engine`, `@relaycast/types` and `@relaycast/sdk` at 12.10.0 (`npm view <pkg>@12.10.0 dist.integrity dist.shasum`)
-- the workflow run URLs
-- the GitHub release URL
-- the image digest and its attestation (`gh attestation verify`)
+- npm `dist.integrity` and `dist.shasum` for `@relaycast/engine`, `@relaycast/types` and `@relaycast/sdk` at 12.10.0: recorded under "Dispatch status"
+- the workflow run URLs: npm run 43669541261 and container run 43671881371, both under "Dispatch status"
+- the GitHub release URL: recorded under "Dispatch status"
+- the image digest and its attestation (`gh attestation verify`): pending the container run
 
 ## Live self-host evidence
 
