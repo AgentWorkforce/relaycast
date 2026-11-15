@@ -1,0 +1,279 @@
+# Fast path: check and publish the relaycast images on Blacksmith runners,
+# outside the shared GitHub-hosted queue. Anyone with write access (people or
+# agents) may start it; nothing runs until Khaliq approves the fast-path
+# environment.
+#
+# Checks: the CI "Lint, Build & Test" job, the per-arch container smoke test
+# (arm64 on a native arm runner) and the container integration test, at the
+# SHA resolved once from `ref`. The Rust SDK job is not repeated (it gates no
+# image).
+#
+# Publishes, linux/amd64+linux/arm64, tagged fast-<sha> only:
+#   ghcr.io/agentworkforce/relaycast-self-host      (as publish-container.yml,
+#                                                   SBOM, max-mode provenance)
+#   ghcr.io/agentworkforce/relaycast-actors-gateway  (as publish-actors-images.yml)
+#   ghcr.io/agentworkforce/relaycast-actors-deployer (as publish-actors-images.yml)
+# It never pushes or moves :latest or a version tag, and it does not publish
+# npm or crates packages or deploy the hosted site. Pin the digests printed in
+# the run summary.
+#
+# No signed GitHub attestation is pushed: attest-build-provenance records the
+# dispatch commit, not the `ref` actually built. BuildKit's SBOM and max-mode
+# provenance (which read the checkout) are attached to the image.
+name: fast-path
+run-name: fast-path ${{ inputs.ref }} (${{ inputs.reason }})
+on:
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: Branch, tag or commit to build (a PR branch is fine)
+        required: true
+        default: main
+      reason:
+        description: Why this needs the fast path
+        required: true
+permissions:
+  contents: read
+# run_id keeps a run that waits for approval from displacing (cancelling) another
+# pending dispatch of the same ref.
+concurrency:
+  group: fast-path-${{ inputs.ref }}-${{ github.run_id }}
+  cancel-in-progress: false
+env:
+  REGISTRY_OWNER: ghcr.io/agentworkforce
+jobs:
+  ci:
+    name: Lint, Build & Test
+    environment: fast-path
+    runs-on: blacksmith-4vcpu-ubuntu-2404
+    timeout-minutes: 30
+    outputs:
+      sha: ${{ steps.sha.outputs.sha }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref }}
+          persist-credentials: false
+      - id: sha
+        run: echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+      # Same as ./.github/actions/setup with build, minus its npm cache: the fast
+      # path builds unreviewed refs and must not save into caches CI restores.
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22.14.0"
+      - run: npm ci
+      - run: npx turbo build
+      - run: npm run test:engine:regression
+      - run: npm run test:release
+      - run: npm run test:release-preparation
+      - run: npx turbo lint
+      - run: npm run check:pg-migrations -w @relaycast/engine
+      - run: npx turbo test
+        env:
+          DO_NOT_TRACK: "1"
+      - run: npm run test:container
+
+  container:
+    name: Container (${{ matrix.platform }})
+    needs: ci
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 25
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: linux/amd64
+            arch: amd64
+            runner: blacksmith-4vcpu-ubuntu-2404
+          - platform: linux/arm64
+            arch: arm64
+            runner: blacksmith-4vcpu-ubuntu-2404-arm
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.ci.outputs.sha }}
+          persist-credentials: false
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          platforms: ${{ matrix.platform }}
+          load: true
+          push: false
+          tags: relaycast-ci:${{ matrix.arch }}
+      - name: Smoke the real image
+        env:
+          ARCH: ${{ matrix.arch }}
+          IMAGE: relaycast-ci:${{ matrix.arch }}
+        run: |
+          set -euo pipefail
+
+          refusal_index=0
+          assert_refused() {
+            refusal_index=$((refusal_index + 1))
+            refusal_container="relaycast-refusal-$ARCH-$refusal_index"
+            if timeout --signal=TERM --kill-after=2s 10s \
+              docker run --rm --name "$refusal_container" "$IMAGE" "$@" \
+              >refusal.log 2>&1; then
+              cat refusal.log
+              return 1
+            else
+              refusal_status=$?
+            fi
+            docker rm --force --volumes "$refusal_container" 2>/dev/null || true
+            if test "$refusal_status" -eq 124; then
+              cat refusal.log
+              echo 'container did not refuse startup within 10 seconds' >&2
+              return 1
+            fi
+            grep --fixed-strings 'refused to start' refusal.log
+          }
+
+          assert_refused
+          assert_refused --base-url http://relay.example.com
+          assert_refused --base-url https://relay
+          assert_refused --base-url https://relay.local
+          assert_refused --base-url https://relay.localhost
+          assert_refused --base-url https://127.0.0.1
+          assert_refused --base-url https://203.0.113.5
+          assert_refused --base-url 'https://[2001:db8::1]'
+          assert_refused --base-url https://a..example
+          assert_refused --db --base-url https://relay.example.com
+
+          label_version="$(docker inspect --format '{{ index .Config.Labels "io.relaycast.engine.version" }}' "$IMAGE")"
+          package_version="$(docker run --rm --entrypoint node "$IMAGE" -p "require('/opt/relaycast/node_modules/@relaycast/engine/package.json').version")"
+          test "$label_version" = "$package_version"
+
+          container="relaycast-ci-$ARCH"
+          docker run --detach --name "$container" "$IMAGE" \
+            --base-url https://relay.example.com
+
+          for attempt in $(seq 1 60); do
+            if docker exec "$container" node -e \
+              "fetch('http://127.0.0.1:8787/health').then(async r=>{const b=await r.json();if(!r.ok||b.ok!==true)process.exit(1)}).catch(()=>process.exit(1))"; then
+              break
+            fi
+            test "$attempt" -lt 60
+            sleep 1
+          done
+
+          docker exec "$container" node --input-type=module -e '
+            const origin = "http://127.0.0.1:8787";
+            const expected = "https://relay.example.com/a2a/rpc";
+            const created = await fetch(origin + "/v1/workspaces", {
+              method: "POST",
+              headers: { "content-type": "application/json" },
+              body: JSON.stringify({ name: "my-team" }),
+            });
+            if (!created.ok) process.exit(1);
+            const response = await fetch(
+              origin + "/.well-known/agent-card.json?workspace=my-team",
+            );
+            const card = await response.json();
+            if (!response.ok || card.url !== expected) process.exit(1);
+          '
+      - name: Clean up smoke container
+        if: always()
+        run: docker rm --force --volumes relaycast-ci-${{ matrix.arch }} 2>/dev/null || true
+
+  container-integration:
+    name: Build and test the real image
+    needs: ci
+    runs-on: blacksmith-4vcpu-ubuntu-2404
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ needs.ci.outputs.sha }}
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: "22.22.3"
+      - run: npm run test:container-image
+      - name: Show docker state on failure
+        if: failure()
+        run: |
+          docker ps -a --filter "name=relaycast-it-" || true
+          for name in $(docker ps -a --filter "name=relaycast-it-" --format "{{.Names}}"); do
+            echo "::group::docker logs $name (bootstrap-secret fixture redacted)"
+            docker logs "$name" 2>&1 | sed -E 's/integration-test-bootstrap-secret-[A-Za-z0-9_-]+/[REDACTED]/g' || true
+            echo "::endgroup::"
+          done
+
+  images:
+    needs: [ci, container, container-integration]
+    runs-on: blacksmith-4vcpu-ubuntu-2404
+    timeout-minutes: 60
+    permissions:
+      contents: read
+      packages: write
+    env:
+      SHA: ${{ needs.ci.outputs.sha }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.ci.outputs.sha }}
+          persist-credentials: false
+      - uses: docker/setup-qemu-action@v3
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ github.token }}
+      - name: Read the pinned engine version
+        id: pin
+        run: echo "pinned=$(node -p "require('./docker/package.json').dependencies['@relaycast/engine']")" >> "$GITHUB_OUTPUT"
+      - name: Build and push the self-host image
+        id: selfhost
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ${{ env.REGISTRY_OWNER }}/relaycast-self-host:fast-${{ needs.ci.outputs.sha }}
+          build-args: RELAYCAST_ENGINE_VERSION=${{ steps.pin.outputs.pinned }}
+          labels: |
+            org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
+            org.opencontainers.image.revision=${{ needs.ci.outputs.sha }}
+          provenance: mode=max
+          sbom: true
+      - name: Build and push the actors gateway
+        id: gateway
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: docker/actors-gateway.Dockerfile
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ${{ env.REGISTRY_OWNER }}/relaycast-actors-gateway:fast-${{ needs.ci.outputs.sha }}
+      - name: Build and push the actors deployer
+        id: deployer
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: docker/actors-deployer.Dockerfile
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ${{ env.REGISTRY_OWNER }}/relaycast-actors-deployer:fast-${{ needs.ci.outputs.sha }}
+      - name: Summary
+        env:
+          REF: ${{ inputs.ref }}
+          REASON: ${{ inputs.reason }}
+          PINNED: ${{ steps.pin.outputs.pinned }}
+          SELFHOST_DIGEST: ${{ steps.selfhost.outputs.digest }}
+          GATEWAY_DIGEST: ${{ steps.gateway.outputs.digest }}
+          DEPLOYER_DIGEST: ${{ steps.deployer.outputs.digest }}
+        run: |
+          {
+            echo "### relaycast fast path"
+            echo "- ref: \`$REF\` at \`$SHA\`"
+            echo "- reason: $REASON"
+            echo "- tag on every image: fast-$SHA (engine $PINNED in the self-host image)"
+            echo
+            echo '```'
+            echo "${REGISTRY_OWNER}/relaycast-self-host@${SELFHOST_DIGEST}"
+            echo "${REGISTRY_OWNER}/relaycast-actors-gateway@${GATEWAY_DIGEST}"
+            echo "${REGISTRY_OWNER}/relaycast-actors-deployer@${DEPLOYER_DIGEST}"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
