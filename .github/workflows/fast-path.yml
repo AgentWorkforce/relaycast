@@ -34,8 +34,10 @@ on:
         required: true
 permissions:
   contents: read
+# run_id keeps a run that waits for approval from displacing (cancelling) another
+# pending dispatch of the same ref.
 concurrency:
-  group: fast-path-${{ inputs.ref }}
+  group: fast-path-${{ inputs.ref }}-${{ github.run_id }}
   cancel-in-progress: false
 env:
   REGISTRY_OWNER: ghcr.io/agentworkforce
@@ -54,9 +56,13 @@ jobs:
           persist-credentials: false
       - id: sha
         run: echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
-      - uses: ./.github/actions/setup
+      # Same as ./.github/actions/setup with build, minus its npm cache: the fast
+      # path builds unreviewed refs and must not save into caches CI restores.
+      - uses: actions/setup-node@v4
         with:
-          build: "true"
+          node-version: "22.14.0"
+      - run: npm ci
+      - run: npx turbo build
       - run: npm run test:engine:regression
       - run: npm run test:release
       - run: npm run test:release-preparation
