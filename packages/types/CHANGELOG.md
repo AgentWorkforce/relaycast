@@ -7,11 +7,7 @@ See the [root changelog](../../CHANGELOG.md) for cross-package release highlight
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased - Minor]
-
-### Added
-
-- `WsRegistrationRejectedEventSchema` (`registration_rejected`: `code`, `message`, `retry_after_ms` nullable) in `WsClientEventSchema`, the SDK-side event for a refused direct-node `node.register`.
+## [Unreleased]
 
 ## [12.11.0] - 2026-11-15
 
