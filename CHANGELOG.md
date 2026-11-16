@@ -16,7 +16,15 @@ This project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 Packages without a separate changelog are covered by the cross-package notes below.
 
-## [Unreleased]
+## [Unreleased - Minor]
+
+### Added
+
+- `on.registrationRejected` / `registration_rejected` reports a refused direct-node attach (`WsRegistrationRejectedEventSchema` in `@relaycast/types`).
+
+### Fixed
+
+- Several `@relaycast/sdk` clients of one agent no longer supersede each other in a reconnect loop: each client attaches its direct node with its own provider `instance_id`, and a client refused with `provider_instance_conflict` (or close 4009) waits at least 30 s before retrying instead of reconnecting at once; `connected` fires only after the engine accepts the attach.
 
 ## [12.11.0] - 2026-11-15
 
