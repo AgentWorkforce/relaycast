@@ -150,6 +150,25 @@ describe('internal admin routes inside a workspace actor', () => {
     expect((await new FakeWorkspaceActor(WORKSPACE_ID).handle(internal('GET', '/internal/capabilities'))).status).toBe(404);
   });
 
+  it('does not advertise create_idempotency even with a bootstrap secret, and serves no keyed create', async () => {
+    const actor = new FakeWorkspaceActor(WORKSPACE_ID, {
+      config: { internalSecret: INTERNAL_SECRET, workspaceBootstrapSecret: 'bootstrap-secret-0123456789abcdef' },
+    });
+    const capabilities = await actor.handle(internal('GET', '/internal/capabilities'));
+    expect(capabilities.status).toBe(200);
+    expect(JSON.parse(capabilities.body).data.workspace_admin).toMatchObject({ create: false, create_idempotency: false });
+    const keyed = await actor.handle({
+      ...internal('POST', '/internal/workspaces', { name: 'another' }),
+      headers: [
+        ['content-type', 'application/json'],
+        ['authorization', `Bearer ${INTERNAL_SECRET}`],
+        ['idempotency-key', 'relay-control-6f1c2a4e-3b7d-4c59-9a8e-0d2f4b6c8e1a'],
+      ],
+    });
+    expect(keyed.status).toBe(404);
+    expect(actor.sql.exec('SELECT COUNT(*) AS n FROM workspaces')).toEqual([{ n: 0 }]);
+  });
+
   it('refuses a weak internal secret at construction', () => {
     expect(() => new FakeWorkspaceActor(WORKSPACE_ID, { config: { internalSecret: 'short' } })).toThrow(/at least 32 characters/);
   });

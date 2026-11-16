@@ -337,11 +337,32 @@ both.
 
 | Route | Body | Success `data` |
 |---|---|---|
-| `GET /internal/capabilities` | — | `{ workspace_key_push: { generation_cas, generation_required_once_fenced, grace_ms, max_grace_ms: 3600000, revocation_markers, previous_key_slot }, workspace_admin: { create, delete, server_minted_key, expiry } }` (all flags `true`) |
-| `POST /internal/workspaces` | `{ name, metadata? }` | `201 { workspace_id, api_key, name, created_at, expires_at: null, api_key_generation: 0 }` |
+| `GET /internal/capabilities` | — | `{ workspace_key_push: { generation_cas, generation_required_once_fenced, grace_ms, max_grace_ms: 3600000, revocation_markers, previous_key_slot }, workspace_admin: { create, delete, server_minted_key, expiry, create_idempotency } }` (all flags `true`, except `create_idempotency`, which is `true` only when `RELAYCAST_WORKSPACE_BOOTSTRAP_SECRET` is set) |
+| `POST /internal/workspaces` | `{ name, metadata? }`, optional `Idempotency-Key` header | `201 { workspace_id, api_key, name, created_at, expires_at: null, api_key_generation: 0 }` (`200` with the same body on a keyed replay) |
 | `DELETE /internal/workspaces/:id` | — | `204`, including when the workspace is already gone; current/previous workspace keys and agent tokens stop authenticating |
 | `POST /internal/workspaces/:id/api-key` | `{ api_key?, key_generation?, grace_ms?, plan? }` | `{ workspace_id, api_key_generation }` (`201` when the push created the workspace); plus `api_key` when the engine minted it |
 | `POST /internal/workspaces/:id/expiry` | `{ expires_in_seconds: 60..7776000 \| null }` | `{ workspace_id, expires_at }`: moves a live workspace's deadline to that many seconds from now, or clears it (`null`). A workspace already past its deadline (expired, or being deleted) is never revived: `409 workspace_expired`; unknown id `404` |
+
+`POST /internal/workspaces` with an `Idempotency-Key` header (any value the
+public route accepts: 1-255 visible ASCII characters) is a keyed create, so a
+control plane can retry it safely after a lost response. It needs
+`RELAYCAST_WORKSPACE_BOOTSTRAP_SECRET`; without it a keyed create is
+`503 workspace_create_idempotency_unavailable` and changes nothing, and
+`GET /internal/capabilities` reports `workspace_admin.create_idempotency: false`.
+With it, the first request creates the workspace (`201`); a replay with the
+same key and body returns the same `workspace_id` and `api_key` (`200`),
+including for concurrent requests, and never creates a second workspace; the
+same key with another body is `409 workspace_create_idempotency_conflict`; and
+once the workspace has been deleted the key is
+`409 workspace_create_idempotency_terminalized` with no replacement created.
+The internal secret authorizes the call, so no `X-Workspace-Bootstrap-Secret`
+proof or 32-character key minimum applies. Internal keys live in their own
+keyspace: the engine records the create under an HMAC of the key with the
+bootstrap secret, so an anonymous `POST /v1/workspaces` presenting the same
+`Idempotency-Key` value neither recovers nor conflicts with it, and the
+reverse. Rotating the bootstrap secret makes a retry a new create. Without the
+header the create behaves as before. The durable-actors gateway serves the
+same contract.
 
 `POST /internal/workspaces/:id/api-key` semantics:
 
