@@ -79,4 +79,65 @@ describe('inbound webhook messages and mention subscriptions', () => {
     expect(urls).toEqual(['https://hooks.example.test/channel']);
     expect(summary.attempted).toBe(1);
   });
+
+  async function workspaceWithMentionSub(name: string) {
+    const ws = await createWorkspace(stack.app, name);
+    const auth = { 'content-type': 'application/json', authorization: `Bearer ${ws.workspaceKey}` };
+    const owner = await registerAgent(stack.app, ws.workspaceKey, 'owner');
+    await registerAgent(stack.app, ws.workspaceKey, 'bob');
+    await stack.app.request('/v1/channels', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', authorization: `Bearer ${owner.token}` },
+      body: JSON.stringify({ name: 'hook-chan' }),
+    });
+    const sub = await stack.app.request('/v1/subscriptions', {
+      method: 'POST',
+      headers: auth,
+      body: JSON.stringify({ events: ['message.created'], url: 'https://hooks.example.test/m', filter: { mentions: 'bob' } }),
+    });
+    expect(sub.status).toBe(201);
+    return { ws, auth, owner };
+  }
+
+  const queuedMessages = async () => (await stack.runtime.handle.db.select().from(pendingEvents))
+    .filter((row) => row.eventType === 'message.created')
+    .map((row) => row.payload as Record<string, unknown>);
+
+  it('a webhook poster cannot replace or remove the origin through its payload', async () => {
+    const { auth } = await workspaceWithMentionSub('webhook-origin-spoof');
+    const created = await stack.app.request('/v1/webhooks', {
+      method: 'POST',
+      headers: auth,
+      body: JSON.stringify({ channel: 'hook-chan' }),
+    });
+    const hook = (await created.json()) as { data: { webhook_id: string; token: string } };
+    for (const spoof of ['x', null, 'inbound_webhook ']) {
+      await stack.app.request(`/v1/hooks/${hook.data.webhook_id}`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', authorization: `Bearer ${hook.data.token}` },
+        body: JSON.stringify({ text: 'hi @bob', payload: { __relaycast_origin: spoof, ref: 'r' } }),
+      });
+    }
+    const queued = await queuedMessages();
+    expect(queued).toHaveLength(3);
+    for (const payload of queued) {
+      expect(payload.metadata).toEqual({ ref: 'r', __relaycast_origin: 'inbound_webhook' });
+      expect(matchesFilter({ mentions: 'bob' }, payload)).toBe(false);
+    }
+  });
+
+  it('an agent cannot mark its own channel post as webhook-posted to dodge mention subscribers', async () => {
+    const { owner } = await workspaceWithMentionSub('agent-origin-spoof');
+    const post = await stack.app.request('/v1/channels/hook-chan/messages', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', authorization: `Bearer ${owner.token}` },
+      body: JSON.stringify({ text: 'hi @bob', metadata: { __relaycast_origin: 'inbound_webhook', ref: 'r' } }),
+    });
+    expect(post.status).toBeLessThan(300);
+    const queued = await queuedMessages();
+    expect(queued).toHaveLength(1);
+    expect((queued[0]!.metadata as Record<string, unknown> | undefined)?.__relaycast_origin).toBeUndefined();
+    expect(matchesFilter({ mentions: 'bob' }, queued[0]!)).toBe(true);
+  });
 });
+
