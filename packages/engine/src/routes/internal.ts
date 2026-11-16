@@ -19,12 +19,13 @@ import { emitServerEvent } from '../lib/serverTelemetry.js';
 import * as workspaceEngine from '../engine/workspace.js';
 import {
   beginInternalWorkspaceDeletion,
-  INTERNAL_CAPABILITIES,
   MAX_WORKSPACE_EXPIRY_SECONDS,
   pushWorkspaceKey,
   setWorkspaceExpiry,
 } from '../engine/internalAdmin.js';
 import { WORKSPACE_KEY_MAX_GRACE_MS } from '../engine/tokenRotate.js';
+import { deriveInternalWorkspaceCreateKey, internalCapabilities } from '../engine/internalCapabilities.js';
+import { parseIdempotencyKey } from '../middleware/idempotency.js';
 
 /**
  * Internal admin API for a trusted control plane (self-host).
@@ -74,10 +75,16 @@ function foreignWorkspace(c: Context<AppEnv>, workspaceId: string): boolean {
 
 // GET /internal/capabilities — non-mutating capability advertisement. A
 // single-workspace host creates no workspaces (its gateway does), so it does
-// not advertise `create`.
-internalRoutes.get('/capabilities', (c) => jsonOk(c, singleWorkspaceId(c) === undefined
-  ? INTERNAL_CAPABILITIES
-  : { ...INTERNAL_CAPABILITIES, workspace_admin: { ...INTERNAL_CAPABILITIES.workspace_admin, create: false } }));
+// not advertise `create`. `create_idempotency` is advertised only where a
+// keyed create works: the create route is served and a workspace bootstrap
+// secret is configured.
+internalRoutes.get('/capabilities', (c) => {
+  const create = singleWorkspaceId(c) === undefined;
+  return jsonOk(c, internalCapabilities({
+    create,
+    createIdempotency: Boolean(c.get('engine').config.workspaceBootstrapSecret),
+  }));
+});
 
 const createWorkspaceSchema = z.object({
   name: z.string().trim().min(1).max(128),
@@ -87,20 +94,52 @@ const createWorkspaceSchema = z.object({
 // POST /internal/workspaces — create a workspace and reveal its key once.
 // Self-host extension; the hosted control plane creates workspaces implicitly
 // through the upsert on /internal/workspaces/:id/api-key.
+//
+// With an `Idempotency-Key` the create is keyed: the first request creates
+// the workspace (201), a replay of the same key and body returns the same
+// workspace and key (200) and never creates another, the same key with
+// another body is 409 `workspace_create_idempotency_conflict`, and a key whose
+// workspace was deleted is 409 `workspace_create_idempotency_terminalized`.
+// The internal secret is the authorization boundary, so no bootstrap proof is
+// asked of the caller and no length floor applies to its key; the key is
+// recorded in a keyspace of its own (`deriveInternalWorkspaceCreateKey`).
+// Without a configured bootstrap secret a keyed create is 503
+// `workspace_create_idempotency_unavailable` and changes nothing.
 internalRoutes.post('/workspaces', async (c) => {
   if (singleWorkspaceId(c) !== undefined) return jsonNotFound(c, 'not_found', 'Route not found');
   try {
+    const { key: idempotencyKey, error: idempotencyError } = parseIdempotencyKey(c.req.header('Idempotency-Key'));
+    if (idempotencyError) return jsonError(c, 'invalid_idempotency_key', idempotencyError, 400);
     const parsed = await parseJsonBody(c, createWorkspaceSchema, 'name is required (1-128 characters)');
     if (!parsed.ok) return parsed.response;
-    const result = await workspaceEngine.createWorkspace(c.get('db'), parsed.data.name, {
-      ...(parsed.data.metadata === undefined ? {} : { metadata: parsed.data.metadata }),
+    const { name, metadata } = parsed.data;
+    let keyed: { bootstrapSecret: string; idempotencyKey: string; requestDigest: string } | undefined;
+    if (idempotencyKey !== undefined) {
+      const bootstrapSecret = c.get('engine').config.workspaceBootstrapSecret;
+      if (!bootstrapSecret) {
+        return jsonError(
+          c,
+          'workspace_create_idempotency_unavailable',
+          'Workspace create idempotency is not configured on this deployment',
+          503,
+        );
+      }
+      keyed = {
+        bootstrapSecret,
+        idempotencyKey: await deriveInternalWorkspaceCreateKey(bootstrapSecret, idempotencyKey),
+        requestDigest: await workspaceEngine.workspaceCreateRequestDigest({
+          name,
+          ...(metadata === undefined ? {} : { metadata }),
+        }),
+      };
+    }
+    const result = await workspaceEngine.createWorkspace(c.get('db'), name, {
+      ...(metadata === undefined ? {} : { metadata }),
+      ...(keyed ?? {}),
     });
-    emitServerEvent(c, result.workspace.workspace_id, 'workspace.created', {});
-    return jsonCreated(c, {
-      ...result.workspace,
-      name: parsed.data.name,
-      api_key_generation: 0,
-    });
+    if (result.created) emitServerEvent(c, result.workspace.workspace_id, 'workspace.created', {});
+    const data = { ...result.workspace, name, api_key_generation: 0 };
+    return result.created ? jsonCreated(c, data) : jsonOk(c, data);
   } catch (err: unknown) {
     return errorResponse(c, err);
   }

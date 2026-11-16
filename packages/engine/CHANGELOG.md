@@ -7,7 +7,13 @@ See the [root changelog](../../CHANGELOG.md) for cross-package release highlight
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [Unreleased - Minor]
+
+### Added
+
+- `POST /internal/workspaces` honours `Idempotency-Key` when `RELAYCAST_WORKSPACE_BOOTSTRAP_SECRET` is configured: the first request creates the workspace (`201`), a replay with the same key and body returns the same `workspace_id` and `api_key` (`200`) without creating another, another body is `409 workspace_create_idempotency_conflict`, and a deleted workspace's key is `409 workspace_create_idempotency_terminalized`. Without the secret a keyed create is `503 workspace_create_idempotency_unavailable` and changes nothing; without the header the create is unchanged. The internal secret authorizes it, so no bootstrap proof or 32-character key floor applies. The create is recorded under `deriveInternalWorkspaceCreateKey` (HMAC of the key under the bootstrap secret), so the public anonymous keyed create cannot recover or collide with it. No migration.
+- `INTERNAL_CAPABILITIES.workspace_admin.create_idempotency` (default `false`) and `internalCapabilities()`: `GET /internal/capabilities` reports `true` only when the bootstrap secret is configured and the host serves `POST /internal/workspaces` (never on a single-workspace actor). `@relaycast/engine/gateway` also exports `deriveInternalWorkspaceCreateKey`, `internalCapabilities` and `parseIdempotencyKey`.
+- `@relaycast/actors-gateway`: the internal keyed create forwards the internal-scoped key to the actor and derives the workspace id from it, and `GET /internal/capabilities` reports `create_idempotency: true` when `RELAYCAST_WORKSPACE_BOOTSTRAP_SECRET` is set.
 
 ## [12.10.1] - 2026-11-15
 
