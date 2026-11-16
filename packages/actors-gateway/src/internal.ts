@@ -10,14 +10,26 @@
  */
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import { z } from 'zod';
-import { INTERNAL_CAPABILITIES, generateWorkspaceId, parseArCredential } from '@relaycast/engine/gateway';
+import {
+  INTERNAL_CAPABILITIES,
+  deriveInternalWorkspaceCreateKey,
+  deriveKeyedWorkspaceId,
+  generateWorkspaceId,
+  internalCapabilities,
+  parseArCredential,
+  parseIdempotencyKey,
+} from '@relaycast/engine/gateway';
 import { WorkspaceMetadataSchema, isArWorkspaceId } from '@relaycast/types';
 import type { GatewayContext } from './context.js';
 import { REQUEST_ID_HEADER, bearerToken, constantTimeEqual, readBody, sendActorResponse, sendError, sendJson, toActorRequest } from './http.js';
 import { MAX_IMPORT_BODY_BYTES } from '@relaycast/engine/gateway';
-import { BOOTSTRAP_PROOF_HEADER, IDEMPOTENCY_KEY_HEADER, chooseWorkspaceId, isWorkspaceIdTaken } from './workspaceId.js';
+import { BOOTSTRAP_PROOF_HEADER, IDEMPOTENCY_KEY_HEADER, isWorkspaceIdTaken } from './workspaceId.js';
 
-/** The engine's own capability document: the actors serve exactly these. */
+/**
+ * The engine's own capability document, which the gateway serves with
+ * `create_idempotency` set when a workspace bootstrap secret is configured
+ * (keyed internal creates derive from it; without it they are 503).
+ */
 export { INTERNAL_CAPABILITIES };
 
 const WORKSPACE_ID_PATTERN = /^[A-Za-z0-9_-]{1,128}$/;
@@ -69,7 +81,10 @@ export async function handleInternal(ctx: GatewayContext, { req, res, url, reque
 
   const path = url.pathname;
   if (req.method === 'GET' && path === '/internal/capabilities') {
-    return sendJson(res, 200, { ok: true, data: INTERNAL_CAPABILITIES });
+    return sendJson(res, 200, {
+      ok: true,
+      data: internalCapabilities({ create: true, createIdempotency: ctx.config.workspaceBootstrapSecret !== undefined }),
+    });
   }
 
   if (req.method === 'POST' && path === '/internal/workspaces') {
@@ -82,26 +97,46 @@ export async function handleInternal(ctx: GatewayContext, { req, res, url, reque
     }
     const parsed = createWorkspaceSchema.safeParse(json);
     if (!parsed.success) return sendError(res, 400, 'invalid_request', 'name is required (1-128 characters)');
-    // The gateway mints the id and its routing tag, exactly as the public
-    // create does (a keyed create derives the id from its `Idempotency-Key`,
-    // which travels to the actor), and the actor creates the workspace from
-    // a synthesized `POST /v1/workspaces`; its 201 and body (the workspace
-    // and its key, revealed once) answer this call. The internal secret is
-    // this call's authentication: like the engine's own internal create, it
-    // asks no bootstrap proof of the caller.
-    const chosen = await chooseWorkspaceId(req, { bootstrapSecret: ctx.config.workspaceBootstrapSecret });
-    if ('error' in chosen) return sendError(res, chosen.error.status, chosen.error.code, chosen.error.message);
-    let workspaceId = chosen.workspaceId;
+    // The gateway mints the id and its routing tag, as the public create
+    // does, and the actor creates the workspace from a synthesized
+    // `POST /v1/workspaces`; its 201 and body (the workspace and its key,
+    // revealed once) answer this call. The internal secret is this call's
+    // authentication: like the engine's own internal create, it asks no
+    // bootstrap proof of the caller and no length floor of its key.
+    //
+    // A keyed create (`Idempotency-Key`) forwards not the caller's key but
+    // `deriveInternalWorkspaceCreateKey` of it, exactly as the engine's own
+    // internal create records it, and derives the id from that. A public
+    // anonymous create presenting the same key value therefore lands on
+    // another id and another binding: neither can recover or conflict with
+    // the other without the bootstrap secret. Replays reach the same actor,
+    // whose binding answers them (same workspace and key; 409 on another body
+    // or once the workspace is deleted).
+    const header = req.headers[IDEMPOTENCY_KEY_HEADER];
+    const { key: callerKey, error: keyError } = parseIdempotencyKey(Array.isArray(header) ? header.join(', ') : header);
+    if (keyError !== undefined) return sendError(res, 400, 'invalid_idempotency_key', keyError);
+    const bootstrapSecret = ctx.config.workspaceBootstrapSecret;
+    let idempotencyKey: string | undefined;
+    let workspaceId: string;
+    if (callerKey === undefined) {
+      workspaceId = generateWorkspaceId();
+    } else {
+      if (bootstrapSecret === undefined) {
+        return sendError(res, 503, 'workspace_create_idempotency_unavailable', 'Workspace create idempotency is not configured on this deployment');
+      }
+      idempotencyKey = await deriveInternalWorkspaceCreateKey(bootstrapSecret, callerKey);
+      workspaceId = await deriveKeyedWorkspaceId(bootstrapSecret, idempotencyKey);
+    }
+    const keyed = idempotencyKey !== undefined;
     setWorkspace(workspaceId);
     const body = JSON.stringify({
       name: parsed.data.name,
       ...(parsed.data.metadata === undefined ? {} : { metadata: parsed.data.metadata }),
     });
-    const idempotencyKey = req.headers[IDEMPOTENCY_KEY_HEADER];
     // The actor serves the synthesized create on its public route, whose
     // engine asks an anonymous keyed create for proof when the deployment
     // requires it; the gateway holds the same secret and proves it itself.
-    const proof = chosen.keyed && ctx.config.workspaceBootstrapProofRequired ? ctx.config.workspaceBootstrapSecret : undefined;
+    const proof = keyed && ctx.config.workspaceBootstrapProofRequired ? bootstrapSecret : undefined;
     const request = {
       method: 'POST',
       url: `${url.origin}/v1/workspaces`,
@@ -109,13 +144,13 @@ export async function handleInternal(ctx: GatewayContext, { req, res, url, reque
         ['host', url.host],
         ['content-type', 'application/json'],
         [REQUEST_ID_HEADER, requestId],
-        ...(typeof idempotencyKey === 'string' ? [[IDEMPOTENCY_KEY_HEADER, idempotencyKey] as [string, string]] : []),
+        ...(idempotencyKey === undefined ? [] : [[IDEMPOTENCY_KEY_HEADER, idempotencyKey] as [string, string]]),
         ...(proof === undefined ? [] : [[BOOTSTRAP_PROOF_HEADER, proof] as [string, string]]),
       ] as [string, string][],
       body,
     };
     let response = await ctx.actors.create(workspaceId, request, await ctx.credentialTags.tag(workspaceId), { signal });
-    if (!chosen.keyed && isWorkspaceIdTaken(response)) {
+    if (!keyed && isWorkspaceIdTaken(response)) {
       // Two replicas minted the same snowflake in one millisecond: once more under a fresh one.
       workspaceId = generateWorkspaceId();
       setWorkspace(workspaceId);

@@ -7,6 +7,7 @@ import { beginInternalWorkspaceDeletion, pushWorkspaceKey } from '../../engine/i
 import { makeNodeStack, registerAgent, type TestStack } from './harness.js';
 import { encodeArCredential, parseCredential } from '@relaycast/types';
 import { createCredentialTagSigner } from '../../auth/credentialTags.js';
+import { workspaceCreateIdempotency, workspaces } from '../../db/tables.js';
 
 const TAGGER = createCredentialTagSigner({ current: 'a', keys: { a: 'internal-admin-tag-secret' } });
 
@@ -24,8 +25,11 @@ describe('internal admin API', () => {
   let stack: TestStack;
   afterEach(() => stack?.close());
 
-  function internal(path: string, init: { method?: string; body?: unknown; secret?: string | null } = {}) {
-    const headers: Record<string, string> = { 'content-type': 'application/json' };
+  function internal(
+    path: string,
+    init: { method?: string; body?: unknown; secret?: string | null; headers?: Record<string, string> } = {},
+  ) {
+    const headers: Record<string, string> = { 'content-type': 'application/json', ...init.headers };
     if (init.secret !== null) headers.authorization = `Bearer ${init.secret ?? SECRET}`;
     return stack.app.request(`/internal${path}`, {
       method: init.method ?? 'GET',
@@ -89,7 +93,8 @@ describe('internal admin API', () => {
           revocation_markers: true,
           previous_key_slot: true,
         },
-        workspace_admin: { create: true, delete: true, server_minted_key: true, expiry: true },
+        // The harness configures a workspace bootstrap secret, so keyed creates work.
+        workspace_admin: { create: true, delete: true, server_minted_key: true, expiry: true, create_idempotency: true },
       });
     });
 
@@ -498,6 +503,165 @@ describe('internal admin API', () => {
       expect((await readWorkspace(kb)).status).toBe(200);
     });
   });
+  describe('keyed create (Idempotency-Key)', () => {
+    const BOOTSTRAP = 'bootstrap-secret-0123456789abcdef';
+    const KEY = 'relay-control-6f1c2a4e-3b7d-4c59-9a8e-0d2f4b6c8e1a';
+
+    // The harness configures a bootstrap secret by default; an empty one is unset.
+    const NO_BOOTSTRAP = { workspaceBootstrapSecret: '' };
+
+    function keyedCreate(body: unknown, key = KEY) {
+      return internal('/workspaces', { method: 'POST', body, headers: { 'idempotency-key': key } });
+    }
+
+    function publicKeyedCreate(body: unknown, key = KEY) {
+      return stack.app.request('/v1/workspaces', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', 'idempotency-key': key },
+        body: JSON.stringify(body),
+      });
+    }
+
+    async function workspaceCount(): Promise<number> {
+      return (await stack.runtime.deps.db.select().from(workspaces)).length;
+    }
+
+    it('advertises create_idempotency only with a bootstrap secret configured', async () => {
+      stack = makeNodeStack({ internalSecret: SECRET, workspaceBootstrapSecret: BOOTSTRAP });
+      expect((await data<{ workspace_admin: Record<string, unknown> }>(await internal('/capabilities'))).workspace_admin)
+        .toEqual({ create: true, delete: true, server_minted_key: true, expiry: true, create_idempotency: true });
+      stack.close();
+
+      stack = makeNodeStack({ internalSecret: SECRET, ...NO_BOOTSTRAP });
+      expect((await data<{ workspace_admin: Record<string, unknown> }>(await internal('/capabilities'))).workspace_admin)
+        .toMatchObject({ create: true, create_idempotency: false });
+    });
+
+    it('creates once and replays the same workspace and key for the same key and body', async () => {
+      stack = makeNodeStack({ internalSecret: SECRET, workspaceBootstrapSecret: BOOTSTRAP });
+      const body = { name: 'lazy-bound', metadata: { plan: 'team' } };
+      const first = await keyedCreate(body);
+      expect(first.status).toBe(201);
+      const created = await data<{ workspace_id: string; api_key: string; name: string; api_key_generation: number }>(first);
+      expect(created).toMatchObject({ name: 'lazy-bound', api_key_generation: 0 });
+      expect(created.api_key).toMatch(/^rk_live_/);
+      expect((await readWorkspace(created.api_key)).status).toBe(200);
+      expect(await workspaceCount()).toBe(1);
+
+      // A lost response: the replay answers the same workspace and the same key.
+      const replay = await keyedCreate(body);
+      expect(replay.status).toBe(200);
+      expect(await data(replay)).toMatchObject({ workspace_id: created.workspace_id, api_key: created.api_key, name: 'lazy-bound' });
+      expect(await workspaceCount()).toBe(1);
+
+      // Concurrent replays converge on the same workspace too.
+      const concurrent = await Promise.all([keyedCreate(body), keyedCreate(body), keyedCreate(body)]);
+      for (const res of concurrent) {
+        expect([200, 201]).toContain(res.status);
+        expect(await data(res)).toMatchObject({ workspace_id: created.workspace_id, api_key: created.api_key });
+      }
+      expect(await workspaceCount()).toBe(1);
+    });
+
+    it('converges concurrent first creates on one workspace', async () => {
+      stack = makeNodeStack({ internalSecret: SECRET, workspaceBootstrapSecret: BOOTSTRAP });
+      const results = await Promise.all([keyedCreate({ name: 'race' }), keyedCreate({ name: 'race' })]);
+      const bodies = await Promise.all(results.map((res) => data<{ workspace_id: string; api_key: string }>(res)));
+      expect(results.map((res) => res.status).sort()).toEqual([200, 201]);
+      expect(bodies[0]).toMatchObject({ workspace_id: bodies[1].workspace_id, api_key: bodies[1].api_key });
+      expect(await workspaceCount()).toBe(1);
+    });
+
+    it('refuses the same key with another body as a conflict', async () => {
+      stack = makeNodeStack({ internalSecret: SECRET, workspaceBootstrapSecret: BOOTSTRAP });
+      expect((await keyedCreate({ name: 'one' })).status).toBe(201);
+      for (const body of [{ name: 'two' }, { name: 'one', metadata: { plan: 'team' } }]) {
+        const res = await keyedCreate(body);
+        expect(res.status).toBe(409);
+        expect(await res.json()).toMatchObject({ ok: false, error: { code: 'workspace_create_idempotency_conflict' } });
+      }
+      expect(await workspaceCount()).toBe(1);
+    });
+
+    it('refuses a replay once the keyed workspace is deleted, creating no replacement', async () => {
+      stack = makeNodeStack({ internalSecret: SECRET, workspaceBootstrapSecret: BOOTSTRAP });
+      const created = await data<{ workspace_id: string }>(await keyedCreate({ name: 'gone' }));
+      expect((await internal(`/workspaces/${created.workspace_id}`, { method: 'DELETE' })).status).toBe(204);
+      expect(await workspaceCount()).toBe(0);
+      const res = await keyedCreate({ name: 'gone' });
+      expect(res.status).toBe(409);
+      expect(await res.json()).toMatchObject({ ok: false, error: { code: 'workspace_create_idempotency_terminalized' } });
+      expect(await workspaceCount()).toBe(0);
+    });
+
+    it('is unavailable (503) without a bootstrap secret and creates nothing', async () => {
+      stack = makeNodeStack({ internalSecret: SECRET, ...NO_BOOTSTRAP });
+      const res = await keyedCreate({ name: 'no-secret' });
+      expect(res.status).toBe(503);
+      expect(await res.json()).toMatchObject({ ok: false, error: { code: 'workspace_create_idempotency_unavailable' } });
+      expect(await workspaceCount()).toBe(0);
+      expect(await stack.runtime.deps.db.select().from(workspaceCreateIdempotency)).toHaveLength(0);
+    });
+
+    it('creates afresh on every request without a key, as before', async () => {
+      for (const workspaceBootstrapSecret of ['', BOOTSTRAP]) {
+        stack = makeNodeStack({ internalSecret: SECRET, workspaceBootstrapSecret });
+        const a = await createViaAdmin('same');
+        const b = await createViaAdmin('same');
+        expect(a.workspace_id).not.toBe(b.workspace_id);
+        expect(a.api_key).not.toBe(b.api_key);
+        expect(await workspaceCount()).toBe(2);
+        expect(await stack.runtime.deps.db.select().from(workspaceCreateIdempotency)).toHaveLength(0);
+        stack.close();
+      }
+    });
+
+    it('asks no length floor or bootstrap proof of the internal caller and refuses a malformed key', async () => {
+      stack = makeNodeStack({ internalSecret: SECRET, workspaceBootstrapSecret: BOOTSTRAP, workspaceBootstrapProofRequired: true });
+      const short = await keyedCreate({ name: 'job' }, 'job-1');
+      expect(short.status).toBe(201);
+      const replay = await keyedCreate({ name: 'job' }, 'job-1');
+      expect(replay.status).toBe(200);
+      expect((await data<{ workspace_id: string }>(replay)).workspace_id)
+        .toBe((await data<{ workspace_id: string }>(short)).workspace_id);
+      for (const key of [' ', 'x'.repeat(256)]) {
+        const bad = await keyedCreate({ name: 'job' }, key);
+        expect(bad.status).toBe(400);
+        expect(await bad.json()).toMatchObject({ ok: false, error: { code: 'invalid_idempotency_key' } });
+      }
+      expect(await workspaceCount()).toBe(1);
+    });
+
+    it('keeps the internal keyspace disjoint from the public anonymous one', async () => {
+      stack = makeNodeStack({ internalSecret: SECRET, workspaceBootstrapSecret: BOOTSTRAP });
+      const body = { name: 'shared-name' };
+      const internalCreated = await data<{ workspace_id: string; api_key: string }>(await keyedCreate(body));
+
+      // A public anonymous caller with the same key value and body neither
+      // recovers the internal binding nor conflicts with it: a workspace of its own.
+      const publicFirst = await publicKeyedCreate(body);
+      expect(publicFirst.status).toBe(201);
+      const publicCreated = await data<{ workspace_id: string; api_key: string }>(publicFirst);
+      expect(publicCreated.workspace_id).not.toBe(internalCreated.workspace_id);
+      expect(publicCreated.api_key).not.toBe(internalCreated.api_key);
+      // Nor with another body.
+      const publicOther = await publicKeyedCreate({ name: 'other' }, `${KEY}-other`);
+      expect(publicOther.status).toBe(201);
+
+      // Each side replays only its own binding.
+      expect(await data(await publicKeyedCreate(body))).toMatchObject({ workspace_id: publicCreated.workspace_id, api_key: publicCreated.api_key });
+      expect(await data(await keyedCreate(body))).toMatchObject({ workspace_id: internalCreated.workspace_id, api_key: internalCreated.api_key });
+
+      // The reverse: a key the public route bound first is a fresh internal create.
+      const publicOnly = 'public-first-0123456789abcdef-0123456789';
+      const publicBound = await data<{ workspace_id: string }>(await publicKeyedCreate({ name: 'p' }, publicOnly));
+      const internalAfter = await keyedCreate({ name: 'q' }, publicOnly);
+      expect(internalAfter.status).toBe(201);
+      expect((await data<{ workspace_id: string }>(internalAfter)).workspace_id).not.toBe(publicBound.workspace_id);
+      expect(await workspaceCount()).toBe(5);
+    });
+  });
+
   describe('key formats', () => {
     it('accepts engine-minted hex keys and cloud-minted base64url keys', async () => {
       stack = makeNodeStack({ internalSecret: SECRET });

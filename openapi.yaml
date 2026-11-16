@@ -7797,6 +7797,13 @@ paths:
                             type: boolean
                           expiry:
                             type: boolean
+                          create_idempotency:
+                            type: boolean
+                            description: >-
+                              `true` only when `POST /internal/workspaces`
+                              honours `Idempotency-Key`: the create route is
+                              served and `RELAYCAST_WORKSPACE_BOOTSTRAP_SECRET`
+                              is set.
         '401':
           description: Missing or wrong internal secret (`unauthorized`)
           content:
@@ -7822,10 +7829,36 @@ paths:
         Create a workspace and reveal its key once. Works even when public
         workspace creation is disabled. Self-host extension; the hosted
         control plane creates workspaces implicitly via the key-push upsert.
+
+
+        With an `Idempotency-Key` the create is keyed (advertised as
+        `workspace_admin.create_idempotency`): the first request creates the
+        workspace (`201`); a replay of the same key and body returns the same
+        `workspace_id` and `api_key` (`200`) and never creates another; the
+        same key with another body is `409
+        workspace_create_idempotency_conflict`; a key whose workspace was
+        deleted is `409 workspace_create_idempotency_terminalized`. The
+        internal secret is the authorization, so no bootstrap proof and no
+        key length floor apply, and the key is recorded in a keyspace
+        disjoint from the public anonymous one. Without
+        `RELAYCAST_WORKSPACE_BOOTSTRAP_SECRET` a keyed create is `503
+        workspace_create_idempotency_unavailable` and changes nothing.
       tags:
         - Internal Admin
       security:
         - internalSecret: []
+      parameters:
+        - name: Idempotency-Key
+          in: header
+          required: false
+          schema:
+            type: string
+            minLength: 1
+            maxLength: 255
+            pattern: '^[\x21-\x7E]+$'
+          description: >-
+            Crash-safe create key, scoped to the internal admin API on this
+            deployment. A malformed value is `400 invalid_idempotency_key`.
       requestBody:
         required: true
         content:
@@ -7864,8 +7897,30 @@ paths:
                           api_key_generation:
                             type: integer
                             enum: [0]
+        '200':
+          description: >-
+            Keyed replay: the workspace the `Idempotency-Key` created, with
+            the same `api_key`. Same body shape as `201`.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok:
+                    type: boolean
+                    enum: [true]
+                  data:
+                    allOf:
+                      - $ref: '#/components/schemas/CreateWorkspaceResponse'
+                      - type: object
+                        properties:
+                          name:
+                            type: string
+                          api_key_generation:
+                            type: integer
+                            enum: [0]
         '400':
-          description: Invalid body
+          description: Invalid body, or `invalid_idempotency_key`
           content:
             application/json:
               schema:
@@ -7880,6 +7935,25 @@ paths:
           description: >-
             `not_found` — the admin API is disabled (no internal secret
             configured). Indistinguishable from an absent route.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '409':
+          description: >-
+            `workspace_create_idempotency_conflict` — the `Idempotency-Key`
+            was reused with another body; or
+            `workspace_create_idempotency_terminalized` — its workspace was
+            deleted, and no replacement is created.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '503':
+          description: >-
+            `workspace_create_idempotency_unavailable` — an `Idempotency-Key`
+            was sent but `RELAYCAST_WORKSPACE_BOOTSTRAP_SECRET` is not set.
+            Nothing is created.
           content:
             application/json:
               schema:
