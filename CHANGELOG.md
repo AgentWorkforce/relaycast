@@ -18,6 +18,10 @@ Packages without a separate changelog are covered by the cross-package notes bel
 
 ## [Unreleased]
 
+### Fixed
+
+- A message posted through an inbound webhook (`POST /v1/hooks/:id`) no longer matches `mentions` event-subscription filters. Its text comes from whoever holds the webhook URL, so an `@name` in it could deliver the post to an agent that subscribes to its mentions outside that channel. Its `message.created` event now carries `metadata.__relaycast_origin: "inbound_webhook"`. Channel and unfiltered subscriptions still receive it.
+
 ## [12.11.0] - 2026-11-15
 
 ### Added

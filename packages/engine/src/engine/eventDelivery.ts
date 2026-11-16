@@ -7,6 +7,7 @@ import { isSafeExternalUrl } from '../lib/ssrf.js';
 import { signStandardWebhook } from '../lib/standardWebhook.js';
 import { runAtomicWrites } from '../ports/database.js';
 import { getActiveSubscriptions } from './eventSubscription.js';
+import { isInboundWebhookMessage } from './messageMetadata.js';
 
 type Db = ReturnType<typeof getDb>;
 type Fetch = typeof globalThis.fetch;
@@ -102,7 +103,7 @@ function requireSafeFetch(fetchImpl: Fetch | undefined): Fetch {
   );
 }
 
-function matchesFilter(
+export function matchesFilter(
   filter: { channel?: string; mentions?: string } | null,
   payload: Record<string, unknown>,
 ): boolean {
@@ -114,6 +115,10 @@ function matchesFilter(
   }
 
   if (filter.mentions) {
+    // A webhook-posted message mentions no one: its text is written by
+    // whoever holds the webhook URL, who must not be able to address agents
+    // outside the channel the webhook posts into.
+    if (isInboundWebhookMessage(payload.metadata)) return false;
     const text = (payload.text as string) || '';
     const mentionPattern = new RegExp(`@${filter.mentions.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}(?:\\b|$)`);
     if (!mentionPattern.test(text)) return false;
