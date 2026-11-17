@@ -19,7 +19,13 @@ import {
 // directly. The active provider's `hashToken` is preferred at those call sites.
 export { hashToken } from '../auth/index.js';
 
-const LAST_SEEN_DEBOUNCE_MS = 30_000; // 30 seconds
+/**
+ * Minimum gap between `agents.last_seen` writes triggered by authenticated
+ * requests. Liveness TTL (`AGENT_LIVENESS_TTL_MS`) is 5 minutes, so a 2 minute
+ * debounce keeps `last_seen` well inside the TTL while cutting the heartbeat
+ * UPDATE rate roughly 4x versus the previous 30 s.
+ */
+export const LAST_SEEN_TOUCH_INTERVAL_MS = 120_000;
 
 function extractToken(authHeader: string | undefined): string | null {
   if (!authHeader?.startsWith('Bearer ')) return null;
@@ -81,7 +87,7 @@ function makeAuthMiddleware(require: AuthRequire) {
     await rememberPrincipal(c, token, result);
     noteAuthenticatedCredential(c, token);
     // Touch lastSeen (debounced, fire-and-forget)
-    if (result.agent && Date.now() - result.agent.lastSeen.getTime() > LAST_SEEN_DEBOUNCE_MS) {
+    if (result.agent && Date.now() - result.agent.lastSeen.getTime() > LAST_SEEN_TOUCH_INTERVAL_MS) {
       touchLastSeen(db, result.agent.id).catch(() => {});
     }
 
@@ -147,7 +153,7 @@ export function requireWorkspaceRead(
     if (result.node && !allowNode) {
       return jsonError(c, 'forbidden', 'Node token cannot access this resource', 403);
     }
-    if (result.agent && Date.now() - result.agent.lastSeen.getTime() > LAST_SEEN_DEBOUNCE_MS) {
+    if (result.agent && Date.now() - result.agent.lastSeen.getTime() > LAST_SEEN_TOUCH_INTERVAL_MS) {
       touchLastSeen(db, result.agent.id).catch(() => {});
     }
 
