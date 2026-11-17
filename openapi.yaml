@@ -6304,7 +6304,11 @@ paths:
                     Optional requester name. Requires `requester_agent_id` and
                     must equal that agent's current name exactly; otherwise 400
                     `invalid_request`. The recorded and returned name is always
-                    the requester agent's name. Never authority.
+                    the requester agent's name. Never authority. A retry should
+                    send `requester_agent_id` alone or the agent's current name;
+                    if the agent was renamed since the first attempt, a retry
+                    repeating the old name gets 400, while an id-only retry
+                    replays.
       responses:
         '201':
           description: >-
@@ -6324,7 +6328,10 @@ paths:
           description: >-
             Invalid Idempotency-Key, task_idempotency_required,
             invalid_task_context, or a strict spawn contract sent to this
-            generic route instead of `/actions/spawn/strict-invoke`.
+            generic route instead of `/actions/spawn/strict-invoke`. An unknown
+            `requester_agent_id`, a `requester_name` sent without
+            `requester_agent_id`, or a `requester_name` that does not equal the
+            requester agent's name also returns `invalid_request`.
           content:
             application/json:
               schema:
@@ -6423,7 +6430,11 @@ paths:
                     Optional requester name. Requires `requester_agent_id` and
                     must equal that agent's current name exactly; otherwise 400
                     `invalid_request`. The recorded and returned name is always
-                    the requester agent's name. Never authority.
+                    the requester agent's name. Never authority. A retry should
+                    send `requester_agent_id` alone or the agent's current name;
+                    if the agent was renamed since the first attempt, a retry
+                    repeating the old name gets 400, while an id-only retry
+                    replays.
       responses:
         '201':
           description: >-
@@ -6434,7 +6445,11 @@ paths:
               schema:
                 $ref: '#/components/schemas/SuccessResponse'
         '400':
-          description: Missing key, malformed body, or invalid strict contract.
+          description: >-
+            Missing key, malformed body, or invalid strict contract. An unknown
+            `requester_agent_id`, a `requester_name` sent without
+            `requester_agent_id`, or a `requester_name` that does not equal the
+            requester agent's name also returns `invalid_request`.
           content:
             application/json:
               schema:

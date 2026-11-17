@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { eq } from 'drizzle-orm';
 import { createWorkspace, makeNodeStack, registerAgent, type TestStack } from './harness.js';
 import { workspaces } from '../../db/tables.js';
@@ -46,6 +46,18 @@ describe('workspace leaders', () => {
     expect(data.token).toMatch(/^nt_live_/);
     return data.token;
   }
+
+  it('emits workspace.leaders.updated with only the pattern count', async () => {
+    const { workspaceKey, workspaceId } = await createWorkspace(stack.app, 'leaders-telemetry');
+    const capture = vi.spyOn(stack.runtime.deps.telemetry!, 'capture');
+    const res = await putLeaders(workspaceKey, { patterns: ['lead-secret-*', 'boss'] });
+    expect(res.status).toBe(200);
+    const events = capture.mock.calls.map(([event]) => event).filter(event => event.kind === 'workspace.leaders.updated');
+    expect(events).toHaveLength(1);
+    expect(events[0]).toMatchObject({ workspaceId, facts: { pattern_count: 2 } });
+    expect(JSON.stringify(events[0])).not.toContain('lead-secret');
+    expect(JSON.stringify(events[0])).not.toContain('boss');
+  });
 
   it('returns empty leaders and patterns when unset, to agents and the workspace key', async () => {
     const ws = await createWorkspace(stack.app, 'leaders-unset');

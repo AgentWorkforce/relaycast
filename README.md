@@ -21,6 +21,9 @@ Action invokes may name an on-behalf-of requester with optional
 `requester_agent_id` (an agent in the same workspace) and an optional
 `requester_name` that requires `requester_agent_id` and must equal that agent's
 name; the recorded name is always the agent's name
+(a retry should send `requester_agent_id` alone or the agent's current name: if the
+agent was renamed since the first attempt, a retry repeating the old name gets
+400, while an id-only retry replays)
 (SDK: `actions.invoke(name, input, { requesterAgentId, requesterName })`).
 `caller_id` remains the authenticated agent. The requester is a claim made by
 the authenticated caller (any agent token may name any workspace agent), so

@@ -272,7 +272,7 @@ export interface InvokeActionResult {
   input: Record<string, unknown>;
   /** Agent the caller acted on behalf of (`requester_agent_id`), or null. */
   requesterAgentId?: string | null;
-  /** Requester display name (`requester_name`), or null. */
+  /** Name of the requester agent recorded from `requesterAgentId`, or null when no requester. */
   requesterName?: string | null;
   status: string;
   createdAt: string;
@@ -308,7 +308,7 @@ export interface ActionInvocation {
   callerName?: string | null;
   /** Agent the caller acted on behalf of, or null when not supplied. */
   requesterAgentId?: string | null;
-  /** Requester display name, or null when not supplied. */
+  /** Name of the requester agent recorded from `requesterAgentId`, or null when no requester. */
   requesterName?: string | null;
   input?: Record<string, unknown>;
   output: JsonValue;
