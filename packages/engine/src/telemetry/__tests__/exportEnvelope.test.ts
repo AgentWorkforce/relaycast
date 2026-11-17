@@ -128,6 +128,7 @@ describe('analytics allowlist', () => {
       channel_name: 'dropped',
       command: 'dropped',
       conversation_id: 'id',
+      count: 'count',
       duration_ms: 'count',
       emoji: 'dropped',
       file_id: 'id',
@@ -269,6 +270,7 @@ describe('projectObservation', () => {
     expect(projectFacts('workspace.created', { created_via: 'alice-script v2' })).toEqual({ created_via: OTHER_VALUE });
     expect(projectFacts('workspace.stream.updated', { stream_mode: 'POISON' })).toEqual({ stream_mode: OTHER_VALUE });
     expect(projectFacts('system.prompt.updated', { operation: 'reset' })).toEqual({ operation: 'reset' });
+    expect(projectFacts('workspace.leaders.updated', { count: 3 })).toEqual({ count: 3 });
     expect(projectFacts('message.created', { message_kind: 7 })).toEqual({ message_kind: OTHER_VALUE });
   });
 

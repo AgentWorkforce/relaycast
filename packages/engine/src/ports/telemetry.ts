@@ -45,6 +45,7 @@ export const ENGINE_OBSERVATION_FACTS = {
   'presence.heartbeat': ['agent_id'],
   'presence.disconnected': ['agent_id'],
   'system.prompt.updated': ['operation'],
+  'workspace.leaders.updated': ['count'],
   'ws.session.started': ['session_scope'],
   'ws.session.ended': ['session_scope', 'duration_ms'],
   'action.registered': ['action_name'],

@@ -2175,6 +2175,68 @@ components:
             - duplicate_in_progress
             - event_id_reused
 
+    WorkspaceLeader:
+      type: object
+      required: [name, agent_id]
+      properties:
+        name:
+          type: string
+          description: Registered agent name.
+        agent_id:
+          type: string
+          description: Agent id.
+
+    WorkspaceLeaders:
+      type: object
+      required: [leaders, patterns]
+      properties:
+        leaders:
+          type: array
+          description: >-
+            Every registered (not released) agent in the workspace whose name
+            matches at least one pattern, sorted by name, each agent once.
+            Resolved at read time, so agents registered after the last `PUT`
+            are included and removed agents drop out.
+          items:
+            $ref: '#/components/schemas/WorkspaceLeader'
+        patterns:
+          type: array
+          description: The stored patterns verbatim (after trimming and de-duplication); empty when unset.
+          items:
+            type: string
+      example:
+        leaders:
+          - name: admin
+            agent_id: '1876543210987654321'
+          - name: opsgrok
+            agent_id: '1876543210987654322'
+        patterns: ['*grok', 'admin']
+
+    SetWorkspaceLeadersRequest:
+      type: object
+      description: >-
+        Replace the leader patterns, or clear them with `{"patterns": []}` or
+        `{"reset": true}` (`reset` may not be combined with `patterns`). Each
+        pattern is an exact agent name or a glob: `*` matches any run of
+        characters (including none), `?` matches exactly one character, every
+        other character is literal; the match is whole-name and case-sensitive.
+        Entries are trimmed and duplicates dropped silently. An entry that is
+        not a string, is empty after trimming, is longer than 128 characters,
+        or contains a control character is rejected with 400
+        `invalid_request`, as is a list longer than 64 entries.
+      properties:
+        patterns:
+          type: array
+          maxItems: 64
+          items:
+            type: string
+            minLength: 1
+            maxLength: 128
+        reset:
+          type: boolean
+      example:
+        patterns: ['*grok', 'admin']
+
     Error:
       type: object
       properties:
@@ -5258,6 +5320,105 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/SuccessResponse'
+
+  /workspace/leaders:
+    get:
+      summary: Get workspace leaders
+      description: >-
+        Resolve the workspace's admin-set leader patterns against the
+        registered agents. Any agent token or the workspace key may read it.
+      tags:
+        - Workspaces
+      security:
+        - workspaceKey: []
+        - agentToken: []
+      responses:
+        '200':
+          description: Resolved leaders and the stored patterns
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/SuccessResponse'
+                  - type: object
+                    properties:
+                      data:
+                        $ref: '#/components/schemas/WorkspaceLeaders'
+              example:
+                ok: true
+                data:
+                  leaders:
+                    - name: admin
+                      agent_id: '1876543210987654321'
+                    - name: opsgrok
+                      agent_id: '1876543210987654322'
+                  patterns: ['*grok', 'admin']
+        '401':
+          description: Missing or invalid credential
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '429':
+          $ref: '#/components/responses/Throttled'
+    put:
+      summary: Set workspace leaders
+      description: >-
+        Replace the workspace's leader patterns (workspace key only). Returns
+        the same shape as `GET`, resolved against the current roster.
+      tags:
+        - Workspaces
+      security:
+        - workspaceKey: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SetWorkspaceLeadersRequest'
+            examples:
+              set:
+                value:
+                  patterns: ['*grok', 'admin']
+              clear:
+                value:
+                  patterns: []
+              reset:
+                value:
+                  reset: true
+      responses:
+        '200':
+          description: Leaders updated
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/SuccessResponse'
+                  - type: object
+                    properties:
+                      data:
+                        $ref: '#/components/schemas/WorkspaceLeaders'
+              example:
+                ok: true
+                data:
+                  leaders:
+                    - name: admin
+                      agent_id: '1876543210987654321'
+                  patterns: ['*grok', 'admin']
+        '400':
+          description: '`invalid_request`: the body or a pattern failed validation.'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '401':
+          description: Missing or invalid workspace key (agent tokens are refused)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '429':
+          $ref: '#/components/responses/Throttled'
 
   /activity:
     get:

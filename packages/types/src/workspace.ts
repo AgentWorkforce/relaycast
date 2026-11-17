@@ -154,6 +154,35 @@ export const SetSystemPromptRequestSchema = z.object({
 });
 export type SetSystemPromptRequest = z.infer<typeof SetSystemPromptRequestSchema>;
 
+// --- Workspace leaders ---
+
+/** Stored leader setting: exact agent names or globs (`*`, `?`). */
+export const WorkspaceLeadersSettingsSchema = z.object({
+  patterns: z.array(z.string()),
+});
+export type WorkspaceLeadersSettings = z.infer<typeof WorkspaceLeadersSettingsSchema>;
+
+/** A registered agent whose name matches at least one leader pattern. */
+export const WorkspaceLeaderSchema = z.object({
+  name: z.string(),
+  agent_id: z.string(),
+});
+export type WorkspaceLeader = z.infer<typeof WorkspaceLeaderSchema>;
+
+/** `GET`/`PUT /v1/workspace/leaders` response. */
+export const WorkspaceLeadersResponseSchema = z.object({
+  leaders: z.array(WorkspaceLeaderSchema),
+  patterns: z.array(z.string()),
+});
+export type WorkspaceLeadersResponse = z.infer<typeof WorkspaceLeadersResponseSchema>;
+
+/** `PUT /v1/workspace/leaders` body: replace the list, or `reset: true` to clear. */
+export const SetWorkspaceLeadersRequestSchema = z.object({
+  patterns: z.array(z.string()).max(64).optional(),
+  reset: z.boolean().optional(),
+});
+export type SetWorkspaceLeadersRequest = z.infer<typeof SetWorkspaceLeadersRequestSchema>;
+
 // --- Activity, DM conversations, token rotation ---
 
 export const ActivityItemSchema = z.object({

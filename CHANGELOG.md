@@ -21,6 +21,7 @@ Packages without a separate changelog are covered by the cross-package notes bel
 ### Added
 
 - Action invocations can record an optional on-behalf-of requester (`requester_agent_id`, `requester_name`) alongside the authenticated caller.
+- Workspace leaders: admins set a list of agent names or `*`/`?` globs with `PUT /v1/workspace/leaders`, and any agent reads the matching registered agents with `GET /v1/workspace/leaders` (SDK: `workspace.getLeaders()` / `workspace.setLeaders({ patterns })`).
 
 ## [12.12.1] - 2026-11-17
 
