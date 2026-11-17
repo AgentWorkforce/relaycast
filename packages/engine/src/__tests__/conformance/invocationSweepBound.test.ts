@@ -1,11 +1,20 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { eq, sql } from 'drizzle-orm';
-import { createWorkspace, makeNodeStack, type TestStack } from './harness.js';
 import {
+  attachDirectNodeSocket,
+  createWorkspace,
+  makeNodeStack,
+  registerAgent,
+  type TestStack,
+} from './harness.js';
+import {
+  INVOCATION_SWEEP_BUDGET_MS,
   NEVER_DISPATCHED_SWEEP_GRACE_MS,
+  NEVER_DISPATCHED_SWEEP_SUB_BATCH,
   sweepTimedOutInvocations,
   type SweepTimedOutInvocationsReport,
 } from '../../engine/action.js';
+import type { NodeConnectionRegistry } from '../../ports/realtime.js';
 import { actionInvocations, nodes } from '../../db/tables.js';
 import * as sqlx from '../../db/sqlx.js';
 
@@ -27,13 +36,15 @@ async function insertPending(
     spawnReservedAt?: Date | null;
     handlerNodeId?: string | null;
     dispatchedNodeId?: string | null;
+    actionId?: string | null;
+    actionName?: string;
   },
 ): Promise<void> {
   await stack.runtime.handle.db.insert(actionInvocations).values({
     id: opts.id,
     workspaceId,
-    actionId: null,
-    actionName: 'spawn',
+    actionId: opts.actionId ?? null,
+    actionName: opts.actionName ?? 'spawn',
     callerId: null,
     callerName: null,
     input: { capability: 'claude' },
@@ -45,6 +56,14 @@ async function insertPending(
     dispatchedNodeId: opts.dispatchedNodeId ?? null,
     createdAt: opts.createdAt,
   });
+}
+
+async function sweepCursorId(stack: TestStack, name: string): Promise<string | null> {
+  const [row] = await sqlx.all<{ cursor: string }>(
+    stack.runtime.handle.db,
+    sql`SELECT cursor FROM maintenance_cursors WHERE id = ${`invocation-sweep-v1:${name}`}`,
+  );
+  return row ? (JSON.parse(row.cursor) as { id: string }).id : null;
 }
 
 async function statuses(stack: TestStack, ids: string[]) {
@@ -59,10 +78,14 @@ async function statuses(stack: TestStack, ids: string[]) {
   return out;
 }
 
-async function sweep(stack: TestStack, opts: Parameters<typeof sweepTimedOutInvocations>[2] & object = {}) {
+async function sweep(
+  stack: TestStack,
+  opts: Parameters<typeof sweepTimedOutInvocations>[2] & object = {},
+  registry: NodeConnectionRegistry = stack.runtime.realtime,
+) {
   let report: SweepTimedOutInvocationsReport | undefined;
   const started = performance.now();
-  const rescheduled = await sweepTimedOutInvocations(stack.runtime.handle.db, stack.runtime.realtime, {
+  const rescheduled = await sweepTimedOutInvocations(stack.runtime.handle.db, registry, {
     pendingInvocationMaxAgeMs: HOUR,
     ...opts,
     onReport: (r) => { report = r; },
@@ -234,5 +257,133 @@ describe('invocation sweep is bounded', () => {
       { id: 'nd_held_a', reservedAgents: 0 },
       { id: 'nd_held_b', reservedAgents: 0 },
     ]);
+  });
+
+  it('a phase that spends its share on live handlers does not starve expiry or retries', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(new Date('2026-11-17T00:00:00Z'));
+    const ws = await createWorkspace(stack.app, 'sweep-fair');
+    const db = stack.runtime.handle.db;
+    const handler = await registerAgent(stack.app, ws.workspaceKey, 'orchestrator');
+    const register = await stack.app.request('/v1/actions', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', authorization: `Bearer ${handler.token}` },
+      body: JSON.stringify({ name: 'crm.lookup', description: 'Look up', handler_agent: 'orchestrator' }),
+    });
+    expect(register.status).toBe(201);
+    const actionId = (await register.json() as { data: { id: string } }).data.id;
+    await attachDirectNodeSocket(stack, ws.workspaceId, handler);
+
+    // Open invocations on a live handler: attempted and not due, so only the
+    // unreachable-handler phase looks at them, and every check leaves them open.
+    const live = Array.from({ length: 12 }, (_, i) => `inv_live_${String(i).padStart(2, '0')}`);
+    for (const [i, id] of live.entries()) {
+      await insertPending(stack, ws.workspaceId, {
+        id, actionId, actionName: 'crm.lookup', dispatchAttempts: 1,
+        createdAt: new Date(Date.now() - HOUR + i * 1_000),
+      });
+    }
+    await insertPending(stack, ws.workspaceId, { id: 'inv_fair_expired', createdAt: new Date(Date.now() - 2 * HOUR) });
+    await insertPending(stack, ws.workspaceId, {
+      id: 'inv_fair_due', dispatchAttempts: 1,
+      createdAt: new Date(Date.now() - 60_000), retryAfterAt: new Date(Date.now() - 1_000),
+    });
+
+    // Each reachability check costs 40% of a quarter share, so the first phase
+    // runs out after three checks every run.
+    const checkMs = INVOCATION_SWEEP_BUDGET_MS / 10;
+    let checks = 0;
+    const realtime = stack.runtime.realtime;
+    const slow = new Proxy(realtime, {
+      get(target, prop, receiver) {
+        const value = Reflect.get(target, prop, receiver);
+        if (prop === 'isProviderConnected') {
+          return (...args: Parameters<NodeConnectionRegistry['isProviderConnected']>) => {
+            checks++;
+            vi.setSystemTime(Date.now() + checkMs);
+            return realtime.isProviderConnected(...args);
+          };
+        }
+        return typeof value === 'function' ? value.bind(target) : value;
+      },
+    });
+    const opts = { neverDispatchedSweepGraceMs: 0, timeoutMs: 24 * HOUR };
+
+    const first = await sweep(stack, opts, slow);
+    expect(first.report.budgetExhausted).toBe(true);
+    expect(first.report.unreachableFailed).toBe(0);
+    // Later phases still got their turn in the same run.
+    expect(first.report.neverDispatchedFailed).toBe(1);
+    expect((await statuses(stack, ['inv_fair_expired'])).inv_fair_expired)
+      .toEqual({ status: 'failed', error: 'never_dispatched_expired' });
+    const [due] = await db.select({ retryAfterAt: actionInvocations.retryAfterAt })
+      .from(actionInvocations).where(eq(actionInvocations.id, 'inv_fair_due'));
+    // The due-pending lane checked it: no longer due at the old retry time.
+    expect(due.retryAfterAt === null || due.retryAfterAt.getTime() > Date.now() - 1_000).toBe(true);
+    expect(await sweepCursorId(stack, 'pending')).toBeNull();
+    // The unreachable phase recorded scan progress past the rows it left open.
+    expect(checks).toBe(3);
+    expect(await sweepCursorId(stack, 'unreachable')).toBe(live[2]);
+
+    vi.setSystemTime(Date.now() + 60_000);
+    await sweep(stack, opts, slow);
+    expect(await sweepCursorId(stack, 'unreachable')).toBe(live[5]);
+    vi.setSystemTime(Date.now() + 60_000);
+    await sweep(stack, opts, slow);
+    expect(await sweepCursorId(stack, 'unreachable')).toBe(live[8]);
+    // The short final page (three rows) is checked to its end, so it wraps.
+    vi.setSystemTime(Date.now() + 60_000);
+    await sweep(stack, opts, slow);
+    expect(await sweepCursorId(stack, 'unreachable')).toBeNull();
+    vi.setSystemTime(Date.now() + 60_000);
+    await sweep(stack, opts, slow);
+    expect(await sweepCursorId(stack, 'unreachable')).toBe(live[2]);
+    const open = await statuses(stack, live);
+    expect(Object.values(open).every((row) => row.status === 'pending')).toBe(true);
+  });
+
+  it('stops never-dispatched work between sub-batches and emits effects for every row it failed', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(new Date('2026-11-17T00:00:00Z'));
+    const ws = await createWorkspace(stack.app, 'sweep-sub-batch');
+    const ids = Array.from({ length: 12 }, (_, i) => `inv_sb_${String(i).padStart(2, '0')}`);
+    for (const [i, id] of ids.entries()) {
+      await insertPending(stack, ws.workspaceId, { id, createdAt: new Date(Date.now() - 2 * HOUR + i * 1_000) });
+    }
+    // A slow effect: each failed row's webhook send takes a tenth of the budget,
+    // so one sub-batch of effects outlasts the never-dispatched phase's share.
+    const effectMs = INVOCATION_SWEEP_BUDGET_MS / 10;
+    let notified: string[] = [];
+    const completionDeps = {
+      ...stack.runtime.deps,
+      webhookQueue: {
+        async send(message: { data: Record<string, unknown> }) {
+          notified.push(String(message.data.invocation_id));
+          vi.setSystemTime(Date.now() + effectMs);
+        },
+      },
+    };
+    const failedIds = async () => {
+      const after = await statuses(stack, ids);
+      return ids.filter((id) => after[id].status === 'failed');
+    };
+
+    const seen: string[] = [];
+    const expected = [
+      ids.slice(0, NEVER_DISPATCHED_SWEEP_SUB_BATCH),
+      ids.slice(NEVER_DISPATCHED_SWEEP_SUB_BATCH, 2 * NEVER_DISPATCHED_SWEEP_SUB_BATCH),
+      ids.slice(2 * NEVER_DISPATCHED_SWEEP_SUB_BATCH),
+    ];
+    for (const [run, batch] of expected.entries()) {
+      notified = [];
+      const { report } = await sweep(stack, { neverDispatchedSweepGraceMs: 0, completionDeps });
+      expect(report.neverDispatchedFailed).toBe(batch.length);
+      expect(report.budgetExhausted).toBe(run < 2);
+      // Every row failed this run was notified, in this run; nothing else was.
+      expect([...notified].sort()).toEqual(batch);
+      seen.push(...batch);
+      expect(await failedIds()).toEqual(seen);
+      vi.setSystemTime(Date.now() + 60_000);
+    }
   });
 });

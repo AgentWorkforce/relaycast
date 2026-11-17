@@ -12,7 +12,7 @@ import {
 } from './agent.js';
 import { randomHex, sha256Hex } from '../lib/crypto.js';
 import { codedError } from '../lib/httpError.js';
-import { D1_SAFE_IN_QUERY_CHUNK_SIZE, chunkValues, queryInChunks } from '../lib/queryChunks.js';
+import { chunkValues, queryInChunks } from '../lib/queryChunks.js';
 import { toFleetWireJson } from './deliveryWire.js';
 import {
   emitAgentExitedEffects,
@@ -102,9 +102,14 @@ export interface SweepTimedOutInvocationsOptions {
    */
   maxRowsPerPass?: number;
   /**
-   * Wall-clock budget for one run. Once spent, no further row work starts and
-   * the run returns; the next run re-selects what is left. A row already in
-   * progress finishes, so a run can overrun by one row's work. Defaults to
+   * Wall-clock budget for one run, shared fairly between the phases: each
+   * phase may spend at most an equal share of what is left when it starts, so
+   * time an earlier phase does not use carries forward and no phase can starve
+   * the ones after it. Once a phase's share is spent it starts no further row
+   * work; the next run continues where it stopped. Work already started
+   * finishes, so a phase can overrun its share by one unit: one row, or one
+   * never-dispatched sub-batch of {@link NEVER_DISPATCHED_SWEEP_SUB_BATCH} rows
+   * with their completion effects. Defaults to
    * {@link INVOCATION_SWEEP_BUDGET_MS}.
    */
   budgetMs?: number;
@@ -5204,16 +5209,56 @@ export interface SweepTimedOutInvocationsReport {
   /** Never-dispatched rows seen past the age bound and left for a later run, after the grace. */
   neverDispatchedDeferred: boolean;
   rescheduled: number;
-  /** True when the run stopped because `budgetMs` ran out. */
+  /** True when at least one phase stopped early because its share of `budgetMs` ran out. */
   budgetExhausted: boolean;
 }
 
+/**
+ * Budgeted phases of one run, in order: unreachable handler, never-dispatched,
+ * timed-out dispatched, due pending.
+ */
+const INVOCATION_SWEEP_PHASES = 4;
+/**
+ * Never-dispatched rows failed per unit of work. The phase re-checks its
+ * budget between sub-batches, and each sub-batch's completion effects are
+ * emitted before that check, so a spent budget never strands a failed row
+ * without its notifications. Kept small because those effects can include
+ * an HTTP push with its own multi-second timeout per row.
+ */
+export const NEVER_DISPATCHED_SWEEP_SUB_BATCH = 5;
+
 type SweepBudget = {
   readonly maxRows: number;
-  /** True once the run's wall-clock budget is spent; latches. */
+  /**
+   * Start the next phase. Its share is an equal split of what is left of the
+   * run's budget over the phases not yet started, so unused time carries
+   * forward and a phase that spends its whole share leaves the rest intact.
+   */
+  beginPhase(): void;
+  /** True once the current phase's share is spent. */
   spent(): boolean;
   report: SweepTimedOutInvocationsReport;
 };
+
+function createSweepBudget(budgetMs: number, maxRows: number, report: SweepTimedOutInvocationsReport): SweepBudget {
+  const deadline = Date.now() + budgetMs;
+  let phasesLeft = INVOCATION_SWEEP_PHASES;
+  let phaseDeadline = deadline;
+  return {
+    maxRows,
+    report,
+    beginPhase() {
+      const now = Date.now();
+      phaseDeadline = now + Math.max(0, deadline - now) / Math.max(1, phasesLeft);
+      phasesLeft = Math.max(0, phasesLeft - 1);
+    },
+    spent() {
+      if (Date.now() < phaseDeadline) return false;
+      report.budgetExhausted = true;
+      return true;
+    },
+  };
+}
 
 type SweepKey = { createdAtMs: number; id: string };
 
@@ -5260,22 +5305,25 @@ function afterSweepKey(key: SweepKey | null) {
 }
 
 /**
- * Persist where a rotating phase stopped. A row that stays open (live handler,
- * no eligible node) must not pin the oldest page forever, so each phase walks
- * (created_at, id) in order across runs and wraps after a short page.
- * Advisory only: a lost write repeats work, it never skips a row's terminal
- * handling because every phase re-checks its predicates on the row.
+ * Persist where a rotating phase stopped. The cursor records scan progress,
+ * not changes: `checked` counts every row the phase looked at, including rows
+ * it left open (live handler, no eligible node), so a run that stops on its
+ * budget resumes after the last checked row, even on a short page, instead of
+ * re-reading the same oldest rows forever. Only a page that was checked to
+ * the end and came back short wraps to the start. Nothing checked keeps the
+ * cursor. Advisory only: a lost write repeats work, it never skips a row's
+ * terminal handling because every phase re-checks its predicates on the row.
  */
 async function advanceSweepKey(
   db: Db,
   id: string,
   page: Array<{ id: string; createdAt: Date }>,
-  processed: number,
+  checked: number,
   limit: number,
 ): Promise<void> {
-  if (processed === 0 && page.length > 0) return;
-  const last = page[processed - 1];
-  const wrapped = processed === page.length && page.length < limit;
+  if (checked === 0 && page.length > 0) return;
+  const last = page[checked - 1];
+  const wrapped = checked === page.length && page.length < limit;
   await writeSweepCursor(db, id, wrapped || !last ? null : { createdAtMs: last.createdAt.getTime(), id: last.id });
 }
 
@@ -5289,7 +5337,7 @@ async function advanceSweepKey(
  * handler restart never kills an invocation regardless of its age.
  *
  * Each run checks at most `maxRows` rows, oldest first, resuming after the
- * last row the previous run checked.
+ * last row the previous run checked (reachable rows included).
  */
 async function failUnreachableAgentInvocations(
   db: Db,
@@ -5298,6 +5346,7 @@ async function failUnreachableAgentInvocations(
   budget: SweepBudget,
   completionDeps?: InvocationCompletionDeps,
 ): Promise<void> {
+  budget.beginPhase();
   if (budget.spent()) return;
   const cursorId = `${SWEEP_CURSOR_PREFIX}unreachable`;
   const after = await readSweepKey(db, cursorId);
@@ -5319,10 +5368,10 @@ async function failUnreachableAgentInvocations(
     .orderBy(asc(actionInvocations.createdAt), asc(actionInvocations.id))
     .limit(budget.maxRows);
 
-  let processed = 0;
+  let checked = 0;
   for (const row of rows) {
     if (budget.spent()) break;
-    processed++;
+    checked++;
     try {
       // targetAgentForInvocation returns null when the handler agent is gone or
       // no longer node-bound — both count as unreachable.
@@ -5357,7 +5406,7 @@ async function failUnreachableAgentInvocations(
       // Leave the invocation for the next sweep.
     }
   }
-  await advanceSweepKey(db, cursorId, rows, processed, budget.maxRows);
+  await advanceSweepKey(db, cursorId, rows, checked, budget.maxRows);
 }
 
 /**
@@ -5377,6 +5426,11 @@ async function failUnreachableAgentInvocations(
  * UPDATE re-checks `dispatch_attempts = 0`, so a row whose attempt landed in
  * the meantime is skipped. This is the same select, wait `graceMs`, re-check
  * update the sleep gave, spread over two runs. `graceMs <= 0` fails in one run.
+ *
+ * Rows are failed in sub-batches of {@link NEVER_DISPATCHED_SWEEP_SUB_BATCH}.
+ * Each sub-batch's completion effects are emitted before the budget is
+ * re-checked, so a run overruns its share by at most one sub-batch and every
+ * row it failed has had its notifications sent.
  */
 async function failNeverDispatchedExpiredInvocations(
   db: Db,
@@ -5385,6 +5439,7 @@ async function failNeverDispatchedExpiredInvocations(
   budget: SweepBudget,
   completionDeps?: InvocationCompletionDeps,
 ): Promise<void> {
+  budget.beginPhase();
   if (budget.spent()) return;
   const nowMs = Date.now();
   const currentCutoff = new Date(nowMs - maxAgeMs);
@@ -5412,27 +5467,30 @@ async function failNeverDispatchedExpiredInvocations(
     byWorkspace.set(row.workspaceId, list);
   }
   for (const [workspaceId, ids] of byWorkspace) {
-    // Chunk ids so the IN clause stays under D1's 100-bound-parameter cap. A per-
-    // chunk try/catch keeps one bad chunk from stalling the whole workspace, so a
+    // Small sub-batches (well under D1's 100-bound-parameter IN cap) are the
+    // unit of budgeted work: fail one, emit its effects, then re-check. A per-
+    // sub-batch try/catch keeps one bad batch from stalling the rest, so a
     // large stale backlog can actually drain across sweeps.
-    for (let i = 0; i < ids.length; i += D1_SAFE_IN_QUERY_CHUNK_SIZE) {
+    for (let i = 0; i < ids.length; i += NEVER_DISPATCHED_SWEEP_SUB_BATCH) {
       if (budget.spent()) return;
-      const chunk = ids.slice(i, i + D1_SAFE_IN_QUERY_CHUNK_SIZE);
+      const subBatch = ids.slice(i, i + NEVER_DISPATCHED_SWEEP_SUB_BATCH);
+      let failed: InvocationRow[] = [];
       try {
-        const failed = await failNeverDispatchedInvocationRows(
+        failed = await failNeverDispatchedInvocationRows(
           db,
           workspaceId,
-          chunk,
+          subBatch,
           cutoff,
           'never_dispatched_expired',
-          budget,
+          budget.report,
         );
-        budget.report.neverDispatchedFailed += failed.length;
-        if (completionDeps && failed.length > 0) {
-          await emitFailedInvocationEffects(completionDeps, workspaceId, failed);
-        }
       } catch {
-        // Leave this chunk for the next sweep; other chunks still get their shot.
+        // Leave this sub-batch for the next sweep; the others still get their shot.
+      }
+      budget.report.neverDispatchedFailed += failed.length;
+      // Always, even if the budget is now spent: these rows are terminal.
+      if (completionDeps && failed.length > 0) {
+        await emitFailedInvocationEffects(completionDeps, workspaceId, failed);
       }
     }
   }
@@ -5486,6 +5544,10 @@ function neverDispatchedCandidates(db: Db, cutoff: Date, limit: number) {
  * hold) returns the slot on the node that holds it. The bulk UPDATE below
  * only matches rows with no hold, so before these paths existed such rows
  * were never failed.
+ *
+ * Every given row is attempted; callers bound the work by passing a small
+ * batch. A held row that throws is skipped (left for the next run) so rows
+ * already failed here are still returned for their completion effects.
  */
 async function failNeverDispatchedInvocationRows(
   db: Db,
@@ -5493,17 +5555,11 @@ async function failNeverDispatchedInvocationRows(
   invocationIds: string[],
   cutoff: Date,
   error: string,
-  budget?: SweepBudget,
+  report?: SweepTimedOutInvocationsReport,
 ): Promise<InvocationRow[]> {
   if (invocationIds.length === 0) return [];
   const held = await db
-    .select({
-      id: actionInvocations.id,
-      placementToken: actionInvocations.spawnPlacementToken,
-      reservedAt: actionInvocations.spawnReservedAt,
-      handlerNodeId: actionInvocations.handlerNodeId,
-      dispatchedNodeId: actionInvocations.dispatchedNodeId,
-    })
+    .select()
     .from(actionInvocations)
     .where(and(
       eq(actionInvocations.workspaceId, workspaceId),
@@ -5515,24 +5571,28 @@ async function failNeverDispatchedInvocationRows(
     ));
   const failed: InvocationRow[] = [];
   for (const row of held) {
-    if (budget?.spent()) break;
-    const strictShape = !!row.placementToken && !!row.handlerNodeId && !row.dispatchedNodeId;
-    const settledHere = strictShape
-      ? await failNeverDispatchedInvocation(db, workspaceId, row.id, error)
-      : await failNeverDispatchedHeldInvocation(db, workspaceId, {
-        id: row.id,
-        placementToken: row.placementToken,
-        reservedAt: row.reservedAt!,
-        handlerNodeId: row.handlerNodeId,
-        dispatchedNodeId: row.dispatchedNodeId,
-      }, cutoff, error);
+    const strictShape = !!row.spawnPlacementToken && !!row.handlerNodeId && !row.dispatchedNodeId;
+    let settledHere: boolean;
+    try {
+      settledHere = strictShape
+        ? await failNeverDispatchedInvocation(db, workspaceId, row.id, error)
+        : await failNeverDispatchedHeldInvocation(db, workspaceId, {
+          id: row.id,
+          placementToken: row.spawnPlacementToken,
+          reservedAt: row.spawnReservedAt!,
+          handlerNodeId: row.handlerNodeId,
+          dispatchedNodeId: row.dispatchedNodeId,
+        }, cutoff, error);
+    } catch {
+      // Both shapes are a single atomic CAS, so a throw left the row open; the
+      // next run retries it.
+      continue;
+    }
     if (!settledHere) continue;
-    if (!strictShape && budget) budget.report.neverDispatchedHeldReleased++;
-    const [settled] = await db
-      .select()
-      .from(actionInvocations)
-      .where(and(eq(actionInvocations.workspaceId, workspaceId), eq(actionInvocations.id, row.id)));
-    if (settled) failed.push(settled);
+    if (!strictShape && report) report.neverDispatchedHeldReleased++;
+    // No re-read: the effects only need the row's identity and the failure,
+    // and a failing re-read must not cost a terminal row its notifications.
+    failed.push({ ...row, status: 'failed', error, spawnReservedAt: null, spawnPlacementToken: null });
   }
   const heldIds = new Set(held.map((row) => row.id));
   const remainingIds = invocationIds.filter((id) => !heldIds.has(id));
@@ -5641,8 +5701,9 @@ async function failNeverDispatchedHeldInvocation(
 
 /**
  * Re-dispatch timed-out `dispatched` rows and due `pending` rows. Each status
- * gets at most `maxRows` rows per run, oldest first, resuming after the last
- * row the previous run reached.
+ * is its own budgeted phase (so a slow dispatched lane cannot starve due
+ * retries) and gets at most `maxRows` rows per run, oldest first, resuming
+ * after the last row the previous run checked.
  */
 async function rescheduleDueInvocations(
   db: Db,
@@ -5669,7 +5730,8 @@ async function rescheduleDueInvocations(
     },
   ];
   for (const lane of lanes) {
-    if (budget.spent()) return;
+    budget.beginPhase();
+    if (budget.spent()) continue;
     const after = await readSweepKey(db, lane.cursorId);
     const rows = await db
       .select()
@@ -5677,10 +5739,10 @@ async function rescheduleDueInvocations(
       .where(and(lane.due, afterSweepKey(after)))
       .orderBy(asc(actionInvocations.createdAt), asc(actionInvocations.id))
       .limit(budget.maxRows);
-    let processed = 0;
+    let checked = 0;
     for (const invocation of rows) {
       if (budget.spent()) break;
-      processed++;
+      checked++;
       try {
         const allowFallback = invocation.status === 'pending';
         if (await rescheduleNodeInvocation(db, registry, invocation, {
@@ -5694,15 +5756,17 @@ async function rescheduleDueInvocations(
         // Leave the invocation for the next sweep.
       }
     }
-    await advanceSweepKey(db, lane.cursorId, rows, processed, budget.maxRows);
+    await advanceSweepKey(db, lane.cursorId, rows, checked, budget.maxRows);
   }
 }
 
 /**
  * One bounded sweep run. Every phase selects at most `maxRowsPerPass` rows and
- * stops starting new row work once `budgetMs` is spent; whatever is left is
- * re-selected by the next run, so the outcome for each invocation is the same,
- * only spread over runs. Returns the number of rescheduled invocations.
+ * stops starting new row work once its share of `budgetMs` is spent; whatever
+ * is left is re-selected by the next run, so the outcome for each invocation
+ * is the same, only spread over runs. Each phase's share is what is left of
+ * the budget divided by the phases still to run, so every phase gets a turn
+ * every run. Returns the number of rescheduled invocations.
  */
 export async function sweepTimedOutInvocations(
   db: Db,
@@ -5719,7 +5783,6 @@ async function sweepTimedOutInvocationsUnlabeled(
 ) {
   const sweepOpts = typeof opts === 'number' || opts === null ? {} : opts;
   const timeoutMs = typeof opts === 'number' ? opts : sweepOpts.timeoutMs ?? ACTION_DISPATCH_TIMEOUT_MS;
-  const deadline = Date.now() + Math.max(0, sweepOpts.budgetMs ?? INVOCATION_SWEEP_BUDGET_MS);
   const report: SweepTimedOutInvocationsReport = {
     unreachableFailed: 0,
     neverDispatchedFailed: 0,
@@ -5728,14 +5791,11 @@ async function sweepTimedOutInvocationsUnlabeled(
     rescheduled: 0,
     budgetExhausted: false,
   };
-  const budget: SweepBudget = {
-    maxRows: Math.max(1, Math.floor(sweepOpts.maxRowsPerPass ?? INVOCATION_SWEEP_MAX_ROWS_PER_PASS)),
-    spent() {
-      if (!report.budgetExhausted && Date.now() >= deadline) report.budgetExhausted = true;
-      return report.budgetExhausted;
-    },
+  const budget = createSweepBudget(
+    Math.max(0, sweepOpts.budgetMs ?? INVOCATION_SWEEP_BUDGET_MS),
+    Math.max(1, Math.floor(sweepOpts.maxRowsPerPass ?? INVOCATION_SWEEP_MAX_ROWS_PER_PASS)),
     report,
-  };
+  );
   try {
     await expireTaskInvocations(db);
     await failUnreachableAgentInvocations(
