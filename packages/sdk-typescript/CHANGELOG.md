@@ -11,7 +11,7 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Added
 
-- `actions.invoke(name, input, { requesterAgentId, requesterName })` records an on-behalf-of requester; invocation results expose `requesterAgentId` / `requesterName`.
+- `actions.invoke(name, input, { requesterAgentId, requesterName })` records an on-behalf-of requester (`requesterName` is optional, requires `requesterAgentId` and must equal that agent's name); invocation results expose `requesterAgentId` / `requesterName`. The requester is a caller-made claim, not authorization.
 - `workspace.getLeaders()` and `workspace.setLeaders({ patterns })` read and replace the workspace leader patterns.
 
 ## [12.12.0] - 2026-11-17

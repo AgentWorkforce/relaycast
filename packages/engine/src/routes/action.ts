@@ -44,7 +44,10 @@ const registerActionSchema = z.object({
 );
 
 // Optional on-behalf-of identity. caller_id/caller_name always remain the
-// authenticated agent; a requester id must name an agent in this workspace.
+// authenticated agent; a requester id must name an agent in this workspace and
+// requester_name (which requires the id) must equal that agent's name. The
+// cross-field rules live in resolveInvocationRequester so both invoke routes
+// return the same 400 invalid_request.
 const invocationRequesterFields = {
   requester_agent_id: z.string().min(1).max(128).optional(),
   requester_name: z.string().min(1).max(256).optional(),

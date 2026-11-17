@@ -1,7 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
   MAX_LEADER_PATTERNS,
-  compileLeaderPattern,
   isGlobPattern,
   leaderMatcher,
   matchesLeaderPattern,
@@ -43,12 +42,53 @@ describe('leader pattern matcher', () => {
     expect(matchesLeaderPattern('a.b*', 'a.bc')).toBe(true);
     expect(matchesLeaderPattern('(x)+[y]{1}|z$^\\/*', '(x)+[y]{1}|z$^\\/tail')).toBe(true);
     expect(matchesLeaderPattern('(x)+*', 'xx')).toBe(false);
-    expect(() => compileLeaderPattern('[unclosed*')).not.toThrow();
+    expect(() => matchesLeaderPattern('[unclosed*', '[unclosed')).not.toThrow();
+    expect(matchesLeaderPattern('[unclosed*', '[unclosed]')).toBe(true);
+    expect(matchesLeaderPattern('\\d+', '1')).toBe(false);
+    expect(matchesLeaderPattern('\\d?', '\\d1')).toBe(true);
   });
 
   it('anchors the whole name, including across newlines', () => {
     expect(matchesLeaderPattern('*grok', 'grok\nevil')).toBe(false);
-    expect(compileLeaderPattern('x*').test('x\ny')).toBe(true);
+    expect(matchesLeaderPattern('x*', 'x\ny')).toBe(true);
+    expect(matchesLeaderPattern('x?y', 'x\ny')).toBe(true);
+    expect(matchesLeaderPattern('grok*', 'evil\ngrok')).toBe(false);
+  });
+
+  it('collapses consecutive stars', () => {
+    expect(matchesLeaderPattern('a**b', 'ab')).toBe(true);
+    expect(matchesLeaderPattern('a**b', 'axxb')).toBe(true);
+    expect(matchesLeaderPattern('a**b', 'axxbc')).toBe(false);
+    expect(matchesLeaderPattern('***', '')).toBe(true);
+  });
+
+  it('handles patterns that start and end with *', () => {
+    expect(matchesLeaderPattern('*lead*', 'lead')).toBe(true);
+    expect(matchesLeaderPattern('*lead*', 'team-lead-1')).toBe(true);
+    expect(matchesLeaderPattern('*lead*', 'leda')).toBe(false);
+    expect(matchesLeaderPattern('*a?c*', 'xxabcyy')).toBe(true);
+    expect(matchesLeaderPattern('*a?c*', 'xxacyy')).toBe(false);
+  });
+
+  it('matches the empty name only against star-only patterns', () => {
+    expect(matchesLeaderPattern('*', '')).toBe(true);
+    expect(matchesLeaderPattern('?', '')).toBe(false);
+    expect(matchesLeaderPattern('a*', '')).toBe(false);
+  });
+
+  it('does not backtrack catastrophically on adversarial patterns', () => {
+    const name = 'a'.repeat(60);
+    const started = performance.now();
+    expect(matchesLeaderPattern('*a'.repeat(30) + 'b', name)).toBe(false);
+    expect(matchesLeaderPattern('*a'.repeat(30), name)).toBe(true);
+    expect(leaderMatcher(['*a'.repeat(30) + 'b'])(name)).toBe(false);
+    expect(leaderMatcher(['*a'.repeat(30) + 'b', '*a'.repeat(30)])(name)).toBe(true);
+    // Worst case within the stored limits: 128-char pattern vs a long name.
+    expect(matchesLeaderPattern('*a'.repeat(63) + 'b', 'a'.repeat(4096))).toBe(false);
+    expect(matchesLeaderPattern('*a'.repeat(60) + 'b', 'a'.repeat(10000))).toBe(false);
+    expect(matchesLeaderPattern('*a'.repeat(60), 'a'.repeat(10000))).toBe(true);
+    // Generous bound: CI and shared hosts run loaded; the real work is microseconds.
+    expect(performance.now() - started).toBeLessThan(1000);
   });
 
   it('combines exact names and globs', () => {
@@ -72,6 +112,9 @@ describe('normalizeLeaderPatterns', () => {
     const max = Array.from({ length: MAX_LEADER_PATTERNS }, (_, i) => `agent-${i}`);
     expect(normalizeLeaderPatterns(max)).toEqual({ ok: true, patterns: max });
     expect(normalizeLeaderPatterns(['a'.repeat(128)]).ok).toBe(true);
+    // The length limit counts code points, so astral characters count once.
+    expect(normalizeLeaderPatterns(['😀'.repeat(128)])).toEqual({ ok: true, patterns: ['😀'.repeat(128)] });
+    expect(normalizeLeaderPatterns(['😀'.repeat(129)]).ok).toBe(false);
     // Duplicates still count toward the raw entry limit.
     expect(normalizeLeaderPatterns(Array.from({ length: MAX_LEADER_PATTERNS + 1 }, () => 'a')).ok).toBe(false);
   });

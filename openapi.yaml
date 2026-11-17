@@ -6291,14 +6291,20 @@ paths:
                     Optional agent in this workspace on whose behalf the caller
                     invokes. Unknown ids return 400 `invalid_request`. Recorded
                     alongside, never instead of, the authenticated `caller_id`.
+                    The requester is a claim made by the authenticated caller
+                    (any agent token may name any workspace agent); consumers
+                    must not treat it as authorization. Reusing an
+                    Idempotency-Key with a different requester returns 409
+                    `idempotency_key_reused`.
                 requester_name:
                   type: string
                   minLength: 1
                   maxLength: 256
                   description: >-
-                    Optional informational requester display name. Defaults to
-                    the requester agent's name when only `requester_agent_id` is
-                    sent; may be sent alone. Never authority.
+                    Optional requester name. Requires `requester_agent_id` and
+                    must equal that agent's current name exactly; otherwise 400
+                    `invalid_request`. The recorded and returned name is always
+                    the requester agent's name. Never authority.
       responses:
         '201':
           description: >-
@@ -6404,14 +6410,20 @@ paths:
                     Optional agent in this workspace on whose behalf the caller
                     invokes. Unknown ids return 400 `invalid_request`. Recorded
                     alongside, never instead of, the authenticated `caller_id`.
+                    The requester is a claim made by the authenticated caller
+                    (any agent token may name any workspace agent); consumers
+                    must not treat it as authorization. Reusing an
+                    Idempotency-Key with a different requester returns 409
+                    `idempotency_key_reused`.
                 requester_name:
                   type: string
                   minLength: 1
                   maxLength: 256
                   description: >-
-                    Optional informational requester display name. Defaults to
-                    the requester agent's name when only `requester_agent_id` is
-                    sent; may be sent alone. Never authority.
+                    Optional requester name. Requires `requester_agent_id` and
+                    must equal that agent's current name exactly; otherwise 400
+                    `invalid_request`. The recorded and returned name is always
+                    the requester agent's name. Never authority.
       responses:
         '201':
           description: >-

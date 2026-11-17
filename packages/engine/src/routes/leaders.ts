@@ -58,7 +58,7 @@ leadersRoutes.put('/workspace/leaders', requireWorkspaceKey, rateLimit, async (c
 
     const result = await leadersEngine.setWorkspaceLeaders(db, workspace.id, normalized);
     emitServerEvent(c, workspace.id, 'workspace.leaders.updated', {
-      count: normalized.length,
+      pattern_count: normalized.length,
     });
     return jsonOk(c, result);
   } catch (err: unknown) {

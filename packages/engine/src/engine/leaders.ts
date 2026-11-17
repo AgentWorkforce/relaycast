@@ -7,7 +7,7 @@ type Db = ReturnType<typeof getDb>;
 
 /** Upper bound on stored leader patterns. */
 export const MAX_LEADER_PATTERNS = 64;
-/** Upper bound on one pattern's length (after trimming). */
+/** Upper bound on one pattern's length after trimming, in Unicode code points (not UTF-16 units). */
 export const MAX_LEADER_PATTERN_LENGTH = 128;
 
 export interface WorkspaceLeader {
@@ -29,36 +29,84 @@ export function isGlobPattern(pattern: string): boolean {
 }
 
 /**
- * Compile a leader pattern to an anchored, case-sensitive RegExp. `*` matches
- * any run of characters (including none), `?` matches exactly one character,
- * and every other character is literal (regex metacharacters are escaped).
- * Unicode mode, so `?` consumes one code point rather than one UTF-16 unit.
+ * A glob pattern split into code points, with runs of consecutive `*`
+ * collapsed to one (they are equivalent and would only add work).
  */
-export function compileLeaderPattern(pattern: string): RegExp {
-  let source = '';
+type CompiledGlob = readonly string[];
+
+function compileGlob(pattern: string): CompiledGlob {
+  const tokens: string[] = [];
   for (const char of pattern) {
-    if (char === '*') source += '.*';
-    else if (char === '?') source += '.';
-    else source += char.replace(/[\\^$.|+()[\]{}]/g, '\\$&');
+    if (char === '*' && tokens[tokens.length - 1] === '*') continue;
+    tokens.push(char);
   }
-  return new RegExp(`^${source}$`, 'su');
+  return tokens;
 }
 
-/** Whole-name, case-sensitive glob match of `name` against `pattern`. */
+/**
+ * Iterative two-pointer wildcard match with single "last star" backtracking.
+ *
+ * A RegExp is deliberately not used: compiling `*` to `.*` yields a
+ * backtracking regex, and stored patterns such as `"*a".repeat(30) + "b"`
+ * evaluated against a name like `"a".repeat(60)` backtrack catastrophically
+ * on the serving thread. This loop only ever rewinds to the most recent `*`,
+ * so the worst case is O(len(pattern) * len(name)) with no recursion.
+ *
+ * Both sides are code-point arrays, so `?` consumes one code point rather
+ * than one UTF-16 unit, and newlines are ordinary characters.
+ */
+function globMatches(glob: CompiledGlob, name: readonly string[]): boolean {
+  let p = 0;
+  let n = 0;
+  let star = -1;
+  let mark = 0;
+  while (n < name.length) {
+    const token = glob[p];
+    if (p < glob.length && token !== '*' && (token === '?' || token === name[n])) {
+      p += 1;
+      n += 1;
+    } else if (p < glob.length && token === '*') {
+      star = p;
+      mark = n;
+      p += 1;
+    } else if (star !== -1) {
+      // Let the last `*` absorb one more code point and retry after it.
+      p = star + 1;
+      mark += 1;
+      n = mark;
+    } else {
+      return false;
+    }
+  }
+  while (p < glob.length && glob[p] === '*') p += 1;
+  return p === glob.length;
+}
+
+/**
+ * Whole-name, case-sensitive glob match of `name` against `pattern`. `*`
+ * matches any run of code points (including none), `?` matches exactly one
+ * code point, and every other character is literal. See globMatches for why
+ * this is not RegExp-based.
+ */
 export function matchesLeaderPattern(pattern: string, name: string): boolean {
   if (!isGlobPattern(pattern)) return pattern === name;
-  return compileLeaderPattern(pattern).test(name);
+  return globMatches(compileGlob(pattern), Array.from(name));
 }
 
 /** Build a predicate matching a name against any of the given patterns. */
 export function leaderMatcher(patterns: readonly string[]): (name: string) => boolean {
   const exact = new Set<string>();
-  const globs: RegExp[] = [];
+  const globs: CompiledGlob[] = [];
   for (const pattern of patterns) {
-    if (isGlobPattern(pattern)) globs.push(compileLeaderPattern(pattern));
+    if (isGlobPattern(pattern)) globs.push(compileGlob(pattern));
     else exact.add(pattern);
   }
-  return (name) => exact.has(name) || globs.some((glob) => glob.test(name));
+  return (name) => {
+    if (exact.has(name)) return true;
+    if (globs.length === 0) return false;
+    const chars = Array.from(name);
+    return globs.some((glob) => globMatches(glob, chars));
+  };
 }
 
 export type LeaderPatternsValidation =
@@ -68,7 +116,7 @@ export type LeaderPatternsValidation =
 /**
  * Validate and normalize a `patterns` value: an array of at most
  * MAX_LEADER_PATTERNS strings, each trimmed, non-empty, at most
- * MAX_LEADER_PATTERN_LENGTH characters, free of control characters.
+ * MAX_LEADER_PATTERN_LENGTH code points, free of control characters.
  * Duplicates (after trimming) are dropped, keeping first-seen order.
  */
 export function normalizeLeaderPatterns(value: unknown): LeaderPatternsValidation {
@@ -91,7 +139,7 @@ export function normalizeLeaderPatterns(value: unknown): LeaderPatternsValidatio
     if (pattern.length === 0) {
       return { ok: false, message: `patterns[${index}] must be a non-empty string` };
     }
-    if (pattern.length > MAX_LEADER_PATTERN_LENGTH) {
+    if (codePointLength(pattern) > MAX_LEADER_PATTERN_LENGTH) {
       return {
         ok: false,
         message: `patterns[${index}] must be at most ${MAX_LEADER_PATTERN_LENGTH} characters`,
@@ -102,6 +150,13 @@ export function normalizeLeaderPatterns(value: unknown): LeaderPatternsValidatio
     patterns.push(pattern);
   }
   return { ok: true, patterns };
+}
+
+/** Count Unicode code points, so an astral character counts once. */
+function codePointLength(value: string): number {
+  let count = 0;
+  for (const _ of value) count++;
+  return count;
 }
 
 function storedPatterns(settings: WorkspaceLeadersSettings | null | undefined): string[] {

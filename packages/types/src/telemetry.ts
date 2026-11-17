@@ -226,7 +226,7 @@ const REQUIRED_SERVER_EVENT_PROPS = {
   relaycast_server_presence_heartbeat: ['workspace_id', 'agent_id'],
   relaycast_server_presence_disconnected: ['workspace_id', 'agent_id'],
   relaycast_server_system_prompt_updated: ['workspace_id', 'operation'],
-  relaycast_server_workspace_leaders_updated: ['workspace_id', 'count'],
+  relaycast_server_workspace_leaders_updated: ['workspace_id', 'pattern_count'],
   relaycast_server_ws_session_started: ['workspace_id', 'session_scope'],
   relaycast_server_ws_session_ended: ['workspace_id', 'session_scope', 'duration_ms'],
   relaycast_server_action_registered: ['workspace_id', 'action_name'],

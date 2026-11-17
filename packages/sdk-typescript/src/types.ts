@@ -286,7 +286,12 @@ export interface InvokeActionOptions {
    * authenticated agent stays `callerId`; an unknown id is rejected with 400.
    */
   requesterAgentId?: string;
-  /** Requester display name; defaults to the requester agent's name. */
+  /**
+   * Optional requester name. Requires `requesterAgentId` and must equal that
+   * agent's current name exactly (otherwise 400); the recorded name is always
+   * the agent's name. The requester is a claim by the authenticated caller,
+   * not authorization.
+   */
   requesterName?: string;
 }
 

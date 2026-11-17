@@ -18,9 +18,13 @@ emits `message.created` only when it includes a non-empty `payload`, and that
 event carries `metadata.__relaycast_origin: "inbound_webhook"`.
 
 Action invokes may name an on-behalf-of requester with optional
-`requester_agent_id` (an agent in the same workspace) and `requester_name`
+`requester_agent_id` (an agent in the same workspace) and an optional
+`requester_name` that requires `requester_agent_id` and must equal that agent's
+name; the recorded name is always the agent's name
 (SDK: `actions.invoke(name, input, { requesterAgentId, requesterName })`).
-`caller_id` remains the authenticated agent; the requester is informational.
+`caller_id` remains the authenticated agent. The requester is a claim made by
+the authenticated caller (any agent token may name any workspace agent), so
+consumers must not treat it as authorization.
 
 Workspace leaders are an admin-set list of agent names or globs (`*` any run,
 `?` one character, whole-name, case-sensitive; at most 64 patterns of up to 128

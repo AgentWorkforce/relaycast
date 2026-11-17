@@ -6,8 +6,9 @@ import { actionInvocations } from '../../db/tables.js';
 /**
  * Optional on-behalf-of requester identity on action invocations. The
  * authenticated agent stays caller_id/caller_name; requester_agent_id must
- * name an agent in the caller's workspace and is returned on every
- * serialized invocation shape.
+ * name an agent in the caller's workspace, requester_name is always that
+ * agent's name (an explicit one must match, and it is never accepted without
+ * the id), and both are returned on every serialized invocation shape.
  */
 describe('invocation requester identity', () => {
   let stack: TestStack;
@@ -56,19 +57,19 @@ describe('invocation requester identity', () => {
     return { ...ws, launcher, owner, sock, handle, nodeToken, invoke, read };
   }
 
-  it('persists and returns both fields on the invoke response and GET, keeping caller as the authenticated agent', async () => {
+  it('accepts an id with the matching agent name and returns both on the invoke response and GET, keeping caller as the authenticated agent', async () => {
     const t = await setup('requester-both');
     const res = await t.invoke('echo', {
-      input: { text: 'hi' }, requester_agent_id: t.owner.agentId, requester_name: 'Owner Display',
+      input: { text: 'hi' }, requester_agent_id: t.owner.agentId, requester_name: 'owner',
     });
     expect(res.status).toBe(201);
     const body = (await res.json() as { data: Record<string, unknown> }).data;
-    expect(body).toMatchObject({ requester_agent_id: t.owner.agentId, requester_name: 'Owner Display' });
+    expect(body).toMatchObject({ requester_agent_id: t.owner.agentId, requester_name: 'owner' });
     expect(await t.read('echo', body.invocation_id as string)).toMatchObject({
       caller_id: t.launcher.agentId,
       caller_name: 'launcher',
       requester_agent_id: t.owner.agentId,
-      requester_name: 'Owner Display',
+      requester_name: 'owner',
     });
   });
 
@@ -91,13 +92,8 @@ describe('invocation requester identity', () => {
     });
   });
 
-  it('accepts requester_name without an id and returns explicit nulls when omitted', async () => {
+  it('returns explicit nulls when the requester is omitted', async () => {
     const t = await setup('requester-optional');
-    const named = await t.invoke('echo', { input: {}, requester_name: 'external-user' });
-    expect(named.status).toBe(201);
-    const namedBody = (await named.json() as { data: Record<string, unknown> }).data;
-    expect(namedBody).toMatchObject({ requester_agent_id: null, requester_name: 'external-user' });
-
     const plain = await t.invoke('echo', { input: {} });
     expect(plain.status).toBe(201);
     const plainBody = (await plain.json() as { data: Record<string, unknown> }).data;
@@ -105,6 +101,71 @@ describe('invocation requester identity', () => {
     expect(await t.read('echo', plainBody.invocation_id as string)).toMatchObject({
       caller_id: t.launcher.agentId, requester_agent_id: null, requester_name: null,
     });
+  });
+
+  it('rejects requester_name without requester_agent_id on generic and strict invoke before any dispatch', async () => {
+    const t = await setup('requester-bare-name');
+    const logical = {
+      schema: 'relay.spawn.invoke.logical/1', target_node_id: 'node_a', target_node: 'alpha',
+      name: 'worker', cli: 'claude', task: 'review', directory: '/repo', verify_ready: true,
+    };
+    const input = {
+      spawn_contract: 'relay.spawn.invoke.logical/1', target_node_id: 'node_a', target_node: 'alpha',
+      name: 'worker', cli: 'claude', task: 'review', worker_cwd: '/repo', verify_ready: true,
+      logical_request: logical,
+    };
+    const responses = [
+      await t.invoke('echo', { input: {}, requester_name: 'owner' }),
+      await t.invoke('echo', { input: {}, requester_name: 'external-user' }, 'bare-key'),
+      await t.invoke('spawn', { input, requester_name: 'owner' }, 'bare-strict-key', '/v1/actions/spawn/strict-invoke'),
+    ];
+    for (const res of responses) {
+      expect(res.status).toBe(400);
+      expect(await res.json()).toMatchObject({
+        ok: false,
+        error: { code: 'invalid_request', message: 'requester_name requires requester_agent_id' },
+      });
+    }
+    expect(t.sock.ofType('action.invoke')).toHaveLength(0);
+    const rows = await stack.runtime.handle.db
+      .select({ id: actionInvocations.id })
+      .from(actionInvocations)
+      .where(eq(actionInvocations.workspaceId, t.workspaceId));
+    expect(rows).toEqual([]);
+  });
+
+  it('rejects a requester_name that does not match the requester agent on generic and strict invoke', async () => {
+    const t = await setup('requester-name-mismatch');
+    const logical = {
+      schema: 'relay.spawn.invoke.logical/1', target_node_id: 'node_a', target_node: 'alpha',
+      name: 'worker', cli: 'claude', task: 'review', directory: '/repo', verify_ready: true,
+    };
+    const input = {
+      spawn_contract: 'relay.spawn.invoke.logical/1', target_node_id: 'node_a', target_node: 'alpha',
+      name: 'worker', cli: 'claude', task: 'review', worker_cwd: '/repo', verify_ready: true,
+      logical_request: logical,
+    };
+    const responses = [
+      await t.invoke('echo', { input: {}, requester_agent_id: t.owner.agentId, requester_name: 'Owner Display' }),
+      // Exact match only: no case folding.
+      await t.invoke('echo', { input: {}, requester_agent_id: t.owner.agentId, requester_name: 'Owner' }),
+      await t.invoke('spawn', {
+        input, requester_agent_id: t.owner.agentId, requester_name: 'launcher',
+      }, 'mismatch-strict-key', '/v1/actions/spawn/strict-invoke'),
+    ];
+    for (const res of responses) {
+      expect(res.status).toBe(400);
+      expect(await res.json()).toMatchObject({
+        ok: false,
+        error: { code: 'invalid_request', message: 'requester_name does not match the requester agent' },
+      });
+    }
+    expect(t.sock.ofType('action.invoke')).toHaveLength(0);
+    const rows = await stack.runtime.handle.db
+      .select({ id: actionInvocations.id })
+      .from(actionInvocations)
+      .where(eq(actionInvocations.workspaceId, t.workspaceId));
+    expect(rows).toEqual([]);
   });
 
   it('rejects a requester outside the caller workspace or malformed fields before any dispatch', async () => {
@@ -154,6 +215,32 @@ describe('invocation requester identity', () => {
     expect(t.sock.ofType('action.invoke')).toHaveLength(1);
   });
 
+  it('replays an id-only requester even if the agent was renamed between retries', async () => {
+    const t = await setup('requester-id-rename');
+    const body = { input: { n: 2 }, requester_agent_id: t.owner.agentId };
+    const first = await t.invoke('echo', body, 'id-key');
+    expect(first.status).toBe(201);
+    const firstBody = (await first.json() as { data: Record<string, unknown> }).data;
+    expect(firstBody).toMatchObject({ requester_agent_id: t.owner.agentId, requester_name: 'owner' });
+
+    const { agents } = await import('../../db/tables.js');
+    await stack.runtime.handle.db.update(agents).set({ name: 'owner-renamed' })
+      .where(and(eq(agents.workspaceId, t.workspaceId), eq(agents.id, t.owner.agentId)));
+
+    const replay = await t.invoke('echo', body, 'id-key');
+    expect(replay.status).toBe(201);
+    expect((await replay.json() as { data: Record<string, unknown> }).data).toMatchObject({
+      invocation_id: firstBody.invocation_id, requester_agent_id: t.owner.agentId, requester_name: 'owner',
+    });
+    // The current name is accepted and still replays; the stale one no longer matches the agent.
+    const renamedReplay = await t.invoke('echo', { ...body, requester_name: 'owner-renamed' }, 'id-key');
+    expect(renamedReplay.status).toBe(201);
+    expect((await renamedReplay.json() as { data: { invocation_id: string } }).data.invocation_id)
+      .toBe(firstBody.invocation_id);
+    expect((await t.invoke('echo', { ...body, requester_name: 'owner' }, 'id-key')).status).toBe(400);
+    expect(t.sock.ofType('action.invoke')).toHaveLength(1);
+  });
+
   it('carries the requester on strict spawn, its idempotent replay, and the spawn replay route', async () => {
     const t = await setup('requester-strict');
     const other = await registerAgent(stack.app, t.workspaceKey, 'other');
@@ -169,18 +256,22 @@ describe('invocation requester identity', () => {
     const strict = (body: Record<string, unknown>) =>
       t.invoke('spawn', { input, ...body }, 'strict-key', '/v1/actions/spawn/strict-invoke');
 
-    const first = await strict({ requester_agent_id: t.owner.agentId, requester_name: 'Owner' });
+    const first = await strict({ requester_agent_id: t.owner.agentId, requester_name: 'owner' });
     expect(first.status).toBe(201);
     const firstBody = (await first.json() as { data: Record<string, unknown> }).data;
-    expect(firstBody).toMatchObject({ requester_agent_id: t.owner.agentId, requester_name: 'Owner' });
+    expect(firstBody).toMatchObject({ requester_agent_id: t.owner.agentId, requester_name: 'owner' });
     expect(t.sock.ofType('action.invoke')).toHaveLength(1);
 
-    const again = await strict({ requester_agent_id: t.owner.agentId, requester_name: 'Owner' });
+    const again = await strict({ requester_agent_id: t.owner.agentId });
     expect(again.status).toBe(201);
     expect((await again.json() as { data: Record<string, unknown> }).data).toMatchObject({
-      invocation_id: firstBody.invocation_id, requester_agent_id: t.owner.agentId, requester_name: 'Owner',
+      invocation_id: firstBody.invocation_id, requester_agent_id: t.owner.agentId, requester_name: 'owner',
     });
-    expect((await strict({ requester_agent_id: other.agentId })).status).toBe(409);
+    for (const reuse of [{ requester_agent_id: other.agentId }, {}]) {
+      const reused = await strict(reuse);
+      expect(reused.status).toBe(409);
+      expect(await reused.json()).toMatchObject({ error: { code: 'idempotency_key_reused' } });
+    }
     expect((await strict({ requester_agent_id: 'missing-agent' })).status).toBe(400);
 
     const replayed = await stack.app.request('/v1/actions/spawn/replay', {
@@ -192,7 +283,7 @@ describe('invocation requester identity', () => {
     });
     expect(replayed.status).toBe(200);
     expect((await replayed.json() as { data: Record<string, unknown> }).data).toMatchObject({
-      invocation_id: firstBody.invocation_id, requester_agent_id: t.owner.agentId, requester_name: 'Owner',
+      invocation_id: firstBody.invocation_id, requester_agent_id: t.owner.agentId, requester_name: 'owner',
     });
     expect(t.sock.ofType('action.invoke')).toHaveLength(1);
   });

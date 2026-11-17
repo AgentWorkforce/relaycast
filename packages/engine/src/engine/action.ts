@@ -660,9 +660,13 @@ export async function deleteAction(
 
 /**
  * Resolve the optional on-behalf-of identity a caller attached to an invoke.
- * A requester id must name an agent in the same workspace; its name defaults
- * to that agent's name. A bare requester_name is accepted as an unverified
- * label. Always returns explicit nulls so idempotent replays compare it.
+ * A requester id must name an agent in the same workspace, and the recorded
+ * requester_name is always that agent's current name: an optional
+ * requester_name must equal it exactly, and requester_name without
+ * requester_agent_id is rejected. The requester is a claim made by the
+ * authenticated caller (any agent token may name any agent in its workspace),
+ * so consumers must not treat it as authorization. Always returns explicit
+ * nulls so idempotent replays compare it.
  */
 export async function resolveInvocationRequester(
   db: Db,
@@ -670,7 +674,10 @@ export async function resolveInvocationRequester(
   data: { requester_agent_id?: string; requester_name?: string },
 ): Promise<{ requester_agent_id: string | null; requester_name: string | null }> {
   if (data.requester_agent_id === undefined) {
-    return { requester_agent_id: null, requester_name: data.requester_name ?? null };
+    if (data.requester_name !== undefined) {
+      throw codedError('requester_name requires requester_agent_id', 'invalid_request', 400);
+    }
+    return { requester_agent_id: null, requester_name: null };
   }
   const [requester] = await db
     .select({ id: agents.id, name: agents.name })
@@ -679,7 +686,10 @@ export async function resolveInvocationRequester(
   if (!requester) {
     throw codedError('requester_agent_id does not match an agent in this workspace', 'invalid_request', 400);
   }
-  return { requester_agent_id: requester.id, requester_name: data.requester_name ?? requester.name };
+  if (data.requester_name !== undefined && data.requester_name !== requester.name) {
+    throw codedError('requester_name does not match the requester agent', 'invalid_request', 400);
+  }
+  return { requester_agent_id: requester.id, requester_name: requester.name };
 }
 
 async function createInvocation(
@@ -762,6 +772,7 @@ function assertInvocationClaimMatches(
     // Internal re-checks of the same row may omit the requester; every HTTP
     // invoke passes it explicitly (null when absent), so a reused key with a
     // different on-behalf-of identity is rejected like a different payload.
+    // requester_name is derived from the id, so only the id is compared.
     && (data.requester_agent_id === undefined
       || (existing.requesterAgentId ?? null) === (data.requester_agent_id ?? null))
     && (exactPayload || logicalReplay);
