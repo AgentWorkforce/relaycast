@@ -167,7 +167,16 @@ function expectConstraintsPreserved(before: ReturnType<typeof constraints>, afte
             .replace(', task_state TEXT', '')
             .replace(', node_liveness_revision INTEGER NOT NULL DEFAULT 0', '')
             .replace(', spawn_placement_token TEXT', '')
-            .replace(', spawn_dispatch_generation INTEGER NOT NULL DEFAULT 0', ''),
+            .replace(', spawn_dispatch_generation INTEGER NOT NULL DEFAULT 0', '')
+            .replace(', requester_agent_id TEXT REFERENCES agents(id) ON DELETE SET NULL', '')
+            .replace(', requester_name TEXT', ''),
+          // 0085 appends the requester FK; SQLite numbers FKs newest-first,
+          // so drop it and restore the original ids of every older FK.
+          foreignKeys: (table.foreignKeys as { id: number; from: string }[])
+            .filter(fk => fk.from !== 'requester_agent_id')
+            .map(fk => (table.foreignKeys as { from: string }[]).some(other => other.from === 'requester_agent_id')
+              ? { ...fk, id: fk.id - 1 }
+              : fk),
         };
       }
       if (table.name === 'event_subscriptions') {

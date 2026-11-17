@@ -191,6 +191,7 @@ describe("loadBundledPostgresMigrations", () => {
       "0003_previous_lila_cheney.sql",
       "0004_handler_snapshot_backfill.sql",
       "0005_delivery_confirmation.sql",
+      "0006_action_invocation_requester.sql",
     ]);
     expect(bundled.every((m) => m.statements.length > 0)).toBe(true);
   });
