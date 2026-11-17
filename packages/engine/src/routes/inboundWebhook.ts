@@ -17,6 +17,7 @@ import { sendWebhookEvent } from './webhookOutbox.js';
 import { emitServerEvent } from '../lib/serverTelemetry.js';
 import { noteAuthenticatedCredential } from '../lib/credentialNotice.js';
 import { acceptsOnlyAr } from '../auth/credentials.js';
+import { constantTimeEqual } from '../lib/crypto.js';
 import { parseCredential } from '@relaycast/types';
 import {
   jsonCreated,
@@ -45,6 +46,32 @@ const triggerInboundWebhookSchema = z.object({
 function extractBearerToken(authHeader: string | undefined): string | null {
   if (!authHeader?.startsWith('Bearer ')) return null;
   return authHeader.slice(7);
+}
+
+/**
+ * Header Cloudflare Notifications webhook destinations put their configured
+ * secret in. Cloudflare cannot send an Authorization header, so a hook token
+ * configured as that secret is accepted from here.
+ */
+export const CLOUDFLARE_WEBHOOK_AUTH_HEADER = 'cf-webhook-auth';
+
+/**
+ * The hook token presented by the caller. `Authorization: Bearer` wins; the
+ * Cloudflare header is read only when no Authorization header is sent. When
+ * both are sent they must carry the same token. The token itself is verified
+ * against the hook exactly as before.
+ */
+async function presentedHookToken(
+  authHeader: string | undefined,
+  cloudflareHeader: string | undefined,
+): Promise<{ ok: true; token: string | null } | { ok: false }> {
+  const cloudflareToken = cloudflareHeader ? cloudflareHeader : null;
+  if (authHeader === undefined) return { ok: true, token: cloudflareToken };
+  const bearer = extractBearerToken(authHeader);
+  if (bearer !== null && cloudflareToken !== null && !(await constantTimeEqual(bearer, cloudflareToken))) {
+    return { ok: false };
+  }
+  return { ok: true, token: bearer };
 }
 
 function hookUrl(requestUrl: string, webhookId: string): string {
@@ -125,7 +152,19 @@ inboundWebhookRoutes.delete('/webhooks/:id', requireWorkspaceKey, rateLimit, asy
 inboundWebhookRoutes.post('/hooks/:webhookId', async (c) => {
   try {
     const db = c.get('db');
-    const token = extractBearerToken(c.req.header('Authorization'));
+    const presented = await presentedHookToken(
+      c.req.header('Authorization'),
+      c.req.header(CLOUDFLARE_WEBHOOK_AUTH_HEADER),
+    );
+    if (!presented.ok) {
+      return jsonError(
+        c,
+        'webhook_token_invalid',
+        `Authorization bearer token and ${CLOUDFLARE_WEBHOOK_AUTH_HEADER} header disagree`,
+        401,
+      );
+    }
+    const { token } = presented;
     if (token && acceptsOnlyAr(db) && parseCredential(token)?.family !== 'ar') {
       return jsonError(c, 'webhook_token_invalid', 'Invalid webhook bearer token', 401);
     }
