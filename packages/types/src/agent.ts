@@ -220,6 +220,10 @@ const LifecycleActionInvocationResponseSchema = z.object({
   handler_node_id: z.string().nullable(),
   dispatched_node_id: z.string().nullable().optional(),
   input: z.record(z.string(), z.unknown()),
+  /** Agent the caller acted on behalf of, when the invoke supplied one. */
+  requester_agent_id: z.string().nullable().optional(),
+  /** Requester display name; defaults to the requester agent's name. */
+  requester_name: z.string().nullable().optional(),
   status: z.string(),
   created_at: z.string(),
 });

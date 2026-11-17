@@ -7,7 +7,11 @@ See the [root changelog](../../CHANGELOG.md) for cross-package release highlight
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [Unreleased - Minor]
+
+### Added
+
+- `POST /v1/actions/:name/invoke` and `/v1/actions/spawn/strict-invoke` accept optional `requester_agent_id` / `requester_name`; the requester must be an agent in the workspace, the name defaults to that agent's name, both are returned on the invoke response and `GET /v1/actions/:name/invocations/:id`, and an Idempotency-Key reused with a different requester returns 409 `idempotency_key_reused`.
 
 ## [12.12.0] - 2026-11-17
 

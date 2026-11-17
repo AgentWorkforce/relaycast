@@ -32,6 +32,7 @@ import type {
   Agent,
   TokenRotateResponse,
   InvokeActionResult,
+  InvokeActionOptions,
   CompleteInvocationRequest,
   ActionInvocation,
   WsClientEvent,
@@ -1031,11 +1032,15 @@ export class AgentClient {
     invoke: (
       name: string,
       input?: Record<string, unknown>,
-      opts?: IdempotencyOption,
+      opts?: InvokeActionOptions,
     ): Promise<InvokeActionResult> =>
       this.client.post(
         `/v1/actions/${encodeURIComponent(name)}/invoke`,
-        { input },
+        {
+          input,
+          ...(opts?.requesterAgentId !== undefined ? { requesterAgentId: opts.requesterAgentId } : {}),
+          ...(opts?.requesterName !== undefined ? { requesterName: opts.requesterName } : {}),
+        },
         idempotencyHeaders(opts),
       ),
 

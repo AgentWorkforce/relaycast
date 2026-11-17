@@ -10,3 +10,8 @@ Durable offline recovery can page `GET /v1/deliveries?after_seq=0&limit=100`,
 then advance `after_seq` to the last returned `seq` (SDK: `deliveries({ afterSeq })`).
 Cursor pages use recipient sequence order and do not acknowledge retained rows;
 normal realtime subscriptions remain the primary delivery path.
+
+Action invokes may name an on-behalf-of requester with optional
+`requester_agent_id` (an agent in the same workspace) and `requester_name`
+(SDK: `actions.invoke(name, input, { requesterAgentId, requesterName })`).
+`caller_id` remains the authenticated agent; the requester is informational.
