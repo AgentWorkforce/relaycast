@@ -117,6 +117,8 @@ describe('Relay Connect observer capability', () => {
       source.includes('from "dm_conversations"')
       || source.includes('from "dm_participants"')
       || source.includes('from "messages"')
+      // Latest-message lookup: a per-channel seek driven from channels.
+      || source.includes('from "channels"')
     ));
     // One page selector plus four enrichment lookups, each internally split
     // into six D1-safe chunks for 500 conversations.
@@ -194,6 +196,8 @@ describe('Relay Connect observer capability', () => {
       source.includes('from "dm_conversations"')
       || source.includes('from "dm_participants"')
       || source.includes('from "messages"')
+      // Latest-message lookup: a per-channel seek driven from channels.
+      || source.includes('from "channels"')
     ));
     expect(dmListingQueries).toHaveLength(5);
     expect(dmListingQueries[0]).toContain('"dm_conversations"."id" in (?)');

@@ -9,6 +9,10 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ## [Unreleased]
 
+### Fixed
+
+- Three hot reads no longer scale with workspace size on SQLite/D1, which has no planner statistics. Authority fanout for channel posts, replies, webhook messages and group DMs now starts from the channel's members or the conversation's participants instead of probing membership for every agent in the workspace. The DM conversation lists (`GET /v1/dm/conversations` and `GET /v1/dm/conversations/all`) read one index entry per conversation for the last message instead of every message in it. Attachment hydration looks attachments up by message id instead of checking every file in the workspace. Results are unchanged.
+
 ## [12.13.0] - 2026-11-17
 
 ### Added
