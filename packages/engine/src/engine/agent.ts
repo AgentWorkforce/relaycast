@@ -9,7 +9,7 @@ import { invalidateChannelCache } from './cache.js';
 import { queryInChunks } from '../lib/queryChunks.js';
 import { codedError } from '../lib/httpError.js';
 import type { RegistrationAdmission } from './registrationAdmission.js';
-import { directNodeIdForAgent } from './node.js';
+import { directNodeIdForAgent, isOnlineCandidate } from './node.js';
 import { addressNodeSelection, formatAgentAddress } from './address.js';
 import { runAtomicWrites, type AtomicWrite } from '../ports/database.js';
 import { AGENT_RECOVERY_PROOF_HASH_PATTERN } from '@relaycast/types';
@@ -458,7 +458,7 @@ export async function listAgents(
   db: Db,
   workspaceId: string,
   status?: string,
-  options: { includeStale?: boolean; includeMetadata?: boolean; names?: string[] } = {},
+  options: { includeStale?: boolean; includeMetadata?: boolean; names?: string[]; livenessProbeBudgetMs?: number } = {},
 ) {
   // Filtering and serialization must use the same instant even if the SELECT
   // crosses a TTL boundary. Presence is derived; roster reads never sweep.
@@ -528,6 +528,8 @@ export async function listAgents(
           : agents.metadata,
       },
       node: addressNodeSelection(),
+      // The hosting node's last checkpoint: orders and bounds liveness probes.
+      checkpoint: { id: nodes.id, status: nodes.status, lastHeartbeatAt: nodes.lastHeartbeatAt },
     })
     .from(agents)
     .leftJoin(nodes, eq(nodes.id, agents.locationNodeId))
@@ -535,7 +537,10 @@ export async function listAgents(
     // they are not roster members, so `agent list` must not fill with them.
     .where(and(...conditions));
 
-  const statuses = await effectiveAgentStatusesWithAuthority(db, workspaceId, rows.map(({ agent }) => agent), now);
+  const checkpoints = new Map<string, NodeCheckpoint>();
+  for (const { checkpoint } of rows) if (checkpoint?.id) checkpoints.set(checkpoint.id, checkpoint);
+  const statuses = await effectiveAgentStatusesWithAuthority(db, workspaceId, rows.map(({ agent }) => agent), now,
+    { checkpoints, budgetMs: options.livenessProbeBudgetMs });
   return rows.map(({ agent: a, node }) => ({
     id: a.id,
     name: a.name,
@@ -934,28 +939,80 @@ function needsNodeAuthority(db: Db, agent: AuthorityPresenceRow): agent is Autho
     && agent.locationType === 'via_node' && !!agent.locationNodeId;
 }
 
+/** A node row's durable checkpoint, as listed beside the agents it hosts. */
+type NodeCheckpoint = { id: string; status: string; lastHeartbeatAt: Date | null };
+
+const OFFLINE_SNAPSHOT: NodeLivenessSnapshot = { status: 'offline', providers: [] };
+
+/** Probe order: nodes checkpointed online first, freshest checkpoint first, rowless last. */
+function probePriority(a: NodeCheckpoint | undefined, b: NodeCheckpoint | undefined): number {
+  const rank = (node: NodeCheckpoint | undefined) => !node ? 2 : node.status === 'online' ? 0 : 1;
+  return rank(a) - rank(b) || (b?.lastHeartbeatAt?.getTime() ?? 0) - (a?.lastHeartbeatAt?.getTime() ?? 0);
+}
+
 /**
  * Public status for many rows of one workspace, asking the authority once per
  * distinct node rather than once per agent.
+ *
+ * A node whose row holds a checkpoint older than the online-candidate bound
+ * cannot be reported online by any authority (see `isOnlineCandidate`), so it
+ * resolves as offline without a probe. The rest are probed within a wall-clock
+ * budget, most promising first; a node left unprobed resolves from its row's
+ * checkpoint instead of from an authority answer.
  */
-async function effectiveAgentStatusesWithAuthority(db: Db, workspaceId: string, rows: AuthorityPresenceRow[], now = Date.now()): Promise<Map<string, string>> {
-  const snapshots = await inspectNodesLiveness(db, workspaceId,
-    rows.filter(row => needsNodeAuthority(db, row)).map(row => row.locationNodeId!));
+async function effectiveAgentStatusesWithAuthority(
+  db: Db,
+  workspaceId: string,
+  rows: AuthorityPresenceRow[],
+  now = Date.now(),
+  options: { checkpoints?: Map<string, NodeCheckpoint>; budgetMs?: number } = {},
+): Promise<Map<string, string>> {
+  const checkpoints = options.checkpoints ?? new Map<string, NodeCheckpoint>();
+  const settled = new Set<string>();
+  const candidates = new Set<string>();
+  for (const row of rows) {
+    if (!needsNodeAuthority(db, row)) continue;
+    const node = checkpoints.get(row.locationNodeId);
+    if (node?.lastHeartbeatAt && !isOnlineCandidate(node, now)) settled.add(row.locationNodeId);
+    else candidates.add(row.locationNodeId);
+  }
+  const order = [...candidates].sort((a, b) => probePriority(checkpoints.get(a), checkpoints.get(b)));
+  const snapshots = await inspectNodesLiveness(db, workspaceId, order, { budgetMs: options.budgetMs });
   const statuses = new Map<string, string>();
   for (const row of rows) {
-    statuses.set(row.id, await effectiveAgentStatusWithAuthority(db, row, now,
-      row.locationNodeId && snapshots.has(row.locationNodeId) ? { snapshot: snapshots.get(row.locationNodeId) } : undefined));
+    const nodeId = row.locationNodeId;
+    let inspected: Inspected | undefined;
+    if (nodeId && settled.has(nodeId)) inspected = { snapshot: OFFLINE_SNAPSHOT };
+    else if (nodeId && snapshots.has(nodeId)) inspected = { snapshot: snapshots.get(nodeId) };
+    else if (nodeId && candidates.has(nodeId)) inspected = { unprobed: checkpoints.get(nodeId) ?? null };
+    statuses.set(row.id, await effectiveAgentStatusWithAuthority(db, row, now, inspected));
   }
   return statuses;
 }
 
-async function effectiveAgentStatusWithAuthority(db: Db, agent: AuthorityPresenceRow, now = Date.now(), inspected?: { snapshot: NodeLivenessSnapshot | undefined }): Promise<string> {
+/**
+ * What a batched read learned about a row's node: an authority answer, or no
+ * answer within the probe budget, with the node row's checkpoint (null when the
+ * node has no row) standing in.
+ */
+type Inspected = { snapshot: NodeLivenessSnapshot | undefined } | { unprobed: NodeCheckpoint | null };
+
+async function effectiveAgentStatusWithAuthority(db: Db, agent: AuthorityPresenceRow, now = Date.now(), inspected?: Inspected): Promise<string> {
   if (!needsNodeAuthority(db, agent)) return effectiveAgentStatus(agent, now);
   const direct = agent.locationNodeId === directNodeIdForAgent(agent.id);
-  const snapshot = inspected ? inspected.snapshot : await inspectNodeLiveness(db, agent.workspaceId, agent.locationNodeId);
-  if (!snapshot || snapshot.status === 'unknown') return direct ? effectiveAgentStatus(agent, now) : 'offline';
-  const receivedAt = Date.now();
-  const live = snapshot.status === 'online' && snapshot.providers.some(p => p.name === agent.providerName && p.live && (direct || p.handlers_live) && p.expires_at > receivedAt && p.last_received_at <= receivedAt);
+  let live: boolean;
+  if (inspected && 'unprobed' in inspected) {
+    // Not probed within the budget: the node's last checkpoint stands in for
+    // the authority. A node checkpointed online within the bound an online
+    // node keeps is presumed live; skipping a probe never makes it offline.
+    const node = inspected.unprobed;
+    live = !!node && node.status === 'online' && isOnlineCandidate(node, now);
+  } else {
+    const snapshot = inspected ? inspected.snapshot : await inspectNodeLiveness(db, agent.workspaceId, agent.locationNodeId);
+    if (!snapshot || snapshot.status === 'unknown') return direct ? effectiveAgentStatus(agent, now) : 'offline';
+    const receivedAt = Date.now();
+    live = snapshot.status === 'online' && snapshot.providers.some(p => p.name === agent.providerName && p.live && (direct || p.handlers_live) && p.expires_at > receivedAt && p.last_received_at <= receivedAt);
+  }
   if (!live) return direct ? effectiveAgentStatus(agent, now) : 'offline';
   const status = agent.status === 'offline' ? agent.statusBeforeLivenessLoss ?? 'offline' : agent.status;
   return status === 'online' ? 'active' : status;

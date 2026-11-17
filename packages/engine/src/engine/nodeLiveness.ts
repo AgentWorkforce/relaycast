@@ -50,27 +50,53 @@ export async function filterAsync<T>(rows: T[], predicate: (row: T) => Promise<b
   return kept;
 }
 /**
+ * Wall-clock budget for one {@link inspectNodesLiveness} call. Each probe may
+ * take up to the host's RPC deadline (2 s on Cloudflare), so a roster naming
+ * hundreds of nodes would otherwise take tens of seconds. Past the budget no
+ * new probe starts and probes still in flight are not waited for.
+ */
+export const NODE_LIVENESS_PROBE_BUDGET_MS = 1_500;
+
+/**
  * Inspect each distinct node once, keeping at most eight authority requests in
  * flight. A roster names the same node for every agent it hosts, so asking per
  * row repeats the same RPC; a snapshot is still read fresh for this decision
  * and is never kept past the call.
+ *
+ * Probes are issued in `nodeIds` order, so callers list the nodes whose answer
+ * matters most first. The call returns within `budgetMs`: a node absent from
+ * the result was not probed (or its probe did not answer in time), and the
+ * caller must fall back to stored state for it rather than treat it as offline.
  */
 export async function inspectNodesLiveness(
   db: EngineDb,
   workspaceId: string,
   nodeIds: Iterable<string>,
+  options: { budgetMs?: number } = {},
 ): Promise<Map<string, NodeLivenessSnapshot | undefined>> {
   const pending = [...new Set(nodeIds)];
   const snapshots = new Map<string, NodeLivenessSnapshot | undefined>();
   if (!nodeLivenessAuthority(db) || pending.length === 0) return snapshots;
+  let expired = false;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const deadline = new Promise<void>(resolve => {
+    timer = setTimeout(() => { expired = true; resolve(); }, options.budgetMs ?? NODE_LIVENESS_PROBE_BUDGET_MS);
+  });
   let next = 0;
   const worker = async () => {
-    while (next < pending.length) {
+    while (!expired && next < pending.length) {
       const nodeId = pending[next++];
-      snapshots.set(nodeId, await inspectNodeLiveness(db, workspaceId, nodeId));
+      // inspectNodeLiveness never rejects; a late answer is dropped.
+      const snapshot = await inspectNodeLiveness(db, workspaceId, nodeId);
+      if (!expired) snapshots.set(nodeId, snapshot);
     }
   };
-  await Promise.all(Array.from({ length: Math.min(8, pending.length) }, worker));
+  try {
+    await Promise.race([Promise.all(Array.from({ length: Math.min(8, pending.length) }, worker)), deadline]);
+  } finally {
+    expired = true;
+    clearTimeout(timer);
+  }
   return snapshots;
 }
 export async function nodeReady(db: EngineDb, row: { workspaceId: string; id: string; status: string; handlersLive: boolean; lastHeartbeatAt: Date | null }): Promise<boolean> {
