@@ -13,5 +13,6 @@ normal realtime subscriptions remain the primary delivery path.
 
 Event subscriptions can filter `message.created` by `mentions`. A message
 posted through an inbound webhook (`POST /v1/hooks/:id`) never matches that
-filter, since its text comes from whoever holds the webhook URL; its event
-carries `metadata.__relaycast_origin: "inbound_webhook"`.
+filter, since its text comes from whoever holds the webhook URL. Such a post
+emits `message.created` only when it includes a non-empty `payload`, and that
+event carries `metadata.__relaycast_origin: "inbound_webhook"`.

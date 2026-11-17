@@ -7283,7 +7283,7 @@ paths:
                     type: string
                 filter:
                   type: object
-                  description: Optional `channel` (exact channel name) and `mentions` (agent name matched as `@name` in the message text). A message posted through an inbound webhook (`POST /hooks/{webhookId}`) never matches `mentions`; its `message.created` event carries `metadata.__relaycast_origin` = `inbound_webhook`.
+                  description: Optional `channel` (exact channel name) and `mentions` (agent name matched as `@name` in the message text). A message posted through an inbound webhook (`POST /hooks/{webhookId}`) never matches `mentions`; its `message.created` event (sent only when the post includes a non-empty `payload`) carries `metadata.__relaycast_origin` = `inbound_webhook`.
                   properties:
                     channel:
                       type: string
@@ -7684,7 +7684,7 @@ paths:
   /hooks/{webhookId}:
     post:
       summary: Trigger inbound webhook
-      description: Trigger a configured inbound webhook. Requires the per-webhook bearer token returned by `POST /webhooks`. Accepts either `{ message, author }` (SDK shape) or `{ text, source, payload }`; `message` maps to message text and `author` is used as the displayed sender without being copied into `source`. A JSON object with none of `text`, `message`, `source`, `author` or `payload` (including `{}`) is rendered as JSON in the message text, capped at 16,000 characters; its fields are not read as message metadata, so they never set `session_ref` or suppress message triggers. The resulting message mentions no one for event subscriptions. An `@name` in its text does not match a subscription's `mentions` filter, and its `message.created` event carries `metadata.__relaycast_origin` = `inbound_webhook`. Channel and unfiltered subscriptions still receive it.
+      description: Trigger a configured inbound webhook. Requires the per-webhook bearer token returned by `POST /webhooks`. Accepts either `{ message, author }` (SDK shape) or `{ text, source, payload }`; `message` maps to message text and `author` is used as the displayed sender without being copied into `source`. A JSON object with none of `text`, `message`, `source`, `author` or `payload` (including `{}`) is rendered as JSON in the message text, capped at 16,000 characters; its fields are not read as message metadata, so they never set `session_ref` or suppress message triggers. A `message.created` event subscription receives the resulting message only when the post includes a non-empty `payload` object (otherwise only `webhook.received` is sent). That event carries `metadata.__relaycast_origin` = `inbound_webhook`, and an `@name` in its text never matches a subscription's `mentions` filter; channel and unfiltered subscriptions still receive it.
       tags:
         - Webhooks
       security:
