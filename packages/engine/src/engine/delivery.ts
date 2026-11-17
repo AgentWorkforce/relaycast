@@ -128,7 +128,7 @@ export async function listDeliveries(
   db: Db,
   workspaceId: string,
   agentId: string,
-  opts: { status?: DeliveryStatus; limit?: number } = {},
+  opts: { status?: DeliveryStatus; limit?: number; after_seq?: number } = {},
 ) {
   return withEngineOperation('deliveries.list', workspaceId, () => listDeliveriesUnlabeled(db, workspaceId, agentId, opts));
 }
@@ -137,7 +137,7 @@ async function listDeliveriesUnlabeled(
   db: Db,
   workspaceId: string,
   agentId: string,
-  opts: { status?: DeliveryStatus; limit?: number },
+  opts: { status?: DeliveryStatus; limit?: number; after_seq?: number },
 ) {
   const limit = Math.min(Math.max(opts.limit ?? 100, 1), 200);
   const statusFilter = opts.status
@@ -162,9 +162,10 @@ async function listDeliveriesUnlabeled(
         eq(deliveries.agentId, agentId),
         statusFilter,
         activeExpiryFilter,
+        opts.after_seq === undefined ? undefined : gt(deliveries.seq, opts.after_seq),
       ),
     )
-    .orderBy(asc(deliveries.createdAt), asc(deliveries.id))
+    .orderBy(...(opts.after_seq === undefined ? [asc(deliveries.createdAt), asc(deliveries.id)] : [asc(deliveries.seq)]))
     .limit(limit);
 
   if (rows.length === 0) return [];

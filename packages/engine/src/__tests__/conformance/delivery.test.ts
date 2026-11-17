@@ -177,6 +177,35 @@ describe('durable delivery api', () => {
     return match as { msg_id: string; seq: number; payload: Record<string, unknown> };
   }
 
+  it('pages by recipient sequence past a retained full page without changing any delivery state', async () => {
+    const { bob, alice } = await seed();
+    for (let i = 0; i < 100; i++) {
+      const response = await stack.app.request('/v1/dm', { method: 'POST', headers: { authorization: `Bearer ${alice.token}`, 'content-type': 'application/json' },
+        body: JSON.stringify({ to: 'bob', text: `queued ${i}` }) });
+      expect(response.status).toBeLessThan(300);
+    }
+    const first = await listDeliveries(bob.token, '?limit=100&after_seq=0');
+    expect(first).toHaveLength(100);
+    const cursor = first.at(-1)!.seq as number;
+    const second = await listDeliveries(bob.token, `?limit=100&after_seq=${cursor}`);
+    expect(second).toHaveLength(1); expect(second[0]!.seq).toBeGreaterThan(cursor);
+    expect(second[0]!.agent_id).toBe(bob.agentId);
+    expect((await listDeliveries(bob.token, '?limit=100&after_seq=0')).map(row => row.id)).toEqual(first.map(row => row.id));
+    const foreign = await listDeliveries(alice.token, `?after_seq=${cursor}`);
+    expect(foreign.every(row => row.agent_id === alice.agentId)).toBe(true);
+  });
+  it('orders cursor pages by sequence even when creation timestamps are out of order', async () => {
+    const { bob, alice } = await seed();
+    await stack.app.request('/v1/dm', { method: 'POST', headers: { authorization: `Bearer ${alice.token}`, 'content-type': 'application/json' }, body: JSON.stringify({ to: 'bob', text: 'second' }) });
+    await stack.runtime.deps.db.update(deliveries).set({ createdAt: new Date(Date.now() + 60_000) }).where(and(eq(deliveries.agentId, bob.agentId), eq(deliveries.seq, 1)));
+    const first = await listDeliveries(bob.token, '?limit=1&after_seq=0'); expect(first[0]!.seq).toBe(1);
+    const second = await listDeliveries(bob.token, '?limit=1&after_seq=1'); expect(second[0]!.seq).toBe(2);
+    expect((await listDeliveries(bob.token, '?limit=1'))[0]!.seq).toBe(2);
+  });
+  it.each(['', '-1', '1.5', 'nope', '9007199254740992'])('refuses invalid after_seq cursor %j', async cursor => {
+    const { bob } = await seed();
+    expect((await stack.app.request(`/v1/deliveries?after_seq=${cursor}`, { headers: { authorization: `Bearer ${bob.token}` } })).status).toBe(400);
+  });
   it('lists the queued delivery for a recipient with the message payload', async () => {
     const { bob, messageId } = await seed();
 

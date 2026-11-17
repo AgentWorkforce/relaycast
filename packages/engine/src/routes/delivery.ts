@@ -36,7 +36,7 @@ deliveryRoutes.get(
   rateLimit,
   async (c) => {
     try {
-      const parsed = parseQueryParams(c, ListDeliveriesQuerySchema, 'Invalid status, limit or wait');
+      const parsed = parseQueryParams(c, ListDeliveriesQuerySchema, 'Invalid status, limit, after_seq or wait');
       if (!parsed.ok) {
         return parsed.response;
       }

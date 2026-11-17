@@ -112,6 +112,13 @@ describe('AgentClient durable delivery', () => {
   });
 
   describe('deliveries()', () => {
+    it('passes an initial zero and later afterSeq cursor using the snake_case wire parameter', async () => {
+      mockFetch.mockImplementation(() => mockResponse([]));
+      await me.deliveries({ afterSeq: 0, limit: 100 });
+      expect(new URL(mockFetch.mock.calls[0]![0] as string).searchParams.get('after_seq')).toBe('0');
+      await me.deliveries({ afterSeq: 100, limit: 100 });
+      expect(new URL(mockFetch.mock.calls[1]![0] as string).searchParams.get('after_seq')).toBe('100');
+    });
     it('GETs /v1/deliveries with no query by default', async () => {
       mockFetch.mockImplementation(() => mockResponse([]));
 
