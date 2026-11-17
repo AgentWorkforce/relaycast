@@ -16,7 +16,11 @@ This project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 Packages without a separate changelog are covered by the cross-package notes below.
 
-## [Unreleased]
+## [Unreleased - Minor]
+
+### Added
+
+- Recipient-scoped delivery queue pagination can scan past retained entries without acknowledging or replaying them.
 
 ## [12.11.0] - 2026-11-15
 

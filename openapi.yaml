@@ -5571,7 +5571,9 @@ paths:
         the non-terminal queue (`queued` + `delivered`) so an offline consumer
         can replay what it missed after reconnect, oldest first. Each item
         carries the message payload. Expired rows awaiting scheduled cleanup
-        are excluded from the default active queue.
+        are excluded from the default active queue. When `after_seq` is supplied,
+        pages are ordered by recipient sequence instead of creation time; advance
+        with the last returned `seq`. This neither acknowledges nor changes rows.
       tags:
         - Deliveries
       security:
@@ -5606,6 +5608,18 @@ paths:
             type: integer
             minimum: 0
             maximum: 25000
+        - name: after_seq
+          in: query
+          required: false
+          description: >
+            Exclusive per-recipient sequence cursor. Start at 0 and advance with
+            the last returned seq to scan past retained pending entries without
+            acknowledging them. Only this calling agent's rows are returned.
+            Omitted preserves the existing creation-time order. Blank is invalid.
+          schema:
+            type: integer
+            minimum: 0
+            maximum: 9007199254740991
       responses:
         '200':
           description: Queued delivery items
