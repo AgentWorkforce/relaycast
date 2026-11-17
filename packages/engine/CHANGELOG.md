@@ -9,9 +9,15 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ## [Unreleased - Patch]
 
+### Changed
+
+- Authenticated agent requests now refresh `agents.last_seen` at most once per 120 s (was 30 s) to cut heartbeat UPDATE load; the 5 minute liveness TTL is unchanged.
+
 ### Fixed
 
+- `GET /v1/agents` under a node liveness authority returns in bounded time. It probed every distinct hosting node, eight at a time with a 2 s deadline each, so a roster of a few hundred direct agents took longer than the hosted caller's 15 s timeout. Probes now share a 1.5 s budget per request (`NODE_LIVENESS_PROBE_BUDGET_MS`), nodes whose row was checkpointed online go first, freshest first, and a node whose last checkpoint is older than any online node keeps is offline without a probe, as `GET /v1/nodes?status=online` already assumes. An agent whose node was not probed in time takes its status from that node's checkpoint: a node checkpointed `online` within that bound counts as live, so the agent keeps its stored status instead of turning `offline`. Probed nodes are decided as before.
 - A message posted through an inbound webhook (`POST /v1/hooks/:id`) no longer matches `mentions` event-subscription filters. Its text comes from whoever holds the webhook URL, so an `@name` in it could deliver the post to an agent that subscribes to its mentions outside that channel. Its `message.created` event now carries `metadata.__relaycast_origin: "inbound_webhook"`. Channel and unfiltered subscriptions still receive it.
+- The invocation sweep (`sweepTimedOutInvocations`) no longer sleeps 5 s inside a run or walks every open invocation. Each phase now handles at most `maxRowsPerPass` rows per run (default 50), oldest first, and a run stops starting new work once `budgetMs` is spent (default 4000 ms). Whatever is left is picked up by the next run. The never-dispatched grace now works across two runs. One run records when it saw expired candidates, in `maintenance_cursors`. A run at least the grace later fails them, and only if they still have no recorded dispatch attempt. Expired never-dispatched rows that held a capacity hold without a strict placement token used to match neither failure path. They are now failed with `never_dispatched_expired`, and their slot is returned. Without that fix they stayed pending and restarted the sleep on every run. Pass `onReport` to get a per-run report of these counts.
 
 ## [12.12.0] - 2026-11-17
 

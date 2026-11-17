@@ -3667,7 +3667,7 @@ function onlineCandidateCondition(now: Date) {
 }
 
 /** {@link onlineCandidateCondition} over a fetched row. */
-function isOnlineCandidate(row: Pick<NodeRow, 'lastHeartbeatAt'>, now: number): boolean {
+export function isOnlineCandidate(row: Pick<NodeRow, 'lastHeartbeatAt'>, now: number): boolean {
   return row.lastHeartbeatAt !== null && row.lastHeartbeatAt.getTime() >= now - NODE_ONLINE_CANDIDATE_RECENCY_MS;
 }
 
