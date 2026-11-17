@@ -131,12 +131,16 @@ describe('inbound webhook messages and mention subscriptions', () => {
     const post = await stack.app.request('/v1/channels/hook-chan/messages', {
       method: 'POST',
       headers: { 'content-type': 'application/json', authorization: `Bearer ${owner.token}` },
-      body: JSON.stringify({ text: 'hi @bob', metadata: { __relaycast_origin: 'inbound_webhook', ref: 'r' } }),
+      // Channel posts take message metadata through `data`.
+      body: JSON.stringify({ text: 'hi @bob', data: { __relaycast_origin: 'inbound_webhook', ref: 'r' } }),
     });
     expect(post.status).toBeLessThan(300);
     const queued = await queuedMessages();
     expect(queued).toHaveLength(1);
-    expect((queued[0]!.metadata as Record<string, unknown> | undefined)?.__relaycast_origin).toBeUndefined();
+    const metadata = queued[0]!.metadata as Record<string, unknown> | undefined;
+    // The public field survives; only the reserved origin is stripped.
+    expect(metadata?.ref).toBe('r');
+    expect(metadata?.__relaycast_origin).toBeUndefined();
     expect(matchesFilter({ mentions: 'bob' }, queued[0]!)).toBe(true);
   });
 });
