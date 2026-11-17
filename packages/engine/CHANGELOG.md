@@ -7,7 +7,11 @@ See the [root changelog](../../CHANGELOG.md) for cross-package release highlight
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [Unreleased - Minor]
+
+### Added
+
+- `POST /v1/hooks/:webhookId` reads the hook token from `cf-webhook-auth` when no `Authorization` header is sent, and verifies it exactly like a bearer token. When both are sent, `Authorization: Bearer` is used and the two must match, else `401 webhook_token_invalid`. A non-bearer `Authorization` header still answers `401 webhook_token_required`.
 
 ## [12.10.1] - 2026-11-15
 

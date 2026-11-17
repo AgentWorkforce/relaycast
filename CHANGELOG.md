@@ -16,7 +16,11 @@ This project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 Packages without a separate changelog are covered by the cross-package notes below.
 
-## [Unreleased]
+## [Unreleased - Minor]
+
+### Added
+
+- Inbound webhooks (`POST /v1/hooks/:webhookId`) accept the hook token in the `cf-webhook-auth` header, so a Cloudflare Notifications webhook destination can post into a channel directly. A Cloudflare alert's `text` becomes the message text.
 
 ## [12.11.0] - 2026-11-15
 

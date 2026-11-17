@@ -176,6 +176,14 @@ components:
       type: http
       scheme: bearer
       description: Per-webhook bearer token returned by `POST /webhooks` (wh_live_*)
+    cloudflareWebhookAuth:
+      type: apiKey
+      in: header
+      name: cf-webhook-auth
+      description: >-
+        The per-webhook token returned by `POST /webhooks`, sent as a Cloudflare
+        Notifications webhook destination secret. Read only when no
+        `Authorization` header is sent.
     internalSecret:
       type: http
       scheme: bearer
@@ -7664,11 +7672,12 @@ paths:
   /hooks/{webhookId}:
     post:
       summary: Trigger inbound webhook
-      description: Trigger a configured inbound webhook. Requires the per-webhook bearer token returned by `POST /webhooks`. Accepts either `{ message, author }` (SDK shape) or `{ text, source, payload }`; `message` maps to message text and `author` is used as the displayed sender without being copied into `source`. A JSON object with none of `text`, `message`, `source`, `author` or `payload` (including `{}`) is rendered as JSON in the message text, capped at 16,000 characters; its fields are not read as message metadata, so they never set `session_ref` or suppress message triggers.
+      description: Trigger a configured inbound webhook. Requires the per-webhook token returned by `POST /webhooks`, sent as `Authorization: Bearer <token>` or, for Cloudflare Notifications webhook destinations, as the destination secret in the `cf-webhook-auth` header. `cf-webhook-auth` is read only when no `Authorization` header is sent; when both are sent they must carry the same token, else `401 webhook_token_invalid`. A missing token answers `401 webhook_token_required`. Cloudflare's payload (`text`, `name`, `data`, `ts`, `alert_type`, ...) and its destination test POST (`{ text }`) post their `text` as the message text. Accepts either `{ message, author }` (SDK shape) or `{ text, source, payload }`; `message` maps to message text and `author` is used as the displayed sender without being copied into `source`. A JSON object with none of `text`, `message`, `source`, `author` or `payload` (including `{}`) is rendered as JSON in the message text, capped at 16,000 characters; its fields are not read as message metadata, so they never set `session_ref` or suppress message triggers.
       tags:
         - Webhooks
       security:
         - webhookToken: []
+        - cloudflareWebhookAuth: []
       parameters:
         - name: webhookId
           in: path
