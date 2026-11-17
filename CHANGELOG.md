@@ -16,7 +16,11 @@ This project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 Packages without a separate changelog are covered by the cross-package notes below.
 
-## [Unreleased]
+## [Unreleased - Minor]
+
+### Added
+
+- Action invocations can record an optional on-behalf-of requester (`requester_agent_id`, `requester_name`) alongside the authenticated caller.
 
 ## [12.12.1] - 2026-11-17
 

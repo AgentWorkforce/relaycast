@@ -16,3 +16,8 @@ posted through an inbound webhook (`POST /v1/hooks/:id`) never matches that
 filter, since its text comes from whoever holds the webhook URL. Such a post
 emits `message.created` only when it includes a non-empty `payload`, and that
 event carries `metadata.__relaycast_origin: "inbound_webhook"`.
+
+Action invokes may name an on-behalf-of requester with optional
+`requester_agent_id` (an agent in the same workspace) and `requester_name`
+(SDK: `actions.invoke(name, input, { requesterAgentId, requesterName })`).
+`caller_id` remains the authenticated agent; the requester is informational.

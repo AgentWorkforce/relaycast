@@ -1179,6 +1179,11 @@ export const actionInvocations = sqliteTable(
       .default('legacy_unknown'),
     callerId: text('caller_id').references(() => agents.id, { onDelete: 'set null' }),
     callerName: text('caller_name'),
+    // Agent on whose behalf the caller issued the invocation (for example a
+    // hosted launcher spawning for another agent). Null when the caller is
+    // the requester. Distinct from caller_id, which is always authenticated.
+    requesterAgentId: text('requester_agent_id').references(() => agents.id, { onDelete: 'set null' }),
+    requesterName: text('requester_name'),
     // Immutable response snapshots for idempotent replay. Deliberately not
     // foreign keys: a later handler release/deletion or routing move must not
     // rewrite the 201 acknowledgement for the invocation already dispatched.

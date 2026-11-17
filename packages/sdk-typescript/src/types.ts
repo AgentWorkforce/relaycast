@@ -270,8 +270,24 @@ export interface InvokeActionResult {
   handlerNodeId?: string | null;
   dispatchedNodeId?: string | null;
   input: Record<string, unknown>;
+  /** Agent the caller acted on behalf of (`requester_agent_id`), or null. */
+  requesterAgentId?: string | null;
+  /** Requester display name (`requester_name`), or null. */
+  requesterName?: string | null;
   status: string;
   createdAt: string;
+}
+
+/** Options for `actions.invoke`. */
+export interface InvokeActionOptions {
+  idempotencyKey?: string;
+  /**
+   * Agent in this workspace the invocation is issued on behalf of. The
+   * authenticated agent stays `callerId`; an unknown id is rejected with 400.
+   */
+  requesterAgentId?: string;
+  /** Requester display name; defaults to the requester agent's name. */
+  requesterName?: string;
 }
 
 export interface CompleteInvocationRequest {
@@ -285,6 +301,10 @@ export interface ActionInvocation {
   actionName: string;
   callerId: string | null;
   callerName?: string | null;
+  /** Agent the caller acted on behalf of, or null when not supplied. */
+  requesterAgentId?: string | null;
+  /** Requester display name, or null when not supplied. */
+  requesterName?: string | null;
   input?: Record<string, unknown>;
   output: JsonValue;
   status: string;

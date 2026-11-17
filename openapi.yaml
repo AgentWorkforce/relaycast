@@ -6119,9 +6119,27 @@ paths:
               properties:
                 input:
                   type: object
+                requester_agent_id:
+                  type: string
+                  minLength: 1
+                  maxLength: 128
+                  description: >-
+                    Optional agent in this workspace on whose behalf the caller
+                    invokes. Unknown ids return 400 `invalid_request`. Recorded
+                    alongside, never instead of, the authenticated `caller_id`.
+                requester_name:
+                  type: string
+                  minLength: 1
+                  maxLength: 256
+                  description: >-
+                    Optional informational requester display name. Defaults to
+                    the requester agent's name when only `requester_agent_id` is
+                    sent; may be sent alone. Never authority.
       responses:
         '201':
-          description: Action invocation created; response `data` includes `invocation_id`
+          description: >-
+            Action invocation created; response `data` includes `invocation_id`,
+            `requester_agent_id` and `requester_name` (null when not supplied).
           headers:
             Idempotency-Replayed:
               description: Set to `true` when the original invocation is replayed.
@@ -6142,7 +6160,7 @@ paths:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
         '409':
-          description: The idempotency key was reused with different input.
+          description: The idempotency key was reused with different input or requester.
           content:
             application/json:
               schema:
@@ -6214,9 +6232,27 @@ paths:
               properties:
                 input:
                   $ref: '#/components/schemas/StrictSpawnInput'
+                requester_agent_id:
+                  type: string
+                  minLength: 1
+                  maxLength: 128
+                  description: >-
+                    Optional agent in this workspace on whose behalf the caller
+                    invokes. Unknown ids return 400 `invalid_request`. Recorded
+                    alongside, never instead of, the authenticated `caller_id`.
+                requester_name:
+                  type: string
+                  minLength: 1
+                  maxLength: 256
+                  description: >-
+                    Optional informational requester display name. Defaults to
+                    the requester agent's name when only `requester_agent_id` is
+                    sent; may be sent alone. Never authority.
       responses:
         '201':
-          description: Strict builtin spawn accepted or replayed.
+          description: >-
+            Strict builtin spawn accepted or replayed. `data` includes
+            `requester_agent_id` and `requester_name` (null when not supplied).
           content:
             application/json:
               schema:
@@ -6411,7 +6447,10 @@ paths:
             type: string
       responses:
         '200':
-          description: Invocation
+          description: >-
+            Invocation, including authenticated `caller_id`/`caller_name` and the
+            optional on-behalf-of `requester_agent_id`/`requester_name` (null when
+            not supplied; `requester_agent_id` becomes null if that agent is deleted).
           content:
             application/json:
               schema:
