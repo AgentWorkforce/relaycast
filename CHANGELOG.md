@@ -20,6 +20,7 @@ Packages without a separate changelog are covered by the cross-package notes bel
 
 ### Fixed
 
+- `GET /v1/agents` on a hosted workspace with hundreds of agents no longer outlasts the caller's timeout. Node liveness probes share a 1.5 s budget per request; an agent whose node was not probed keeps the status its node's last checkpoint supports.
 - A message posted through an inbound webhook (`POST /v1/hooks/:id`) no longer matches `mentions` event-subscription filters. Its text comes from whoever holds the webhook URL, so an `@name` in it could deliver the post to an agent that subscribes to its mentions outside that channel. Its `message.created` event now carries `metadata.__relaycast_origin: "inbound_webhook"`. Channel and unfiltered subscriptions still receive it.
 
 ## [12.12.0] - 2026-11-17

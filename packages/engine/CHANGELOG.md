@@ -15,6 +15,7 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Fixed
 
+- `GET /v1/agents` under a node liveness authority returns in bounded time. It probed every distinct hosting node, eight at a time with a 2 s deadline each, so a roster of a few hundred direct agents took longer than the hosted caller's 15 s timeout. Probes now share a 1.5 s budget per request (`NODE_LIVENESS_PROBE_BUDGET_MS`), nodes whose row was checkpointed online go first, freshest first, and a node whose last checkpoint is older than any online node keeps is offline without a probe, as `GET /v1/nodes?status=online` already assumes. An agent whose node was not probed in time takes its status from that node's checkpoint: a node checkpointed `online` within that bound counts as live, so the agent keeps its stored status instead of turning `offline`. Probed nodes are decided as before.
 - A message posted through an inbound webhook (`POST /v1/hooks/:id`) no longer matches `mentions` event-subscription filters. Its text comes from whoever holds the webhook URL, so an `@name` in it could deliver the post to an agent that subscribes to its mentions outside that channel. Its `message.created` event now carries `metadata.__relaycast_origin: "inbound_webhook"`. Channel and unfiltered subscriptions still receive it.
 
 ## [12.12.0] - 2026-11-17
