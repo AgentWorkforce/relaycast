@@ -27,6 +27,26 @@ describe('workspace leaders', () => {
   const getLeaders = (key: string) => send('GET', '/v1/workspace/leaders', key);
   const putLeaders = (key: string, body: unknown) => send('PUT', '/v1/workspace/leaders', key, body);
 
+  async function enrollNodeToken(workspaceKey: string) {
+    const enrolled = await stack.app.request('/v1/nodes', {
+      method: 'POST',
+      headers: { authorization: `Bearer ${workspaceKey}`, 'content-type': 'application/json' },
+      body: JSON.stringify({
+        node_id: 'leaders-node',
+        name: 'leaders-node',
+        role: 'broker',
+        capabilities: [],
+        max_agents: 4,
+        tags: [],
+        version: 'test',
+      }),
+    });
+    expect(enrolled.status).toBe(201);
+    const { data } = await enrolled.json() as { data: { token: string } };
+    expect(data.token).toMatch(/^nt_live_/);
+    return data.token;
+  }
+
   it('returns empty leaders and patterns when unset, to agents and the workspace key', async () => {
     const ws = await createWorkspace(stack.app, 'leaders-unset');
     const agent = await registerAgent(stack.app, ws.workspaceKey, 'opsgrok');
@@ -169,5 +189,34 @@ describe('workspace leaders', () => {
       .from(workspaces)
       .where(eq(workspaces.id, ws.workspaceId));
     expect(row?.leaders).toBeNull();
+  });
+
+  it('lets a node token read the leaders the workspace key reads', async () => {
+    const ws = await createWorkspace(stack.app, 'leaders-node-read');
+    await registerAgent(stack.app, ws.workspaceKey, 'opsgrok');
+    await registerAgent(stack.app, ws.workspaceKey, 'worker');
+    const put = await putLeaders(ws.workspaceKey, { patterns: ['*grok', 'ghost'] });
+    expect(put.status).toBe(200);
+    const nodeToken = await enrollNodeToken(ws.workspaceKey);
+
+    const viaNode = await getLeaders(nodeToken);
+    expect(viaNode.status).toBe(200);
+    expect(viaNode.body).toEqual({
+      ok: true,
+      data: { leaders: [expect.objectContaining({ name: 'opsgrok' })], patterns: ['*grok', 'ghost'] },
+    });
+    expect(viaNode.body).toEqual((await getLeaders(ws.workspaceKey)).body);
+  });
+
+  it('refuses a node token on PUT and leaves the stored list unchanged', async () => {
+    const ws = await createWorkspace(stack.app, 'leaders-node-write');
+    await putLeaders(ws.workspaceKey, { patterns: ['admin'] });
+    const nodeToken = await enrollNodeToken(ws.workspaceKey);
+
+    const denied = await putLeaders(nodeToken, { patterns: ['*grok'] });
+    expect(denied.status).toBe(401);
+    expect(denied.body.ok).toBe(false);
+    expect(denied.body.error?.code).toBe('node_token_forbidden');
+    expect((await getLeaders(ws.workspaceKey)).body.data).toEqual({ leaders: [], patterns: ['admin'] });
   });
 });

@@ -5326,12 +5326,14 @@ paths:
       summary: Get workspace leaders
       description: >-
         Resolve the workspace's admin-set leader patterns against the
-        registered agents. Any agent token or the workspace key may read it.
+        registered agents. GET accepts a workspace key, agent token or node
+        token; PUT requires the workspace key.
       tags:
         - Workspaces
       security:
         - workspaceKey: []
         - agentToken: []
+        - nodeToken: []
       responses:
         '200':
           description: Resolved leaders and the stored patterns
@@ -5364,8 +5366,9 @@ paths:
     put:
       summary: Set workspace leaders
       description: >-
-        Replace the workspace's leader patterns (workspace key only). Returns
-        the same shape as `GET`, resolved against the current roster.
+        Replace the workspace's leader patterns. PUT requires the workspace
+        key (agent tokens get 401; node tokens get 401 `node_token_forbidden`).
+        Returns the same shape as `GET`, resolved against the current roster.
       tags:
         - Workspaces
       security:
@@ -5412,7 +5415,7 @@ paths:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
         '401':
-          description: Missing or invalid workspace key (agent tokens are refused)
+          description: Missing or invalid workspace key (agent and node tokens are refused)
           content:
             application/json:
               schema:

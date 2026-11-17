@@ -1,7 +1,7 @@
 import { Hono } from 'hono';
 import { z } from 'zod';
 import type { AppEnv } from '../env.js';
-import { requireAuth, requireWorkspaceKey } from '../middleware/auth.js';
+import { requireSender, requireWorkspaceKey } from '../middleware/auth.js';
 import { rateLimit } from '../middleware/rateLimit.js';
 import * as leadersEngine from '../engine/leaders.js';
 import { emitServerEvent } from '../lib/serverTelemetry.js';
@@ -15,7 +15,8 @@ const updateLeadersSchema = z.object({
   reset: z.boolean().optional(),
 }).passthrough();
 
-leadersRoutes.get('/workspace/leaders', requireAuth, rateLimit, async (c) => {
+// GET accepts a workspace key, agent token or node token; PUT requires the workspace key.
+leadersRoutes.get('/workspace/leaders', requireSender, rateLimit, async (c) => {
   try {
     const db = c.get('db');
     const workspace = c.get('workspace');

@@ -26,7 +26,7 @@ Workspace leaders are an admin-set list of agent names or globs (`*` any run,
 `?` one character, whole-name, case-sensitive; at most 64 patterns of up to 128
 characters). Set them with the workspace key via
 `PUT /v1/workspace/leaders` `{"patterns":["*grok","admin"]}` (`{"patterns":[]}`
-or `{"reset":true}` clears); any agent reads
+or `{"reset":true}` clears); a workspace key, agent token or node token reads
 `GET /v1/workspace/leaders` → `{"leaders":[{"name","agent_id"}],"patterns":[...]}`,
 the registered agents currently matching, sorted by name
 (SDK: `workspace.getLeaders()` / `workspace.setLeaders({ patterns })`).
