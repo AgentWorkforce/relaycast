@@ -867,6 +867,19 @@ export const ACTOR_MIGRATIONS: readonly (readonly [string, readonly string[]])[]
       "ALTER TABLE action_invocations\n  ADD COLUMN spawn_dispatch_generation INTEGER NOT NULL DEFAULT 0",
       "UPDATE action_invocations\nSET handler_agent_id = (\n      SELECT actions.handler_agent_id\n      FROM actions\n      WHERE actions.id = action_invocations.action_id\n        AND actions.workspace_id = action_invocations.workspace_id\n    ),\n    handler_node_id = (\n      SELECT actions.handler_node_id\n      FROM actions\n      WHERE actions.id = action_invocations.action_id\n        AND actions.workspace_id = action_invocations.workspace_id\n    )\nWHERE invocation_origin = 'registered_action'\n  AND action_id IS NOT NULL\n  AND handler_agent_id IS NULL\n  AND handler_node_id IS NULL"
     ]
+  ],
+  [
+    "0085_action_invocation_requester.sql",
+    [
+      "ALTER TABLE action_invocations\n  ADD COLUMN requester_agent_id TEXT REFERENCES agents(id) ON DELETE SET NULL",
+      "ALTER TABLE action_invocations\n  ADD COLUMN requester_name TEXT"
+    ]
+  ],
+  [
+    "0086_workspace_leaders.sql",
+    [
+      "ALTER TABLE workspaces\n  ADD COLUMN leaders text"
+    ]
   ]
 ];
 

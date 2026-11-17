@@ -7,7 +7,12 @@ See the [root changelog](../../CHANGELOG.md) for cross-package release highlight
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [Unreleased - Minor]
+
+### Added
+
+- `POST /v1/actions/:name/invoke` and `/v1/actions/spawn/strict-invoke` accept an optional `requester_agent_id` (an agent in the workspace) and an optional `requester_name`, which requires `requester_agent_id` and must equal that agent's current name (otherwise 400 `invalid_request`); the recorded name is always the agent's name. Both are returned on the invoke response and `GET /v1/actions/:name/invocations/:id`, and an Idempotency-Key reused with a different requester returns 409 `idempotency_key_reused`. The requester is a claim by the authenticated caller, not authorization.
+- `GET /v1/workspace/leaders` resolves the workspace's leader patterns against registered agents; `PUT /v1/workspace/leaders` replaces or clears them. GET accepts a workspace key, agent token or node token; PUT requires the workspace key. Stored in the new nullable `workspaces.leaders` column (SQLite migration 0086, Postgres 0007); emits `workspace.leaders.updated` with `pattern_count`.
 
 ## [12.12.1] - 2026-11-17
 

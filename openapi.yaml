@@ -2175,6 +2175,68 @@ components:
             - duplicate_in_progress
             - event_id_reused
 
+    WorkspaceLeader:
+      type: object
+      required: [name, agent_id]
+      properties:
+        name:
+          type: string
+          description: Registered agent name.
+        agent_id:
+          type: string
+          description: Agent id.
+
+    WorkspaceLeaders:
+      type: object
+      required: [leaders, patterns]
+      properties:
+        leaders:
+          type: array
+          description: >-
+            Every registered (not released) agent in the workspace whose name
+            matches at least one pattern, sorted by name, each agent once.
+            Resolved at read time, so agents registered after the last `PUT`
+            are included and removed agents drop out.
+          items:
+            $ref: '#/components/schemas/WorkspaceLeader'
+        patterns:
+          type: array
+          description: The stored patterns verbatim (after trimming and de-duplication); empty when unset.
+          items:
+            type: string
+      example:
+        leaders:
+          - name: admin
+            agent_id: '1876543210987654321'
+          - name: opsgrok
+            agent_id: '1876543210987654322'
+        patterns: ['*grok', 'admin']
+
+    SetWorkspaceLeadersRequest:
+      type: object
+      description: >-
+        Replace the leader patterns, or clear them with `{"patterns": []}` or
+        `{"reset": true}` (`reset` may not be combined with `patterns`). Each
+        pattern is an exact agent name or a glob: `*` matches any run of
+        characters (including none), `?` matches exactly one character, every
+        other character is literal; the match is whole-name and case-sensitive.
+        Entries are trimmed and duplicates dropped silently. An entry that is
+        not a string, is empty after trimming, is longer than 128 characters,
+        or contains a control character is rejected with 400
+        `invalid_request`, as is a list longer than 64 entries.
+      properties:
+        patterns:
+          type: array
+          maxItems: 64
+          items:
+            type: string
+            minLength: 1
+            maxLength: 128
+        reset:
+          type: boolean
+      example:
+        patterns: ['*grok', 'admin']
+
     Error:
       type: object
       properties:
@@ -5259,6 +5321,108 @@ paths:
               schema:
                 $ref: '#/components/schemas/SuccessResponse'
 
+  /workspace/leaders:
+    get:
+      summary: Get workspace leaders
+      description: >-
+        Resolve the workspace's admin-set leader patterns against the
+        registered agents. GET accepts a workspace key, agent token or node
+        token; PUT requires the workspace key.
+      tags:
+        - Workspaces
+      security:
+        - workspaceKey: []
+        - agentToken: []
+        - nodeToken: []
+      responses:
+        '200':
+          description: Resolved leaders and the stored patterns
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/SuccessResponse'
+                  - type: object
+                    properties:
+                      data:
+                        $ref: '#/components/schemas/WorkspaceLeaders'
+              example:
+                ok: true
+                data:
+                  leaders:
+                    - name: admin
+                      agent_id: '1876543210987654321'
+                    - name: opsgrok
+                      agent_id: '1876543210987654322'
+                  patterns: ['*grok', 'admin']
+        '401':
+          description: Missing or invalid credential
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '429':
+          $ref: '#/components/responses/Throttled'
+    put:
+      summary: Set workspace leaders
+      description: >-
+        Replace the workspace's leader patterns. PUT requires the workspace
+        key (agent tokens get 401; node tokens get 401 `node_token_forbidden`).
+        Returns the same shape as `GET`, resolved against the current roster.
+      tags:
+        - Workspaces
+      security:
+        - workspaceKey: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SetWorkspaceLeadersRequest'
+            examples:
+              set:
+                value:
+                  patterns: ['*grok', 'admin']
+              clear:
+                value:
+                  patterns: []
+              reset:
+                value:
+                  reset: true
+      responses:
+        '200':
+          description: Leaders updated
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/SuccessResponse'
+                  - type: object
+                    properties:
+                      data:
+                        $ref: '#/components/schemas/WorkspaceLeaders'
+              example:
+                ok: true
+                data:
+                  leaders:
+                    - name: admin
+                      agent_id: '1876543210987654321'
+                  patterns: ['*grok', 'admin']
+        '400':
+          description: '`invalid_request`: the body or a pattern failed validation.'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '401':
+          description: Missing or invalid workspace key (agent and node tokens are refused)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '429':
+          $ref: '#/components/responses/Throttled'
+
   /activity:
     get:
       summary: Get workspace activity feed
@@ -6119,9 +6283,37 @@ paths:
               properties:
                 input:
                   type: object
+                requester_agent_id:
+                  type: string
+                  minLength: 1
+                  maxLength: 128
+                  description: >-
+                    Optional agent in this workspace on whose behalf the caller
+                    invokes. Unknown ids return 400 `invalid_request`. Recorded
+                    alongside, never instead of, the authenticated `caller_id`.
+                    The requester is a claim made by the authenticated caller
+                    (any agent token may name any workspace agent); consumers
+                    must not treat it as authorization. Reusing an
+                    Idempotency-Key with a different requester returns 409
+                    `idempotency_key_reused`.
+                requester_name:
+                  type: string
+                  minLength: 1
+                  maxLength: 256
+                  description: >-
+                    Optional requester name. Requires `requester_agent_id` and
+                    must equal that agent's current name exactly; otherwise 400
+                    `invalid_request`. The recorded and returned name is always
+                    the requester agent's name. Never authority. A retry should
+                    send `requester_agent_id` alone or the agent's current name;
+                    if the agent was renamed since the first attempt, a retry
+                    repeating the old name gets 400, while an id-only retry
+                    replays.
       responses:
         '201':
-          description: Action invocation created; response `data` includes `invocation_id`
+          description: >-
+            Action invocation created; response `data` includes `invocation_id`,
+            `requester_agent_id` and `requester_name` (null when not supplied).
           headers:
             Idempotency-Replayed:
               description: Set to `true` when the original invocation is replayed.
@@ -6136,13 +6328,16 @@ paths:
           description: >-
             Invalid Idempotency-Key, task_idempotency_required,
             invalid_task_context, or a strict spawn contract sent to this
-            generic route instead of `/actions/spawn/strict-invoke`.
+            generic route instead of `/actions/spawn/strict-invoke`. An unknown
+            `requester_agent_id`, a `requester_name` sent without
+            `requester_agent_id`, or a `requester_name` that does not equal the
+            requester agent's name also returns `invalid_request`.
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
         '409':
-          description: The idempotency key was reused with different input.
+          description: The idempotency key was reused with different input or requester.
           content:
             application/json:
               schema:
@@ -6214,15 +6409,47 @@ paths:
               properties:
                 input:
                   $ref: '#/components/schemas/StrictSpawnInput'
+                requester_agent_id:
+                  type: string
+                  minLength: 1
+                  maxLength: 128
+                  description: >-
+                    Optional agent in this workspace on whose behalf the caller
+                    invokes. Unknown ids return 400 `invalid_request`. Recorded
+                    alongside, never instead of, the authenticated `caller_id`.
+                    The requester is a claim made by the authenticated caller
+                    (any agent token may name any workspace agent); consumers
+                    must not treat it as authorization. Reusing an
+                    Idempotency-Key with a different requester returns 409
+                    `idempotency_key_reused`.
+                requester_name:
+                  type: string
+                  minLength: 1
+                  maxLength: 256
+                  description: >-
+                    Optional requester name. Requires `requester_agent_id` and
+                    must equal that agent's current name exactly; otherwise 400
+                    `invalid_request`. The recorded and returned name is always
+                    the requester agent's name. Never authority. A retry should
+                    send `requester_agent_id` alone or the agent's current name;
+                    if the agent was renamed since the first attempt, a retry
+                    repeating the old name gets 400, while an id-only retry
+                    replays.
       responses:
         '201':
-          description: Strict builtin spawn accepted or replayed.
+          description: >-
+            Strict builtin spawn accepted or replayed. `data` includes
+            `requester_agent_id` and `requester_name` (null when not supplied).
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/SuccessResponse'
         '400':
-          description: Missing key, malformed body, or invalid strict contract.
+          description: >-
+            Missing key, malformed body, or invalid strict contract. An unknown
+            `requester_agent_id`, a `requester_name` sent without
+            `requester_agent_id`, or a `requester_name` that does not equal the
+            requester agent's name also returns `invalid_request`.
           content:
             application/json:
               schema:
@@ -6411,7 +6638,10 @@ paths:
             type: string
       responses:
         '200':
-          description: Invocation
+          description: >-
+            Invocation, including authenticated `caller_id`/`caller_name` and the
+            optional on-behalf-of `requester_agent_id`/`requester_name` (null when
+            not supplied; `requester_agent_id` becomes null if that agent is deleted).
           content:
             application/json:
               schema:

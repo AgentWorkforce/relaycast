@@ -43,12 +43,24 @@ const registerActionSchema = z.object({
   },
 );
 
+// Optional on-behalf-of identity. caller_id/caller_name always remain the
+// authenticated agent; a requester id must name an agent in this workspace and
+// requester_name (which requires the id) must equal that agent's name. The
+// cross-field rules live in resolveInvocationRequester so both invoke routes
+// return the same 400 invalid_request.
+const invocationRequesterFields = {
+  requester_agent_id: z.string().min(1).max(128).optional(),
+  requester_name: z.string().min(1).max(256).optional(),
+};
+
 const invokeActionSchema = z.object({
   input: z.record(z.string(), z.unknown()).optional(),
+  ...invocationRequesterFields,
 });
 
 const invokeStrictSpawnSchema = z.object({
   input: z.record(z.string(), z.unknown()),
+  ...invocationRequesterFields,
 }).strict();
 
 const replaySpawnSchema = z.object({
@@ -174,10 +186,11 @@ actionRoutes.post('/actions/spawn/strict-invoke', requireAuth, rateLimit, async 
       return jsonError(c, 'invalid_idempotency_key', error ?? 'Idempotency-Key is required', 400);
     }
     const workspace = c.get('workspace');
+    const requester = await actionEngine.resolveInvocationRequester(c.get('db'), workspace.id, parsed.data);
     const result = await actionEngine.invokeStrictSpawn(
       c.get('db'),
       workspace.id,
-      { input: parsed.data.input, caller_id: agent.id, caller_name: agent.name },
+      { input: parsed.data.input, caller_id: agent.id, caller_name: agent.name, ...requester },
       { nodeConnections: c.get('engine').nodeConnections, idempotencyKey: key },
     );
     const replayed = actionEngine.wasInvocationReplayed(result);
@@ -252,6 +265,7 @@ actionRoutes.post('/actions/:name/invoke', requireAuth, rateLimit, async (c) => 
 
     const actionName = c.req.param('name');
     const { nodeConnections } = c.get('engine');
+    const requester = await actionEngine.resolveInvocationRequester(db, workspace.id, parsed.data);
     const result = await actionEngine.invokeAction(
       db,
       workspace.id,
@@ -260,6 +274,7 @@ actionRoutes.post('/actions/:name/invoke', requireAuth, rateLimit, async (c) => 
         input: parsed.data.input,
         caller_id: agent.id,
         caller_name: agent.name,
+        ...requester,
       },
       {
         nodeConnections,

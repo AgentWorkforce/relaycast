@@ -47,6 +47,23 @@ type RetryableInvocationRow = Pick<
 
 const OPEN_INVOCATION_STATUSES = ['pending', 'dispatched', 'invoked'];
 const REPLAYED_INVOCATION = Symbol('replayed-action-invocation');
+
+/**
+ * Optional on-behalf-of identity supplied by the invoking agent (for example a
+ * hosted launcher spawning for another workspace agent). caller_id/caller_name
+ * always remain the authenticated caller; the route validates requester ids.
+ */
+type InvocationRequester = {
+  requester_agent_id?: string | null;
+  requester_name?: string | null;
+};
+
+function requesterFields(row: Pick<InvocationRow, 'requesterAgentId' | 'requesterName'>) {
+  return {
+    requester_agent_id: row.requesterAgentId ?? null,
+    requester_name: row.requesterName ?? null,
+  };
+}
 export const ACTION_DISPATCH_TIMEOUT_MS = 30_000;
 /**
  * How long an agent handler's connection must be CONTINUOUSLY unreachable
@@ -641,6 +658,40 @@ export async function deleteAction(
   return deleted;
 }
 
+/**
+ * Resolve the optional on-behalf-of identity a caller attached to an invoke.
+ * A requester id must name an agent in the same workspace, and the recorded
+ * requester_name is always that agent's current name: an optional
+ * requester_name must equal it exactly, and requester_name without
+ * requester_agent_id is rejected. The requester is a claim made by the
+ * authenticated caller (any agent token may name any agent in its workspace),
+ * so consumers must not treat it as authorization. Always returns explicit
+ * nulls so idempotent replays compare it.
+ */
+export async function resolveInvocationRequester(
+  db: Db,
+  workspaceId: string,
+  data: { requester_agent_id?: string; requester_name?: string },
+): Promise<{ requester_agent_id: string | null; requester_name: string | null }> {
+  if (data.requester_agent_id === undefined) {
+    if (data.requester_name !== undefined) {
+      throw codedError('requester_name requires requester_agent_id', 'invalid_request', 400);
+    }
+    return { requester_agent_id: null, requester_name: null };
+  }
+  const [requester] = await db
+    .select({ id: agents.id, name: agents.name })
+    .from(agents)
+    .where(and(eq(agents.workspaceId, workspaceId), eq(agents.id, data.requester_agent_id)));
+  if (!requester) {
+    throw codedError('requester_agent_id does not match an agent in this workspace', 'invalid_request', 400);
+  }
+  if (data.requester_name !== undefined && data.requester_name !== requester.name) {
+    throw codedError('requester_name does not match the requester agent', 'invalid_request', 400);
+  }
+  return { requester_agent_id: requester.id, requester_name: requester.name };
+}
+
 async function createInvocation(
   db: Db,
   workspaceId: string,
@@ -649,6 +700,8 @@ async function createInvocation(
     input?: Record<string, unknown>;
     caller_id?: string | null;
     caller_name?: string | null;
+    requester_agent_id?: string | null;
+    requester_name?: string | null;
     handler_agent_id?: string | null;
     handler_node_id?: string | null;
     action_name?: string;
@@ -671,6 +724,8 @@ async function createInvocation(
       invocationOrigin: action ? 'registered_action' : 'builtin',
       callerId: data.caller_id ?? null,
       callerName: data.caller_name ?? null,
+      requesterAgentId: data.requester_agent_id ?? null,
+      requesterName: data.requester_name ?? null,
       handlerAgentId: data.handler_agent_id ?? action?.handlerAgentId ?? null,
       handlerNodeId: data.handler_node_id ?? action?.handlerNodeId ?? null,
       input: data.input ?? {},
@@ -704,7 +759,7 @@ async function createInvocation(
 function assertInvocationClaimMatches(
   existing: InvocationRow,
   expectedActionName: string,
-  data: { input?: Record<string, unknown>; caller_id?: string | null },
+  data: { input?: Record<string, unknown>; caller_id?: string | null; requester_agent_id?: string | null },
 ): void {
   const existingInput = recordInput(existing.input);
   const incomingInput = recordInput(data.input);
@@ -714,6 +769,12 @@ function assertInvocationClaimMatches(
     && sameSpawnLogicalRequest(existingInput, incomingInput);
   const samePayload = existing.actionName === expectedActionName
     && existing.callerId === (data.caller_id ?? null)
+    // Internal re-checks of the same row may omit the requester; every HTTP
+    // invoke passes it explicitly (null when absent), so a reused key with a
+    // different on-behalf-of identity is rejected like a different payload.
+    // requester_name is derived from the id, so only the id is compared.
+    && (data.requester_agent_id === undefined
+      || (existing.requesterAgentId ?? null) === (data.requester_agent_id ?? null))
     && (exactPayload || logicalReplay);
   if (!samePayload) {
     throw codedError(
@@ -903,6 +964,7 @@ async function refreshUnsentStrictSpawnWorkerCwd(
   assertInvocationClaimMatches(current, 'spawn', {
     input: incomingInput,
     caller_id: invocation.callerId,
+    requester_agent_id: invocation.requesterAgentId,
   });
   return current;
 }
@@ -1073,6 +1135,7 @@ function invocationAck(
     input,
     ...(strictSpawnProof ?? {}),
     status: invocation.status,
+    ...requesterFields(invocation),
     created_at: invocation.createdAt.toISOString(),
   };
 }
@@ -1481,6 +1544,8 @@ async function dispatchRelease(args: {
     input?: Record<string, unknown>;
     caller_id?: string;
     caller_name?: string;
+    requester_agent_id?: string | null;
+    requester_name?: string | null;
   };
 }) {
   const input = recordInput(args.data.input);
@@ -1498,6 +1563,8 @@ async function dispatchRelease(args: {
     input,
     caller_id: args.data.caller_id,
     caller_name: args.data.caller_name,
+    requester_agent_id: args.data.requester_agent_id,
+    requester_name: args.data.requester_name,
     action_name: 'release',
     invocation_id: args.invocationId ?? (args.idempotencyKey && (args.idempotencyActorId ?? args.data.caller_id)
       ? await idempotentInvocationId(args.workspaceId, args.idempotencyActorId ?? args.data.caller_id!, 'release', args.idempotencyKey)
@@ -1567,6 +1634,8 @@ async function dispatchRelease(args: {
     input,
     caller_id: args.data.caller_id,
     caller_name: args.data.caller_name,
+    requester_agent_id: args.data.requester_agent_id,
+    requester_name: args.data.requester_name,
     action_name: 'release',
     invocation_id: args.invocationId ?? (args.idempotencyKey && (args.idempotencyActorId ?? args.data.caller_id)
       ? await idempotentInvocationId(args.workspaceId, args.idempotencyActorId ?? args.data.caller_id!, 'release', args.idempotencyKey)
@@ -1805,6 +1874,7 @@ async function dispatchRelease(args: {
       dispatched_node_id: null,
       input,
       status: 'completed',
+      ...requesterFields(invocation),
       created_at: invocation.createdAt.toISOString(),
     };
   };
@@ -1981,6 +2051,7 @@ async function dispatchRelease(args: {
     dispatched_node_id: dispatched.accepted ? nodeId : null,
     input: recordInput(invocation.input),
     status: dispatched.accepted ? (dispatched.pending ? 'pending' : 'dispatched') : 'pending',
+    ...requesterFields(invocation),
     created_at: invocation.createdAt.toISOString(),
   };
 }
@@ -1998,6 +2069,8 @@ export async function dispatchAgentRelease(
     input?: Record<string, unknown>;
     caller_id?: string;
     caller_name?: string;
+    requester_agent_id?: string | null;
+    requester_name?: string | null;
   },
   options: {
     nodeConnections?: NodeConnectionRegistry;
@@ -2040,6 +2113,7 @@ function spawnResult(
     input,
     ...(strictSpawnProof ?? {}),
     status,
+    ...requesterFields(invocation),
     created_at: invocation.createdAt.toISOString(),
   };
 }
@@ -2103,7 +2177,11 @@ async function placeStrictSpawnClaim(
     .from(actionInvocations)
     .where(and(eq(actionInvocations.workspaceId, workspaceId), eq(actionInvocations.id, invocation.id)));
   if (!winner) throw codedError('Spawn invocation is no longer available', 'idempotency_unavailable', 503);
-  assertInvocationClaimMatches(winner, 'spawn', { input, caller_id: invocation.callerId });
+  assertInvocationClaimMatches(winner, 'spawn', {
+    input,
+    caller_id: invocation.callerId,
+    requester_agent_id: invocation.requesterAgentId,
+  });
   if (
     winner.status === 'pending'
     && winner.dispatchAttempts === 0
@@ -2286,6 +2364,8 @@ async function dispatchSpawn(args: {
     input?: Record<string, unknown>;
     caller_id?: string;
     caller_name?: string;
+    requester_agent_id?: string | null;
+    requester_name?: string | null;
   };
   /** Node-address the spawn instead of placing by capacity. */
   targetNodeId?: string;
@@ -2322,6 +2402,8 @@ async function dispatchSpawn(args: {
     input,
     caller_id: data.caller_id,
     caller_name: data.caller_name,
+    requester_agent_id: data.requester_agent_id,
+    requester_name: data.requester_name,
     invocation_id: args.invocationId,
   });
   let { invocation } = claim;
@@ -2462,7 +2544,7 @@ async function dispatchSpawn(args: {
 export async function dispatchCapacitySpawn(
   db: Db,
   workspaceId: string,
-  data: { input?: Record<string, unknown>; caller_id?: string; caller_name?: string; target_node_id?: string },
+  data: { input?: Record<string, unknown>; caller_id?: string; caller_name?: string; target_node_id?: string } & InvocationRequester,
   options: { nodeConnections?: NodeConnectionRegistry } = {},
 ) {
   return dispatchSpawn({
@@ -2489,6 +2571,8 @@ export async function invokeNodeAction(
     input?: Record<string, unknown>;
     caller_id?: string;
     caller_name?: string;
+    requester_agent_id?: string | null;
+    requester_name?: string | null;
   },
   options: { nodeConnections?: NodeConnectionRegistry } = {},
 ) {
@@ -2533,6 +2617,8 @@ export async function invokeNodeAction(
     input: data.input,
     caller_id: data.caller_id,
     caller_name: data.caller_name,
+    requester_agent_id: data.requester_agent_id,
+    requester_name: data.requester_name,
   });
   const providerName = action.handlerProvider ?? DEFAULT_PROVIDER_NAME;
   const reservedNode = isSpawnInvocation(action.name)
@@ -2564,6 +2650,7 @@ export async function invokeNodeAction(
     dispatched_node_id: dispatched.accepted ? nodeId : null,
     input: recordInput(invocation.input),
     status: dispatched.accepted ? (dispatched.pending ? 'pending' : 'dispatched') : 'pending',
+    ...requesterFields(invocation),
     created_at: invocation.createdAt.toISOString(),
   };
 }
@@ -2577,7 +2664,7 @@ export async function invokeNodeAction(
 export async function invokeStrictSpawn(
   db: Db,
   workspaceId: string,
-  data: { input?: Record<string, unknown>; caller_id: string; caller_name?: string },
+  data: { input?: Record<string, unknown>; caller_id: string; caller_name?: string } & InvocationRequester,
   options: { nodeConnections?: NodeConnectionRegistry; idempotencyKey: string },
 ) {
   const input = recordInput(data.input);
@@ -2667,6 +2754,8 @@ export async function invokeAction(
     input?: Record<string, unknown>;
     caller_id?: string;
     caller_name?: string;
+    requester_agent_id?: string | null;
+    requester_name?: string | null;
   },
   options: {
     nodeConnections?: NodeConnectionRegistry;
@@ -2774,6 +2863,8 @@ export async function invokeAction(
       input: data.input,
       caller_id: data.caller_id,
       caller_name: data.caller_name,
+      requester_agent_id: data.requester_agent_id,
+      requester_name: data.requester_name,
       invocation_id: invocationId,
     });
     if (replayed) {
@@ -2818,6 +2909,7 @@ export async function invokeAction(
       dispatched_node_id: dispatched.accepted ? action.handlerNodeId : null,
       input: recordInput(invocation.input),
       status: dispatched.accepted ? (dispatched.pending ? 'pending' : 'dispatched') : 'pending',
+      ...requesterFields(invocation),
       created_at: invocation.createdAt.toISOString(),
     };
   }
@@ -2868,6 +2960,8 @@ export async function invokeAction(
     input: data.input,
     caller_id: data.caller_id,
     caller_name: data.caller_name,
+    requester_agent_id: data.requester_agent_id,
+    requester_name: data.requester_name,
     handler_node_id: handlerAgent.locationNodeId,
     invocation_id: invocationId,
   });
@@ -3025,6 +3119,7 @@ export async function invokeAction(
     dispatched_node_id: dispatched.accepted ? handlerAgent.locationNodeId : null,
     input: recordInput(invocation.input),
     status: dispatched.accepted ? (dispatched.pending ? 'pending' : 'dispatched') : 'pending',
+    ...requesterFields(invocation),
     created_at: invocation.createdAt.toISOString(),
   };
 }
@@ -3035,6 +3130,7 @@ function publicInvocation(row: InvocationRow) {
     action_name: row.actionName,
     caller_id: row.callerId,
     caller_name: row.callerName,
+    ...requesterFields(row),
     input: row.input,
     output: row.output,
     status: row.status,

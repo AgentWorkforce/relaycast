@@ -16,3 +16,24 @@ posted through an inbound webhook (`POST /v1/hooks/:id`) never matches that
 filter, since its text comes from whoever holds the webhook URL. Such a post
 emits `message.created` only when it includes a non-empty `payload`, and that
 event carries `metadata.__relaycast_origin: "inbound_webhook"`.
+
+Action invokes may name an on-behalf-of requester with optional
+`requester_agent_id` (an agent in the same workspace) and an optional
+`requester_name` that requires `requester_agent_id` and must equal that agent's
+name; the recorded name is always the agent's name
+(a retry should send `requester_agent_id` alone or the agent's current name: if the
+agent was renamed since the first attempt, a retry repeating the old name gets
+400, while an id-only retry replays)
+(SDK: `actions.invoke(name, input, { requesterAgentId, requesterName })`).
+`caller_id` remains the authenticated agent. The requester is a claim made by
+the authenticated caller (any agent token may name any workspace agent), so
+consumers must not treat it as authorization.
+
+Workspace leaders are an admin-set list of agent names or globs (`*` any run,
+`?` one character, whole-name, case-sensitive; at most 64 patterns of up to 128
+characters). Set them with the workspace key via
+`PUT /v1/workspace/leaders` `{"patterns":["*grok","admin"]}` (`{"patterns":[]}`
+or `{"reset":true}` clears); a workspace key, agent token or node token reads
+`GET /v1/workspace/leaders` → `{"leaders":[{"name","agent_id"}],"patterns":[...]}`,
+the registered agents currently matching, sorted by name
+(SDK: `workspace.getLeaders()` / `workspace.setLeaders({ patterns })`).

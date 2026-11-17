@@ -20,6 +20,8 @@ import type {
   WorkspaceLookup,
   SystemPrompt,
   SetSystemPromptRequest,
+  SetWorkspaceLeadersRequest,
+  WorkspaceLeadersResponse,
   CreateWebhookRequest,
   CreateWebhookResponse,
   Webhook,
@@ -789,6 +791,18 @@ export class RelayCast {
      */
     rotateKey: (data?: RotateWorkspaceKeyRequest): Promise<RotateWorkspaceKeyResponse> =>
       this.client.post('/v1/workspace/rotate-key', data ?? {}),
+    /**
+     * Resolve the workspace leaders: every registered agent whose name matches
+     * a stored pattern (exact name or `*`/`?` glob), sorted by name, plus the
+     * stored patterns verbatim.
+     */
+    getLeaders: (): Promise<WorkspaceLeadersResponse> => this.client.get('/v1/workspace/leaders'),
+    /**
+     * Replace the leader patterns (workspace key only). `{ patterns: [] }` or
+     * `{ reset: true }` clears them.
+     */
+    setLeaders: (data: SetWorkspaceLeadersRequest): Promise<WorkspaceLeadersResponse> =>
+      this.client.put('/v1/workspace/leaders', data),
     delete: (workspaceId?: string): Promise<void> => workspaceId === undefined
       ? this.client.delete('/v1/workspace')
       : this.client.delete(`/v1/workspaces/${encodeURIComponent(workspaceId)}`),

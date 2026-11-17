@@ -7,7 +7,12 @@ See the [root changelog](../../CHANGELOG.md) for cross-package release highlight
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [Unreleased - Minor]
+
+### Added
+
+- Optional nullable `requester_agent_id` and `requester_name` (always the requester agent's name) on action invocation responses.
+- `WorkspaceLeadersSettings`, `WorkspaceLeader`, `WorkspaceLeadersResponse` and `SetWorkspaceLeadersRequest` schemas, plus the `relaycast_server_workspace_leaders_updated` server telemetry event (`pattern_count`).
 
 ## [12.12.0] - 2026-11-17
 

@@ -1410,6 +1410,39 @@ describe('RelayCast', () => {
     });
   });
 
+  describe('workspace leaders', () => {
+    it('getLeaders() calls GET /v1/workspace/leaders and camelizes leaders', async () => {
+      const { RelayCast } = await import('../relay.js');
+      const relay = new RelayCast({ apiKey: 'rk_live_test123' });
+
+      mockFetch.mockImplementation(() =>
+        mockResponse({ leaders: [{ name: 'opsgrok', agent_id: 'a1' }], patterns: ['*grok'] }),
+      );
+      const result = await relay.workspace.getLeaders();
+
+      const [url, init] = mockFetch.mock.calls[0]!;
+      expect(url).toBe('https://cast.agentrelay.com/v1/workspace/leaders');
+      expect(init.method).toBe('GET');
+      expect(result).toEqual({ leaders: [{ name: 'opsgrok', agentId: 'a1' }], patterns: ['*grok'] });
+    });
+
+    it('setLeaders() calls PUT /v1/workspace/leaders with the patterns', async () => {
+      const { RelayCast } = await import('../relay.js');
+      const relay = new RelayCast({ apiKey: 'rk_live_test123' });
+
+      mockFetch.mockImplementation(() =>
+        mockResponse({ leaders: [], patterns: ['*grok', 'admin'] }),
+      );
+      const result = await relay.workspace.setLeaders({ patterns: ['*grok', 'admin'] });
+
+      const [url, init] = mockFetch.mock.calls[0]!;
+      expect(url).toBe('https://cast.agentrelay.com/v1/workspace/leaders');
+      expect(init.method).toBe('PUT');
+      expect(init.body).toBe(JSON.stringify({ patterns: ['*grok', 'admin'] }));
+      expect(result).toEqual({ leaders: [], patterns: ['*grok', 'admin'] });
+    });
+  });
+
   describe('agents.update', () => {
     it('update() calls PATCH /v1/agents/:name', async () => {
       const { RelayCast } = await import('../relay.js');

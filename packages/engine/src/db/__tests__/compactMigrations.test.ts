@@ -54,13 +54,15 @@ function snapshot(handle: SqliteDbHandle) {
       // 0070 adds a nullable liveness-recovery marker without backfilling it.
       if (name === 'workspaces') {
         // 0073 adds the rotation grace slot and the generation fence as
-        // additive columns, and 0077 drops `plan`; exclude them so this
-        // comparison stays byte-for-byte over every other value.
+        // additive columns, 0077 drops `plan`, and 0086 adds the nullable
+        // `leaders` setting; exclude them so this comparison stays
+        // byte-for-byte over every other value.
         const {
           plan: _plan,
           previous_api_key_hash: _previousApiKeyHash,
           previous_api_key_expires_at: _previousApiKeyExpiresAt,
           api_key_generation: _apiKeyGeneration,
+          leaders: _leaders,
           ...existing
         } = row as Record<string, unknown>;
         return JSON.stringify(existing);
@@ -167,7 +169,16 @@ function expectConstraintsPreserved(before: ReturnType<typeof constraints>, afte
             .replace(', task_state TEXT', '')
             .replace(', node_liveness_revision INTEGER NOT NULL DEFAULT 0', '')
             .replace(', spawn_placement_token TEXT', '')
-            .replace(', spawn_dispatch_generation INTEGER NOT NULL DEFAULT 0', ''),
+            .replace(', spawn_dispatch_generation INTEGER NOT NULL DEFAULT 0', '')
+            .replace(', requester_agent_id TEXT REFERENCES agents(id) ON DELETE SET NULL', '')
+            .replace(', requester_name TEXT', ''),
+          // 0085 appends the requester FK; SQLite numbers FKs newest-first,
+          // so drop it and restore the original ids of every older FK.
+          foreignKeys: (table.foreignKeys as { id: number; from: string }[])
+            .filter(fk => fk.from !== 'requester_agent_id')
+            .map(fk => (table.foreignKeys as { from: string }[]).some(other => other.from === 'requester_agent_id')
+              ? { ...fk, id: fk.id - 1 }
+              : fk),
         };
       }
       if (table.name === 'event_subscriptions') {
@@ -179,7 +190,8 @@ function expectConstraintsPreserved(before: ReturnType<typeof constraints>, afte
       if (table.name === 'agents' && original) {
         return { ...table, sql: original.sql };
       }
-      // 0073 appends the rotation grace slot and the generation fence.
+      // 0073 appends the rotation grace slot and the generation fence; 0086
+      // appends the nullable leaders setting.
       // Remove only their exact additive DDL so every pre-existing workspace
       // constraint stays under comparison.
       if (table.name === 'workspaces') {
@@ -188,7 +200,8 @@ function expectConstraintsPreserved(before: ReturnType<typeof constraints>, afte
           sql: table.sql
             .replace(', previous_api_key_hash TEXT', '')
             .replace(', previous_api_key_expires_at INTEGER', '')
-            .replace(', api_key_generation INTEGER NOT NULL DEFAULT 0', ''),
+            .replace(', api_key_generation INTEGER NOT NULL DEFAULT 0', '')
+            .replace(', leaders text', ''),
         };
       }
       // 0063 appends four nullable recovery fields. Remove only their exact

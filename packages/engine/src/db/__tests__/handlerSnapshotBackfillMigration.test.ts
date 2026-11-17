@@ -42,7 +42,11 @@ describe('registered invocation handler snapshot backfill', () => {
           ('node-invocation','ws','node-action','node-work','registered_action','dispatched','node',NULL,NULL);
       `);
 
-      expect(runMigrations(handle).applied).toEqual(['0084_strict_spawn_dispatch_generation.sql']);
+      expect(runMigrations(handle).applied).toEqual([
+        '0084_strict_spawn_dispatch_generation.sql',
+        '0085_action_invocation_requester.sql',
+        '0086_workspace_leaders.sql',
+      ]);
       expect(handle.sqlite.prepare(`
         SELECT id, handler_agent_id, handler_node_id, spawn_dispatch_generation
         FROM action_invocations ORDER BY id

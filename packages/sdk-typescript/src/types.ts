@@ -270,8 +270,29 @@ export interface InvokeActionResult {
   handlerNodeId?: string | null;
   dispatchedNodeId?: string | null;
   input: Record<string, unknown>;
+  /** Agent the caller acted on behalf of (`requester_agent_id`), or null. */
+  requesterAgentId?: string | null;
+  /** Name of the requester agent recorded from `requesterAgentId`, or null when no requester. */
+  requesterName?: string | null;
   status: string;
   createdAt: string;
+}
+
+/** Options for `actions.invoke`. */
+export interface InvokeActionOptions {
+  idempotencyKey?: string;
+  /**
+   * Agent in this workspace the invocation is issued on behalf of. The
+   * authenticated agent stays `callerId`; an unknown id is rejected with 400.
+   */
+  requesterAgentId?: string;
+  /**
+   * Optional requester name. Requires `requesterAgentId` and must equal that
+   * agent's current name exactly (otherwise 400); the recorded name is always
+   * the agent's name. The requester is a claim by the authenticated caller,
+   * not authorization.
+   */
+  requesterName?: string;
 }
 
 export interface CompleteInvocationRequest {
@@ -285,6 +306,10 @@ export interface ActionInvocation {
   actionName: string;
   callerId: string | null;
   callerName?: string | null;
+  /** Agent the caller acted on behalf of, or null when not supplied. */
+  requesterAgentId?: string | null;
+  /** Name of the requester agent recorded from `requesterAgentId`, or null when no requester. */
+  requesterName?: string | null;
   input?: Record<string, unknown>;
   output: JsonValue;
   status: string;
@@ -717,9 +742,12 @@ export type RotateWorkspaceKeyRequest = Camelize<Raw.RotateWorkspaceKeyRequest>;
 export type RotateWorkspaceKeyResponse = Camelize<Raw.RotateWorkspaceKeyResponse>;
 export type SendDmRequest = Camelize<Raw.SendDmRequest>;
 export type SetSystemPromptRequest = Camelize<Raw.SetSystemPromptRequest>;
+export type SetWorkspaceLeadersRequest = Camelize<Raw.SetWorkspaceLeadersRequest>;
 export type SpawnAgentRequest = Camelize<Raw.SpawnAgentRequest>;
 export type SpawnAgentResponse = Camelize<Raw.SpawnAgentResponse>;
 export type SystemPrompt = Camelize<Raw.SystemPrompt>;
+export type WorkspaceLeader = Camelize<Raw.WorkspaceLeader>;
+export type WorkspaceLeadersResponse = Camelize<Raw.WorkspaceLeadersResponse>;
 export type ThreadReplyEvent = Camelize<Raw.ThreadReplyEvent>;
 export type ThreadReplyRequest = Camelize<Raw.ThreadReplyRequest>;
 export type TokenRotateResponse = Camelize<Raw.TokenRotateResponse>;

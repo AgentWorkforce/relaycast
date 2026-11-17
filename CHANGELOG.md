@@ -16,7 +16,12 @@ This project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 Packages without a separate changelog are covered by the cross-package notes below.
 
-## [Unreleased]
+## [Unreleased - Minor]
+
+### Added
+
+- Action invocations can record an optional on-behalf-of requester (`requester_agent_id`, plus an optional `requester_name` that must equal that agent's name) alongside the authenticated caller. The requester is a caller-made claim, not authorization.
+- Workspace leaders: admins set a list of agent names or `*`/`?` globs with `PUT /v1/workspace/leaders`, and anyone in the workspace reads the matching registered agents with `GET /v1/workspace/leaders` (SDK: `workspace.getLeaders()` / `workspace.setLeaders({ patterns })`). GET accepts a workspace key, agent token or node token; PUT requires the workspace key.
 
 ## [12.12.1] - 2026-11-17
 
