@@ -9,6 +9,10 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ## [Unreleased - Patch]
 
+### Changed
+
+- Authenticated agent requests now refresh `agents.last_seen` at most once per 120 s (was 30 s) to cut heartbeat UPDATE load; the 5 minute liveness TTL is unchanged.
+
 ### Fixed
 
 - `GET /v1/agents` under a node liveness authority returns in bounded time. It probed every distinct hosting node, eight at a time with a 2 s deadline each, so a roster of a few hundred direct agents took longer than the hosted caller's 15 s timeout. Probes now share a 1.5 s budget per request (`NODE_LIVENESS_PROBE_BUDGET_MS`), nodes whose row was checkpointed online go first, freshest first, and a node whose last checkpoint is older than any online node keeps is offline without a probe, as `GET /v1/nodes?status=online` already assumes. An agent whose node was not probed in time takes its status from that node's checkpoint: a node checkpointed `online` within that bound counts as live, so the agent keeps its stored status instead of turning `offline`. Probed nodes are decided as before.
