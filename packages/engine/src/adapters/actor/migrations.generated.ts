@@ -874,6 +874,12 @@ export const ACTOR_MIGRATIONS: readonly (readonly [string, readonly string[]])[]
       "ALTER TABLE action_invocations\n  ADD COLUMN requester_agent_id TEXT REFERENCES agents(id) ON DELETE SET NULL",
       "ALTER TABLE action_invocations\n  ADD COLUMN requester_name TEXT"
     ]
+  ],
+  [
+    "0086_workspace_leaders.sql",
+    [
+      "ALTER TABLE workspaces\n  ADD COLUMN leaders text"
+    ]
   ]
 ];
 

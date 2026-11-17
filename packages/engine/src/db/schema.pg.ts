@@ -83,6 +83,7 @@ import type { FleetCapability } from '@relaycast/types';
 import type {
   ObserverTokenFilters,
   TaskInvocationState,
+  WorkspaceLeadersSettings,
   WorkspaceProvenanceRecord,
   WorkspaceRetentionSettings,
 } from './schema.js';
@@ -90,6 +91,7 @@ import type {
 export type {
   ObserverTokenFilters,
   TaskInvocationState,
+  WorkspaceLeadersSettings,
   WorkspaceProvenanceRecord,
   WorkspaceRetentionSettings,
 } from './schema.js';
@@ -150,6 +152,7 @@ export const workspaces = pgTable(
     createdAt: epochSeconds('created_at').notNull().default(epochNow),
     metadata: jsonb('metadata').$type<Record<string, unknown>>().default({}),
     retention: jsonb('retention').$type<WorkspaceRetentionSettings>(),
+    leaders: jsonb('leaders').$type<WorkspaceLeadersSettings>(),
     // A non-null deadline is an explicit, immutable opt-in to whole-workspace
     // deletion. Persistent workspaces always leave this null.
     expiresAt: epochSeconds('expires_at'),

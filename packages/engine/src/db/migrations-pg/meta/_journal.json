@@ -50,6 +50,13 @@
       "when": 1794900771754,
       "tag": "0006_action_invocation_requester",
       "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "7",
+      "when": 1794904190079,
+      "tag": "0007_workspace_leaders",
+      "breakpoints": true
     }
   ]
 }

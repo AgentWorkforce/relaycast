@@ -141,6 +141,7 @@ export const ANALYTICS_FIELD_RULES: Readonly<Record<string, AnalyticsFieldRule>>
   event_count: { type: 'count', doc: 'subscribed event types' },
   skill_count: { type: 'count', doc: 'number of directory skills (never the skills)' },
   tag_count: { type: 'count', doc: 'number of search tags (never the tags)' },
+  count: { type: 'count', doc: 'number of workspace leader patterns (never the patterns)' },
   score: { type: 'number', doc: 'directory rating / routing match score' },
   // Flags
   success: { type: 'flag', doc: 'route feedback outcome' },
@@ -227,6 +228,7 @@ export const ANALYTICS_EVENT_FIELDS: Readonly<Record<EngineObservationKind, read
   'presence.heartbeat': ['agent_id'],
   'presence.disconnected': ['agent_id'],
   'system.prompt.updated': ['operation'],
+  'workspace.leaders.updated': ['count'],
   'ws.session.started': ['session_scope'],
   'ws.session.ended': ['session_scope', 'duration_ms'],
   'action.registered': [],

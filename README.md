@@ -15,3 +15,12 @@ Action invokes may name an on-behalf-of requester with optional
 `requester_agent_id` (an agent in the same workspace) and `requester_name`
 (SDK: `actions.invoke(name, input, { requesterAgentId, requesterName })`).
 `caller_id` remains the authenticated agent; the requester is informational.
+
+Workspace leaders are an admin-set list of agent names or globs (`*` any run,
+`?` one character, whole-name, case-sensitive; at most 64 patterns of up to 128
+characters). Set them with the workspace key via
+`PUT /v1/workspace/leaders` `{"patterns":["*grok","admin"]}` (`{"patterns":[]}`
+or `{"reset":true}` clears); any agent reads
+`GET /v1/workspace/leaders` → `{"leaders":[{"name","agent_id"}],"patterns":[...]}`,
+the registered agents currently matching, sorted by name
+(SDK: `workspace.getLeaders()` / `workspace.setLeaders({ patterns })`).

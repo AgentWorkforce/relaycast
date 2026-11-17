@@ -192,6 +192,7 @@ describe("loadBundledPostgresMigrations", () => {
       "0004_handler_snapshot_backfill.sql",
       "0005_delivery_confirmation.sql",
       "0006_action_invocation_requester.sql",
+      "0007_workspace_leaders.sql",
     ]);
     expect(bundled.every((m) => m.statements.length > 0)).toBe(true);
   });

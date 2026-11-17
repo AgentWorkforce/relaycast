@@ -12,6 +12,7 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 ### Added
 
 - Optional nullable `requester_agent_id` and `requester_name` on action invocation responses.
+- `WorkspaceLeadersSettings`, `WorkspaceLeader`, `WorkspaceLeadersResponse` and `SetWorkspaceLeadersRequest` schemas, plus the `relaycast_server_workspace_leaders_updated` server telemetry event.
 
 ## [12.12.0] - 2026-11-17
 
