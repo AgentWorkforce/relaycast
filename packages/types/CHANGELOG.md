@@ -9,6 +9,12 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ## [Unreleased]
 
+## [12.12.0] - 2026-11-17
+
+### Added
+
+- Optional validated `after_seq` cursor on delivery queue queries.
+
 ## [12.11.0] - 2026-11-15
 
 ### Added

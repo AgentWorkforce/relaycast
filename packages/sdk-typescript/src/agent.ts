@@ -993,11 +993,12 @@ export class AgentClient {
    * arrives or the wait expires. A connected agent (`connect()`) receives
    * deliveries over its socket and needs no polling at all.
    */
-  async deliveries(options?: { status?: DeliveryStatus; limit?: number; waitMs?: number }): Promise<DeliveryItem[]> {
+  async deliveries(options?: { status?: DeliveryStatus; limit?: number; waitMs?: number; afterSeq?: number }): Promise<DeliveryItem[]> {
     const params: Record<string, string> = {};
     if (options?.status) params.status = options.status;
     if (options?.limit != null) params.limit = String(options.limit);
     if (options?.waitMs != null) params.wait = String(options.waitMs);
+    if (options?.afterSeq != null) params.after_seq = String(options.afterSeq);
     return this.client.get('/v1/deliveries', params);
   }
 

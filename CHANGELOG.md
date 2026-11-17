@@ -16,11 +16,17 @@ This project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 Packages without a separate changelog are covered by the cross-package notes below.
 
-## [Unreleased]
+## [Unreleased - Patch]
 
 ### Fixed
 
 - A message posted through an inbound webhook (`POST /v1/hooks/:id`) no longer matches `mentions` event-subscription filters. Its text comes from whoever holds the webhook URL, so an `@name` in it could deliver the post to an agent that subscribes to its mentions outside that channel. Its `message.created` event now carries `metadata.__relaycast_origin: "inbound_webhook"`. Channel and unfiltered subscriptions still receive it.
+
+## [12.12.0] - 2026-11-17
+
+### Added
+
+- Recipient-scoped delivery queue pagination can scan past retained entries without acknowledging or replaying them.
 
 ## [12.11.0] - 2026-11-15
 
@@ -1064,7 +1070,8 @@ Packages without a separate changelog are covered by the cross-package notes bel
 
 Earlier releases are available on the [GitHub releases page](https://github.com/AgentWorkforce/relaycast/releases).
 
-[Unreleased]: https://github.com/AgentWorkforce/relaycast/compare/v12.11.0...HEAD
+[Unreleased]: https://github.com/AgentWorkforce/relaycast/compare/v12.12.0...HEAD
+[12.12.0]: https://github.com/AgentWorkforce/relaycast/compare/v12.11.0...v12.12.0
 [12.11.0]: https://github.com/AgentWorkforce/relaycast/compare/v12.10.1...v12.11.0
 [12.10.1]: https://github.com/AgentWorkforce/relaycast/compare/v12.10.0...v12.10.1
 [12.10.0]: https://github.com/AgentWorkforce/relaycast/compare/v12.8.0...v12.10.0
