@@ -12,7 +12,7 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 ### Added
 
 - `POST /v1/actions/:name/invoke` and `/v1/actions/spawn/strict-invoke` accept optional `requester_agent_id` / `requester_name`; the requester must be an agent in the workspace, the name defaults to that agent's name, both are returned on the invoke response and `GET /v1/actions/:name/invocations/:id`, and an Idempotency-Key reused with a different requester returns 409 `idempotency_key_reused`.
-- `GET /v1/workspace/leaders` (any agent or workspace key) resolves the workspace's leader patterns against registered agents; `PUT /v1/workspace/leaders` (workspace key) replaces or clears them. Stored in the new nullable `workspaces.leaders` column (SQLite migration 0086, Postgres 0007); emits `workspace.leaders.updated` with `count`.
+- `GET /v1/workspace/leaders` resolves the workspace's leader patterns against registered agents; `PUT /v1/workspace/leaders` replaces or clears them. GET accepts a workspace key, agent token or node token; PUT requires the workspace key. Stored in the new nullable `workspaces.leaders` column (SQLite migration 0086, Postgres 0007); emits `workspace.leaders.updated` with `count`.
 
 ## [12.12.0] - 2026-11-17
 
