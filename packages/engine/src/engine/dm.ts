@@ -54,6 +54,7 @@ import {
 } from './address.js';
 import { buildMessageSessionWrite, requireSessionRefFromMetadata } from './sessionMessages.js';
 import { fetchAttachmentsBatch, resolveSendAttachments, type AttachmentRow } from './attachments.js';
+import { latestMessageIdsByChannel } from './dmAll.js';
 import { canonicalJson, canonicalUserMessageMetadata, publicMessageMetadata, sanitizeUserMessageMetadata } from './messageMetadata.js';
 import { queryInChunks } from '../lib/queryChunks.js';
 
@@ -1035,13 +1036,9 @@ export async function listConversations(
     .where(inArray(messages.channelId, ids))
     .groupBy(messages.channelId));
 
-  const latestMessageIds = await queryInChunks(channelIds, (ids) => db
-    .select({ channelId: messages.channelId, lastId: sql<string>`max(${messages.id})` })
-    .from(messages)
-    .where(inArray(messages.channelId, ids))
-    .groupBy(messages.channelId));
+  const latestMessageIds = await latestMessageIdsByChannel(db, channelIds);
 
-  const lastIds = latestMessageIds.map((row) => row.lastId).filter(Boolean);
+  const lastIds = latestMessageIds.map((row) => row.lastId).filter((id): id is string => id !== null);
   const lastMessages = await queryInChunks(lastIds, (ids) => db
     .select({
       id: messages.id,
