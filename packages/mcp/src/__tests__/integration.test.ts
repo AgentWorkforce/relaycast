@@ -18,6 +18,7 @@ describe('MCP → SDK → HTTP integration', () => {
   let client: Client;
   let captured: CapturedRequest[];
   let invalidAgentTokens: Set<string>;
+  let dmMessages: Array<{ id: string; text: string }>;
   let originalFetch: typeof global.fetch;
 
   function lastReq(): CapturedRequest {
@@ -31,6 +32,7 @@ describe('MCP → SDK → HTTP integration', () => {
   beforeEach(async () => {
     captured = [];
     invalidAgentTokens = new Set();
+    dmMessages = [];
     originalFetch = global.fetch;
 
     global.fetch = vi.fn(async (url: string | URL, init?: RequestInit) => {
@@ -121,6 +123,16 @@ describe('MCP → SDK → HTTP integration', () => {
           participants: [{ agent_id: 'a1' }, { agent_id: 'a2' }],
           created_at: new Date().toISOString(),
         };
+      } else if (path === '/v1/dm/forbidden/messages' && req.method === 'GET') {
+        return Response.json({
+          ok: false,
+          error: { code: 'forbidden', message: 'Not a participant in this conversation' },
+        }, { status: 403 });
+      } else if (path === '/v1/dm/conv1/messages' && req.method === 'GET') {
+        const { searchParams } = new URL(req.url);
+        const before = searchParams.get('before');
+        const limit = Number(searchParams.get('limit') ?? 50);
+        data = dmMessages.filter((message) => before === null || message.id < before).slice(0, limit);
       } else if (path.includes('/dm/conv1/messages')) {
         data = { id: 'dm_msg_1', conversation_id: 'conv1', text: (req.body as Record<string, unknown>)?.text };
       } else if (path.includes('/reactions') && req.method === 'POST') {
@@ -471,6 +483,88 @@ describe('MCP → SDK → HTTP integration', () => {
     const req = findReq((r) => r.url.includes('/dm/conversations'));
     expect(req).toBeDefined();
     expect(req!.url).toContain('limit=25');
+  });
+
+  it('message.dm.history forwards the cursor and limit and returns the oldest ID when more messages exist', async () => {
+    dmMessages = Array.from({ length: 102 }, (_, index) => ({
+      id: String(102 - index).padStart(3, '0'),
+      text: 'Direct message',
+    }));
+    const result = await client.callTool({
+      name: 'message.dm.history',
+      arguments: { conversation_id: 'conv1', before: '102', limit: 100 },
+    });
+
+    const expected = { messages: dmMessages.slice(1, 101), next_before: '002' };
+    expect(result.isError).toBeFalsy();
+    expect(result.structuredContent).toEqual(expected);
+    expect(result.content).toEqual([{ type: 'text', text: JSON.stringify(expected, null, 2) }]);
+    // Only history GETs use the current agent token; there is no mark-read call.
+    expect(captured.map(({ url, method, headers }) => [new URL(url).pathname, method, headers.authorization]))
+      .toEqual([
+        ['/v1/dm/conv1/messages', 'GET', 'Bearer at_test_integration'],
+        ['/v1/dm/conv1/messages', 'GET', 'Bearer at_test_integration'],
+      ]);
+    expect(Object.fromEntries(new URL(captured[0].url).searchParams)).toEqual({ before: '102', limit: '100' });
+    expect(Object.fromEntries(new URL(captured[1].url).searchParams)).toEqual({ before: '002', limit: '1' });
+
+    const nextPage = await client.callTool({
+      name: 'message.dm.history',
+      arguments: { conversation_id: 'conv1', before: expected.next_before, limit: 100 },
+    });
+    expect(nextPage.structuredContent).toEqual({ messages: dmMessages.slice(101), next_before: null });
+  });
+
+  it('message.dm.history defaults to 20 and returns a null cursor for an empty page', async () => {
+    const result = await client.callTool({
+      name: 'message.dm.history',
+      arguments: { conversation_id: 'conv1' },
+    });
+
+    expect(result.structuredContent).toEqual({ messages: [], next_before: null });
+    expect(captured).toHaveLength(1);
+    expect(Object.fromEntries(new URL(lastReq().url).searchParams)).toEqual({ limit: '20' });
+  });
+
+  it('message.dm.history returns a null cursor when the final page is full', async () => {
+    dmMessages = [{ id: '002', text: 'Newer' }, { id: '001', text: 'Older' }];
+    const result = await client.callTool({
+      name: 'message.dm.history',
+      arguments: { conversation_id: 'conv1', limit: 2 },
+    });
+
+    expect(result.structuredContent).toEqual({ messages: dmMessages, next_before: null });
+    expect(captured).toHaveLength(2);
+    expect(Object.fromEntries(new URL(lastReq().url).searchParams)).toEqual({ before: '001', limit: '1' });
+  });
+
+  it.each([
+    { limit: 101 },
+    { as: 'OtherAgent' },
+    { workspace_id: 'other-workspace' },
+    { workspace_alias: 'other-workspace' },
+    { token: 'other-token' },
+  ])('message.dm.history rejects unsupported arguments %j without calling the API', async (args) => {
+    const result = await client.callTool({
+      name: 'message.dm.history',
+      arguments: { conversation_id: 'conv1', ...args },
+    });
+
+    expect(result.isError).toBe(true);
+    expect(captured).toHaveLength(0);
+  });
+
+  it('message.dm.history reports a 403 without returning message content', async () => {
+    const result = await client.callTool({
+      name: 'message.dm.history',
+      arguments: { conversation_id: 'forbidden' },
+    });
+
+    expect(result.isError).toBe(true);
+    expect(result.structuredContent).toBeUndefined();
+    expect(result.content).toEqual([{ type: 'text', text: 'Not a participant in this conversation' }]);
+    expect(captured).toHaveLength(1);
+    expect(lastReq().method).toBe('GET');
   });
 
   it('message.dm.send_group → POST /v1/dm/group then POST /v1/dm/:id/messages', async () => {

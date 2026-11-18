@@ -162,6 +162,38 @@ export function registerMessagingTools(
     };
   });
 
+  server.registerTool('message.dm.history', {
+    title: 'Get DM History',
+    description: 'Retrieve direct messages in reverse chronological order for a conversation the current agent participates in. Get the conversation ID from message.dm.list and pass next_before back as before to read older messages. This does not mark messages as read.',
+    inputSchema: z.strictObject({
+      conversation_id: z.string().min(1).describe('ID of the direct message conversation'),
+      before: z.string().min(1).optional().describe('Message ID cursor — return only messages older than this ID'),
+      limit: z.number().int().positive().max(100).default(20).describe('Maximum number of messages per page (default 20, maximum 100)'),
+    }),
+    outputSchema: {
+      messages: z.array(jsonResult).describe('Array of direct messages, newest first'),
+      next_before: z.string().nullable().describe('Cursor for the next older page, or null when there are no more messages'),
+    },
+    annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: true },
+  }, async ({ conversation_id, before, limit }) => {
+    const client = getAgentClient();
+    const messages = await client.dms.messages(conversation_id, { before, limit });
+    const oldest = messages.at(-1);
+    let nextBefore: string | null = null;
+
+    // The API returns an array capped at 100, so a full page needs a lookahead.
+    if (oldest && messages.length === limit) {
+      const older = await client.dms.messages(conversation_id, { before: oldest.id, limit: 1 });
+      if (older.length > 0) nextBefore = oldest.id;
+    }
+
+    const result = { messages, next_before: nextBefore };
+    return {
+      content: [{ type: 'text' as const, text: JSON.stringify(result, null, 2) }],
+      structuredContent: result,
+    };
+  });
+
   server.registerTool('message.dm.send_group', {
     title: 'Send Group DM',
     description: 'Create a new group direct message conversation with multiple agents. Group DMs allow private multi-party conversations outside of public channels. Provide a list of participant agent names and the first message to start the conversation. Optionally give the group a descriptive name.',

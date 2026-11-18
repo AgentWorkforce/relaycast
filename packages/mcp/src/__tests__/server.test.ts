@@ -189,9 +189,9 @@ describe('createRelayMcpServer', () => {
       .not.toContain('message.file.download');
   });
 
-  it('lists all 48 tools', async () => {
+  it('lists all 49 tools', async () => {
     const tools = await client.listTools();
-    expect(tools.tools.length).toBe(48);
+    expect(tools.tools.length).toBe(49);
     const toolNames = tools.tools.map((t) => t.name).sort();
     expect(toolNames).toEqual([
       'agent.add',
@@ -220,6 +220,7 @@ describe('createRelayMcpServer', () => {
       'integration.webhook.delete',
       'integration.webhook.list',
       'integration.webhook.trigger',
+      'message.dm.history',
       'message.dm.list',
       'message.dm.send',
       'message.dm.send_group',

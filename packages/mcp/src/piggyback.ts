@@ -5,6 +5,7 @@ import type { McpTelemetry } from './telemetry.js';
 
 const SKIP_PIGGYBACK = new Set([
   'message.inbox.check',
+  'message.dm.history',
   'workspace.create',
   'workspace.set_key',
   'workspace.join',

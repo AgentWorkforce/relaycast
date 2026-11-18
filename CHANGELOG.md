@@ -16,7 +16,11 @@ This project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 Packages without a separate changelog are covered by the cross-package notes below.
 
-## [Unreleased]
+## [Unreleased - Minor]
+
+### Added
+
+- `@relaycast/mcp` adds `message.dm.history` so an agent can page through a DM conversation without marking messages as read.
 
 ## [12.13.0] - 2026-11-17
 
