@@ -568,6 +568,107 @@ describe('agent device tokens', () => {
       expect(socket.sock.closed).toBe(true);
     });
 
+    describe('on a host that closes sockets only by the hashes a revocation names', () => {
+      // The hosted registry: disconnectNodeDeviceSockets, but no in-memory list of open bindings.
+      function hashListHost() {
+        const registry = stack.runtime.realtime as unknown as Record<string, unknown>;
+        const original = registry.nodeConnectionDeviceTokenHashes;
+        const calls: string[][] = [];
+        const realClose = (registry.disconnectNodeDeviceSockets as (...args: unknown[]) => Promise<void>).bind(registry);
+        let failures = 0;
+        registry.nodeConnectionDeviceTokenHashes = undefined;
+        registry.disconnectNodeDeviceSockets = async (workspaceId: string, nodeId: string, hashes: string[]) => {
+          calls.push([...hashes].sort());
+          if (failures > 0) { failures -= 1; throw new Error('do unreachable'); }
+          return realClose(workspaceId, nodeId, hashes);
+        };
+        return {
+          calls,
+          failNext: (count: number) => { failures = count; },
+          restore: () => {
+            registry.nodeConnectionDeviceTokenHashes = original;
+            registry.disconnectNodeDeviceSockets = realClose;
+          },
+        };
+      }
+      const sha = async (token: string) => (await import('../../lib/crypto.js')).sha256Hex(token);
+
+      it('names the revoked, replaced or dropped device tokens on every revocation path', async () => {
+        const { ws, ada } = await seedWithChannel();
+        const host = hashListHost();
+        try {
+          const laptopToken = await mintToken(ws, ada.agentId, laptop);
+          const replaced = await mintToken(ws, ada.agentId, laptop); // re-mint names the old token
+          expect(host.calls.at(-1)).toEqual([await sha(laptopToken)]);
+          await request('DELETE', `/v1/agents/ada/device-tokens/${laptop.id}`, ws.workspaceKey);
+          expect(host.calls.at(-1)).toEqual([await sha(replaced)]);
+          const a = await mintToken(ws, ada.agentId, laptop);
+          const b = await mintToken(ws, ada.agentId, buildBox);
+          await post('/v1/agents/ada/takeover', ws.workspaceKey, {
+            expected_agent_id: ada.agentId, actor: 'cloud-user:u1', reason: 'test', session_ref: 's1', node_id: 'cloud-dashboard',
+          });
+          expect(host.calls.at(-1)).toEqual([await sha(a), await sha(b)].sort());
+        } finally {
+          host.restore();
+        }
+      });
+
+      it('retries a failed close, so the revoked device\'s socket still goes', async () => {
+        const { ws, ada } = await seedWithChannel();
+        const laptopToken = await mintToken(ws, ada.agentId, laptop);
+        const bound = await mintNodeToken(laptopToken);
+        const socket = await openSocket(bound.node_id, bound.token, ada, ws.workspaceId);
+        const host = hashListHost();
+        try {
+          host.failNext(1);
+          await request('DELETE', `/v1/agents/ada/device-tokens/${laptop.id}`, ws.workspaceKey);
+          expect(host.calls).toHaveLength(2);
+          expect(socket.sock.closed).toBe(true);
+        } finally {
+          host.restore();
+        }
+      });
+    });
+
+    it('refuses node.register on a socket whose device token is gone', async () => {
+      const { ws, ada } = await seedWithChannel();
+      const laptopToken = await mintToken(ws, ada.agentId, laptop);
+      const bound = await mintNodeToken(laptopToken);
+      const socket = await openSocket(bound.node_id, bound.token, ada, ws.workspaceId, false);
+      await stack.runtime.handle.db.update(agentDeviceTokens).set({ expiresAt: new Date(Date.now() - 1000) });
+      await socket.handle.handleMessage(JSON.stringify({
+        v: 1, id: 'reg', type: 'node.register', node_id: bound.node_id, name: `direct-${ada.agentId}`,
+        capabilities: [], max_agents: 1, tags: [], version: 't', resume_cursor: null,
+      }));
+      expect(socket.sock.closed).toBe(true);
+    });
+
+    it('checks the row on checkpoint heartbeats of untracked sockets', async () => {
+      const { ws, ada } = await seedWithChannel();
+      const laptopToken = await mintToken(ws, ada.agentId, laptop);
+      const bound = await mintNodeToken(laptopToken);
+      let closed = false;
+      const replies: string[] = [];
+      const frame = (message: Json, extra: Json = {}) => handleNodeControlMessage({
+        db: stack.runtime.handle.db as never,
+        registry: stack.runtime.realtime as never,
+        workspaceId: ws.workspaceId,
+        nodeId: bound.node_id,
+        socket: { send: (data: string) => { replies.push(data); }, close: () => { closed = true; } } as never,
+        raw: JSON.stringify(message),
+        ...extra,
+      } as never);
+      await frame({
+        v: 1, id: 'reg', type: 'node.register', node_id: bound.node_id, name: `direct-${ada.agentId}`,
+        capabilities: [], max_agents: 1, tags: [], version: 't', resume_cursor: null,
+      });
+      await stack.runtime.handle.db.update(agentDeviceTokens).set({ expiresAt: new Date(Date.now() - 1000) });
+      await frame({ v: 1, id: 'hb', type: 'node.heartbeat', load: 0, active_agents: 0, handlers_live: false },
+        { heartbeatCheckpoint: { role: 'direct' } });
+      expect(closed).toBe(true);
+      expect(replies.filter((reply) => reply.includes('"hb"')).join('')).toContain('node_token_invalid');
+    });
+
     it('lets a direct node post only as its own agent (M2)', async () => {
       const { ws, ada, bob } = await seedWithChannel();
       expect((await post('/v1/channels/ops/join', bob.token, {})).status).toBeLessThan(300);

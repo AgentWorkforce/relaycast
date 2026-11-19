@@ -567,6 +567,9 @@ agentRoutes.post(
  * device, so any device-invalidating mutation (or a dead row binding) closes
  * the whole direct node. Best-effort: node auth already refuses those tokens.
  */
+/** Attempts to close a revoked device's sockets before giving up to the heartbeat check. */
+const DISCONNECT_ATTEMPTS = 3;
+
 async function disconnectIfBindingDead(
   c: Context<AppEnv>,
   workspaceId: string,
@@ -589,7 +592,19 @@ async function disconnectIfBindingDead(
       const live = await agentDeviceEngine.liveDeviceTokenHashes(c.get('db'), workspaceId, opened);
       for (const hash of opened) if (!live.has(hash)) dead.add(hash);
     }
-    if (dead.size > 0) await registry.disconnectNodeDeviceSockets(workspaceId, nodeId, [...dead]);
+    if (dead.size > 0) {
+      // A failed close leaves a dead device's socket open until its heartbeat
+      // check runs (cached up to DEVICE_LIVENESS_RECHECK_MS): retry it.
+      for (let attempt = 0; ; attempt += 1) {
+        try {
+          await registry.disconnectNodeDeviceSockets(workspaceId, nodeId, [...dead]);
+          break;
+        } catch (err) {
+          if (attempt >= DISCONNECT_ATTEMPTS - 1) throw err;
+          await new Promise((resolve) => setTimeout(resolve, 100 * (attempt + 1)));
+        }
+      }
+    }
   } catch (err) {
     console.warn('[agent.device] bound node disconnect failed', { workspaceId, error: String(err) });
   }
