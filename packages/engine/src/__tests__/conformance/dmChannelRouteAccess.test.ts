@@ -1,6 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import {
   createWorkspace,
+  D1_MAX_BOUND_PARAMETERS,
+  enforceD1ParameterLimit,
   makeNodeStack,
   registerAgent,
   type TestStack,
@@ -186,5 +188,47 @@ describe('DM content through channel and message routes', () => {
 
     const after = await call('GET', `/messages/${group.messageId}`, dave.token);
     expect(after.status).toBe(404);
+  });
+
+  it('keeps a DM posted through the channel route in its participants\' console logs', async () => {
+    const { alice, bob, carol, pair } = await setup();
+    const post = await call('POST', `/channels/${pair.channel}/messages`, alice.token, { text: 'viachannel three' });
+    expect(post.status).toBe(201);
+
+    for (const participant of [alice, bob]) {
+      const logs = await call<Array<{ text: string }>>('GET', '/console/messages?limit=100', participant.token);
+      expect(logs.status).toBe(200);
+      expect(logs.data.map((log) => log.text)).toContain('viachannel three');
+    }
+    const outsider = await call('GET', '/console/messages?limit=100', carol.token);
+    expect(outsider.status).toBe(200);
+    expect(outsider.text).not.toContain('viachannel');
+  });
+
+  it('filters a full page of distinct DM conversations inside the D1 parameter limit', async () => {
+    const ws = await createWorkspace(stack.app, 'dm-route-access-d1-ws');
+    const hub = await registerAgent(stack.app, ws.workspaceKey, 'hub');
+    const outsider = await registerAgent(stack.app, ws.workspaceKey, 'outsider');
+    const PEERS = 100;
+    for (let index = 0; index < PEERS; index += 1) {
+      const peer = await registerAgent(stack.app, ws.workspaceKey, `peer-${index}`);
+      const dm = await call('POST', '/dm', peer.token, { to: 'hub', text: `fanword ${index}` });
+      expect(dm.status).toBe(201);
+    }
+
+    const guard = enforceD1ParameterLimit(stack);
+    try {
+      for (const path of ['/search?q=fanword&limit=100', '/console/messages?limit=100&delivery_kind=dm']) {
+        const mine = await call<unknown[]>('GET', path, hub.token);
+        expect(mine.status, path).toBe(200);
+        expect(mine.data, path).toHaveLength(PEERS);
+        const theirs = await call<unknown[]>('GET', path, outsider.token);
+        expect(theirs.status, path).toBe(200);
+        expect(theirs.data, path).toHaveLength(0);
+      }
+      expect(guard.maxObserved()).toBeLessThanOrEqual(D1_MAX_BOUND_PARAMETERS);
+    } finally {
+      guard.restore();
+    }
   });
 });

@@ -1,6 +1,7 @@
 import { and, eq, inArray, isNull } from 'drizzle-orm';
 import type { getDb } from '../db/index.js';
 import { channels, dmConversations, dmParticipants, messages } from '../db/tables.js';
+import { queryInChunks } from '../lib/queryChunks.js';
 
 type Db = ReturnType<typeof getDb>;
 
@@ -72,10 +73,15 @@ export async function agentDmAccessForMessage(
 /**
  * Drops DM rows the agent is not a participant in from a mixed result list
  * (search hits, console message logs). A row is treated as DM content when it
- * carries a conversation id or a non-zero channel type; a DM row without a
- * conversation id cannot be attributed and is dropped.
+ * carries a conversation id or a non-zero channel type.
+ *
+ * Rows are attributed by their backing channel, because a message posted to a
+ * DM through the channel route is logged without a conversation id; the
+ * conversation id is the fallback for a row with no channel id. A DM row with
+ * neither cannot be attributed and is dropped.
  */
 export async function filterAgentVisibleDmResults<T extends {
+  channel_id?: string | null;
   conversation_id?: string | null;
   channel_type?: number | null;
 }>(
@@ -85,20 +91,39 @@ export async function filterAgentVisibleDmResults<T extends {
 ): Promise<T[]> {
   if (!agentId || results.length === 0) return results;
   const isDm = (result: T) => Boolean(result.conversation_id) || isDmBackedChannelType(result.channel_type);
-  const conversationIds = [...new Set(results
-    .filter(isDm)
-    .map((result) => result.conversation_id)
-    .filter((id): id is string => Boolean(id)))];
-  if (conversationIds.length === 0) return results.filter((result) => !isDm(result));
+  const dmRows = results.filter(isDm);
+  if (dmRows.length === 0) return results;
 
-  const rows = await db
+  const distinct = (values: Array<string | null | undefined>) =>
+    [...new Set(values.filter((value): value is string => Boolean(value)))];
+  const channelIds = distinct(dmRows.map((row) => row.channel_id));
+  const conversationIds = distinct(dmRows.filter((row) => !row.channel_id).map((row) => row.conversation_id));
+
+  // A page can hold up to 100 distinct conversations; chunk to stay inside
+  // D1's bound-parameter ceiling.
+  const byChannel = await queryInChunks(channelIds, (ids) => db
+    .select({ channelId: dmConversations.channelId })
+    .from(dmConversations)
+    .innerJoin(dmParticipants, eq(dmParticipants.conversationId, dmConversations.id))
+    .where(and(
+      eq(dmParticipants.agentId, agentId),
+      isNull(dmParticipants.leftAt),
+      inArray(dmConversations.channelId, ids),
+    )));
+  const byConversation = await queryInChunks(conversationIds, (ids) => db
     .select({ conversationId: dmParticipants.conversationId })
     .from(dmParticipants)
     .where(and(
       eq(dmParticipants.agentId, agentId),
       isNull(dmParticipants.leftAt),
-      inArray(dmParticipants.conversationId, conversationIds),
-    ));
-  const allowed = new Set(rows.map((row) => row.conversationId));
-  return results.filter((result) => !isDm(result) || Boolean(result.conversation_id && allowed.has(result.conversation_id)));
+      inArray(dmParticipants.conversationId, ids),
+    )));
+  const allowedChannels = new Set(byChannel.map((row) => row.channelId));
+  const allowedConversations = new Set(byConversation.map((row) => row.conversationId));
+
+  return results.filter((result) => {
+    if (!isDm(result)) return true;
+    if (result.channel_id) return allowedChannels.has(result.channel_id);
+    return Boolean(result.conversation_id && allowedConversations.has(result.conversation_id));
+  });
 }
