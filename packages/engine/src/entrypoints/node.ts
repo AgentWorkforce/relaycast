@@ -29,6 +29,7 @@ import {
   authenticateRealtimeWs,
   missingWsToken,
   queryOrBearerToken,
+  attachAuthenticatedNodeSocket,
 } from '../engine/wsAuth.js';
 
 export { credentialConfigFromEnv, type CredentialEnvConfig } from '../config/credentialEnv.js';
@@ -329,13 +330,8 @@ function serveRuntime<R extends NodeRuntimeWithDb>(
             return;
           }
           wss.handleUpgrade(req, socket, head, (ws) => {
-            const handle = runtime.realtime.attachNodeSocket(
-              authResult.node.workspaceId,
-              authResult.node.id,
-              toEngineSocket(ws),
-              // The socket remembers the binding of the token that opened it.
-              { deviceTokenHash: authResult.node.deviceTokenHash ?? null },
-            );
+            // The socket remembers the binding of the token that opened it.
+            const handle = attachAuthenticatedNodeSocket(runtime.realtime, authResult, toEngineSocket(ws));
             ws.on('message', (data) => { void handle.handleMessage(data.toString()); });
             ws.on('close', () => { void handle.handleClose(); });
           });

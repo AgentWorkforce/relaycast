@@ -23,6 +23,7 @@ import * as agentEngine from '../engine/agent.js';
 import { agentRetentionSchema, retainAgents } from '../engine/agentRetention.js';
 import * as agentIdentityEngine from '../engine/agentIdentity.js';
 import * as agentDeviceEngine from '../engine/agentDevice.js';
+import { forgetDeviceLiveness } from '../engine/agentDevice.js';
 import * as nodeEngine from '../engine/node.js';
 import * as actionEngine from '../engine/action.js';
 import * as directoryEngine from '../engine/directory.js';
@@ -475,6 +476,7 @@ agentRoutes.post(
         );
       }
 
+      const droppedDevices = await agentDeviceEngine.agentDeviceTokenHashes(db, target.workspaceId, target.id);
       const result = await agentIdentityEngine.rotateAgentIdentity(db, {
         workspaceId: target.workspaceId,
         agentId: target.id,
@@ -488,7 +490,7 @@ agentRoutes.post(
         originActor: c.get('originActor'),
       });
       // Recovery drops the agent's device tokens, and with them any bound node token.
-      await disconnectIfBindingDead(c, target.workspaceId, target.id);
+      await disconnectIfBindingDead(c, target.workspaceId, target.id, droppedDevices);
       return jsonOk(c, result);
     } catch (err: unknown) {
       return errorResponse(c, err);
@@ -519,6 +521,7 @@ agentRoutes.post(
         );
       }
 
+      const takenDevices = await agentDeviceEngine.agentDeviceTokenHashes(db, workspace.id, target.id);
       const result = await agentIdentityEngine.takeOverAgentIdentity(db, {
         workspaceId: workspace.id,
         agentId: target.id,
@@ -530,7 +533,7 @@ agentRoutes.post(
         nodeId: parsed.data.node_id,
         originActor: c.get('originActor'),
       });
-      await disconnectIfBindingDead(c, workspace.id, target.id);
+      await disconnectIfBindingDead(c, workspace.id, target.id, takenDevices);
       await fanoutToAgents(c, [target.id], 'agent.identity_taken_over', {
         agent_id: target.id,
         agent_name: target.name,
@@ -553,29 +556,39 @@ agentRoutes.post(
 );
 
 /**
- * Close the person's direct-node sockets that were opened with a device-bound
- * node token whose device token is no longer live (revoked, re-minted,
- * expired, or deleted by a takeover, recovery, revoke-token or agent delete),
- * so that device loses node transport at once, not at its next heartbeat.
- * Each socket is judged by the token that opened it, never by the node row's
- * current binding; the person's other devices and unbound sockets stay.
- * Best-effort: node auth already refuses those tokens.
+ * Close the person's direct-node sockets that were opened with a device token
+ * that is no longer live, so that device loses node transport at once, not at
+ * its next heartbeat. `killed` are the device-token hashes this operation
+ * revoked, replaced or deleted. A host that tracks open sockets in memory also
+ * sweeps the others it holds whose device is gone (expired). Each socket is
+ * judged by the token that opened it, never by the node row's current
+ * binding; the person's other devices and unbound sockets stay. A host with
+ * no per-socket binding falls back to the row (whole node). Best-effort: node
+ * auth already refuses those tokens.
  */
-async function disconnectIfBindingDead(c: Context<AppEnv>, workspaceId: string, agentId: string): Promise<void> {
+async function disconnectIfBindingDead(
+  c: Context<AppEnv>,
+  workspaceId: string,
+  agentId: string,
+  killed: readonly string[] = [],
+): Promise<void> {
   try {
     const nodeId = nodeEngine.directNodeIdForAgent(agentId);
     const registry = c.get('engine').nodeConnections;
-    if (!registry.nodeConnectionDeviceTokenHashes || !registry.disconnectNodeDeviceSockets) {
+    if (!registry.disconnectNodeDeviceSockets) {
       if (await agentDeviceEngine.nodeBindingDead(c.get('db'), workspaceId, nodeId)) {
         await registry.disconnectNode(workspaceId, nodeId);
       }
       return;
     }
-    const opened = registry.nodeConnectionDeviceTokenHashes(workspaceId, nodeId);
-    if (opened.length === 0) return;
-    const live = await agentDeviceEngine.liveDeviceTokenHashes(c.get('db'), workspaceId, opened);
-    const dead = opened.filter((hash) => !live.has(hash));
-    if (dead.length > 0) await registry.disconnectNodeDeviceSockets(workspaceId, nodeId, dead);
+    forgetDeviceLiveness(killed);
+    const dead = new Set(killed);
+    const opened = registry.nodeConnectionDeviceTokenHashes?.(workspaceId, nodeId) ?? [];
+    if (opened.length > 0) {
+      const live = await agentDeviceEngine.liveDeviceTokenHashes(c.get('db'), workspaceId, opened);
+      for (const hash of opened) if (!live.has(hash)) dead.add(hash);
+    }
+    if (dead.size > 0) await registry.disconnectNodeDeviceSockets(workspaceId, nodeId, [...dead]);
   } catch (err) {
     console.warn('[agent.device] bound node disconnect failed', { workspaceId, error: String(err) });
   }
@@ -598,8 +611,9 @@ agentRoutes.post(
         ttlSeconds: parsed.data.ttl_seconds,
       });
       // A re-mint replaces the device's token, and with it any node token it bound.
-      await disconnectIfBindingDead(c, workspace.id, result.agent_id);
-      return jsonCreated(c, result);
+      const { replacedTokenHash, ...minted } = result;
+      await disconnectIfBindingDead(c, workspace.id, result.agent_id, replacedTokenHash ? [replacedTokenHash] : []);
+      return jsonCreated(c, minted);
     } catch (err: unknown) {
       return errorResponse(c, err);
     }
@@ -617,7 +631,7 @@ agentRoutes.delete(
       const workspace = c.get('workspace');
       const revoked = await agentDeviceEngine.revokeAgentDeviceToken(
         c.get('db'), workspace.id, c.req.param('name'), c.req.param('device_id'));
-      if (revoked) await disconnectIfBindingDead(c, workspace.id, revoked);
+      if (revoked) await disconnectIfBindingDead(c, workspace.id, revoked.agentId, [revoked.tokenHash]);
       return jsonOk(c, { revoked: Boolean(revoked) });
     } catch (err: unknown) {
       return errorResponse(c, err);
@@ -647,6 +661,7 @@ agentRoutes.post(
           409,
         );
       }
+      const revokedDevices = await agentDeviceEngine.agentDeviceTokenHashes(db, workspace.id, target.id);
       const result = await agentIdentityEngine.revokeAgentIdentityTokens(db, {
         workspaceId: workspace.id,
         agentId: target.id,
@@ -658,7 +673,7 @@ agentRoutes.post(
         nodeId: parsed.data.node_id,
         originActor: c.get('originActor'),
       });
-      await disconnectIfBindingDead(c, workspace.id, target.id);
+      await disconnectIfBindingDead(c, workspace.id, target.id, revokedDevices);
       emitServerEvent(c, workspace.id, 'agent.token.revoked', {
         agent_id: target.id,
         agent_name: target.name,
@@ -949,9 +964,17 @@ agentRoutes.delete(
       const db = c.get('db');
       const workspace = c.get('workspace');
       const name = c.req.param('name');
+      const [doomed] = await db.select({ id: agents.id }).from(agents)
+        .where(and(eq(agents.workspaceId, workspace.id), eq(agents.name, name)));
       const deleted = await agentEngine.deleteAgent(db, workspace.id, name);
       if (!deleted) {
         return agentNotFound(c, name);
+      }
+      // Its direct node row is gone with its device tokens; close that node's
+      // sockets too, so no device (or other holder) keeps node transport.
+      if (doomed) {
+        await c.get('engine').nodeConnections.disconnectNode(workspace.id, nodeEngine.directNodeIdForAgent(doomed.id))
+          .catch((err) => console.warn('[agent.delete] direct node disconnect failed', { error: String(err) }));
       }
       emitServerEvent(c, workspace.id, 'agent.deleted', {
         agent_name: name,

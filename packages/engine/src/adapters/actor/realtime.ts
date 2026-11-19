@@ -505,7 +505,17 @@ export class ActorRealtime implements RealtimeBus, ConnectionRegistry, NodeConne
       if (!node) return false;
       // A socket opened with a device-bound token whose device is gone is not
       // re-attached after the actor slept (node auth refuses that token too).
-      if (row.deviceTokenHash && !await deviceTokenLive(this.db, row.deviceTokenHash)) return false;
+      // Its registry state is torn down as a close would, so the node and its
+      // provider go offline now rather than at the liveness sweep.
+      if (row.deviceTokenHash && !await deviceTokenLive(this.db, row.deviceTokenHash)) {
+        const stale = this.inner.attachNodeSocket(workspaceId, row.nodeId, this.engineSocket(row.socketId), {
+          connectionId: row.socketId,
+          earlyDrain: false,
+          deviceTokenHash: row.deviceTokenHash,
+        });
+        await stale.handleClose();
+        return false;
+      }
       const handle = this.inner.attachNodeSocket(workspaceId, row.nodeId, this.engineSocket(row.socketId), {
         connectionId: row.socketId,
         earlyDrain: options.earlyDrain,
@@ -580,8 +590,12 @@ export class ActorRealtime implements RealtimeBus, ConnectionRegistry, NodeConne
     if (principal.kind === 'node') {
       const node = await getNodeById(this.db, principal.workspace_id, principal.node_id);
       if (!node) return reject(socket, UNAUTHORIZED_CLOSE_CODE, 'unknown node');
-      socket.setTags(connectionTag(socket.id), 'kind:node', `node:${principal.node_id}`);
       const deviceTokenHash = principal.device_token_hash ?? null;
+      // A grant issued before its device was revoked must not attach (grants live up to SOCKET_GRANT_MAX_AGE_MS).
+      if (deviceTokenHash && !await deviceTokenLive(this.db, deviceTokenHash)) {
+        return reject(socket, UNAUTHORIZED_CLOSE_CODE, 'device token revoked');
+      }
+      socket.setTags(connectionTag(socket.id), 'kind:node', `node:${principal.node_id}`);
       const handle = this.inner.attachNodeSocket(principal.workspace_id, principal.node_id, this.engineSocket(socket.id), {
         connectionId: socket.id,
         deviceTokenHash,

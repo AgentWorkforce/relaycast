@@ -24,7 +24,7 @@ import {
 } from '@relaycast/types';
 import type { getDb } from '../db/index.js';
 import { actionInvocations, actions, agents, agentDeviceTokens, agentNodeBindings, channelMembers, channels, nodeProviders, nodes, workspaces } from '../db/tables.js';
-import { deviceTokenLive, liveNodeBinding, nodeDeviceJoin } from './agentDevice.js';
+import { deviceTokenLiveCached, liveNodeBinding, nodeDeviceJoin, nodeIsDeviceBound } from './agentDevice.js';
 import { isWorkspaceExpired, WORKSPACE_EXPIRED_CODE, WORKSPACE_EXPIRED_MESSAGE } from '../auth/workspaceExpiry.js';
 import { randomHex, sha256Hex } from '../lib/crypto.js';
 import { codedError } from '../lib/httpError.js';
@@ -106,8 +106,12 @@ export interface HandleNodeControlMessageArgs {
   /**
    * The device-token binding of the node token that OPENED this socket
    * (nodes.device_token_hash when it authenticated), not the node row's
-   * current one, which a later mint may have changed. Null or absent: opened
-   * with an unbound node token.
+   * current one, which a later mint may have changed.
+   * - a string: opened with a device-bound node token;
+   * - null: the host tracks bindings and this socket was opened unbound;
+   * - undefined: the host does not track per-socket bindings. Every check
+   *   then falls back to the node row's current binding (the weaker rule),
+   *   never to "unbound".
    */
   connectionDeviceTokenHash?: string | null;
   /**
@@ -3810,6 +3814,10 @@ async function readHeartbeatDrainState(
       providerStatus: nodeProviders.status,
       providerHandlersLive: nodeProviders.handlersLive,
       providerLastHeartbeatAt: nodeProviders.lastHeartbeatAt,
+      // The row's binding, for hosts that do not track per-socket bindings.
+      deviceTokenHash: nodes.deviceTokenHash,
+      boundDeviceId: agentDeviceTokens.id,
+      boundDeviceExpiresAt: agentDeviceTokens.expiresAt,
     })
     .from(nodes)
     .leftJoin(nodeProviders, and(
@@ -3817,10 +3825,17 @@ async function readHeartbeatDrainState(
       eq(nodeProviders.nodeId, nodes.id),
       eq(nodeProviders.name, providerName),
     ))
+    .leftJoin(agentDeviceTokens, nodeDeviceJoin())
     .where(and(eq(nodes.workspaceId, workspaceId), eq(nodes.id, nodeId)));
-  if (!row) return { node: undefined, provider: undefined };
-  const { providerId, providerStatus, providerHandlersLive, providerLastHeartbeatAt, ...node } = row;
+  if (!row) return { node: undefined, provider: undefined, rowBindingDead: false };
+  const {
+    providerId, providerStatus, providerHandlersLive, providerLastHeartbeatAt,
+    deviceTokenHash, boundDeviceId, boundDeviceExpiresAt, ...node
+  } = row;
+  const rowBindingDead = deviceTokenHash !== null && (boundDeviceId === null
+    || (boundDeviceExpiresAt !== null && boundDeviceExpiresAt.getTime() <= Date.now()));
   return {
+    rowBindingDead,
     node,
     provider: providerId === null ? undefined : {
       status: providerStatus!,
@@ -4149,7 +4164,11 @@ export async function handleNodeControlMessage(args: HandleNodeControlMessageArg
         // the socket; this catches expiry), its heartbeat is refused and this
         // socket alone is closed. Checked against the token that opened it,
         // never the row's current binding.
-        if (args.connectionDeviceTokenHash && !await deviceTokenLive(args.db, args.connectionDeviceTokenHash)) {
+        // Untracked host (undefined): the row's binding, read with the drain
+        // state at no extra query (checkpoint heartbeats skip it, as before).
+        if (args.connectionDeviceTokenHash === undefined
+          ? prior?.rowBindingDead === true
+          : args.connectionDeviceTokenHash !== null && !await deviceTokenLiveCached(args.db, args.connectionDeviceTokenHash)) {
           closeSocket(args.socket, 'device token revoked');
           throw codedError('Node token is no longer valid', 'node_token_invalid', 401);
         }
@@ -4244,7 +4263,8 @@ export async function handleNodeControlMessage(args: HandleNodeControlMessageArg
       case 'agent.register': {
         // A socket opened with a device-bound node token never creates an
         // agent: its token would outlive the device that asked for it.
-        if (args.connectionDeviceTokenHash) {
+        if (args.connectionDeviceTokenHash
+          || (args.connectionDeviceTokenHash === undefined && await nodeIsDeviceBound(args.db, args.workspaceId, args.nodeId))) {
           throw codedError('A device token cannot manage agent credentials', 'device_token_forbidden', 403);
         }
         const registered = await registerAgentViaNode(
@@ -4303,7 +4323,7 @@ export async function handleNodeControlMessage(args: HandleNodeControlMessageArg
           message,
           {
             deliveryCursorSupported: supportsProviderDeliveryReadiness(args.registry),
-            connectionDeviceTokenHash: args.connectionDeviceTokenHash ?? null,
+            connectionDeviceTokenHash: args.connectionDeviceTokenHash,
           },
         );
         // Inventory only clears a hold for an agent it newly routes. A

@@ -117,6 +117,21 @@ export async function authenticateRealtimeWs(deps: WsAuthDeps, token: string): P
   return invalidWsToken('Invalid token format');
 }
 
+/**
+ * Attach an authenticated node socket to a registry so that it remembers the
+ * binding of the token that opened it (engine/agentDevice.ts): every host that
+ * attaches node sockets from `authenticateNodeWs` goes through here.
+ */
+export function attachAuthenticatedNodeSocket<H>(
+  registry: { attachNodeSocket(workspaceId: string, nodeId: string, socket: never, options: { deviceTokenHash: string | null }): H },
+  auth: Extract<NodeWsAuthResult, { ok: true }>,
+  socket: unknown,
+): H {
+  return registry.attachNodeSocket(auth.node.workspaceId, auth.node.id, socket as never, {
+    deviceTokenHash: auth.node.deviceTokenHash ?? null,
+  });
+}
+
 export async function authenticateNodeWs(deps: WsAuthDeps, token: string): Promise<NodeWsAuthResult> {
   const family = parseCredential(token)?.family;
   if (getAuthTokenKind(token) !== 'node' || (family !== 'ar' && acceptsOnlyAr(deps.db))) {

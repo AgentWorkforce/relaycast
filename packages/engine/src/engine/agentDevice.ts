@@ -83,7 +83,7 @@ export async function issueAgentDeviceToken(
   workspaceId: string,
   agentName: string,
   input: { expectedAgentId: string; device: { id: string; name: string; kind: string }; ttlSeconds?: number },
-): Promise<{ agent_id: string; device: AgentDeviceStamp; token: string; expires_at: string | null }> {
+): Promise<{ agent_id: string; device: AgentDeviceStamp; token: string; expires_at: string | null; replacedTokenHash: string | null }> {
   const device = validateDevice(input.device);
   if (input.ttlSeconds !== undefined && (!Number.isInteger(input.ttlSeconds)
     || input.ttlSeconds < AGENT_DEVICE_TTL_MIN_SECONDS || input.ttlSeconds > AGENT_DEVICE_TTL_MAX_SECONDS)) {
@@ -100,6 +100,14 @@ export async function issueAgentDeviceToken(
   if (agent.type !== 'human') {
     throw codedError('Device tokens are issued only for person (type "human") agents', 'not_a_person_agent', 409);
   }
+  const [previous] = await db
+    .select({ tokenHash: agentDeviceTokens.tokenHash })
+    .from(agentDeviceTokens)
+    .where(and(
+      eq(agentDeviceTokens.workspaceId, workspaceId),
+      eq(agentDeviceTokens.agentId, agent.id),
+      eq(agentDeviceTokens.deviceId, device.id),
+    ));
   const token = await issueAgentDeviceCredential(db, workspaceId);
   const tokenHash = await sha256Hex(token);
   const now = new Date(Math.floor(Date.now() / 1000) * 1000);
@@ -122,16 +130,19 @@ export async function issueAgentDeviceToken(
       target: [agentDeviceTokens.workspaceId, agentDeviceTokens.agentId, agentDeviceTokens.deviceId],
       set: { deviceName: device.name, deviceKind: device.kind, tokenHash, expiresAt, updatedAt: now },
     });
-  return { agent_id: agent.id, device, token, expires_at: expiresAt?.toISOString() ?? null };
+  return {
+    agent_id: agent.id, device, token, expires_at: expiresAt?.toISOString() ?? null,
+    replacedTokenHash: previous?.tokenHash ?? null,
+  };
 }
 
-/** Revoke one device's token at once. The agent's id when a token was deleted, else null. */
+/** Revoke one device's token at once. The agent and the revoked token's hash when one was deleted, else null. */
 export async function revokeAgentDeviceToken(
   db: Db,
   workspaceId: string,
   agentName: string,
   deviceId: string,
-): Promise<string | null> {
+): Promise<{ agentId: string; tokenHash: string } | null> {
   const agent = await personAgent(db, workspaceId, agentName);
   const deleted = await db
     .delete(agentDeviceTokens)
@@ -140,8 +151,8 @@ export async function revokeAgentDeviceToken(
       eq(agentDeviceTokens.agentId, agent.id),
       eq(agentDeviceTokens.deviceId, deviceId),
     ))
-    .returning({ id: agentDeviceTokens.id });
-  return deleted.length > 0 ? agent.id : null;
+    .returning({ id: agentDeviceTokens.id, tokenHash: agentDeviceTokens.tokenHash });
+  return deleted[0] ? { agentId: agent.id, tokenHash: deleted[0].tokenHash } : null;
 }
 
 /**
@@ -222,4 +233,58 @@ export async function liveDeviceTokenHashes(db: Db, workspaceId: string, hashes:
       or(isNull(agentDeviceTokens.expiresAt), gt(agentDeviceTokens.expiresAt, now)),
     ));
   return new Set(rows.map((row) => row.tokenHash));
+}
+
+/** Whether this node's current token is bound to a device token at all. */
+export async function nodeIsDeviceBound(db: Db, workspaceId: string, nodeId: string): Promise<boolean> {
+  const [row] = await db
+    .select({ bound: nodes.deviceTokenHash })
+    .from(nodes)
+    .where(and(eq(nodes.workspaceId, workspaceId), eq(nodes.id, nodeId)));
+  return Boolean(row?.bound);
+}
+
+/** The hashes of every device token an agent holds now (read before an operation that drops them). */
+export async function agentDeviceTokenHashes(db: Db, workspaceId: string, agentId: string): Promise<string[]> {
+  const rows = await db
+    .select({ tokenHash: agentDeviceTokens.tokenHash })
+    .from(agentDeviceTokens)
+    .where(and(eq(agentDeviceTokens.workspaceId, workspaceId), eq(agentDeviceTokens.agentId, agentId)));
+  return rows.map((row) => row.tokenHash);
+}
+
+/** How long a heartbeat trusts a positive device check before reading it again. */
+export const DEVICE_LIVENESS_RECHECK_MS = 5 * 60 * 1000;
+const DEVICE_LIVENESS_CACHE_MAX = 10_000;
+const deviceLiveness = new Map<string, { checkedAt: number; expiresAt: number | null }>();
+
+/**
+ * deviceTokenLive for the heartbeat of a socket opened with a device-bound
+ * node token, without a database read on every beat: a live answer is reused
+ * until the device's own expiry or DEVICE_LIVENESS_RECHECK_MS, whichever comes
+ * first. Revocations do not wait for it: they close the device's sockets by
+ * hash at once (this only bounds the backstop when such a close failed).
+ */
+export async function deviceTokenLiveCached(db: Db, tokenHash: string, now = Date.now()): Promise<boolean> {
+  const cached = deviceLiveness.get(tokenHash);
+  if (cached && now - cached.checkedAt < DEVICE_LIVENESS_RECHECK_MS && (cached.expiresAt === null || now < cached.expiresAt)) {
+    return true;
+  }
+  const [row] = await db
+    .select({ expiresAt: agentDeviceTokens.expiresAt })
+    .from(agentDeviceTokens)
+    .where(eq(agentDeviceTokens.tokenHash, tokenHash));
+  const live = Boolean(row) && (row!.expiresAt === null || row!.expiresAt.getTime() > now);
+  if (!live) {
+    deviceLiveness.delete(tokenHash);
+    return false;
+  }
+  if (deviceLiveness.size >= DEVICE_LIVENESS_CACHE_MAX) deviceLiveness.delete(deviceLiveness.keys().next().value!);
+  deviceLiveness.set(tokenHash, { checkedAt: now, expiresAt: row!.expiresAt?.getTime() ?? null });
+  return true;
+}
+
+/** Forget cached liveness for these device tokens (revocation in this process). */
+export function forgetDeviceLiveness(tokenHashes: readonly string[]): void {
+  for (const hash of tokenHashes) deviceLiveness.delete(hash);
 }

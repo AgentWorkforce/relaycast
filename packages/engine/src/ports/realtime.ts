@@ -324,12 +324,17 @@ export interface NodeConnectionRegistry {
 
   /**
    * The device-token bindings (engine/agentDevice.ts) of the node token each
-   * open socket of this node was opened with; unbound sockets excluded.
-   * Optional: a host without per-socket binding closes the whole node instead.
+   * open socket of this node was opened with; unbound sockets excluded. Only
+   * a host that tracks its sockets in memory offers it (to sweep expired
+   * devices); others rely on the hashes each revocation names.
    */
   nodeConnectionDeviceTokenHashes?(workspaceId: string, nodeId: string): string[];
 
-  /** Close only this node's sockets opened with one of these device-token bindings. */
+  /**
+   * Close only this node's sockets opened with one of these device-token
+   * bindings. Optional: a host without per-socket binding closes the whole
+   * node when the row's binding is dead instead.
+   */
   disconnectNodeDeviceSockets?(workspaceId: string, nodeId: string, deviceTokenHashes: readonly string[]): Promise<void>;
 
   /**

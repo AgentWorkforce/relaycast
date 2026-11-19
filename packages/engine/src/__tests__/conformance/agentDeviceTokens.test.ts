@@ -4,7 +4,8 @@ import { agentDeviceTokens, messages } from '../../db/tables.js';
 import { SENDER_DEVICE_METADATA_KEY } from '../../engine/address.js';
 import { transformForClient } from '../../engine/wsTransform.js';
 import { fetchQueuedWsBacklogEvents } from '../../engine/delivery.js';
-import { authenticateNodeWs } from '../../engine/wsAuth.js';
+import { attachAuthenticatedNodeSocket, authenticateNodeWs } from '../../engine/wsAuth.js';
+import { handleNodeControlMessage } from '../../engine/node.js';
 import { FakeSocket } from './harness.js';
 import { createCredentialTagSigner } from '../../auth/credentialTags.js';
 import { createWorkspace, registerAgent, makeNodeStack, type TestStack } from './harness.js';
@@ -422,11 +423,12 @@ describe('agent device tokens', () => {
     /** Attach a node socket the way the transport does: it remembers the binding of the token that opened it. */
     async function openSocket(nodeId: string, openedWith: string, ada: { agentId: string }, wsId: string, register = true) {
       const auth = await authenticateNodeWs(wsDeps(), openedWith);
-      expect(auth).toMatchObject({ ok: true });
+      if (!auth.ok) throw new Error('node token did not authenticate');
+      expect(auth.node.id).toBe(nodeId);
+      expect(auth.node.workspaceId).toBe(wsId);
       const sock = new FakeSocket();
-      const handle = stack.runtime.realtime.attachNodeSocket(wsId, nodeId, sock, {
-        deviceTokenHash: auth.ok ? auth.node.deviceTokenHash : null,
-      });
+      // The same attach the Node entrypoint performs after authenticateNodeWs.
+      const handle = attachAuthenticatedNodeSocket(stack.runtime.realtime, auth, sock);
       if (register) await handle.handleMessage(JSON.stringify({
         v: 1, id: 'reg', type: 'node.register', node_id: nodeId, name: `direct-${ada.agentId}`,
         capabilities: [], max_agents: 1, tags: [], version: 't', resume_cursor: null,
@@ -501,6 +503,45 @@ describe('agent device tokens', () => {
       }));
       const reply = JSON.stringify([...socket.sock.ofType('reply'), ...socket.sock.ofType('error')].filter((frame) => frame.id === 'newagent'));
       expect(reply).toContain('device_token_forbidden');
+    });
+
+    it("falls back to the node row's binding on a host that does not track sockets (B1a)", async () => {
+      const { ws, ada } = await seedWithChannel();
+      const laptopToken = await mintToken(ws, ada.agentId, laptop);
+      const bound = await mintNodeToken(laptopToken);
+      const replies: string[] = [];
+      let closed = false;
+      // An untracked host passes no connectionDeviceTokenHash (undefined, not null).
+      const frame = (message: Json) => handleNodeControlMessage({
+        db: stack.runtime.handle.db as never,
+        registry: stack.runtime.realtime as never,
+        workspaceId: ws.workspaceId,
+        nodeId: bound.node_id,
+        socket: { send: (data: string) => { replies.push(data); }, close: () => { closed = true; } } as never,
+        raw: JSON.stringify(message),
+      });
+      await frame({
+        v: 1, id: 'reg', type: 'node.register', node_id: bound.node_id, name: `direct-${ada.agentId}`,
+        capabilities: [], max_agents: 1, tags: [], version: 't', resume_cursor: null,
+      });
+      await frame({ v: 1, id: 'agent', type: 'agent.register', name: 'sidekick', resumable: true, session_ref: 's-y' });
+      expect(replies.join('\n')).toContain('device_token_forbidden');
+      await frame({ v: 1, id: 'rec', type: 'agent.recover', name: 'ada', expected_agent_id: ada.agentId, session_ref: 's1' });
+      expect(replies.filter((reply) => reply.includes('"rec"')).join('')).toContain('device_token_forbidden');
+      // The device expires: the row's binding is dead, so the heartbeat is refused and the socket closed.
+      await stack.runtime.handle.db.update(agentDeviceTokens).set({ expiresAt: new Date(Date.now() - 1000) });
+      await frame({ v: 1, id: 'hb', type: 'node.heartbeat', load: 0, active_agents: 0, handlers_live: false });
+      expect(closed).toBe(true);
+      expect(replies.filter((reply) => reply.includes('"hb"')).join('')).toContain('node_token_invalid');
+    });
+
+    it('closes the direct node\'s sockets when the person is deleted', async () => {
+      const { ws, ada } = await seedWithChannel();
+      const laptopToken = await mintToken(ws, ada.agentId, laptop);
+      const bound = await mintNodeToken(laptopToken);
+      const socket = await openSocket(bound.node_id, bound.token, ada, ws.workspaceId);
+      expect((await request('DELETE', '/v1/agents/ada', ws.workspaceKey)).status).toBeLessThan(300);
+      expect(socket.sock.closed).toBe(true);
     });
 
     it('lets a direct node post only as its own agent (M2)', async () => {
