@@ -2818,7 +2818,8 @@ paths:
         '403':
           description: >-
             A workspace key on a deployment whose workspace keys a control
-            plane owns (`workspace_key_rotation_disabled`).
+            plane owns (`workspace_key_rotation_disabled`), or a per-device
+            person token, which is always refused (`device_token_forbidden`).
           content:
             application/json:
               schema:
@@ -3282,6 +3283,8 @@ paths:
                 work_unit_id:
                   type: string
       responses:
+        '403':
+          description: A per-device person token (`POST /agents/{name}/device-tokens`) cannot manage credentials (`device_token_forbidden`).
         '200':
           description: Recovery verifier enrolled
           content:
@@ -3673,7 +3676,7 @@ paths:
                   data:
                     $ref: '#/components/schemas/AgentIdentityRecovery'
         '403':
-          description: Recovery authority does not match the exact identity
+          description: Recovery authority does not match the exact identity. A per-device person token is always refused with `device_token_forbidden`.
         '409':
           description: Identity changed before recovery completed
 
@@ -3761,7 +3764,7 @@ paths:
                     id:
                       type: string
                       pattern: '^[a-z0-9](?:[a-z0-9-]{0,62}[a-z0-9])?$'
-                      description: Lowercase letters, digits and dashes; not `unknown`.
+                      description: Lowercase letters, digits and dashes; not `unknown` or `direct`.
                     name:
                       type: string
                       description: Control characters become spaces; trimmed to 80 characters.
@@ -3804,7 +3807,9 @@ paths:
   /agents/{name}/device-tokens/{device_id}:
     delete:
       summary: Revoke a device token
-      description: Revokes one device's token at once. Revoking a device with no token returns `revoked: false`.
+      description: >-
+        Revokes one device's token at once. Revoking a device with no token
+        returns `revoked: false`.
       tags: [Agents]
       security:
         - workspaceKey: []
@@ -5340,6 +5345,8 @@ paths:
           schema:
             type: string
       responses:
+        '403':
+          description: A per-device person token (`POST /agents/{name}/device-tokens`) cannot manage credentials (`device_token_forbidden`).
         '200':
           description: Token rotated
           content:

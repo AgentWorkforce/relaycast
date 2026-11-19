@@ -1,5 +1,5 @@
 {
-  "id": "f981a5bf-2ea8-4229-87e5-12d2a62c6fc6",
+  "id": "aa4c633b-92c5-4bd4-b428-92182395d393",
   "prevId": "ce74bbac-d4f6-46c1-b075-653b6da3c982",
   "version": "7",
   "dialect": "postgresql",
@@ -7117,6 +7117,12 @@
           "type": "text",
           "primaryKey": false,
           "notNull": true
+        },
+        "device_token_hash": {
+          "name": "device_token_hash",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
         },
         "previous_token_hash": {
           "name": "previous_token_hash",

@@ -23,3 +23,7 @@ CREATE UNIQUE INDEX agent_device_tokens_agent_device_unique
   ON agent_device_tokens(workspace_id, agent_id, device_id);
 CREATE UNIQUE INDEX agent_device_tokens_token_hash_unique
   ON agent_device_tokens(token_hash);
+
+-- A node token minted with a device token is bound to it: the hash of the
+-- device token that minted it. NULL (every existing node) means unbound.
+ALTER TABLE nodes ADD COLUMN device_token_hash TEXT;

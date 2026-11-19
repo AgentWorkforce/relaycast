@@ -36,6 +36,7 @@ import {
   parseQueryParams,
 } from '../lib/httpResponse.js';
 import { parsePaginationQuery, positiveIntQueryParam } from '../lib/httpQuery.js';
+import { directNodeIdForAgent } from '../engine/node.js';
 import {
   getMessagesBySessionRef,
   SessionRefSchema,
@@ -162,8 +163,16 @@ messageRoutes.post(
             channel.id,
             senderAgentId,
             { text, blocks, attachments, data, content_type, mode },
-            // Only an agent posting as itself carries its token's device; a node's `from` is unknown.
-            { mailbox, workspaceDeliveryPolicy, senderDevice: agent ? c.get('agentDevice') : undefined },
+            // An agent posting as itself carries its token's device. A node posting
+            // as `from` carries the device its token is bound to, but only for the
+            // person whose direct node it is; otherwise the device is unknown.
+            {
+              mailbox,
+              workspaceDeliveryPolicy,
+              senderDevice: agent
+                ? c.get('agentDevice')
+                : node && node.id === directNodeIdForAgent(senderAgentId) ? c.get('nodeDevice') : undefined,
+            },
           );
         },
         afterOperation: async (data) => {

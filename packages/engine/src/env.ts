@@ -34,6 +34,8 @@ export interface AppVariables {
    * May differ from agent.tokenHash during a previous-token grace window. */
   agentCredentialHash: string | undefined;
   node: typeof nodes.$inferSelect | undefined;
+  /** The device a device-bound node token (`node`) was minted with; undefined for unbound node tokens. */
+  nodeDevice: AgentDeviceStamp | undefined;
   observerToken: typeof observerTokens.$inferSelect | undefined;
   db: EngineDb;
   logger: Logger;

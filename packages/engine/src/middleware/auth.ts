@@ -65,6 +65,7 @@ async function rememberPrincipal(
   c.set('agentDevice', result.agent ? result.agentDevice : undefined);
   c.set('agentCredentialHash', result.agent ? await presentedCredentialHash(token) : undefined);
   c.set('node', result.node);
+  c.set('nodeDevice', result.node ? result.nodeDevice : undefined);
   c.set('observerToken', result.observerToken);
 }
 

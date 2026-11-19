@@ -255,6 +255,11 @@ agentRoutes.post(
       const db = c.get('db');
       const workspace = c.get('workspace');
       const authAgent = c.get('agent')!;
+      // Never mint an unbound node token for a device token (fail closed).
+      const deviceTokenHash = c.get('agentDevice') ? c.get('agentCredentialHash') : undefined;
+      if (c.get('agentDevice') && !deviceTokenHash) {
+        return jsonError(c, 'internal_error', 'Could not bind the node token to this device', 500);
+      }
       const directNode = await nodeEngine.ensureDirectNodeForAgent(db, workspace.id, authAgent, { online: false });
       if (!directNode) {
         return jsonError(c, 'agent_bound_to_node', 'Agent is explicitly bound to another node', 409);
@@ -275,7 +280,11 @@ agentRoutes.post(
         max_agents: 1,
         tags: ['implicit', 'direct'],
         version: 'implicit',
-      }, { directAgentId: authAgent.id });
+      }, {
+        directAgentId: authAgent.id,
+        // Minted with a device token: bound to it, so it dies with the device.
+        ...(deviceTokenHash ? { deviceTokenHash } : {}),
+      });
 
       return jsonOk(c, {
         node_id: nodeWithToken.id,
@@ -430,10 +439,17 @@ agentRoutes.post(
           }
           return jsonError(c, 'agent_recovery_not_authorized', 'Recovery credential was not accepted', 403);
         }
+        if (auth.agentDevice) {
+          // A device token never recovers (and so never obtains) the shared token.
+          return jsonError(c, 'device_token_forbidden', 'A device token cannot manage agent credentials', 403);
+        }
         target = await identityTargetByName(db, auth.workspace.id, name);
         if (auth.agent && target?.id === auth.agent.id) {
           authority = 'current_agent_token';
           actor = `agent:${auth.agent.name}`;
+        } else if (auth.node?.deviceTokenHash) {
+          // A device-bound node token never recovers the shared token either.
+          return jsonError(c, 'device_token_forbidden', 'A device token cannot manage agent credentials', 403);
         } else if (
           auth.node
           && target?.originNodeId === auth.node.id
@@ -471,6 +487,8 @@ agentRoutes.post(
         nodeId,
         originActor: c.get('originActor'),
       });
+      // Recovery drops the agent's device tokens, and with them any bound node token.
+      await disconnectIfBindingDead(c, target.workspaceId, target.id);
       return jsonOk(c, result);
     } catch (err: unknown) {
       return errorResponse(c, err);
@@ -512,6 +530,7 @@ agentRoutes.post(
         nodeId: parsed.data.node_id,
         originActor: c.get('originActor'),
       });
+      await disconnectIfBindingDead(c, workspace.id, target.id);
       await fanoutToAgents(c, [target.id], 'agent.identity_taken_over', {
         agent_id: target.id,
         agent_name: target.name,
@@ -533,6 +552,23 @@ agentRoutes.post(
   },
 );
 
+/**
+ * Close the person's direct-node socket when its node token was bound to a
+ * device token that is no longer live (engine/agentDevice.ts), so a revoked,
+ * re-minted or taken-over device loses node transport at once, not at its
+ * next heartbeat. Best-effort: node auth already refuses that token.
+ */
+async function disconnectIfBindingDead(c: Context<AppEnv>, workspaceId: string, agentId: string): Promise<void> {
+  try {
+    const nodeId = nodeEngine.directNodeIdForAgent(agentId);
+    if (await agentDeviceEngine.nodeBindingDead(c.get('db'), workspaceId, nodeId)) {
+      await c.get('engine').nodeConnections.disconnectNode(workspaceId, nodeId);
+    }
+  } catch (err) {
+    console.warn('[agent.device] bound node disconnect failed', { workspaceId, error: String(err) });
+  }
+}
+
 // POST /v1/agents/:name/device-tokens - mint (or re-mint) one device's token
 // for a person agent. Workspace key only; the token is shown once.
 agentRoutes.post(
@@ -549,6 +585,8 @@ agentRoutes.post(
         device: parsed.data.device,
         ttlSeconds: parsed.data.ttl_seconds,
       });
+      // A re-mint replaces the device's token, and with it any node token it bound.
+      await disconnectIfBindingDead(c, workspace.id, result.agent_id);
       return jsonCreated(c, result);
     } catch (err: unknown) {
       return errorResponse(c, err);
@@ -567,7 +605,8 @@ agentRoutes.delete(
       const workspace = c.get('workspace');
       const revoked = await agentDeviceEngine.revokeAgentDeviceToken(
         c.get('db'), workspace.id, c.req.param('name'), c.req.param('device_id'));
-      return jsonOk(c, { revoked });
+      if (revoked) await disconnectIfBindingDead(c, workspace.id, revoked);
+      return jsonOk(c, { revoked: Boolean(revoked) });
     } catch (err: unknown) {
       return errorResponse(c, err);
     }
@@ -607,6 +646,7 @@ agentRoutes.post(
         nodeId: parsed.data.node_id,
         originActor: c.get('originActor'),
       });
+      await disconnectIfBindingDead(c, workspace.id, target.id);
       emitServerEvent(c, workspace.id, 'agent.token.revoked', {
         agent_id: target.id,
         agent_name: target.name,

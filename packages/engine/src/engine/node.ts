@@ -23,7 +23,8 @@ import {
   parseFleetBrokerToRelaycastMessage,
 } from '@relaycast/types';
 import type { getDb } from '../db/index.js';
-import { actionInvocations, actions, agents, agentNodeBindings, channelMembers, channels, nodeProviders, nodes, workspaces } from '../db/tables.js';
+import { actionInvocations, actions, agents, agentDeviceTokens, agentNodeBindings, channelMembers, channels, nodeProviders, nodes, workspaces } from '../db/tables.js';
+import { liveNodeBinding, nodeDeviceJoin } from './agentDevice.js';
 import { isWorkspaceExpired, WORKSPACE_EXPIRED_CODE, WORKSPACE_EXPIRED_MESSAGE } from '../auth/workspaceExpiry.js';
 import { randomHex, sha256Hex } from '../lib/crypto.js';
 import { codedError } from '../lib/httpError.js';
@@ -508,6 +509,12 @@ export async function createNodeToken(
     expectedTokenHash?: string;
     directAgentId?: string;
     /**
+     * With `directAgentId`: the hash of the person's device token that asked
+     * for this node token. The minted token is bound to it (nodes.device_token_hash)
+     * and dies with it. Absent: an unbound node token, as before.
+     */
+    deviceTokenHash?: string;
+    /**
      * Keyed recovery for a rotation (with `expectedTokenHash`) or a first
      * enrollment (without). The token is derived from the caller's secrets and
      * the request, never stored: a replay re-derives it and matches the hash.
@@ -638,6 +645,9 @@ export async function createNodeToken(
       .set({
         name,
         tokenHash,
+        // An agent's own mint binds (or unbinds) by the credential it used; a
+        // rotation by proof keeps the proving token's binding.
+        deviceTokenHash: authorizedDirectNode ? authorization.deviceTokenHash ?? null : existing.deviceTokenHash,
         previousTokenHash: keyedRotation ? authorization.expectedTokenHash : null,
         previousTokenExpiresAt: keyedRotation ? new Date(now.getTime() + NODE_ROTATION_RECOVERY_TTL_MS) : null,
         rotationIdempotencyKeyHash: keyedRotation ? recovery.idempotencyKeyHash : null,
@@ -703,6 +713,7 @@ export async function createNodeToken(
         workspaceId,
         name,
         tokenHash,
+        deviceTokenHash: authorization.directAgentId !== undefined ? authorization.deviceTokenHash ?? null : null,
         previousTokenHash: null,
         previousTokenExpiresAt: keyedCreate ? new Date(now.getTime() + NODE_ROTATION_RECOVERY_TTL_MS) : null,
         rotationIdempotencyKeyHash: keyedCreate ? recovery.idempotencyKeyHash : null,
@@ -746,9 +757,12 @@ export async function createNodeToken(
   }
 }
 
+/** The node a token names, unless it is bound to a device token that is no longer live. */
 export async function getNodeByTokenHash(db: Db, tokenHash: string) {
-  const [node] = await db.select().from(nodes).where(eq(nodes.tokenHash, tokenHash));
-  return node ?? null;
+  const [row] = await db.select({ node: nodes }).from(nodes)
+    .leftJoin(agentDeviceTokens, nodeDeviceJoin())
+    .where(and(eq(nodes.tokenHash, tokenHash), liveNodeBinding(new Date())));
+  return row?.node ?? null;
 }
 
 export async function getNodeByName(db: Db, workspaceId: string, name: string) {
@@ -2847,6 +2861,11 @@ export async function recoverAgentViaNode(
         403,
       );
     }
+    // A node token minted with a person's device token speaks for that device
+    // only: it never recovers (and so never obtains) the shared token.
+    if (node.deviceTokenHash) {
+      throw codedError('A device token cannot manage agent credentials', 'device_token_forbidden', 403);
+    }
 
     const activeNodeIds = await activeBindingNodeIdsForAgent(tx, workspaceId, target.id);
     const targetWasActive = activeNodeIds.includes(nodeId);
@@ -3783,6 +3802,9 @@ async function readHeartbeatDrainState(
       providerStatus: nodeProviders.status,
       providerHandlersLive: nodeProviders.handlersLive,
       providerLastHeartbeatAt: nodeProviders.lastHeartbeatAt,
+      deviceTokenHash: nodes.deviceTokenHash,
+      boundDeviceId: agentDeviceTokens.id,
+      boundDeviceExpiresAt: agentDeviceTokens.expiresAt,
     })
     .from(nodes)
     .leftJoin(nodeProviders, and(
@@ -3790,10 +3812,18 @@ async function readHeartbeatDrainState(
       eq(nodeProviders.nodeId, nodes.id),
       eq(nodeProviders.name, providerName),
     ))
+    .leftJoin(agentDeviceTokens, nodeDeviceJoin())
     .where(and(eq(nodes.workspaceId, workspaceId), eq(nodes.id, nodeId)));
-  if (!row) return { node: undefined, provider: undefined };
-  const { providerId, providerStatus, providerHandlersLive, providerLastHeartbeatAt, ...node } = row;
+  if (!row) return { node: undefined, provider: undefined, bindingDead: false };
+  const {
+    providerId, providerStatus, providerHandlersLive, providerLastHeartbeatAt,
+    deviceTokenHash, boundDeviceId, boundDeviceExpiresAt, ...node
+  } = row;
+  // A device-bound node token whose device was revoked, re-minted or expired.
+  const bindingDead = deviceTokenHash !== null && (boundDeviceId === null
+    || (boundDeviceExpiresAt !== null && boundDeviceExpiresAt.getTime() <= Date.now()));
   return {
+    bindingDead,
     node,
     provider: providerId === null ? undefined : {
       status: providerStatus!,
@@ -4117,6 +4147,13 @@ export async function handleNodeControlMessage(args: HandleNodeControlMessageArg
           args.nodeId,
           frameProviderName,
         );
+        // The socket of a device-bound node token outlives no device: once the
+        // device is gone (an explicit revocation already disconnected it; this
+        // catches expiry), the heartbeat is refused and the socket closed.
+        if (prior?.bindingDead) {
+          await args.registry.disconnectNode(args.workspaceId, args.nodeId);
+          throw codedError('Node token is no longer valid', 'node_token_invalid', 401);
+        }
         const beat = await heartbeatNode(
           args.db,
           args.workspaceId,

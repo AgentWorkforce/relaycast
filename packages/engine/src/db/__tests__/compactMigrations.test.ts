@@ -97,6 +97,8 @@ function snapshot(handle: SqliteDbHandle) {
       }
       if (name === 'nodes') {
         const {
+          // 0087 appends the nullable device binding.
+          device_token_hash: _deviceTokenHash,
           previous_token_hash: _previousTokenHash,
           previous_token_expires_at: _previousTokenExpiresAt,
           rotation_idempotency_key_hash: _rotationIdempotencyKeyHash,
@@ -233,7 +235,8 @@ function expectConstraintsPreserved(before: ReturnType<typeof constraints>, afte
             .replace(', previous_token_expires_at INTEGER DEFAULT NULL', '')
             .replace(', rotation_idempotency_key_hash TEXT DEFAULT NULL', '')
             .replace(', rotation_request_digest TEXT DEFAULT NULL', '')
-            .replace(', liveness_revision INTEGER NOT NULL DEFAULT 0', ''),
+            .replace(', liveness_revision INTEGER NOT NULL DEFAULT 0', '')
+            .replace(', device_token_hash TEXT', ''),
         };
       }
       if (table.name === 'node_providers') {

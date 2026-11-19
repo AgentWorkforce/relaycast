@@ -17,7 +17,9 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 ### Changed
 
 - A person agent's sender address is `<person>@<device id>`, or `<person>@direct` for an unknown device; the person's direct node `machine_id` is still recorded for the roster but no longer used for the sender address. An address to a person matches whatever its machine part (display only).
-- Identity recovery, takeover and `revoke-token` delete all of the agent's device tokens; `rotate-token` does not. A device token is refused (403 `device_token_forbidden`) by `rotate-token`, `POST /v1/agent/recovery-credential` and `POST /v1/credentials/upgrade`.
+- Identity recovery, takeover, `revoke-token` and agent deletion delete all of the agent's device tokens; `rotate-token` does not. A device token, and a node token minted with one, is refused (403 `device_token_forbidden`) by `rotate-token`, `POST /v1/agents/:name/recover`, the node socket's `agent.recover`, `POST /v1/agent/recovery-credential` and `POST /v1/credentials/upgrade`, so it never obtains the shared token. Device ids `unknown` and `direct` are reserved.
+- A node token minted through `POST /v1/agent/node-token` with a device token is bound to that device (new nullable `nodes.device_token_hash`, in the same migrations): it authenticates only while that exact device token is live, so a device revoke, re-mint or expiry, a takeover, `revoke-token` or agent deletion ends it. Explicit revocations close the node's socket at once; an expired device's socket is closed at its next heartbeat. A post over a bound node token as its person carries that device as `agent_device`. Node tokens minted with the shared token are unchanged.
+- `agent_device` is also served on reconnect replay of channel posts and group DMs and in workspace DM history. `ar_ad_` tokens are redacted in logs and observer text.
 
 ## [12.13.0] - 2026-11-17
 

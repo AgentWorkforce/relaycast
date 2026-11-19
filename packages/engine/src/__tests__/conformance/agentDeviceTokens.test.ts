@@ -3,6 +3,9 @@ import { eq } from 'drizzle-orm';
 import { agentDeviceTokens, messages } from '../../db/tables.js';
 import { SENDER_DEVICE_METADATA_KEY } from '../../engine/address.js';
 import { transformForClient } from '../../engine/wsTransform.js';
+import { fetchQueuedWsBacklogEvents } from '../../engine/delivery.js';
+import { authenticateNodeWs } from '../../engine/wsAuth.js';
+import { FakeSocket } from './harness.js';
 import { createWorkspace, registerAgent, makeNodeStack, type TestStack } from './harness.js';
 
 type Json = Record<string, any>;
@@ -115,6 +118,7 @@ describe('agent device tokens', () => {
       { ...laptop, id: 'ada@laptop' },
       { ...laptop, id: 'Ada-Laptop' },
       { ...laptop, id: 'unknown' },
+      { ...laptop, id: 'direct' },
       { ...laptop, id: 'x'.repeat(65) },
       { ...laptop, kind: 'unknown' },
       { ...laptop, kind: 'phone' },
@@ -276,6 +280,68 @@ describe('agent device tokens', () => {
     expect((await request('GET', '/v1/agent', again)).status).toBe(401);
   });
 
+  it('never lets a device token recover the shared token', async () => {
+    const { ws, ada } = await seed();
+    const laptopToken = await mintToken(ws, ada.agentId, laptop);
+    const recovered = await post('/v1/agents/ada/recover', laptopToken, {
+      expected_agent_id: ada.agentId, actor: 'agent:ada', reason: 'lost token', session_ref: 's1',
+    });
+    expect(recovered.status).toBe(403);
+    expect(await errorCode(recovered)).toBe('device_token_forbidden');
+    // Nothing changed: the shared token and the device token both still work.
+    expect((await request('GET', '/v1/agent', ada.token)).status).toBe(200);
+    expect((await request('GET', '/v1/agent', laptopToken)).status).toBe(200);
+  });
+
+  it('drops device tokens when the person is deleted (a tombstone keeps its row)', async () => {
+    const { ws, ada } = await seed();
+    const laptopToken = await mintToken(ws, ada.agentId, laptop);
+    const deleted = await request('DELETE', '/v1/agents/ada', ws.workspaceKey);
+    expect(deleted.status).toBeLessThan(300);
+    expect((await request('GET', '/v1/agent', laptopToken)).status).toBe(401);
+    expect((await post('/v1/dm', laptopToken, { to: 'bob', text: 'after delete' })).status).toBe(401);
+    expect(await stack.runtime.handle.db.select().from(agentDeviceTokens)).toEqual([]);
+  });
+
+  it('keeps agent_device on replay of queued channel posts and group DMs, and in workspace DM history', async () => {
+    const { ws, ada, bob } = await seed();
+    const laptopToken = await mintToken(ws, ada.agentId, laptop);
+    expect((await post('/v1/channels', bob.token, { name: 'ops' })).status).toBe(201);
+    expect((await post('/v1/channels/ops/join', laptopToken, {})).status).toBeLessThan(300);
+    expect((await post('/v1/channels/ops/messages', laptopToken, { text: 'queued channel post' })).status).toBe(201);
+    const group = await data(await post('/v1/dm/group', laptopToken, { participants: ['bob'] }));
+    expect((await post(`/v1/dm/${group.id}/messages`, laptopToken, { text: 'queued group dm' })).status).toBe(201);
+    const direct = await dmFrom(laptopToken, 'bob');
+
+    const replayed = await fetchQueuedWsBacklogEvents(stack.runtime.handle.db as never, ws.workspaceId, bob.agentId);
+    const byType = (type: string) => replayed.filter((event) => event.eventType === type)
+      .map((event) => event.eventData as Json);
+    expect(byType('message.created').map((event) => event.agent_device)).toContainEqual(laptop);
+    expect(byType('group_dm.received').map((event) => event.message.agent_device)).toContainEqual(laptop);
+    expect(byType('dm.received').map((event) => event.message.agent_device)).toContainEqual(laptop);
+
+    const history = await request('GET', `/v1/dm/conversations/${direct.conversation_id}/messages`, ws.workspaceKey);
+    expect(history.status).toBe(200);
+    const messagesOut = await data(history) as unknown as Json[];
+    expect(messagesOut.find((message) => message.id === direct.message.id)?.agent_device).toEqual(laptop);
+  });
+
+  it('delivers an addressed DM to a person on a broker named "direct"', async () => {
+    const { ws, ada, bob } = await seed();
+    const enroll = await post('/v1/nodes', ws.workspaceKey, {
+      node_id: 'node_brk', name: 'direct', machine_id: 'brk-machine', capabilities: [], max_agents: 4, version: 't',
+    });
+    expect(enroll.status).toBe(201);
+    // Bind the person to that broker the way a host does.
+    const { agents } = await import('../../db/tables.js');
+    await stack.runtime.handle.db.update(agents)
+      .set({ locationType: 'via_node', locationNodeId: 'node_brk' })
+      .where(eq(agents.id, ada.agentId));
+    for (const address of ['ada@brk-machine', 'ada@direct', 'ada@anything']) {
+      expect((await post('/v1/dm', bob.token, { address, text: address })).status, address).toBe(201);
+    }
+  });
+
   it('never lets a device token manage credentials', async () => {
     const { ws, ada } = await seed();
     const laptopToken = await mintToken(ws, ada.agentId, laptop);
@@ -286,6 +352,147 @@ describe('agent device tokens', () => {
     expect(await errorCode(await post('/v1/credentials/upgrade', laptopToken, {}))).toBe('device_token_forbidden');
     // The shared token is untouched by those attempts.
     expect((await request('GET', '/v1/agent', ada.token)).status).toBe(200);
+  });
+
+  describe('node tokens minted with a device token', () => {
+    async function mintNodeToken(token: string) {
+      const response = await post('/v1/agent/node-token', token, {});
+      expect(response.status).toBe(200);
+      return data(response) as Promise<{ node_id: string; token: string }>;
+    }
+    /** A node-token principal posting to a channel as `from`. */
+    async function postAs(nodeToken: string, from = 'ada') {
+      return post('/v1/channels/ops/messages', nodeToken, { text: 'via node', from });
+    }
+    async function seedWithChannel() {
+      const seeded = await seed();
+      expect((await post('/v1/channels', seeded.bob.token, { name: 'ops' })).status).toBe(201);
+      expect((await post('/v1/channels/ops/join', seeded.ada.token, {})).status).toBeLessThan(300);
+      return seeded;
+    }
+    const wsDeps = () => ({ auth: stack.runtime.deps.auth, db: stack.runtime.handle.db }) as never;
+
+    it('stamps a bound node post with its device, and an unbound one as unknown', async () => {
+      const { ws, ada } = await seedWithChannel();
+      const laptopToken = await mintToken(ws, ada.agentId, laptop);
+      const bound = await mintNodeToken(laptopToken);
+      const viaBound = await postAs(bound.token);
+      expect(viaBound.status).toBe(201);
+      expect((await data(viaBound)).agent_device).toEqual(laptop);
+      const unbound = await mintNodeToken(ada.token); // rotates the person's one direct node token
+      const viaUnbound = await postAs(unbound.token);
+      expect(viaUnbound.status).toBe(201);
+      expect((await data(viaUnbound)).agent_device.kind).toBe('unknown');
+      expect((await postAs(bound.token)).status).toBe(401); // rotated out, as before
+    });
+
+    for (const [path, end] of [
+      ['device revoke', async (ctx: Json) => request('DELETE', `/v1/agents/ada/device-tokens/${laptop.id}`, ctx.ws.workspaceKey)],
+      ['device re-mint', async (ctx: Json) => mint(ctx.ws, ctx.ada.agentId, laptop)],
+      ['device expiry', async () => stack.runtime.handle.db.update(agentDeviceTokens).set({ expiresAt: new Date(Date.now() - 1000) })],
+      ['takeover', async (ctx: Json) => post('/v1/agents/ada/takeover', ctx.ws.workspaceKey, {
+        expected_agent_id: ctx.ada.agentId, actor: 'cloud-user:u1', reason: 'test', session_ref: 's1', node_id: 'cloud-dashboard',
+      })],
+      ['revoke-token', async (ctx: Json) => post('/v1/agents/ada/revoke-token', ctx.ws.workspaceKey, {
+        expected_agent_id: ctx.ada.agentId, actor: 'admin', reason: 'compromise',
+      })],
+      ['agent delete', async (ctx: Json) => request('DELETE', '/v1/agents/ada', ctx.ws.workspaceKey)],
+    ] as const) {
+      it(`ends with its device: ${path}`, async () => {
+        const ctx = await seedWithChannel();
+        const laptopToken = await mintToken(ctx.ws, ctx.ada.agentId, laptop);
+        const bound = await mintNodeToken(laptopToken);
+        expect((await postAs(bound.token)).status).toBe(201);
+        expect(await authenticateNodeWs(wsDeps(), bound.token)).toMatchObject({ ok: true });
+        await end(ctx as Json);
+        expect((await postAs(bound.token)).status).toBe(401);
+        expect(await authenticateNodeWs(wsDeps(), bound.token)).toMatchObject({ ok: false });
+      });
+    }
+
+    it('keeps an unbound (shared-token) node token working when a device is revoked', async () => {
+      const { ws, ada } = await seedWithChannel();
+      await mintToken(ws, ada.agentId, laptop);
+      const unbound = await mintNodeToken(ada.token);
+      await request('DELETE', `/v1/agents/ada/device-tokens/${laptop.id}`, ws.workspaceKey);
+      expect((await postAs(unbound.token)).status).toBe(201);
+    });
+
+    it('closes a connected bound node socket when the device is revoked, and at the next heartbeat when it expires', async () => {
+      const { ws, ada } = await seedWithChannel();
+      const laptopToken = await mintToken(ws, ada.agentId, laptop);
+      const bound = await mintNodeToken(laptopToken);
+      const attach = () => {
+        const sock = new FakeSocket();
+        const handle = stack.runtime.realtime.attachNodeSocket(ws.workspaceId, bound.node_id, sock);
+        return { sock, handle };
+      };
+      const register = (handle: { handleMessage(raw: string): Promise<void> }) => handle.handleMessage(JSON.stringify({
+        v: 1, id: 'reg', type: 'node.register', node_id: bound.node_id, name: `direct-${ada.agentId}`,
+        capabilities: [], max_agents: 1, tags: [], version: 't', resume_cursor: null,
+      }));
+      const first = attach();
+      await register(first.handle);
+      expect(first.sock.closed).toBe(false);
+      await request('DELETE', `/v1/agents/ada/device-tokens/${laptop.id}`, ws.workspaceKey);
+      expect(first.sock.closed).toBe(true);
+
+      const again = await mintToken(ws, ada.agentId, laptop);
+      const rebound = await mintNodeToken(again);
+      const second = { sock: new FakeSocket(), handle: undefined as never as { handleMessage(raw: string): Promise<void> } };
+      second.handle = stack.runtime.realtime.attachNodeSocket(ws.workspaceId, rebound.node_id, second.sock);
+      await register(second.handle);
+      await stack.runtime.handle.db.update(agentDeviceTokens).set({ expiresAt: new Date(Date.now() - 1000) });
+      await second.handle.handleMessage(JSON.stringify({ v: 1, id: 'hb', type: 'node.heartbeat', load: 0, active_agents: 0, handlers_live: false }));
+      expect(second.sock.closed).toBe(true);
+    });
+
+    it('never lets a bound node token recover the shared token or rotate itself after its device is gone', async () => {
+      const { ws, ada } = await seedWithChannel();
+      const laptopToken = await mintToken(ws, ada.agentId, laptop);
+      const bound = await mintNodeToken(laptopToken);
+      const recovered = await post('/v1/agents/ada/recover', bound.token, {
+        expected_agent_id: ada.agentId, actor: 'node', reason: 'lost', session_ref: 's1',
+      });
+      expect(recovered.status).toBe(403);
+      expect(await errorCode(recovered)).toBe('device_token_forbidden');
+      // Over the node socket too.
+      const sock = new FakeSocket();
+      const handle = stack.runtime.realtime.attachNodeSocket(ws.workspaceId, bound.node_id, sock);
+      await handle.handleMessage(JSON.stringify({
+        v: 1, id: 'reg', type: 'node.register', node_id: bound.node_id, name: `direct-${ada.agentId}`,
+        capabilities: [], max_agents: 1, tags: [], version: 't', resume_cursor: null,
+      }));
+      await handle.handleMessage(JSON.stringify({
+        v: 1, id: 'rec', type: 'agent.recover', name: 'ada', expected_agent_id: ada.agentId, session_ref: 's1',
+      }));
+      const reply = sock.ofType('reply').find((frame) => frame.id === 'rec') ?? sock.ofType('error').find((frame) => frame.id === 'rec');
+      expect(JSON.stringify(reply)).toContain('device_token_forbidden');
+      expect((await request('GET', '/v1/agent', ada.token)).status).toBe(200);
+
+      // A direct node's token is never rotated by proof: its id is reserved for
+      // the agent's own mint, so a dead bound token cannot re-key itself either.
+      await request('DELETE', `/v1/agents/ada/device-tokens/${laptop.id}`, ws.workspaceKey);
+      const { createNodeToken } = await import('../../engine/node.js');
+      const { sha256Hex } = await import('../../lib/crypto.js');
+      await expect(createNodeToken(stack.runtime.handle.db as never, ws.workspaceId, {
+        node_id: bound.node_id, name: `direct-${ada.agentId}`, kind: 'ws', role: 'direct', capabilities: [], max_agents: 1,
+      }, { expectedTokenHash: await sha256Hex(bound.token) })).rejects.toMatchObject({ code: 'reserved_node_id' });
+    });
+  });
+
+  it('answers an unknown route, or an unmatched method, with the exact 404 Cloud falls back on', async () => {
+    const { ws } = await seed();
+    // Cloud hands out the shared person token only for this envelope (an
+    // engine that predates /device-tokens); everything else is an error there.
+    for (const [method, path] of [
+      ['POST', '/v1/agents/ada/no-such-route'],
+      ['PUT', '/v1/agents/ada/device-tokens'],
+    ] as const) {
+      const response = await request(method, path, ws.workspaceKey, {});
+      expect(response.status, `${method} ${path}`).toBe(404);
+      expect(await response.json()).toEqual({ ok: false, error: { code: 'not_found', message: 'Route not found' } });
+    }
   });
 
   it('routes any address form for a person to the person: device ids, web, direct, revoked ids and old machine ids', async () => {

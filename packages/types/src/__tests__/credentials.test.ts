@@ -108,6 +108,9 @@ describe('credential families', () => {
     const routed = ar('agent');
     expect(redactCredentials(`key:${routed}xyz and ${routed}.`, '[x]')).toBe('key:[x]xyz and [x].');
     expect(redactCredentials(`token${routed}`, '[x]')).toBe('token[x]');
+    // Agent device tokens of both families are redacted too.
+    const device = encodeArCredential({ kind: 'agent', workspaceId: WS, tag: TAG, secret: SECRET, agentDevice: true });
+    expect(redactCredentials(`device ${device} and at_live_dv_${'0'.repeat(32)}`, '[x]')).toBe('device [x] and [x]');
     expect(redactCredentials(`(rk_live_abc)and prefixot_live_def`, '[x]')).toBe('([x])and prefix[x]');
     // The replacement is literal: `$&` must not re-insert the credential.
     expect(redactCredentials(`a rk_live_abc b`, '$&')).toBe('a $& b');

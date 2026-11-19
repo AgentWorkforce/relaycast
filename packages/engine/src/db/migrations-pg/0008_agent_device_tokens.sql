@@ -12,6 +12,7 @@ CREATE TABLE "agent_device_tokens" (
 	"updated_at" bigint DEFAULT floor(extract(epoch from statement_timestamp()))::bigint NOT NULL
 );
 --> statement-breakpoint
+ALTER TABLE "nodes" ADD COLUMN "device_token_hash" text;--> statement-breakpoint
 ALTER TABLE "agent_device_tokens" ADD CONSTRAINT "agent_device_tokens_workspace_id_workspaces_id_fk" FOREIGN KEY ("workspace_id") REFERENCES "public"."workspaces"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "agent_device_tokens" ADD CONSTRAINT "agent_device_tokens_agent_fk" FOREIGN KEY ("workspace_id","agent_id") REFERENCES "public"."agents"("workspace_id","id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
 CREATE UNIQUE INDEX "agent_device_tokens_rowid_unique" ON "agent_device_tokens" USING btree ("rowid");--> statement-breakpoint

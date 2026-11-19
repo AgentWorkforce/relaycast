@@ -20,7 +20,7 @@ Packages without a separate changelog are covered by the cross-package notes bel
 
 ### Added
 
-- Per-device person tokens: the workspace key mints (`POST /v1/agents/:name/device-tokens`) and revokes (`DELETE /v1/agents/:name/device-tokens/:device_id`) a token per device for a person (`type: human`) agent. What a device token sends carries the server-stamped `agent_device` (`{ id, name, kind }`) next to `agent_address` on DMs, group DMs, channel posts, thread replies, deliveries and events, so receivers see which device a person spoke from. A caller cannot set it.
+- Per-device person tokens: the workspace key mints (`POST /v1/agents/:name/device-tokens`) and revokes (`DELETE /v1/agents/:name/device-tokens/:device_id`) a token per device for a person (`type: human`) agent. What a device token sends carries the server-stamped `agent_device` (`{ id, name, kind }`) next to `agent_address` on DMs, group DMs, channel posts, thread replies, deliveries and events, so receivers see which device a person spoke from. A caller cannot set it. A node token minted with a device token dies with that device.
 
 ### Changed
 

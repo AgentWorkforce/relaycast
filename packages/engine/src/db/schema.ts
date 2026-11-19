@@ -329,6 +329,11 @@ export const nodes = sqliteTable(
       .references(() => workspaces.id, { onDelete: 'cascade' }),
     name: text('name').notNull(),
     tokenHash: text('token_hash').notNull().unique(),
+    // Set when the node token was minted with a person's per-device token
+    // (engine/agentDevice.ts): the hash of that device token. The node token
+    // authenticates only while that exact device token is live, so revoking,
+    // re-minting or expiring the device (or a takeover) also ends it.
+    deviceTokenHash: text('device_token_hash'),
     // A successful idempotent rotation retains only the superseded token hash
     // and request binding for a bounded recovery window. This lets a caller
     // recover the replacement after a lost 201 without making the workspace

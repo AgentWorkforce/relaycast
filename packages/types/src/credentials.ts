@@ -250,7 +250,7 @@ export function maskCredential(token: string): string {
  * Credentials of either family anywhere in `text`, matched by structure (no
  * word boundaries), so one glued to surrounding text is still found.
  */
-const CREDENTIAL_IN_TEXT = /ar_(?:ws|ag|nd|ob|wh)_[0-9A-Za-z]{11}_[a-z][0-9A-Za-z]{10}_[0-9A-Za-z]{49}|(?:rk|at|nt|ot|wh)_live_[A-Za-z0-9_-]+/g;
+const CREDENTIAL_IN_TEXT = /ar_(?:ws|ag|ad|nd|ob|wh)_[0-9A-Za-z]{11}_[a-z][0-9A-Za-z]{10}_[0-9A-Za-z]{49}|(?:rk|at|nt|ot|wh)_live_[A-Za-z0-9_-]+/g;
 
 export function redactCredentials(text: string, replacement: string): string {
   return text.replace(CREDENTIAL_IN_TEXT, () => replacement);

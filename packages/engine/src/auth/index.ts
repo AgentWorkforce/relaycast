@@ -1,6 +1,6 @@
-import { and, eq, gt, isNull, or } from 'drizzle-orm';
+import { and, eq, gt, isNull, ne, or } from 'drizzle-orm';
 import { workspaces, agents, agentDeviceTokens, nodes, observerTokens } from '../db/tables.js';
-import { deviceStampOf } from '../engine/agentDevice.js';
+import { deviceStampOf, liveNodeBinding, nodeDeviceJoin } from '../engine/agentDevice.js';
 import { sha256Hex } from '../lib/crypto.js';
 import {
   activeObserverTokenCondition,
@@ -122,10 +122,11 @@ async function authenticateLegacy(
   }
 
   if (kind === 'node') {
-    const [row] = await db.select({ node: nodes, workspace: workspaces }).from(nodes)
+    const [row] = await db.select({ node: nodes, workspace: workspaces, device: agentDeviceTokens }).from(nodes)
       .innerJoin(workspaces, eq(workspaces.id, nodes.workspaceId))
-      .where(eq(nodes.tokenHash, hash));
-    return row ? resolved(row.workspace, { node: row.node }) : unauthorized('Invalid node token', 'node_token_invalid');
+      .leftJoin(agentDeviceTokens, nodeDeviceJoin())
+      .where(and(eq(nodes.tokenHash, hash), liveNodeBinding(now)));
+    return row ? resolvedNode(row) : unauthorized('Invalid node token', 'node_token_invalid');
   }
 
   if (kind === 'observer') {
@@ -138,6 +139,15 @@ async function authenticateLegacy(
   }
 
   return unauthorized('Invalid token format');
+}
+
+/** A node principal, with the device its token is bound to (device-minted node tokens only). */
+function resolvedNode(row: {
+  node: typeof nodes.$inferSelect;
+  workspace: typeof workspaces.$inferSelect;
+  device: typeof agentDeviceTokens.$inferSelect | null;
+}): AuthResult {
+  return resolved(row.workspace, { node: row.node, ...(row.device ? { nodeDevice: deviceStampOf(row.device) } : {}) });
 }
 
 /**
@@ -155,6 +165,8 @@ async function authenticateAgentDevice(db: EngineDb, hash: string, workspaceId: 
       ...(workspaceId !== undefined ? [eq(agentDeviceTokens.workspaceId, workspaceId)] : []),
       or(isNull(agentDeviceTokens.expiresAt), gt(agentDeviceTokens.expiresAt, now)),
       eq(agents.type, 'human'),
+      // A released person speaks from no device, whatever release path ran.
+      ne(agents.status, 'released'),
     ));
   return row
     ? resolved(row.workspace, { agent: row.agent, agentDevice: deviceStampOf(row.device) })
@@ -210,10 +222,11 @@ async function authenticateAr(
     return row ? resolved(row.workspace, { agent: row.agent }) : unauthorized('Invalid agent token', 'agent_token_invalid');
   }
   if (kind === 'node') {
-    const [row] = await db.select({ node: nodes, workspace: workspaces }).from(nodes)
+    const [row] = await db.select({ node: nodes, workspace: workspaces, device: agentDeviceTokens }).from(nodes)
       .innerJoin(workspaces, eq(workspaces.id, nodes.workspaceId))
-      .where(and(eq(nodes.workspaceId, workspaceId), eq(nodes.tokenHash, hash)));
-    return row ? resolved(row.workspace, { node: row.node }) : unauthorized('Invalid node token', 'node_token_invalid');
+      .leftJoin(agentDeviceTokens, nodeDeviceJoin())
+      .where(and(eq(nodes.workspaceId, workspaceId), eq(nodes.tokenHash, hash), liveNodeBinding(now)));
+    return row ? resolvedNode(row) : unauthorized('Invalid node token', 'node_token_invalid');
   }
   const [row] = await db.select({ observerToken: observerTokens, workspace: workspaces }).from(observerTokens)
     .innerJoin(workspaces, eq(workspaces.id, observerTokens.workspaceId))

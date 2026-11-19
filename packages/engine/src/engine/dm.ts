@@ -47,7 +47,6 @@ import {
   addressNodeSelection,
   addressNotFound,
   addressSplits,
-  DIRECT_MACHINE,
   PERSON_AGENT_TYPE,
   selectAddressedRecipient,
   senderFields,
@@ -341,7 +340,7 @@ function buildDmMessageWrites(
   createdAt = new Date(),
   inboundRegistration?: { id: string; tokenHash?: string },
   senderStamp?: Record<string, unknown> | null,
-  addressedRecipient?: { agentId: string; nodeId: string; machine: string },
+  addressedRecipient?: { agentId: string; nodeId: string; machine: string; anyMachine?: boolean },
 ): AtomicWrite[] {
   const hasAttachments = attachments.length > 0;
   const metadata = dmMessageMetadata(data, senderStamp);
@@ -371,7 +370,7 @@ function buildDmMessageWrites(
             SELECT 1 FROM agents a JOIN nodes n ON n.id = a.location_node_id
             WHERE a.id = ${addressedRecipient.agentId} AND a.workspace_id = ${workspaceId}
               AND a.status <> 'released' AND a.location_node_id = ${addressedRecipient.nodeId}
-              AND (
+              AND (${addressedRecipient.anyMachine ? 1 : 0} = 1 OR
                 (n.role = 'direct' AND (${addressedRecipient.machine} = 'direct' OR n.machine_id = ${addressedRecipient.machine}))
                 OR (n.role <> 'direct' AND ${addressedRecipient.machine} <> 'direct'
                   AND (n.name = ${addressedRecipient.machine} OR n.machine_id = ${addressedRecipient.machine}))
@@ -689,14 +688,13 @@ export async function sendDm(
       data.to === '@self' ? eq(agents.id, fromAgentId) : eq(agents.name, data.to),
     ));
   // A person's machine part is display only (machineMatches): the admission
-  // guard checks the node the person is on, under the alias that names it.
+  // guard still checks the agent, its node and its status, but not the machine.
   const addressedRecipient = options.address !== undefined && recipient?.agent.locationNodeId
     ? {
       agentId: recipient.agent.id,
       nodeId: recipient.agent.locationNodeId,
-      machine: recipient.agent.type === PERSON_AGENT_TYPE && recipient.node
-        ? (recipient.node.role === 'direct' ? DIRECT_MACHINE : recipient.node.name)
-        : addressSplits(options.address).find((split) => split.agent === recipient.agent.name)!.machine,
+      machine: addressSplits(options.address).find((split) => split.agent === recipient.agent.name)!.machine,
+      anyMachine: recipient.agent.type === PERSON_AGENT_TYPE,
     }
     : undefined;
   const toAgent = recipient?.agent;

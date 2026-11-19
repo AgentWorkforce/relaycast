@@ -23,6 +23,8 @@ export type AuthResult =
       /** Set when `agent` authenticated with one of its per-device tokens. */
       agentDevice?: AgentDeviceStamp;
       node?: Node;
+      /** Set when `node`'s token was minted with a person's device token and that device is still live. */
+      nodeDevice?: AgentDeviceStamp;
       observerToken?: ObserverToken;
     }
   | { ok: false; status: number; code: string; message: string };
