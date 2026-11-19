@@ -17,10 +17,12 @@ import { jsonNotFound } from '../lib/httpResponse.js';
 
 interface DmChannelGuardOptions {
   /**
-   * Channel-membership operations (join, invite) have no meaning on a DM's
-   * backing channel and would add a `channel_members` row for a non-participant,
-   * so they are refused for every agent, participants included. Group DMs add
-   * members through `/dm/group/:id/participants`.
+   * Channel-membership operations (join, invite, leave) have no meaning on a
+   * DM's backing channel: DM participants hold no `channel_members` row, so
+   * join and invite would add one for a non-participant and leave would report
+   * a departure that did not happen. They are refused for every agent,
+   * participants included. Group DMs manage members through
+   * `/dm/group/:id/participants`.
    */
   refuseParticipants?: boolean;
 }

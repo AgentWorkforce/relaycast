@@ -339,7 +339,7 @@ channelRoutes.post(
 channelRoutes.post(
   '/channels/:name/leave',
   requireAgentToken,
-  hideDmChannelFromOutsiders(),
+  hideDmChannelFromOutsiders({ refuseParticipants: true }),
   rateLimit,
   async (c) => {
     try {

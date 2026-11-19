@@ -7,6 +7,7 @@ import {
   registerAgent,
   type TestStack,
 } from './harness.js';
+import { conformancePgDb } from './pgMode.js';
 
 // DM and group-DM conversations live on ordinary channel rows, so the
 // channel/message/search/console routes reach them. An agent that is not a
@@ -164,6 +165,17 @@ describe('DM content through channel and message routes', () => {
     }
   });
 
+  it('refuses a channel leave on a DM-backed channel and keeps the participant in the DM', async () => {
+    const { alice, pair, group } = await setup();
+
+    for (const target of [pair, group]) {
+      const leave = await call('POST', `/channels/${target.channel}/leave`, alice.token);
+      expect(leave.status).toBe(404);
+      const history = await call('GET', `/channels/${target.channel}/messages`, alice.token);
+      expect(history.status).toBe(200);
+    }
+  });
+
   it('leaves participants and the workspace key able to read by channel name and message id', async () => {
     const { ws, bob, pair, group } = await setup();
 
@@ -216,7 +228,9 @@ describe('DM content through channel and message routes', () => {
       expect(dm.status).toBe(201);
     }
 
-    const guard = enforceD1ParameterLimit(stack);
+    // The guard patches the SQLite handle, which PostgreSQL mode does not have;
+    // the result checks below still run there.
+    const guard = conformancePgDb() ? undefined : enforceD1ParameterLimit(stack);
     try {
       for (const path of ['/search?q=fanword&limit=100', '/console/messages?limit=100&delivery_kind=dm']) {
         const mine = await call<unknown[]>('GET', path, hub.token);
@@ -226,9 +240,9 @@ describe('DM content through channel and message routes', () => {
         expect(theirs.status, path).toBe(200);
         expect(theirs.data, path).toHaveLength(0);
       }
-      expect(guard.maxObserved()).toBeLessThanOrEqual(D1_MAX_BOUND_PARAMETERS);
+      if (guard) expect(guard.maxObserved()).toBeLessThanOrEqual(D1_MAX_BOUND_PARAMETERS);
     } finally {
-      guard.restore();
+      guard?.restore();
     }
   });
 });
