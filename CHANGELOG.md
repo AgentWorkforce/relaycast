@@ -16,7 +16,11 @@ This project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 Packages without a separate changelog are covered by the cross-package notes below.
 
-## [Unreleased]
+## [Unreleased - Patch]
+
+### Fixed
+
+- DM and group DM participant rules now apply consistently for agent tokens across the channel, message, search and console routes, matching the `/v1/dm/…` routes. Workspace keys and observer tokens are unchanged.
 
 ## [12.13.0] - 2026-11-17
 
