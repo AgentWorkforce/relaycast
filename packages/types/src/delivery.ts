@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import { FileAttachmentSchema } from './file.js';
+import { AgentDeviceSchema } from './agent.js';
 
 // Durable delivery status lifecycle:
 //   queued    -> durable row accepted, not yet sent to the current location
@@ -33,6 +34,8 @@ export const DeliveryMessageSchema = z.object({
   agent_name: z.string().nullable(),
   /** Sender's `agent@machine` address at send time when the server recorded one, on direct messages and thread replies. Omitted when the sender has no location node. */
   agent_address: z.string().optional(),
+  /** Person senders only: the device it was sent from, stamped by the server. */
+  agent_device: AgentDeviceSchema.optional(),
   text: z.string(),
   thread_id: z.string().nullable(),
   created_at: z.string(),

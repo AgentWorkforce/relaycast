@@ -7,7 +7,12 @@ See the [root changelog](../../CHANGELOG.md) for cross-package release highlight
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [Unreleased - Minor]
+
+### Added
+
+- `AgentDeviceSchema` / `AgentDevice` (`{ id, name, kind: desktop|cli|web|unknown }`) and an optional `agent_device` beside `agent_address` on message and delivery schemas.
+- `parseCredential` classifies agent device tokens (`at_live_dv_…`, `ar_ad_…`) as kind `agent` with `agentDevice: true`; `encodeArCredential` takes `agentDevice`. `AR_AGENT_DEVICE_CODE` and `LEGACY_AGENT_DEVICE_PREFIX` name the shapes.
 
 ## [12.13.0] - 2026-11-17
 

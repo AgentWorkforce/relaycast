@@ -22,6 +22,22 @@ const TAG = 'aX7pQ2mN4bc';
 const SECRET = Uint8Array.from({ length: 32 }, (_, i) => i * 7 + 1);
 const ar = (kind: CredentialKind, workspaceId = WS) => encodeArCredential({ kind, workspaceId, tag: TAG, secret: SECRET });
 
+describe('agent device tokens', () => {
+  it('classify at_live_dv_ and ar_ad_ as agent credentials marked agentDevice', () => {
+    expect(parseCredential(`at_live_dv_${'a'.repeat(32)}`)).toEqual({ family: 'legacy', kind: 'agent', agentDevice: true });
+    // Ordinary agent tokens are hex after at_live_, so never collide with the device prefix.
+    expect(parseCredential(`at_live_${'d'.repeat(32)}`)).toEqual({ family: 'legacy', kind: 'agent' });
+    const device = encodeArCredential({ kind: 'agent', workspaceId: WS, tag: TAG, secret: SECRET, agentDevice: true });
+    expect(device).toMatch(/^ar_ad_/);
+    expect(device).toHaveLength(79);
+    expect(parseCredential(device)).toEqual({ family: 'ar', kind: 'agent', workspaceId: WS, tag: TAG, keyVersion: 'a', agentDevice: true });
+    expect(credentialKind(device)).toBe('agent');
+    expect(parseCredential(ar('agent'))).not.toHaveProperty('agentDevice');
+    expect(() => encodeArCredential({ kind: 'node', workspaceId: WS, tag: TAG, secret: SECRET, agentDevice: true }))
+      .toThrow(/Only an agent credential/);
+  });
+});
+
 describe('ar_ credentials', () => {
   it('round-trip every kind with a fixed-width layout', () => {
     for (const kind of Object.keys(AR_KIND_CODES) as CredentialKind[]) {

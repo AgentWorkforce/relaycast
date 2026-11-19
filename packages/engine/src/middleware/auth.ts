@@ -62,6 +62,7 @@ async function rememberPrincipal(
 ): Promise<void> {
   c.set('workspace', result.workspace);
   c.set('agent', result.agent);
+  c.set('agentDevice', result.agent ? result.agentDevice : undefined);
   c.set('agentCredentialHash', result.agent ? await presentedCredentialHash(token) : undefined);
   c.set('node', result.node);
   c.set('observerToken', result.observerToken);
@@ -159,6 +160,17 @@ export function requireWorkspaceRead(
 
     await next();
   });
+}
+
+/**
+ * A per-device person token (engine/agentDevice.ts) speaks as its agent but
+ * never manages credentials: it cannot rotate the shared token, enroll a
+ * recovery verifier, or upgrade itself. Null when the request may proceed.
+ */
+export function refuseAgentDeviceToken(c: Context<AppEnv>): Response | null {
+  return c.get('agentDevice')
+    ? jsonError(c, 'device_token_forbidden', 'A device token cannot manage agent credentials', 403)
+    : null;
 }
 
 /** Requires a workspace key (`rk_live_...`). */

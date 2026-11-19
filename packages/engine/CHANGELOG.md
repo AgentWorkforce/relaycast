@@ -7,7 +7,17 @@ See the [root changelog](../../CHANGELOG.md) for cross-package release highlight
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [Unreleased - Minor]
+
+### Added
+
+- `POST /v1/agents/:name/device-tokens` (workspace key) mints or re-mints one device's token for a person (`type: human`) agent: body `{ agent_id, device: { id, name, kind: desktop|cli|web }, ttl_seconds? }`, response `{ agent_id, device, token, expires_at }`. One live token per (agent, device id), shown once and stored only as a hash in the new `agent_device_tokens` table (SQLite migration 0087, Postgres 0008; additive). `DELETE /v1/agents/:name/device-tokens/:device_id` revokes one at once. Tokens are `at_live_dv_…` / `ar_ad_…` agent credentials; their shape selects the device table, so authentication stays one indexed lookup and ordinary agent tokens are unaffected.
+- Sends by a person agent store the server-owned `__relaycast_sender_device` and serve it as `agent_device` beside `agent_address` (DMs, group DMs, channel posts, thread replies, deliveries, webhooks and realtime events); `kind: unknown` for the shared token or a node / workspace-key send. Caller-supplied `__relaycast_` keys are still dropped. Non-person senders carry no `agent_device`.
+
+### Changed
+
+- A person agent's sender address is `<person>@<device id>`, or `<person>@direct` for an unknown device; the person's direct node `machine_id` is still recorded for the roster but no longer used for the sender address. An address to a person matches whatever its machine part (display only).
+- Identity recovery, takeover and `revoke-token` delete all of the agent's device tokens; `rotate-token` does not. A device token is refused (403 `device_token_forbidden`) by `rotate-token`, `POST /v1/agent/recovery-credential` and `POST /v1/credentials/upgrade`.
 
 ## [12.13.0] - 2026-11-17
 

@@ -57,6 +57,13 @@
       "when": 1794904190079,
       "tag": "0007_workspace_leaders",
       "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "7",
+      "when": 1795086750695,
+      "tag": "0008_agent_device_tokens",
+      "breakpoints": true
     }
   ]
 }

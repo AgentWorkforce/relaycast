@@ -162,7 +162,8 @@ messageRoutes.post(
             channel.id,
             senderAgentId,
             { text, blocks, attachments, data, content_type, mode },
-            { mailbox, workspaceDeliveryPolicy },
+            // Only an agent posting as itself carries its token's device; a node's `from` is unknown.
+            { mailbox, workspaceDeliveryPolicy, senderDevice: agent ? c.get('agentDevice') : undefined },
           );
         },
         afterOperation: async (data) => {

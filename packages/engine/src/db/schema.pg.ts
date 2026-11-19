@@ -346,6 +346,37 @@ export const agentRecoveryCredentials = pgTable(
   ],
 );
 
+/** Per-device tokens of a person agent; see schema.ts. */
+export const agentDeviceTokens = pgTable(
+  'agent_device_tokens',
+  {
+    rowid: rowid(),
+    id: text('id').primaryKey(),
+    workspaceId: text('workspace_id')
+      .notNull()
+      .references(() => workspaces.id, { onDelete: 'cascade' }),
+    agentId: text('agent_id').notNull(),
+    deviceId: text('device_id').notNull(),
+    deviceName: text('device_name').notNull(),
+    deviceKind: text('device_kind').notNull(),
+    tokenHash: text('token_hash').notNull(),
+    expiresAt: epochSeconds('expires_at'),
+    createdAt: epochSeconds('created_at').notNull().default(epochNow),
+    updatedAt: epochSeconds('updated_at').notNull().default(epochNow),
+  },
+  (table) => [
+    uniqueIndex('agent_device_tokens_rowid_unique').on(table.rowid),
+    uniqueIndex('agent_device_tokens_agent_device_unique').on(table.workspaceId, table.agentId, table.deviceId),
+    uniqueIndex('agent_device_tokens_token_hash_unique').on(table.tokenHash),
+    foreignKey({
+      columns: [table.workspaceId, table.agentId],
+      foreignColumns: [agents.workspaceId, agents.id],
+      name: 'agent_device_tokens_agent_fk',
+    }).onDelete('cascade'),
+  ],
+);
+
+
 /**
  * Append-only security record. There is intentionally no agent foreign key:
  * an identity audit must survive release/deletion and retention pruning.

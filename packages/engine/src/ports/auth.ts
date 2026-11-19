@@ -8,8 +8,23 @@ export type ObserverToken = typeof observerTokens.$inferSelect;
 
 export type AuthRequire = 'workspace' | 'agent' | 'node' | 'observer' | 'any' | 'sender';
 
+/**
+ * The device a person agent's token belongs to, as the server stamps it on
+ * that agent's sends (`__relaycast_sender_device`, served as `agent_device`).
+ * `unknown` is stamped for the shared token; it is never minted.
+ */
+export type AgentDeviceStamp = { id: string; name: string; kind: 'desktop' | 'cli' | 'web' | 'unknown' };
+
 export type AuthResult =
-  | { ok: true; workspace: Workspace; agent?: Agent; node?: Node; observerToken?: ObserverToken }
+  | {
+      ok: true;
+      workspace: Workspace;
+      agent?: Agent;
+      /** Set when `agent` authenticated with one of its per-device tokens. */
+      agentDevice?: AgentDeviceStamp;
+      node?: Node;
+      observerToken?: ObserverToken;
+    }
   | { ok: false; status: number; code: string; message: string };
 
 /**

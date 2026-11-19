@@ -4,7 +4,8 @@
  * - `legacy`: `rk_live_…` (workspace key), `at_live_…` (agent), `nt_live_…`
  *   (node), `ot_live_…` (observer), `wh_live_…` (inbound webhook);
  * - `ar`: `ar_<kind>_<wsid>_<tag>_<secret><crc>`:
- *   - `kind`: `ws` | `ag` | `nd` | `ob` | `wh` ({@link AR_KIND_CODES});
+ *   - `kind`: `ws` | `ag` | `nd` | `ob` | `wh` ({@link AR_KIND_CODES}), or
+ *     `ad` for an agent device token ({@link AR_AGENT_DEVICE_CODE});
  *   - `wsid`: the workspace snowflake (64-bit) in base62, 11 characters;
  *   - `tag`: a key-version letter plus 10 base62 characters of
  *     HMAC-SHA256(keyring[version], wsid), which lets a gateway refuse a
@@ -14,6 +15,11 @@
  *     a typo or truncation is rejected offline and secret scanners match
  *     precisely.
  *
+ * An agent device token is an agent credential (kind `agent`) issued to one
+ * device of a person agent: `at_live_dv_…` ({@link LEGACY_AGENT_DEVICE_PREFIX})
+ * or `ar_ad_…`. Its shape selects the device-token table, so the server
+ * authenticates it with one lookup; `agentDevice: true` marks it.
+ *
  * This module is the one classifier of credential shape for the engine and
  * every client. Shape (including the checksum) says nothing about validity;
  * the server decides that.
@@ -22,10 +28,12 @@ export type CredentialKind = 'workspace' | 'agent' | 'node' | 'observer' | 'webh
 export type CredentialFamily = 'legacy' | 'ar';
 
 export type ParsedCredential =
-  | { family: 'legacy'; kind: CredentialKind }
+  | { family: 'legacy'; kind: CredentialKind; agentDevice?: true }
   | {
       family: 'ar';
       kind: CredentialKind;
+      /** An agent token issued to one device of a person agent. */
+      agentDevice?: true;
       /** The workspace snowflake, in decimal. */
       workspaceId: string;
       /** The routing tag: key version letter plus 10 base62 characters. */
@@ -60,6 +68,15 @@ export const AR_KIND_CODES: Readonly<Record<CredentialKind, string>> = {
   webhook: 'wh',
 };
 
+/** The `ar_` code of an agent device token: kind `agent`, issued to one device. */
+export const AR_AGENT_DEVICE_CODE = 'ad';
+
+/**
+ * The `legacy` prefix of an agent device token. Ordinary `at_live_` secrets are
+ * lowercase hex, so no existing agent token starts with it.
+ */
+export const LEGACY_AGENT_DEVICE_PREFIX = 'at_live_dv_';
+
 /** `ar_` service segments reserved for other agent relay services. */
 export const AR_RESERVED_SERVICE_CODES: readonly string[] = ['au'];
 
@@ -76,7 +93,7 @@ const KIND_BY_CODE = Object.fromEntries(
 ) as Record<string, CredentialKind>;
 
 const KINDS = Object.keys(LEGACY_CREDENTIAL_PREFIXES) as CredentialKind[];
-const AR = /^ar_(ws|ag|nd|ob|wh)_([0-9A-Za-z]{11})_([a-z][0-9A-Za-z]{10})_([0-9A-Za-z]{43})([0-9A-Za-z]{6})$/;
+const AR = /^ar_(ws|ag|ad|nd|ob|wh)_([0-9A-Za-z]{11})_([a-z][0-9A-Za-z]{10})_([0-9A-Za-z]{43})([0-9A-Za-z]{6})$/;
 
 const BASE62 = '0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz';
 const MAX_SNOWFLAKE = (1n << 64n) - 1n;
@@ -156,10 +173,14 @@ export function encodeArCredential(args: {
   workspaceId: string;
   tag: string;
   secret: Uint8Array;
+  /** An agent device token (`ar_ad_`); only with kind `agent`. */
+  agentDevice?: boolean;
 }): string {
+  if (args.agentDevice && args.kind !== 'agent') throw new Error('Only an agent credential can be a device token');
   if (!/^[a-z][0-9A-Za-z]{10}$/.test(args.tag)) throw new Error('A credential tag is a key version letter plus 10 base62 characters');
   if (args.secret.length !== AR_SECRET_BYTES) throw new Error(`A credential secret is ${AR_SECRET_BYTES} bytes`);
-  const body = `${AR_CREDENTIAL_PREFIX}${AR_KIND_CODES[args.kind]}_${encodeArWorkspaceId(args.workspaceId)}_${args.tag}_`
+  const code = args.agentDevice ? AR_AGENT_DEVICE_CODE : AR_KIND_CODES[args.kind];
+  const body = `${AR_CREDENTIAL_PREFIX}${code}_${encodeArWorkspaceId(args.workspaceId)}_${args.tag}_`
     + base62Encode(bytesToBigInt(args.secret), AR_SECRET_LENGTH);
   return body + arChecksum(body);
 }
@@ -171,10 +192,21 @@ export function parseCredential(token: string): ParsedCredential | undefined {
     if (arChecksum(token.slice(0, -AR_CHECKSUM_LENGTH)) !== ar[5]) return undefined;
     const workspace = base62Decode(ar[2]);
     if (workspace > MAX_SNOWFLAKE) return undefined;
-    return { family: 'ar', kind: KIND_BY_CODE[ar[1]], workspaceId: workspace.toString(), tag: ar[3], keyVersion: ar[3][0] };
+    const device = ar[1] === AR_AGENT_DEVICE_CODE;
+    return {
+      family: 'ar',
+      kind: device ? 'agent' : KIND_BY_CODE[ar[1]],
+      workspaceId: workspace.toString(),
+      tag: ar[3],
+      keyVersion: ar[3][0],
+      ...(device ? { agentDevice: true as const } : {}),
+    };
   }
   const kind = KINDS.find((candidate) => token.startsWith(LEGACY_CREDENTIAL_PREFIXES[candidate]));
-  return kind ? { family: 'legacy', kind } : undefined;
+  if (!kind) return undefined;
+  return kind === 'agent' && token.startsWith(LEGACY_AGENT_DEVICE_PREFIX)
+    ? { family: 'legacy', kind, agentDevice: true }
+    : { family: 'legacy', kind };
 }
 
 export function credentialKind(token: string): CredentialKind | undefined {

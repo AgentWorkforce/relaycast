@@ -9,7 +9,7 @@ import {
   CliTypeSchema,
 } from '@relaycast/types';
 import type { AppEnv } from '../env.js';
-import { requireWorkspaceKey, requireAuth, requireAgentToken, requireSender, requireWorkspaceRead } from '../middleware/auth.js';
+import { refuseAgentDeviceToken, requireWorkspaceKey, requireAuth, requireAgentToken, requireSender, requireWorkspaceRead } from '../middleware/auth.js';
 import {
   authenticateUnexpired,
   isWorkspaceExpired,
@@ -22,6 +22,7 @@ import { registrationAdmission } from '../middleware/admission.js';
 import * as agentEngine from '../engine/agent.js';
 import { agentRetentionSchema, retainAgents } from '../engine/agentRetention.js';
 import * as agentIdentityEngine from '../engine/agentIdentity.js';
+import * as agentDeviceEngine from '../engine/agentDevice.js';
 import * as nodeEngine from '../engine/node.js';
 import * as actionEngine from '../engine/action.js';
 import * as directoryEngine from '../engine/directory.js';
@@ -100,6 +101,16 @@ const takeoverAgentSchema = z.object({
   reason: z.string().min(1),
   session_ref: z.string().min(1),
   node_id: z.string().min(1),
+});
+
+const issueDeviceTokenSchema = z.object({
+  agent_id: z.string().min(1),
+  device: z.object({
+    id: z.string().min(1).max(64),
+    name: z.string().min(1).max(400),
+    kind: z.string().min(1),
+  }),
+  ttl_seconds: z.number().int().optional(),
 });
 
 const revokeAgentTokenSchema = z.object({
@@ -352,6 +363,8 @@ agentRoutes.post(
         'invalid recovery credential body',
       );
       if (!parsed.ok) return parsed.response;
+      const deviceRefusal = refuseAgentDeviceToken(c);
+      if (deviceRefusal) return deviceRefusal;
       const workspace = c.get('workspace');
       const agent = c.get('agent')!;
       await agentIdentityEngine.enrollRecoveryCredential(c.get('db'), {
@@ -514,6 +527,47 @@ agentRoutes.post(
         audit_id: result.audit_id,
       });
       return jsonOk(c, result);
+    } catch (err: unknown) {
+      return errorResponse(c, err);
+    }
+  },
+);
+
+// POST /v1/agents/:name/device-tokens - mint (or re-mint) one device's token
+// for a person agent. Workspace key only; the token is shown once.
+agentRoutes.post(
+  '/agents/:name/device-tokens',
+  requireWorkspaceKey,
+  rateLimit,
+  async (c) => {
+    try {
+      const parsed = await parseJsonBody(c, issueDeviceTokenSchema, 'invalid device token body');
+      if (!parsed.ok) return parsed.response;
+      const workspace = c.get('workspace');
+      const result = await agentDeviceEngine.issueAgentDeviceToken(c.get('db'), workspace.id, c.req.param('name'), {
+        expectedAgentId: parsed.data.agent_id,
+        device: parsed.data.device,
+        ttlSeconds: parsed.data.ttl_seconds,
+      });
+      return jsonCreated(c, result);
+    } catch (err: unknown) {
+      return errorResponse(c, err);
+    }
+  },
+);
+
+// DELETE /v1/agents/:name/device-tokens/:device_id - revoke one device's token
+// at once. Workspace key only; revoking an absent device is a no-op.
+agentRoutes.delete(
+  '/agents/:name/device-tokens/:device_id',
+  requireWorkspaceKey,
+  rateLimit,
+  async (c) => {
+    try {
+      const workspace = c.get('workspace');
+      const revoked = await agentDeviceEngine.revokeAgentDeviceToken(
+        c.get('db'), workspace.id, c.req.param('name'), c.req.param('device_id'));
+      return jsonOk(c, { revoked });
     } catch (err: unknown) {
       return errorResponse(c, err);
     }

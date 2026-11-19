@@ -63,7 +63,7 @@ describe('bounded workspace deletion', () => {
     // final cascade over them stays small. Anything that accumulates history
     // must be drained instead — add new tables to DRAIN_STEPS, not here.
     const bounded = new Set([
-      'workspaces', 'workspace_create_idempotency', 'agent_recovery_credentials', 'observer_tokens',
+      'workspaces', 'workspace_create_idempotency', 'agent_recovery_credentials', 'agent_device_tokens', 'observer_tokens',
       'node_providers', 'agent_node_bindings', 'a2a_agents', 'directory_agents', 'directory_skills',
       'directory_ratings', 'routing_configs', 'certifications', 'dm_conversation_reservations',
       'webhooks', 'event_subscriptions', 'actions', 'triggers', 'credential_upgrades',

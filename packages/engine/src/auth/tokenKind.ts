@@ -17,15 +17,18 @@ export interface ParsedAuthToken {
   family: 'legacy' | 'ar';
   /** The workspace an `ar_` credential names. */
   workspaceId?: string;
+  /** An agent token issued to one device of a person agent (engine/agentDevice.ts). */
+  agentDevice?: true;
 }
 
 /** Classify an API credential of either family. */
 export function parseAuthToken(token: string): ParsedAuthToken | undefined {
   const parsed = parseCredential(token);
   if (!parsed || parsed.kind === 'webhook') return undefined;
+  const device = parsed.agentDevice ? { agentDevice: true as const } : {};
   return parsed.family === 'ar'
-    ? { kind: parsed.kind, token, family: 'ar', workspaceId: parsed.workspaceId }
-    : { kind: parsed.kind, token, family: 'legacy' };
+    ? { kind: parsed.kind, token, family: 'ar', workspaceId: parsed.workspaceId, ...device }
+    : { kind: parsed.kind, token, family: 'legacy', ...device };
 }
 
 export function getAuthTokenKind(token: string): AuthTokenKind | undefined {

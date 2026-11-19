@@ -33,6 +33,7 @@ type TableName =
   | 'credentialUpgrades'
   | 'agents'
   | 'agentRecoveryCredentials'
+  | 'agentDeviceTokens'
   | 'agentIdentityAudit'
   | 'nodes'
   | 'nodeProviders'
@@ -167,6 +168,7 @@ export let workspaceCreateIdempotency: EngineSchema['workspaceCreateIdempotency'
 export let credentialUpgrades: EngineSchema['credentialUpgrades'] = unbound('credentialUpgrades');
 export let agents: EngineSchema['agents'] = unbound('agents');
 export let agentRecoveryCredentials: EngineSchema['agentRecoveryCredentials'] = unbound('agentRecoveryCredentials');
+export let agentDeviceTokens: EngineSchema['agentDeviceTokens'] = unbound('agentDeviceTokens');
 export let agentIdentityAudit: EngineSchema['agentIdentityAudit'] = unbound('agentIdentityAudit');
 export let nodes: EngineSchema['nodes'] = unbound('nodes');
 export let nodeProviders: EngineSchema['nodeProviders'] = unbound('nodeProviders');
@@ -216,6 +218,7 @@ function assign(s: EngineSchema): void {
   credentialUpgrades = s.credentialUpgrades;
   agents = s.agents;
   agentRecoveryCredentials = s.agentRecoveryCredentials;
+  agentDeviceTokens = s.agentDeviceTokens;
   agentIdentityAudit = s.agentIdentityAudit;
   nodes = s.nodes;
   nodeProviders = s.nodeProviders;

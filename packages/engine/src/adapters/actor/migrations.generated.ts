@@ -880,6 +880,14 @@ export const ACTOR_MIGRATIONS: readonly (readonly [string, readonly string[]])[]
     [
       "ALTER TABLE workspaces\n  ADD COLUMN leaders text"
     ]
+  ],
+  [
+    "0087_agent_device_tokens.sql",
+    [
+      "CREATE TABLE agent_device_tokens (\n  id TEXT PRIMARY KEY NOT NULL,\n  workspace_id TEXT NOT NULL,\n  agent_id TEXT NOT NULL,\n  device_id TEXT NOT NULL,\n  device_name TEXT NOT NULL,\n  device_kind TEXT NOT NULL,\n  token_hash TEXT NOT NULL,\n  expires_at INTEGER,\n  created_at INTEGER NOT NULL DEFAULT (unixepoch()),\n  updated_at INTEGER NOT NULL DEFAULT (unixepoch()),\n  FOREIGN KEY (workspace_id) REFERENCES workspaces(id) ON DELETE CASCADE,\n  FOREIGN KEY (workspace_id, agent_id) REFERENCES agents(workspace_id, id) ON DELETE CASCADE\n)",
+      "CREATE UNIQUE INDEX agent_device_tokens_agent_device_unique\n  ON agent_device_tokens(workspace_id, agent_id, device_id)",
+      "CREATE UNIQUE INDEX agent_device_tokens_token_hash_unique\n  ON agent_device_tokens(token_hash)"
+    ]
   ]
 ];
 

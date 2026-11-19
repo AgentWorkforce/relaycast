@@ -83,7 +83,7 @@ threadRoutes.post(
             parentId,
             agentId,
             { text, blocks, data },
-            { mailbox, workspaceDeliveryPolicy },
+            { mailbox, workspaceDeliveryPolicy, senderDevice: c.get('agentDevice') },
           );
         },
         afterOperation: async (data) => {

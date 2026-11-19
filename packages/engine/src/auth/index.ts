@@ -1,5 +1,6 @@
-import { and, eq, gt, or } from 'drizzle-orm';
-import { workspaces, agents, nodes, observerTokens } from '../db/tables.js';
+import { and, eq, gt, isNull, or } from 'drizzle-orm';
+import { workspaces, agents, agentDeviceTokens, nodes, observerTokens } from '../db/tables.js';
+import { deviceStampOf } from '../engine/agentDevice.js';
 import { sha256Hex } from '../lib/crypto.js';
 import {
   activeObserverTokenCondition,
@@ -71,6 +72,11 @@ export class SqliteApiKeyAuthProvider implements AuthProvider {
     }
 
     const hash = await hashToken(token);
+    if (parsedToken.agentDevice) {
+      // Its shape selects the device-token table: one lookup, never the agents
+      // table, and never the legacy-upgrade path.
+      return authenticateAgentDevice(db, hash, parsedToken.workspaceId);
+    }
     if (parsedToken.workspaceId !== undefined) {
       return authenticateAr(db, parsedToken.kind, parsedToken.workspaceId, hash);
     }
@@ -132,6 +138,27 @@ async function authenticateLegacy(
   }
 
   return unauthorized('Invalid token format');
+}
+
+/**
+ * Verify an agent device token: one indexed query on its hash, returning the
+ * device, its agent and the workspace together. An expired token is refused;
+ * so is one whose agent is not a person agent (only those are minted).
+ */
+async function authenticateAgentDevice(db: EngineDb, hash: string, workspaceId: string | undefined): Promise<AuthResult> {
+  const now = new Date();
+  const [row] = await db.select({ device: agentDeviceTokens, agent: agents, workspace: workspaces }).from(agentDeviceTokens)
+    .innerJoin(agents, and(eq(agents.workspaceId, agentDeviceTokens.workspaceId), eq(agents.id, agentDeviceTokens.agentId)))
+    .innerJoin(workspaces, eq(workspaces.id, agentDeviceTokens.workspaceId))
+    .where(and(
+      eq(agentDeviceTokens.tokenHash, hash),
+      ...(workspaceId !== undefined ? [eq(agentDeviceTokens.workspaceId, workspaceId)] : []),
+      or(isNull(agentDeviceTokens.expiresAt), gt(agentDeviceTokens.expiresAt, now)),
+      eq(agents.type, 'human'),
+    ));
+  return row
+    ? resolved(row.workspace, { agent: row.agent, agentDevice: deviceStampOf(row.device) })
+    : unauthorized('Invalid agent token', 'agent_token_invalid');
 }
 
 /**

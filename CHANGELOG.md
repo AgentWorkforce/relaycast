@@ -16,7 +16,15 @@ This project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 Packages without a separate changelog are covered by the cross-package notes below.
 
-## [Unreleased]
+## [Unreleased - Minor]
+
+### Added
+
+- Per-device person tokens: the workspace key mints (`POST /v1/agents/:name/device-tokens`) and revokes (`DELETE /v1/agents/:name/device-tokens/:device_id`) a token per device for a person (`type: human`) agent. What a device token sends carries the server-stamped `agent_device` (`{ id, name, kind }`) next to `agent_address` on DMs, group DMs, channel posts, thread replies, deliveries and events, so receivers see which device a person spoke from. A caller cannot set it.
+
+### Changed
+
+- A person agent's `agent_address` on what it sends is now `<person>@<device id>`, or `<person>@direct` for its shared token, instead of the machine id of whichever device last registered the person's direct node. Any machine part in an address to a person still reaches the person.
 
 ## [12.13.0] - 2026-11-17
 
