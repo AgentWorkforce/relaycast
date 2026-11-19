@@ -39,6 +39,7 @@ import { getWorkspaceExpiry } from '../../engine/workspace.js';
 import { isWorkspaceExpired } from '../../auth/workspaceExpiry.js';
 import { SOCKET_GRANT_MAX_AGE_MS, SocketPrincipalSchema, signSocketPrincipal, socketGrantResponse, verifySocketPrincipal, type SocketPrincipal } from './socket-grant.js';
 import { ActorSocketTable, type ActorSocketRow } from './socket-table.js';
+import { deviceTokenLive } from '../../engine/agentDevice.js';
 import type { ActorSql } from './database.js';
 
 /**
@@ -192,7 +193,10 @@ export class ActorRealtime implements RealtimeBus, ConnectionRegistry, NodeConne
   }
 
   async upgradeNode(args: NodeUpgradeArgs): Promise<Response> {
-    return socketGrantResponse(await signSocketPrincipal(this.options.grantSecret, { v: 1, kind: 'node', workspace_id: args.workspaceId, node_id: args.nodeId }));
+    return socketGrantResponse(await signSocketPrincipal(this.options.grantSecret, {
+      v: 1, kind: 'node', workspace_id: args.workspaceId, node_id: args.nodeId,
+      ...(args.deviceTokenHash ? { device_token_hash: args.deviceTokenHash } : {}),
+    }));
   }
 
   /*
@@ -360,6 +364,15 @@ export class ActorRealtime implements RealtimeBus, ConnectionRegistry, NodeConne
     return this.inner.disconnectNode(workspaceId, nodeId);
   }
 
+  nodeConnectionDeviceTokenHashes(workspaceId: string, nodeId: string): string[] {
+    return this.inner.nodeConnectionDeviceTokenHashes(workspaceId, nodeId);
+  }
+
+  async disconnectNodeDeviceSockets(workspaceId: string, nodeId: string, deviceTokenHashes: readonly string[]): Promise<void> {
+    await this.inner.disconnectNodeDeviceSockets(workspaceId, nodeId, deviceTokenHashes);
+    this.forgetDropped();
+  }
+
   drainNode(workspaceId: string, nodeId: string, options?: NodeDrainOptions): Promise<void> {
     return this.inner.drainNode(workspaceId, nodeId, options);
   }
@@ -490,9 +503,13 @@ export class ActorRealtime implements RealtimeBus, ConnectionRegistry, NodeConne
       if (!row.nodeId) return false;
       const node = await getNodeById(this.db, workspaceId, row.nodeId);
       if (!node) return false;
+      // A socket opened with a device-bound token whose device is gone is not
+      // re-attached after the actor slept (node auth refuses that token too).
+      if (row.deviceTokenHash && !await deviceTokenLive(this.db, row.deviceTokenHash)) return false;
       const handle = this.inner.attachNodeSocket(workspaceId, row.nodeId, this.engineSocket(row.socketId), {
         connectionId: row.socketId,
         earlyDrain: options.earlyDrain,
+        deviceTokenHash: row.deviceTokenHash,
       });
       this.inner.restoreNodeConnectionState(row.socketId, {
         providerName: row.providerName ?? undefined,
@@ -501,7 +518,13 @@ export class ActorRealtime implements RealtimeBus, ConnectionRegistry, NodeConne
         callerAwareActions: row.callerAwareActions,
         lastSeen: row.lastSeen,
       });
-      this.attached.set(row.socketId, { principal: { v: 1, kind: 'node', workspace_id: workspaceId, node_id: row.nodeId }, handle });
+      this.attached.set(row.socketId, {
+        principal: {
+          v: 1, kind: 'node', workspace_id: workspaceId, node_id: row.nodeId,
+          ...(row.deviceTokenHash ? { device_token_hash: row.deviceTokenHash } : {}),
+        },
+        handle,
+      });
       // Rows written before supersession dropped them may bind one provider twice.
       this.forgetDropped();
       return true;
@@ -558,11 +581,15 @@ export class ActorRealtime implements RealtimeBus, ConnectionRegistry, NodeConne
       const node = await getNodeById(this.db, principal.workspace_id, principal.node_id);
       if (!node) return reject(socket, UNAUTHORIZED_CLOSE_CODE, 'unknown node');
       socket.setTags(connectionTag(socket.id), 'kind:node', `node:${principal.node_id}`);
+      const deviceTokenHash = principal.device_token_hash ?? null;
       const handle = this.inner.attachNodeSocket(principal.workspace_id, principal.node_id, this.engineSocket(socket.id), {
         connectionId: socket.id,
+        deviceTokenHash,
       });
       this.attached.set(socket.id, { principal, handle });
-      this.table.insert({ socketId: socket.id, kind: 'node', workspaceId: principal.workspace_id, nodeId: principal.node_id });
+      this.table.insert({
+        socketId: socket.id, kind: 'node', workspaceId: principal.workspace_id, nodeId: principal.node_id, deviceTokenHash,
+      });
       return;
     }
 

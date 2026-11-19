@@ -126,11 +126,20 @@ messageRoutes.post(
           return jsonError(c, 'from_required', 'A node token must set "from" (an agent name in the node workspace)', 400);
         }
         const [fromAgent] = await db
-          .select({ id: agents.id, name: agents.name, type: agents.type, metadata: agents.metadata })
+          .select({
+            id: agents.id, name: agents.name, type: agents.type, metadata: agents.metadata,
+            locationNodeId: agents.locationNodeId,
+          })
           .from(agents)
           .where(and(eq(agents.workspaceId, workspace.id), eq(agents.name, from)));
         if (!fromAgent) {
           return jsonNotFound(c, 'agent_not_found', `Agent "${from}" not found in this workspace`);
+        }
+        // A direct node is one agent's own delivery host: it posts only as that
+        // agent (its implicit node, or the agent located on it), never as
+        // someone else. Broker nodes host many agents and keep `from` as before.
+        if (node.role === 'direct' && node.id !== directNodeIdForAgent(fromAgent.id) && fromAgent.locationNodeId !== node.id) {
+          return jsonError(c, 'from_not_allowed', 'A direct node may post only as its own agent', 403);
         }
         sender = fromAgent;
       } else {

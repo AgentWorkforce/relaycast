@@ -172,8 +172,9 @@ export async function rotateAgentIdentity(
       originActor: audit.originActor,
     }),
     // Recovery and takeover hand the identity to a new holder: no device of
-    // the previous one keeps speaking as it (engine/agentDevice.ts).
-    deleteAgentDeviceTokens(writeDb, target.workspaceId, target.agentId),
+    // the previous one keeps speaking as it (engine/agentDevice.ts). Only when
+    // the token change above applied.
+    deleteAgentDeviceTokens(writeDb, target.workspaceId, target.agentId, tokenHash),
   ] as const;
   let results: unknown[];
   if (options.alreadyAtomic) {
@@ -237,7 +238,7 @@ export async function revokeAgentIdentityTokens(
       nodeId: audit.nodeId ?? null,
       originActor: audit.originActor,
     }),
-    deleteAgentDeviceTokens(writeDb, target.workspaceId, target.agentId),
+    deleteAgentDeviceTokens(writeDb, target.workspaceId, target.agentId, replacementHash),
   ], { requireAtomic: true });
 
   if (!firstReturnedRow<{ id: string }>(results[0])) {

@@ -58,6 +58,8 @@ export interface NodeUpgradeArgs {
   workspaceId: string;
   nodeId: string;
   nodeName: string;
+  /** The device-token binding of the node token that authenticated this upgrade; null when unbound. */
+  deviceTokenHash?: string | null;
   origin: { client: string; version: string };
   originActor?: string;
 }
@@ -319,6 +321,16 @@ export interface NodeConnectionRegistry {
 
   /** Force-close all sockets for a node. */
   disconnectNode(workspaceId: string, nodeId: string): Promise<void>;
+
+  /**
+   * The device-token bindings (engine/agentDevice.ts) of the node token each
+   * open socket of this node was opened with; unbound sockets excluded.
+   * Optional: a host without per-socket binding closes the whole node instead.
+   */
+  nodeConnectionDeviceTokenHashes?(workspaceId: string, nodeId: string): string[];
+
+  /** Close only this node's sockets opened with one of these device-token bindings. */
+  disconnectNodeDeviceSockets?(workspaceId: string, nodeId: string, deviceTokenHashes: readonly string[]): Promise<void>;
 
   /**
    * Flush any queued `action.invoke` frames to the node's live connection.

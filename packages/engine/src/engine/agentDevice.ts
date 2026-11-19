@@ -1,4 +1,4 @@
-import { and, eq, gt, isNotNull, isNull, or } from 'drizzle-orm';
+import { and, eq, exists, gt, inArray, isNotNull, isNull, or } from 'drizzle-orm';
 import type { getDb } from '../db/index.js';
 import { agentDeviceTokens, agents, nodes } from '../db/tables.js';
 import { issueAgentDeviceCredential } from '../auth/credentials.js';
@@ -144,11 +144,23 @@ export async function revokeAgentDeviceToken(
   return deleted.length > 0 ? agent.id : null;
 }
 
-/** The delete that drops every device token of an agent (identity recovery, takeover, revocation). */
-export function deleteAgentDeviceTokens(db: Db, workspaceId: string, agentId: string) {
+/**
+ * The delete that drops every device token of an agent (identity recovery,
+ * takeover, revocation, delete). With `onlyIfTokenHash`, it applies only when
+ * the agent's shared token is now that hash, so a batch whose token change
+ * lost a race (409) leaves the device tokens alone.
+ */
+export function deleteAgentDeviceTokens(db: Db, workspaceId: string, agentId: string, onlyIfTokenHash?: string) {
   return db
     .delete(agentDeviceTokens)
-    .where(and(eq(agentDeviceTokens.workspaceId, workspaceId), eq(agentDeviceTokens.agentId, agentId)));
+    .where(and(
+      eq(agentDeviceTokens.workspaceId, workspaceId),
+      eq(agentDeviceTokens.agentId, agentId),
+      ...(onlyIfTokenHash === undefined ? [] : [exists(db
+        .select({ id: agents.id })
+        .from(agents)
+        .where(and(eq(agents.workspaceId, workspaceId), eq(agents.id, agentId), eq(agents.tokenHash, onlyIfTokenHash))))]),
+    ));
 }
 
 /** The stamp of an authenticated device-token row. */
@@ -184,4 +196,30 @@ export async function nodeBindingDead(db: Db, workspaceId: string, nodeId: strin
     .where(and(eq(nodes.workspaceId, workspaceId), eq(nodes.id, nodeId)));
   if (!row?.bound) return false;
   return !row.device || (row.expiresAt !== null && row.expiresAt.getTime() <= now.getTime());
+}
+
+/** Whether the device token with this hash exists and has not expired. */
+export async function deviceTokenLive(db: Db, tokenHash: string, now = new Date()): Promise<boolean> {
+  const [row] = await db
+    .select({ id: agentDeviceTokens.id })
+    .from(agentDeviceTokens)
+    .where(and(
+      eq(agentDeviceTokens.tokenHash, tokenHash),
+      or(isNull(agentDeviceTokens.expiresAt), gt(agentDeviceTokens.expiresAt, now)),
+    ));
+  return Boolean(row);
+}
+
+/** Which of these device-token hashes belong to live (unexpired) device tokens of the workspace. */
+export async function liveDeviceTokenHashes(db: Db, workspaceId: string, hashes: readonly string[], now = new Date()): Promise<Set<string>> {
+  if (hashes.length === 0) return new Set();
+  const rows = await db
+    .select({ tokenHash: agentDeviceTokens.tokenHash })
+    .from(agentDeviceTokens)
+    .where(and(
+      eq(agentDeviceTokens.workspaceId, workspaceId),
+      inArray(agentDeviceTokens.tokenHash, [...hashes]),
+      or(isNull(agentDeviceTokens.expiresAt), gt(agentDeviceTokens.expiresAt, now)),
+    ));
+  return new Set(rows.map((row) => row.tokenHash));
 }

@@ -553,17 +553,29 @@ agentRoutes.post(
 );
 
 /**
- * Close the person's direct-node socket when its node token was bound to a
- * device token that is no longer live (engine/agentDevice.ts), so a revoked,
- * re-minted or taken-over device loses node transport at once, not at its
- * next heartbeat. Best-effort: node auth already refuses that token.
+ * Close the person's direct-node sockets that were opened with a device-bound
+ * node token whose device token is no longer live (revoked, re-minted,
+ * expired, or deleted by a takeover, recovery, revoke-token or agent delete),
+ * so that device loses node transport at once, not at its next heartbeat.
+ * Each socket is judged by the token that opened it, never by the node row's
+ * current binding; the person's other devices and unbound sockets stay.
+ * Best-effort: node auth already refuses those tokens.
  */
 async function disconnectIfBindingDead(c: Context<AppEnv>, workspaceId: string, agentId: string): Promise<void> {
   try {
     const nodeId = nodeEngine.directNodeIdForAgent(agentId);
-    if (await agentDeviceEngine.nodeBindingDead(c.get('db'), workspaceId, nodeId)) {
-      await c.get('engine').nodeConnections.disconnectNode(workspaceId, nodeId);
+    const registry = c.get('engine').nodeConnections;
+    if (!registry.nodeConnectionDeviceTokenHashes || !registry.disconnectNodeDeviceSockets) {
+      if (await agentDeviceEngine.nodeBindingDead(c.get('db'), workspaceId, nodeId)) {
+        await registry.disconnectNode(workspaceId, nodeId);
+      }
+      return;
     }
+    const opened = registry.nodeConnectionDeviceTokenHashes(workspaceId, nodeId);
+    if (opened.length === 0) return;
+    const live = await agentDeviceEngine.liveDeviceTokenHashes(c.get('db'), workspaceId, opened);
+    const dead = opened.filter((hash) => !live.has(hash));
+    if (dead.length > 0) await registry.disconnectNodeDeviceSockets(workspaceId, nodeId, dead);
   } catch (err) {
     console.warn('[agent.device] bound node disconnect failed', { workspaceId, error: String(err) });
   }

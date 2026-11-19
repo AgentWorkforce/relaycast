@@ -61,6 +61,12 @@ interface NodeConn {
   socket: EngineSocket;
   workspaceId: string;
   nodeId: string;
+  /**
+   * The device-token binding of the node token that opened this socket
+   * (engine/agentDevice.ts); null for an unbound token. Kept per socket: a
+   * later mint changes the node row, never what opened this socket.
+   */
+  deviceTokenHash: string | null;
   providerName?: string;
   instanceId?: string;
   /** Null means legacy/immediate; a set means cursor-gated ready identities. */
@@ -892,6 +898,33 @@ export class InProcessRealtime implements RealtimeBus, ConnectionRegistry, NodeC
     this.nodeQueues.delete(this.providerQueueKey(nodeKey, providerName));
   }
 
+  /** The distinct device-token bindings of this node's open sockets (unbound sockets excluded). */
+  nodeConnectionDeviceTokenHashes(workspaceId: string, nodeId: string): string[] {
+    const hashes = new Set<string>();
+    for (const conn of this.nodeConnections.values()) {
+      if (conn.workspaceId === workspaceId && conn.nodeId === nodeId && conn.deviceTokenHash) hashes.add(conn.deviceTokenHash);
+    }
+    return [...hashes];
+  }
+
+  /**
+   * Close only this node's sockets that were opened with one of these
+   * device-token bindings: a revoked device's socket goes, the person's other
+   * devices (and unbound sockets) stay.
+   */
+  async disconnectNodeDeviceSockets(workspaceId: string, nodeId: string, deviceTokenHashes: readonly string[]): Promise<void> {
+    const dead = new Set(deviceTokenHashes);
+    for (const [connId, conn] of [...this.nodeConnections]) {
+      if (conn.workspaceId !== workspaceId || conn.nodeId !== nodeId || !conn.deviceTokenHash || !dead.has(conn.deviceTokenHash)) continue;
+      try {
+        conn.socket.close(1008, 'device token revoked');
+      } catch {
+        // already closed
+      }
+      await this.onNodeConnectionClose(connId);
+    }
+  }
+
   async disconnectNode(workspaceId: string, nodeId: string): Promise<void> {
     const nodeKey = this.nodeKey(workspaceId, nodeId);
     const providers = this.providerIndex.get(nodeKey);
@@ -953,7 +986,7 @@ export class InProcessRealtime implements RealtimeBus, ConnectionRegistry, NodeC
     workspaceId: string,
     nodeId: string,
     socket: EngineSocket,
-    options: { connectionId?: string; earlyDrain?: boolean } = {},
+    options: { connectionId?: string; earlyDrain?: boolean; deviceTokenHash?: string | null } = {},
   ): SocketHandle {
     const connectionId = options.connectionId ?? `nconn_${++this.connectionSeq}`;
     const nodeKey = this.nodeKey(workspaceId, nodeId);
@@ -961,6 +994,7 @@ export class InProcessRealtime implements RealtimeBus, ConnectionRegistry, NodeC
       socket,
       workspaceId,
       nodeId,
+      deviceTokenHash: options.deviceTokenHash ?? null,
       lastSeen: Date.now(),
       attaches: 0,
       superseded: false,
@@ -986,6 +1020,7 @@ export class InProcessRealtime implements RealtimeBus, ConnectionRegistry, NodeC
           nodeId,
           socket,
           connectionId,
+          connectionDeviceTokenHash: conn.deviceTokenHash,
           // Read under the node lock from the handle's own connection object:
           // outlives the registry's marker, which goes with the close.
           connectionSuperseded: () => conn.superseded,

@@ -10,6 +10,8 @@ import { ACTOR_IMPORT_CHUNKS_TABLE, ACTOR_IMPORT_TABLE } from './import.js';
 export interface ActorTable {
   readonly name: string;
   readonly ddl: string;
+  /** Columns added after the table first shipped: a stored table lacking one gets it with ALTER TABLE ADD COLUMN. */
+  readonly addedColumns?: readonly { readonly name: string; readonly ddl: string }[];
 }
 
 const ADAPTER_TABLES: readonly ActorTable[] = [
@@ -38,19 +40,27 @@ const ADAPTER_TABLES: readonly ActorTable[] = [
  */
 export function ensureActorSchema(sql: ActorSql): boolean {
   const names = [ACTOR_MIGRATIONS_TABLE, ...ADAPTER_TABLES.map((table) => table.name)];
-  const present = new Set(
+  // The same single sqlite_master read also returns each table's DDL, so a
+  // missing added column is found without another query.
+  const stored = new Map(
     (sql.exec(
-      `SELECT name FROM sqlite_master WHERE type = 'table' AND name IN (${names.map(() => '?').join(', ')})`,
+      `SELECT name, sql FROM sqlite_master WHERE type = 'table' AND name IN (${names.map(() => '?').join(', ')})`,
       ...names,
-    ) as { name: string }[]).map((row) => row.name),
+    ) as { name: string; sql: string | null }[]).map((row) => [row.name, row.sql ?? ''] as const),
   );
-  const migrationsCurrent = present.has(ACTOR_MIGRATIONS_TABLE) && actorMigrationsCurrent(sql);
-  const tablesCurrent = ADAPTER_TABLES.every((table) => present.has(table.name));
+  const missingColumns = (table: ActorTable) => (table.addedColumns ?? [])
+    .filter((column) => !new RegExp(`\\b${column.name}\\b`).test(stored.get(table.name) ?? ''));
+  const migrationsCurrent = stored.has(ACTOR_MIGRATIONS_TABLE) && actorMigrationsCurrent(sql);
+  const tablesCurrent = ADAPTER_TABLES.every((table) => stored.has(table.name) && missingColumns(table).length === 0);
   if (migrationsCurrent && tablesCurrent) return true;
 
-  if (!migrationsCurrent) applyActorMigrations(sql, { trackingTableExists: present.has(ACTOR_MIGRATIONS_TABLE) });
+  if (!migrationsCurrent) applyActorMigrations(sql, { trackingTableExists: stored.has(ACTOR_MIGRATIONS_TABLE) });
   for (const table of ADAPTER_TABLES) {
-    if (!present.has(table.name)) sql.exec(table.ddl);
+    if (!stored.has(table.name)) {
+      sql.exec(table.ddl);
+      continue;
+    }
+    for (const column of missingColumns(table)) sql.exec(`ALTER TABLE ${table.name} ADD COLUMN ${column.ddl}`);
   }
   return false;
 }

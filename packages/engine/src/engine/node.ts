@@ -24,7 +24,7 @@ import {
 } from '@relaycast/types';
 import type { getDb } from '../db/index.js';
 import { actionInvocations, actions, agents, agentDeviceTokens, agentNodeBindings, channelMembers, channels, nodeProviders, nodes, workspaces } from '../db/tables.js';
-import { liveNodeBinding, nodeDeviceJoin } from './agentDevice.js';
+import { deviceTokenLive, liveNodeBinding, nodeDeviceJoin } from './agentDevice.js';
 import { isWorkspaceExpired, WORKSPACE_EXPIRED_CODE, WORKSPACE_EXPIRED_MESSAGE } from '../auth/workspaceExpiry.js';
 import { randomHex, sha256Hex } from '../lib/crypto.js';
 import { codedError } from '../lib/httpError.js';
@@ -103,6 +103,13 @@ export interface HandleNodeControlMessageArgs {
    * caller drives node control without a registry-managed socket.
    */
   connectionId?: string;
+  /**
+   * The device-token binding of the node token that OPENED this socket
+   * (nodes.device_token_hash when it authenticated), not the node row's
+   * current one, which a later mint may have changed. Null or absent: opened
+   * with an unbound node token.
+   */
+  connectionDeviceTokenHash?: string | null;
   /**
    * Host admission for `agent.register` (see `createRegistrationAdmission`).
    * Absent when the host has no `admit` hook.
@@ -2830,7 +2837,7 @@ export async function recoverAgentViaNode(
   nodeId: string,
   providerName: string,
   message: FleetAgentRecoverMessage,
-  options: { deliveryCursorSupported?: boolean } = {},
+  options: { deliveryCursorSupported?: boolean; connectionDeviceTokenHash?: string | null } = {},
 ): Promise<AgentRegisterReplyData> {
   assertRegistrableAgentName(message.name);
   const hasInteractiveTransaction = hasTransactionCapability(db);
@@ -2862,8 +2869,9 @@ export async function recoverAgentViaNode(
       );
     }
     // A node token minted with a person's device token speaks for that device
-    // only: it never recovers (and so never obtains) the shared token.
-    if (node.deviceTokenHash) {
+    // only: it never recovers (and so never obtains) the shared token. Either
+    // the token that opened this socket or the node's current one may be bound.
+    if (node.deviceTokenHash || options.connectionDeviceTokenHash) {
       throw codedError('A device token cannot manage agent credentials', 'device_token_forbidden', 403);
     }
 
@@ -3802,9 +3810,6 @@ async function readHeartbeatDrainState(
       providerStatus: nodeProviders.status,
       providerHandlersLive: nodeProviders.handlersLive,
       providerLastHeartbeatAt: nodeProviders.lastHeartbeatAt,
-      deviceTokenHash: nodes.deviceTokenHash,
-      boundDeviceId: agentDeviceTokens.id,
-      boundDeviceExpiresAt: agentDeviceTokens.expiresAt,
     })
     .from(nodes)
     .leftJoin(nodeProviders, and(
@@ -3812,18 +3817,10 @@ async function readHeartbeatDrainState(
       eq(nodeProviders.nodeId, nodes.id),
       eq(nodeProviders.name, providerName),
     ))
-    .leftJoin(agentDeviceTokens, nodeDeviceJoin())
     .where(and(eq(nodes.workspaceId, workspaceId), eq(nodes.id, nodeId)));
-  if (!row) return { node: undefined, provider: undefined, bindingDead: false };
-  const {
-    providerId, providerStatus, providerHandlersLive, providerLastHeartbeatAt,
-    deviceTokenHash, boundDeviceId, boundDeviceExpiresAt, ...node
-  } = row;
-  // A device-bound node token whose device was revoked, re-minted or expired.
-  const bindingDead = deviceTokenHash !== null && (boundDeviceId === null
-    || (boundDeviceExpiresAt !== null && boundDeviceExpiresAt.getTime() <= Date.now()));
+  if (!row) return { node: undefined, provider: undefined };
+  const { providerId, providerStatus, providerHandlersLive, providerLastHeartbeatAt, ...node } = row;
   return {
-    bindingDead,
     node,
     provider: providerId === null ? undefined : {
       status: providerStatus!,
@@ -4147,11 +4144,13 @@ export async function handleNodeControlMessage(args: HandleNodeControlMessageArg
           args.nodeId,
           frameProviderName,
         );
-        // The socket of a device-bound node token outlives no device: once the
-        // device is gone (an explicit revocation already disconnected it; this
-        // catches expiry), the heartbeat is refused and the socket closed.
-        if (prior?.bindingDead) {
-          await args.registry.disconnectNode(args.workspaceId, args.nodeId);
+        // A socket opened with a device-bound node token outlives no device:
+        // once that device token is gone (explicit revocations already closed
+        // the socket; this catches expiry), its heartbeat is refused and this
+        // socket alone is closed. Checked against the token that opened it,
+        // never the row's current binding.
+        if (args.connectionDeviceTokenHash && !await deviceTokenLive(args.db, args.connectionDeviceTokenHash)) {
+          closeSocket(args.socket, 'device token revoked');
           throw codedError('Node token is no longer valid', 'node_token_invalid', 401);
         }
         const beat = await heartbeatNode(
@@ -4243,6 +4242,11 @@ export async function handleNodeControlMessage(args: HandleNodeControlMessageArg
         return;
       }
       case 'agent.register': {
+        // A socket opened with a device-bound node token never creates an
+        // agent: its token would outlive the device that asked for it.
+        if (args.connectionDeviceTokenHash) {
+          throw codedError('A device token cannot manage agent credentials', 'device_token_forbidden', 403);
+        }
         const registered = await registerAgentViaNode(
           args.db,
           args.workspaceId,
@@ -4297,7 +4301,10 @@ export async function handleNodeControlMessage(args: HandleNodeControlMessageArg
           args.nodeId,
           frameProviderName,
           message,
-          { deliveryCursorSupported: supportsProviderDeliveryReadiness(args.registry) },
+          {
+            deliveryCursorSupported: supportsProviderDeliveryReadiness(args.registry),
+            connectionDeviceTokenHash: args.connectionDeviceTokenHash ?? null,
+          },
         );
         // Inventory only clears a hold for an agent it newly routes. A
         // presence-only disconnect leaves the binding active, so the next
@@ -4601,4 +4608,14 @@ async function publicNodes(db: Db, rows: NodeRow[], now: number, status?: 'onlin
 async function reusableMachineNode(db: Db, node: NodeRow): Promise<boolean> {
   const authority = await inspectNodeLiveness(db, node.workspaceId, node.id);
   return authority ? authority.status === 'offline' : isReusableForMachineMatch(node);
+}
+
+/** Close a node socket from a frame handler (best-effort; the transport's close handler cleans up). */
+function closeSocket(socket: NodeSocketLike | undefined, reason: string): void {
+  const closable = socket as (NodeSocketLike & { close?: (code?: number, reason?: string) => void }) | undefined;
+  try {
+    closable?.close?.(1008, reason);
+  } catch {
+    // already closed
+  }
 }

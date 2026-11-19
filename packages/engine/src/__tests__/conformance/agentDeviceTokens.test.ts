@@ -6,6 +6,7 @@ import { transformForClient } from '../../engine/wsTransform.js';
 import { fetchQueuedWsBacklogEvents } from '../../engine/delivery.js';
 import { authenticateNodeWs } from '../../engine/wsAuth.js';
 import { FakeSocket } from './harness.js';
+import { createCredentialTagSigner } from '../../auth/credentialTags.js';
 import { createWorkspace, registerAgent, makeNodeStack, type TestStack } from './harness.js';
 
 type Json = Record<string, any>;
@@ -418,33 +419,124 @@ describe('agent device tokens', () => {
       expect((await postAs(unbound.token)).status).toBe(201);
     });
 
-    it('closes a connected bound node socket when the device is revoked, and at the next heartbeat when it expires', async () => {
+    /** Attach a node socket the way the transport does: it remembers the binding of the token that opened it. */
+    async function openSocket(nodeId: string, openedWith: string, ada: { agentId: string }, wsId: string, register = true) {
+      const auth = await authenticateNodeWs(wsDeps(), openedWith);
+      expect(auth).toMatchObject({ ok: true });
+      const sock = new FakeSocket();
+      const handle = stack.runtime.realtime.attachNodeSocket(wsId, nodeId, sock, {
+        deviceTokenHash: auth.ok ? auth.node.deviceTokenHash : null,
+      });
+      if (register) await handle.handleMessage(JSON.stringify({
+        v: 1, id: 'reg', type: 'node.register', node_id: nodeId, name: `direct-${ada.agentId}`,
+        capabilities: [], max_agents: 1, tags: [], version: 't', resume_cursor: null,
+      }));
+      return { sock, handle };
+    }
+    const heartbeat = (handle: { handleMessage(raw: string): Promise<void> }) => handle.handleMessage(JSON.stringify({
+      v: 1, id: 'hb', type: 'node.heartbeat', load: 0, active_agents: 0, handlers_live: false,
+    }));
+    const recoverOn = async (socket: { sock: FakeSocket; handle: { handleMessage(raw: string): Promise<void> } }, agentId: string) => {
+      await socket.handle.handleMessage(JSON.stringify({
+        v: 1, id: 'rec', type: 'agent.recover', name: 'ada', expected_agent_id: agentId, session_ref: 's1',
+      }));
+      return JSON.stringify([...socket.sock.ofType('reply'), ...socket.sock.ofType('error')].filter((frame) => frame.id === 'rec'));
+    };
+
+    it('closes a connected bound node socket when its device is revoked, and at its next heartbeat when it expires', async () => {
       const { ws, ada } = await seedWithChannel();
       const laptopToken = await mintToken(ws, ada.agentId, laptop);
       const bound = await mintNodeToken(laptopToken);
-      const attach = () => {
-        const sock = new FakeSocket();
-        const handle = stack.runtime.realtime.attachNodeSocket(ws.workspaceId, bound.node_id, sock);
-        return { sock, handle };
-      };
-      const register = (handle: { handleMessage(raw: string): Promise<void> }) => handle.handleMessage(JSON.stringify({
-        v: 1, id: 'reg', type: 'node.register', node_id: bound.node_id, name: `direct-${ada.agentId}`,
-        capabilities: [], max_agents: 1, tags: [], version: 't', resume_cursor: null,
-      }));
-      const first = attach();
-      await register(first.handle);
+      const first = await openSocket(bound.node_id, bound.token, ada, ws.workspaceId);
       expect(first.sock.closed).toBe(false);
       await request('DELETE', `/v1/agents/ada/device-tokens/${laptop.id}`, ws.workspaceKey);
       expect(first.sock.closed).toBe(true);
 
       const again = await mintToken(ws, ada.agentId, laptop);
       const rebound = await mintNodeToken(again);
-      const second = { sock: new FakeSocket(), handle: undefined as never as { handleMessage(raw: string): Promise<void> } };
-      second.handle = stack.runtime.realtime.attachNodeSocket(ws.workspaceId, rebound.node_id, second.sock);
-      await register(second.handle);
+      const second = await openSocket(rebound.node_id, rebound.token, ada, ws.workspaceId);
       await stack.runtime.handle.db.update(agentDeviceTokens).set({ expiresAt: new Date(Date.now() - 1000) });
-      await second.handle.handleMessage(JSON.stringify({ v: 1, id: 'hb', type: 'node.heartbeat', load: 0, active_agents: 0, handlers_live: false }));
+      await heartbeat(second.handle);
       expect(second.sock.closed).toBe(true);
+    });
+
+    it('judges a socket by the token that opened it, after the shared token re-mints the node token (B1)', async () => {
+      const { ws, ada } = await seedWithChannel();
+      const laptopToken = await mintToken(ws, ada.agentId, laptop);
+      const bound = await mintNodeToken(laptopToken);
+      const deviceSocket = await openSocket(bound.node_id, bound.token, ada, ws.workspaceId);
+      // The shared-token holder mints the person's node token: the row is unbound now.
+      await mintNodeToken(ada.token);
+      // The device socket still may not recover the shared token...
+      expect(await recoverOn(deviceSocket, ada.agentId)).toContain('device_token_forbidden');
+      // ...and revoking its device closes it, row binding notwithstanding.
+      await request('DELETE', `/v1/agents/ada/device-tokens/${laptop.id}`, ws.workspaceKey);
+      expect(deviceSocket.sock.closed).toBe(true);
+      await heartbeat(deviceSocket.handle).catch(() => undefined);
+      expect((await request('GET', '/v1/agent', ada.token)).status).toBe(200);
+    });
+
+    it("closes only the revoked device's socket when another device minted the node token since (M1)", async () => {
+      const { ws, ada } = await seedWithChannel();
+      const aToken = await mintToken(ws, ada.agentId, laptop);
+      const aNode = await mintNodeToken(aToken);
+      const aSocket = await openSocket(aNode.node_id, aNode.token, ada, ws.workspaceId);
+      const bToken = await mintToken(ws, ada.agentId, buildBox);
+      const bNode = await mintNodeToken(bToken); // row now bound to B
+      // B attaches without registering, so A is not superseded: only revocation decides.
+      const bSocket = await openSocket(bNode.node_id, bNode.token, ada, ws.workspaceId, false);
+      expect(aSocket.sock.closed).toBe(false);
+      await request('DELETE', `/v1/agents/ada/device-tokens/${laptop.id}`, ws.workspaceKey);
+      expect(aSocket.sock.closed).toBe(true);
+      expect(bSocket.sock.closed).toBe(false);
+    });
+
+    it('never lets a bound socket register an agent whose token would outlive the device', async () => {
+      const { ws, ada } = await seedWithChannel();
+      const laptopToken = await mintToken(ws, ada.agentId, laptop);
+      const bound = await mintNodeToken(laptopToken);
+      const socket = await openSocket(bound.node_id, bound.token, ada, ws.workspaceId);
+      await socket.handle.handleMessage(JSON.stringify({
+        v: 1, id: 'newagent', type: 'agent.register', name: 'sidekick', resumable: true, session_ref: 's-x',
+      }));
+      const reply = JSON.stringify([...socket.sock.ofType('reply'), ...socket.sock.ofType('error')].filter((frame) => frame.id === 'newagent'));
+      expect(reply).toContain('device_token_forbidden');
+    });
+
+    it('lets a direct node post only as its own agent (M2)', async () => {
+      const { ws, ada, bob } = await seedWithChannel();
+      expect((await post('/v1/channels/ops/join', bob.token, {})).status).toBeLessThan(300);
+      const laptopToken = await mintToken(ws, ada.agentId, laptop);
+      const bound = await mintNodeToken(laptopToken);
+      const asBob = await postAs(bound.token, 'bob');
+      expect(asBob.status).toBe(403);
+      expect(await errorCode(asBob)).toBe('from_not_allowed');
+      const unbound = await mintNodeToken(ada.token);
+      expect((await postAs(unbound.token, 'bob')).status).toBe(403);
+      expect((await postAs(unbound.token, 'ada')).status).toBe(201);
+    });
+
+    it('refuses an upgraded legacy node token on the WebSocket once its device is gone', async () => {
+      // A deployment that issues legacy credentials but can upgrade them to ar_.
+      await stack.close();
+      stack = makeNodeStack({ ttlMs: 60_000, credentialTagger: createCredentialTagSigner({ current: 'a', keys: { a: 'device-test-tag-secret' } }) });
+      const { ws, ada } = await seedWithChannel();
+      const laptopToken = await mintToken(ws, ada.agentId, laptop);
+      const bound = await mintNodeToken(laptopToken);
+      expect(bound.token).toMatch(/^nt_live_/);
+      const upgraded = await post('/v1/credentials/upgrade', bound.token, {});
+      expect(upgraded.status, await upgraded.clone().text()).toBe(200);
+      expect(await authenticateNodeWs(wsDeps(), bound.token)).toMatchObject({ ok: true }); // grace
+      await request('DELETE', `/v1/agents/ada/device-tokens/${laptop.id}`, ws.workspaceKey);
+      expect(await authenticateNodeWs(wsDeps(), bound.token)).toMatchObject({ ok: false });
+    });
+
+    it('refuses A2A registration with a device token', async () => {
+      const { ws, ada } = await seed();
+      const laptopToken = await mintToken(ws, ada.agentId, laptop);
+      const registered = await post('/v1/a2a/register', laptopToken, { agent_card: { name: 'x', url: 'https://example.test/a2a' } });
+      expect(registered.status).toBe(403);
+      expect(await errorCode(registered)).toBe('device_token_forbidden');
     });
 
     it('never lets a bound node token recover the shared token or rotate itself after its device is gone', async () => {

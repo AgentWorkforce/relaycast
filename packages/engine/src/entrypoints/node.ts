@@ -333,6 +333,8 @@ function serveRuntime<R extends NodeRuntimeWithDb>(
               authResult.node.workspaceId,
               authResult.node.id,
               toEngineSocket(ws),
+              // The socket remembers the binding of the token that opened it.
+              { deviceTokenHash: authResult.node.deviceTokenHash ?? null },
             );
             ws.on('message', (data) => { void handle.handleMessage(data.toString()); });
             ws.on('close', () => { void handle.handleClose(); });
