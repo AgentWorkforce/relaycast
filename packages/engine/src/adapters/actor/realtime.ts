@@ -469,12 +469,17 @@ export class ActorRealtime implements RealtimeBus, ConnectionRegistry, NodeConne
     // the actor slept, as a close would (offline only if nothing else holds the node).
     for (const row of this.deadDeviceRows.splice(0)) {
       if (!row.nodeId) continue;
-      const stale = this.inner.attachNodeSocket(row.workspaceId, row.nodeId, this.engineSocket(row.socketId), {
-        connectionId: row.socketId,
-        earlyDrain: false,
-        deviceTokenHash: row.deviceTokenHash,
-      });
-      await stale.handleClose();
+      // One failed teardown must not drop the rest of the batch.
+      try {
+        const stale = this.inner.attachNodeSocket(row.workspaceId, row.nodeId, this.engineSocket(row.socketId), {
+          connectionId: row.socketId,
+          earlyDrain: false,
+          deviceTokenHash: row.deviceTokenHash,
+        });
+        await stale.handleClose();
+      } catch (err) {
+        console.warn('[actor.realtime] dead-device socket teardown failed', { socketId: row.socketId, error: String(err) });
+      }
     }
 
     for (const id of [...this.attached.keys()]) {

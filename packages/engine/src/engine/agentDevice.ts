@@ -288,3 +288,24 @@ export async function deviceTokenLiveCached(db: Db, tokenHash: string, now = Dat
 export function forgetDeviceLiveness(tokenHashes: readonly string[]): void {
   for (const hash of tokenHashes) deviceLiveness.delete(hash);
 }
+
+const nodeBindingLiveness = new Map<string, number>();
+
+/**
+ * nodeBindingDead for checkpoint heartbeats of sockets whose host does not
+ * track bindings, without a read on every beat: a "not dead" answer is reused
+ * for DEVICE_LIVENESS_RECHECK_MS per node. A dead answer is never cached.
+ */
+export async function nodeBindingDeadCached(db: Db, workspaceId: string, nodeId: string, now = Date.now()): Promise<boolean> {
+  const key = `${workspaceId}:${nodeId}`;
+  const checkedAt = nodeBindingLiveness.get(key);
+  if (checkedAt !== undefined && now - checkedAt < DEVICE_LIVENESS_RECHECK_MS) return false;
+  const dead = await nodeBindingDead(db, workspaceId, nodeId, new Date(now));
+  if (dead) {
+    nodeBindingLiveness.delete(key);
+    return true;
+  }
+  if (nodeBindingLiveness.size >= DEVICE_LIVENESS_CACHE_MAX) nodeBindingLiveness.delete(nodeBindingLiveness.keys().next().value!);
+  nodeBindingLiveness.set(key, now);
+  return false;
+}
