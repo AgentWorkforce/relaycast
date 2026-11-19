@@ -379,6 +379,9 @@ export class ActorRealtime implements RealtimeBus, ConnectionRegistry, NodeConne
 
   /* --------------------------- socket lifecycle ------------------------- */
 
+  /** Replayed rows whose device token died while the actor slept, torn down after the survivors are back. */
+  private readonly deadDeviceRows: ActorSocketRow[] = [];
+
   /**
    * Reconcile the registry with the control plane, once at the start of
    * every actor call.
@@ -462,6 +465,18 @@ export class ActorRealtime implements RealtimeBus, ConnectionRegistry, NodeConne
       }
     }
 
+    // Survivors are all back: now tear down the sockets whose device died while
+    // the actor slept, as a close would (offline only if nothing else holds the node).
+    for (const row of this.deadDeviceRows.splice(0)) {
+      if (!row.nodeId) continue;
+      const stale = this.inner.attachNodeSocket(row.workspaceId, row.nodeId, this.engineSocket(row.socketId), {
+        connectionId: row.socketId,
+        earlyDrain: false,
+        deviceTokenHash: row.deviceTokenHash,
+      });
+      await stale.handleClose();
+    }
+
     for (const id of [...this.attached.keys()]) {
       // The disconnecting socket is torn down by onDisconnect itself.
       if (event?.phase === 'disconnect' && id === event.socket.id) continue;
@@ -505,15 +520,10 @@ export class ActorRealtime implements RealtimeBus, ConnectionRegistry, NodeConne
       if (!node) return false;
       // A socket opened with a device-bound token whose device is gone is not
       // re-attached after the actor slept (node auth refuses that token too).
-      // Its registry state is torn down as a close would, so the node and its
-      // provider go offline now rather than at the liveness sweep.
+      // Its teardown is deferred until every surviving socket is back (end of
+      // rehydrate), so it never takes a node offline under a healthy socket.
       if (row.deviceTokenHash && !await deviceTokenLive(this.db, row.deviceTokenHash)) {
-        const stale = this.inner.attachNodeSocket(workspaceId, row.nodeId, this.engineSocket(row.socketId), {
-          connectionId: row.socketId,
-          earlyDrain: false,
-          deviceTokenHash: row.deviceTokenHash,
-        });
-        await stale.handleClose();
+        this.deadDeviceRows.push(row);
         return false;
       }
       const handle = this.inner.attachNodeSocket(workspaceId, row.nodeId, this.engineSocket(row.socketId), {

@@ -116,6 +116,26 @@ describe('actor runtime device binding', () => {
     expect(woken.sql.raw.prepare('SELECT status FROM nodes WHERE id = ?').get(node.node_id)).toEqual({ status: 'offline' });
   });
 
+  it('never takes a node offline under a healthy socket when a dead-device socket is torn down after sleep', async () => {
+    const actor = new FakeWorkspaceActor(WORKSPACE_ID);
+    const ada = await person(actor);
+    // A: opened with the device's node token, never registered, so it holds no provider.
+    const bound = await grantFor(actor, ada.device);
+    const dead = await actor.connect(bound.principal);
+    // B: opened with the shared token's node token; it holds the provider, so the node is online through it.
+    const unbound = await grantFor(actor, ada.shared);
+    const healthy = await actor.connect(unbound.principal);
+    await actor.message(healthy, register(unbound));
+    expect(actor.sql.raw.prepare('SELECT status FROM nodes WHERE id = ?').get(unbound.node_id)).toEqual({ status: 'online' });
+    // A's device expires while the actor sleeps; A's row is replayed first (older).
+    actor.sql.raw.prepare('UPDATE agent_device_tokens SET expires_at = ?').run(Math.floor(Date.now() / 1000) - 10);
+    const woken = actor.restart();
+    expect((await call(woken, 'GET', '/v1/agents', undefined, ada.key)).status).toBe(200);
+    expect(dead.closed?.code).toBe(UNAUTHORIZED_CLOSE_CODE);
+    expect(healthy.closed).toBeNull();
+    expect(woken.sql.raw.prepare('SELECT status FROM nodes WHERE id = ?').get(unbound.node_id)).toEqual({ status: 'online' });
+  });
+
   it('replays a bound socket whose device is still live, keeping its binding', async () => {
     const actor = new FakeWorkspaceActor(WORKSPACE_ID);
     const ada = await person(actor);
