@@ -10,6 +10,9 @@ import {
 /** Workspace routing arg type extracted from tool input. */
 type WsRouting = { workspace_id?: string; workspace_alias?: string };
 
+/** Server-side cap on DM message page size. */
+const DM_HISTORY_MAX_LIMIT = 100;
+
 /** Passthrough object schema for dynamic API responses. */
 const jsonResult = z.object({}).passthrough();
 
@@ -164,25 +167,32 @@ export function registerMessagingTools(
 
   server.registerTool('message.dm.history', {
     title: 'Get DM History',
-    description: 'Retrieve direct messages in reverse chronological order for a conversation the current agent participates in. Get the conversation ID from message.dm.list and pass next_before back as before to read older messages. This does not mark messages as read.',
+    description: 'Retrieve direct messages in reverse chronological order for a conversation the current agent participates in. Get the conversation ID from message.dm.list (pass the same workspace_id, workspace_alias or as) and pass next_before back as before to read older messages. This does not mark messages as read.',
     inputSchema: z.strictObject({
       conversation_id: z.string().min(1).describe('ID of the direct message conversation'),
       before: z.string().min(1).optional().describe('Message ID cursor — return only messages older than this ID'),
-      limit: z.number().int().positive().max(100).default(20).describe('Maximum number of messages per page (default 20, maximum 100)'),
+      limit: z.number().int().positive().max(DM_HISTORY_MAX_LIMIT).default(20).describe('Maximum number of messages per page (default 20, maximum 100)'),
+      ...workspaceRoutingInputShape,
+      ...identityOverrideInputShape,
     }),
     outputSchema: {
       messages: z.array(jsonResult).describe('Array of direct messages, newest first'),
       next_before: z.string().nullable().describe('Cursor for the next older page, or null when there are no more messages'),
     },
     annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: true },
-  }, async ({ conversation_id, before, limit }) => {
-    const client = getAgentClient();
-    const messages = await client.dms.messages(conversation_id, { before, limit });
+  }, async ({ conversation_id, before, limit, workspace_id, workspace_alias, as: asIdentity }) => {
+    const client = getAgentClient(workspaceRefFromArgs({ workspace_id, workspace_alias }), asIdentity);
+    // Fetch one extra message to learn whether an older page exists. The API
+    // caps pages at 100, so a full 100-message page still needs a lookahead.
+    const fetchLimit = Math.min(limit + 1, DM_HISTORY_MAX_LIMIT);
+    const fetched = await client.dms.messages(conversation_id, { before, limit: fetchLimit });
+    const messages = fetched.slice(0, limit);
     const oldest = messages.at(-1);
     let nextBefore: string | null = null;
 
-    // The API returns an array capped at 100, so a full page needs a lookahead.
-    if (oldest && messages.length === limit) {
+    if (oldest && fetched.length > limit) {
+      nextBefore = oldest.id;
+    } else if (oldest && fetchLimit === limit && fetched.length === limit) {
       const older = await client.dms.messages(conversation_id, { before: oldest.id, limit: 1 });
       if (older.length > 0) nextBefore = oldest.id;
     }

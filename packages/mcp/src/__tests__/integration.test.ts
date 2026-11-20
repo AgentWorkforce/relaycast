@@ -523,7 +523,19 @@ describe('MCP → SDK → HTTP integration', () => {
 
     expect(result.structuredContent).toEqual({ messages: [], next_before: null });
     expect(captured).toHaveLength(1);
-    expect(Object.fromEntries(new URL(lastReq().url).searchParams)).toEqual({ limit: '20' });
+    expect(Object.fromEntries(new URL(lastReq().url).searchParams)).toEqual({ limit: '21' });
+  });
+
+  it('message.dm.history uses the extra fetched message as the cursor signal without a second request', async () => {
+    dmMessages = [{ id: '003', text: 'Newest' }, { id: '002', text: 'Middle' }, { id: '001', text: 'Oldest' }];
+    const result = await client.callTool({
+      name: 'message.dm.history',
+      arguments: { conversation_id: 'conv1', limit: 2 },
+    });
+
+    expect(result.structuredContent).toEqual({ messages: dmMessages.slice(0, 2), next_before: '002' });
+    expect(captured).toHaveLength(1);
+    expect(Object.fromEntries(new URL(lastReq().url).searchParams)).toEqual({ limit: '3' });
   });
 
   it('message.dm.history returns a null cursor when the final page is full', async () => {
@@ -534,15 +546,12 @@ describe('MCP → SDK → HTTP integration', () => {
     });
 
     expect(result.structuredContent).toEqual({ messages: dmMessages, next_before: null });
-    expect(captured).toHaveLength(2);
-    expect(Object.fromEntries(new URL(lastReq().url).searchParams)).toEqual({ before: '001', limit: '1' });
+    expect(captured).toHaveLength(1);
+    expect(Object.fromEntries(new URL(lastReq().url).searchParams)).toEqual({ limit: '3' });
   });
 
   it.each([
     { limit: 101 },
-    { as: 'OtherAgent' },
-    { workspace_id: 'other-workspace' },
-    { workspace_alias: 'other-workspace' },
     { token: 'other-token' },
   ])('message.dm.history rejects unsupported arguments %j without calling the API', async (args) => {
     const result = await client.callTool({
