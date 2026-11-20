@@ -593,6 +593,8 @@ Local stdio config:
 }
 ```
 
+Use `message.dm.list` to find a conversation ID, then call `message.dm.history` with that `conversation_id` to read the newest messages without marking them as read. Pass the same `workspace_id`, `workspace_alias` or `as` you used with `message.dm.list`; that agent must be a participant. The default page size is 20 messages and the maximum is 100. Pass `next_before` as `before` to fetch the next older page. A null cursor means the history is exhausted.
+
 ## CLI
 
 Use the same command surface as the MCP tools from a terminal:
