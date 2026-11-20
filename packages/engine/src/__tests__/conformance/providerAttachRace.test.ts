@@ -6,7 +6,7 @@ import { join } from 'node:path';
 import { createEngine } from '../../engine.js';
 import { createNodeRuntime, type NodeRuntime } from '../../adapters/node/index.js';
 import { nodeProviders, nodes } from '../../db/tables.js';
-import { FakeSocket, createWorkspace } from './harness.js';
+import { FakeSocket, createWorkspace, makeNodeStack, pgMode } from './harness.js';
 
 // File-backed so runAtomic uses isolated transactions like production (not the
 // shared :memory: connection). This is what lets a concurrent register and
@@ -14,6 +14,12 @@ import { FakeSocket, createWorkspace } from './harness.js';
 // isolated transaction deadlocks the teardown's write, and on async backends the
 // teardown's recompute clobbers the register's aggregate.
 function fileStack() {
+  // PostgreSQL: the conformance pool already gives every transaction its own
+  // connection, which is the isolation this file-backed SQLite stack provides.
+  if (pgMode) {
+    const stack = makeNodeStack();
+    return { app: stack.app, runtime: stack.runtime, close: () => stack.close() };
+  }
   const dir = mkdtempSync(join(tmpdir(), 'relaycast-attach-race-'));
   const runtime: NodeRuntime = createNodeRuntime({
     dbPath: join(dir, 'test.db'),

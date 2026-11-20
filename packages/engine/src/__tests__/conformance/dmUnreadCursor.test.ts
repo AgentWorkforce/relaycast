@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { createWorkspace, makeNodeStack, registerAgent, type TestStack } from './harness.js';
+import { createWorkspace, makeNodeStack, rawGet, rawRun, registerAgent, type TestStack } from './harness.js';
 
 describe('DM unread cursor', () => {
   let stack: TestStack;
@@ -110,24 +110,24 @@ describe('DM unread cursor', () => {
     const sentRes = await authed(alice.token).post('/v1/dm', { to: 'bob', text: 'current' });
     expect(sentRes.status).toBeLessThan(300);
     const sent = (await sentRes.json()).data as { id: string; conversation_id: string };
-    const sqlite = stack.runtime.handle.sqlite;
-    const row = sqlite.prepare(
+    const db = stack.runtime.deps.db;
+    const row = (await rawGet<{ workspace_id: string; channel_id: string; agent_id: string }>(db,
       'SELECT workspace_id, channel_id, agent_id FROM messages WHERE id = ?',
-    ).get(sent.id) as { workspace_id: string; channel_id: string; agent_id: string };
+      [sent.id]))!;
     // 17 nines sort after an 18-digit id as text, and before it numerically.
     const older = '9'.repeat(17);
-    sqlite.prepare(
+    await rawRun(db,
       'INSERT INTO messages (id, workspace_id, channel_id, agent_id, body) VALUES (?, ?, ?, ?, ?)',
-    ).run(older, row.workspace_id, row.channel_id, row.agent_id, 'older');
+      [older, row.workspace_id, row.channel_id, row.agent_id, 'older']);
 
-    sqlite.prepare(
+    await rawRun(db,
       'UPDATE dm_participants SET last_read_id = ? WHERE agent_id = ? AND conversation_id = ?',
-    ).run(older, bob.agentId, sent.conversation_id);
+      [older, bob.agentId, sent.conversation_id]);
     expect(await unreadCount(bob.token, sent.conversation_id)).toBe(1);
 
-    sqlite.prepare(
+    await rawRun(db,
       'UPDATE dm_participants SET last_read_id = ? WHERE agent_id = ? AND conversation_id = ?',
-    ).run(sent.id, bob.agentId, sent.conversation_id);
+      [sent.id, bob.agentId, sent.conversation_id]);
     expect(await unreadCount(bob.token, sent.conversation_id)).toBe(0);
   });
 
@@ -171,15 +171,15 @@ describe('DM unread cursor', () => {
       };
       return inbox.unread_channels.find((row) => row.channel_name === 'general')?.unread_count ?? 0;
     };
-    const sqlite = stack.runtime.handle.sqlite;
-    const { channel_id: channelId } = sqlite.prepare(
+    const db = stack.runtime.deps.db;
+    const { channel_id: channelId } = (await rawGet<{ channel_id: string }>(db,
       'SELECT channel_id FROM messages WHERE id = ?',
-    ).get(messageId) as { channel_id: string };
+      [messageId]))!;
 
     // 17 nines sort after an 18-digit id as text, and before it numerically.
-    sqlite.prepare(
+    await rawRun(db,
       'UPDATE channel_members SET last_read_id = ? WHERE agent_id = ? AND channel_id = ?',
-    ).run('9'.repeat(17), bob.agentId, channelId);
+      ['9'.repeat(17), bob.agentId, channelId]);
     expect(await channelUnread()).toBe(1);
   });
 });

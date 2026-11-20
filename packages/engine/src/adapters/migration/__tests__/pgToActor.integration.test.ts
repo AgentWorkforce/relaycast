@@ -87,7 +87,9 @@ describe.skipIf(!enabled)('Postgres to workspace actor migration (integration)',
   afterAll(async () => {
     server?.kill('SIGTERM');
     if (outDir) await rm(outDir, { recursive: true, force: true }).catch(() => {});
-    if (owner) await resetSchema(owner).catch(() => {});
+    // Only the lock holder may reset: a beforeAll that timed out waiting must
+    // not drop the schema under the file that holds it.
+    if (owner && releaseFixture) await resetSchema(owner).catch(() => {});
     await releaseFixture?.().catch(() => {});
     await owner?.end().catch(() => {});
   }, 60_000);

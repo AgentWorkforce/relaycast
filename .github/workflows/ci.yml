@@ -33,6 +33,33 @@ jobs:
           DO_NOT_TRACK: "1"
       - run: npm run test:container
 
+  engine-postgres:
+    name: Engine on PostgreSQL
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/setup
+        with:
+          build: "true"
+      - name: Start the PostgreSQL fixture
+        run: bash packages/engine/scripts/pg-fixture/up.sh "$RUNNER_TEMP/pg-certs" "$RUNNER_TEMP/pg-fixture.env"
+      - name: PostgreSQL integration tests
+        working-directory: packages/engine
+        run: source "$RUNNER_TEMP/pg-fixture.env" && npx vitest run src/adapters/postgres --reporter=verbose
+        env:
+          DO_NOT_TRACK: "1"
+      - name: Conformance suite in PostgreSQL mode
+        working-directory: packages/engine
+        run: source "$RUNNER_TEMP/pg-fixture.env" && npm run test:conformance:pg
+        env:
+          DO_NOT_TRACK: "1"
+      - name: Stop the PostgreSQL fixture
+        if: always()
+        run: bash packages/engine/scripts/pg-fixture/down.sh "$RUNNER_TEMP/pg-certs" "$RUNNER_TEMP/pg-fixture.env"
+
   container:
     name: Container (${{ matrix.platform }})
     runs-on: ubuntu-latest

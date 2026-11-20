@@ -1,7 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { eq, sql } from 'drizzle-orm';
-import { compileSqliteQuery } from '../../adapters/sqlite-handle.js';
-import { attachDirectNodeSocket, createWorkspace, makeNodeStack, registerAgent, type TestStack } from './harness.js';
+import {
+  attachDirectNodeSocket, createWorkspace, interceptStatements, makeNodeStack, pgMode, registerAgent, sqliteOnly, type TestStack,
+} from './harness.js';
 import { actions, agents, agentNodeBindings, channels, files, messages, nodes, webhooks } from '../../db/tables.js';
 import { retainAgents } from '../../engine/agentRetention.js';
 
@@ -32,6 +33,20 @@ describe('bulk agent retention', () => {
       role: 'broker', status: 'offline', lastHeartbeatAt: old,
     });
   }
+  /**
+   * Observe the rows of every raw statement retainAgents runs (through
+   * db/sqlx.ts): `db.all` on SQLite, `db.execute` on PostgreSQL.
+   */
+  function afterRawRows(onRows: (rows: unknown[]) => Promise<void>) {
+    const target = db() as unknown as Record<'all' | 'execute', (query: unknown) => Promise<unknown>>;
+    const method = pgMode ? 'execute' : 'all';
+    const original = target[method].bind(target);
+    vi.spyOn(target, method).mockImplementation(async (query) => {
+      const result = await original(query);
+      await onRows(pgMode ? (result as { rows: unknown[] }).rows : result as unknown[]);
+      return result;
+    });
+  }
   const remaining = async () => (await db().select({ id: agents.id }).from(agents)).map(row => row.id).sort();
 
   it('defaults to a read-only report and physically deletes only eligible rows with an explicit flag', async () => {
@@ -51,13 +66,10 @@ describe('bulk agent retention', () => {
   it('deletes a full 100-row page in one write within the hosted D1 parameter limit', async () => {
     for (let i = 0; i < 100; i++) await seed(`d1-${String(i).padStart(3, '0')}`);
     await seed('live', { status: 'active' });
-    const original = db().all.bind(db());
     let writes = 0;
-    vi.spyOn(db(), 'all').mockImplementation(async (query) => {
-      const compiled = typeof query === 'string' ? { sql: query, params: [] } : compileSqliteQuery(query);
-      if (compiled.params.length > 100) throw new Error('D1_ERROR: too many bound parameters');
-      if (/^\s*DELETE\b/.test(compiled.sql)) writes++;
-      return original(query);
+    interceptStatements(stack, (source, parameterCount) => {
+      if (parameterCount > 100) throw new Error('D1_ERROR: too many bound parameters');
+      if (/^\s*DELETE\b/.test(source)) writes++;
     });
     expect(await retainAgents(db(), ws.workspaceId, { ...options, delete: true }, now))
       .toMatchObject({ scanned: 100, deleted: 100, skipped_changed: 0 });
@@ -134,7 +146,8 @@ describe('bulk agent retention', () => {
     await handle.handleClose();
   });
 
-  it('protects malformed ownership and age data, and aborts on unavailable ownership evidence', async () => {
+  // pg: jsonb metadata and bigint last_seen reject the malformed values this seeds.
+  sqliteOnly('protects malformed ownership and age data, and aborts on unavailable ownership evidence', async () => {
     await seed('bad-json');
     await seed('bad-age');
     await seed('array-metadata');
@@ -149,7 +162,8 @@ describe('bulk agent retention', () => {
     expect(await remaining()).toHaveLength(4);
   });
 
-  it.each(['agent_node_bindings', 'nodes'] as const)('fails closed when the %s ownership table is missing', async (table) => {
+  // pg: renames a table of the shared schema, which the runtime role does not own.
+  sqliteOnly.each(['agent_node_bindings', 'nodes'] as const)('fails closed when the %s ownership table is missing', async (table) => {
     await seed('potential-candidate');
     await db().run(sql.raw(`ALTER TABLE ${table} RENAME TO unavailable_ownership`));
     for (const remove of [false, true]) {
@@ -159,7 +173,8 @@ describe('bulk agent retention', () => {
     }
   });
 
-  it.each(['last_seen', 'created_at'] as const)('protects unknown, fractional, negative and boundary %s values', async (column) => {
+  // pg: bigint epoch columns reject the text and fractional values this seeds.
+  sqliteOnly.each(['last_seen', 'created_at'] as const)('protects unknown, fractional, negative and boundary %s values', async (column) => {
     for (const [id, value] of [['text', 'unknown'], ['fraction', 1.5], ['negative', -1], ['boundary', cutoff.getTime() / 1000]] as const) {
       await seed(id);
       await db().run(sql`UPDATE agents SET ${sql.identifier(column)} = ${value} WHERE id = ${id}`);
@@ -170,13 +185,15 @@ describe('bulk agent retention', () => {
     expect(await remaining()).toEqual(before);
   });
 
-  it('indexes implicit foreign-key probes for physical deletion', async () => {
+  // pg: reads SQLite's EXPLAIN QUERY PLAN output.
+  sqliteOnly('indexes implicit foreign-key probes for physical deletion', async () => {
     const plan = await db().all<{ detail: string }>(sql`EXPLAIN QUERY PLAN DELETE FROM agents WHERE id = 'unused'`);
     expect(plan.filter(row => /SCAN (messages|channels|webhooks|reactions|directory_ratings|routing_failures)\b/.test(row.detail))).toEqual([]);
     expect(plan.some(row => row.detail.includes('idx_messages_agent'))).toBe(true);
   });
 
-  it('does not scan history or delete before the required indexes are deployed', async () => {
+  // pg: drops an index of the shared schema, which the runtime role does not own.
+  sqliteOnly('does not scan history or delete before the required indexes are deployed', async () => {
     await seed('unowned');
     await db().run(sql`DROP INDEX idx_messages_agent`);
     expect(await retainAgents(db(), ws.workspaceId, options, now)).toMatchObject({
@@ -215,10 +232,8 @@ describe('bulk agent retention', () => {
     'rechecks a concurrent %s in the DELETE without interactive transaction support', async (change) => {
       await seed('racing');
       await node();
-      const original = db().all.bind(db());
-      vi.spyOn(db(), 'all').mockImplementation(async (query) => {
-        const rows = await original(query);
-        if (Array.isArray(rows) && rows.some(row => (row as { reason?: string }).reason === 'eligible')) {
+      afterRawRows(async (rows) => {
+        if (rows.some(row => (row as { reason?: string }).reason === 'eligible')) {
           if (change === 'heartbeat') await db().update(agents).set({ lastSeen: now }).where(eq(agents.id, 'racing'));
           if (change === 'status') await db().update(agents).set({ status: 'active' }).where(eq(agents.id, 'racing'));
           if (change === 'origin') await db().update(agents).set({ originNodeId: 'broker' }).where(eq(agents.id, 'racing'));
@@ -232,7 +247,6 @@ describe('bulk agent retention', () => {
             id: 'racing-channel', workspaceId: ws.workspaceId, name: 'racing', createdBy: 'racing',
           });
         }
-        return rows;
       });
       expect(await retainAgents(db(), ws.workspaceId, { ...options, delete: true }, now))
         .toMatchObject({ deleted: 0, skipped_changed: 1 });
@@ -240,7 +254,8 @@ describe('bulk agent retention', () => {
     },
   );
 
-  it('keeps the entire page when ownership becomes unavailable after preview', async () => {
+  // pg: renames a table of the shared schema, which the runtime role does not own.
+  sqliteOnly('keeps the entire page when ownership becomes unavailable after preview', async () => {
     await seed('racing');
     const original = db().all.bind(db());
     vi.spyOn(db(), 'all').mockImplementation(async (query) => {
