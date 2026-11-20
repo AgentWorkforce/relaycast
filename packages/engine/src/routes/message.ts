@@ -4,11 +4,13 @@ import { and, eq } from 'drizzle-orm';
 import { agents } from '../db/tables.js';
 import type { AppEnv } from '../env.js';
 import { requireSender, requireWorkspaceKey, requireWorkspaceRead } from '../middleware/auth.js';
+import { hideDmChannelFromOutsiders, hideDmMessageFromOutsiders } from '../middleware/dmAccess.js';
 import { rateLimit } from '../middleware/rateLimit.js';
 import { admitMessage, assertMessageAdmitted } from '../middleware/admission.js';
 import { jsonIdempotentOk, parseIdempotencyKey, runIdempotent } from '../middleware/idempotency.js';
 import * as messageEngine from '../engine/message.js';
 import * as channelEngine from '../engine/channel.js';
+import { agentDmAccessForChannelName } from '../engine/dmAccess.js';
 import * as triggerEngine from '../engine/trigger.js';
 import { resolveMailboxConfig } from '../engine/mailboxConfig.js';
 import { resolveWorkspaceDeliveryPolicyFor } from '../engine/workspaceDeliveryPolicy.js';
@@ -136,6 +138,12 @@ messageRoutes.post(
         return jsonError(c, 'agent_token_required', 'Agent or node token required to post messages', 403);
       }
       const senderAgentId = sender.id;
+      // A DM lives on an ordinary channel row; only its participants may post
+      // to it by channel name. Checked on the resolved sender so a node token
+      // posting as `from` is held to the same rule.
+      if ((await agentDmAccessForChannelName(db, workspace.id, senderAgentId, channelName)) === 'outsider') {
+        return jsonNotFound(c, 'channel_not_found', `Channel "${channelName}" not found`);
+      }
       const senderAgentName = sender.name;
 
       const mailbox = resolveMailboxConfig(c.get('engine').config, workspace.id);
@@ -289,6 +297,7 @@ messageRoutes.get(
 messageRoutes.get(
   '/channels/:name/messages',
   requireWorkspaceRead('messages:read'),
+  hideDmChannelFromOutsiders(),
   rateLimit,
   async (c) => {
     try {
@@ -330,6 +339,7 @@ messageRoutes.get(
 messageRoutes.get(
   '/messages/:id',
   requireWorkspaceRead(['messages:read', 'dms:read']),
+  hideDmMessageFromOutsiders,
   rateLimit,
   async (c) => {
     try {

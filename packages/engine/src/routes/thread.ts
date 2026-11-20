@@ -2,6 +2,7 @@ import { Hono } from 'hono';
 import { z } from 'zod';
 import type { AppEnv } from '../env.js';
 import { requireAuth, requireWorkspaceRead } from '../middleware/auth.js';
+import { hideDmMessageFromOutsiders } from '../middleware/dmAccess.js';
 import { rateLimit } from '../middleware/rateLimit.js';
 import { admitMessage, assertMessageAdmitted } from '../middleware/admission.js';
 import { jsonIdempotentOk, parseIdempotencyKey, runIdempotent } from '../middleware/idempotency.js';
@@ -36,6 +37,7 @@ const postReplySchema = z.object({
 threadRoutes.post(
   '/messages/:id/replies',
   requireAuth,
+  hideDmMessageFromOutsiders,
   rateLimit,
   admitMessage,
   async (c) => {
@@ -153,6 +155,7 @@ threadRoutes.post(
 threadRoutes.get(
   '/messages/:id/replies',
   requireWorkspaceRead('threads:read'),
+  hideDmMessageFromOutsiders,
   rateLimit,
   async (c) => {
     try {

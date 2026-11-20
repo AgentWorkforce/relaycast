@@ -4,6 +4,7 @@ import type { AppEnv } from '../env.js';
 import { requireWorkspaceRead } from '../middleware/auth.js';
 import { rateLimit } from '../middleware/rateLimit.js';
 import * as consoleEngine from '../engine/console.js';
+import { filterAgentVisibleDmResults } from '../engine/dmAccess.js';
 import {
   filterObserverSearchResults,
   getObserverTokenFromContext,
@@ -75,11 +76,13 @@ consoleRoutes.get('/console/messages', requireWorkspaceRead('messages:read'), ra
       deliveryKind: parsed.data.delivery_kind,
     });
 
+    // An agent token sees DM logs only for conversations it participates in.
+    const agentVisible = await filterAgentVisibleDmResults(db, c.get('agent')?.id, data);
     const visible = await filterObserverSearchResults(
       db,
       workspace.id,
       getObserverTokenFromContext(c),
-      data.map((item) => ({
+      agentVisible.map((item) => ({
         ...item,
         channel_name: item.channel_name ?? undefined,
       })),
