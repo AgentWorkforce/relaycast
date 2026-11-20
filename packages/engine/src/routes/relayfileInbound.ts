@@ -26,6 +26,8 @@ const MAX_SKEW_MS = 5 * 60 * 1000;
 const MAX_RELAYFILE_BODY_BYTES = 1024 * 1024;
 const SECRET_LABEL = 'relayfile-inbound:v1';
 const IDEMPOTENCY_TTL_SECONDS = 60 * 60 * 24 * 30;
+/** Default cap on the provider record stored in relayfile message metadata. */
+export const DEFAULT_RELAYFILE_RECORD_METADATA_MAX_BYTES = 8 * 1024;
 
 const createTargetSchema = z.object({
   channel: z.string().min(1),
@@ -221,6 +223,7 @@ async (c) => {
   }
 
   const mailbox = resolveMailboxConfig(c.get('engine').config, workspaceId);
+  const recordLimit = relayfileRecordMetadataMaxBytes(c.get('engine').config?.relayfileRecordMetadataMaxBytes);
   try {
     const result = await runIdempotent({
       workspaceId,
@@ -253,7 +256,7 @@ async (c) => {
           event: event.type,
           ...(event.providerEventType ? { provider_event_type: event.providerEventType } : {}),
           ...(event.resourceRef ? { resource_ref: event.resourceRef } : {}),
-          record: message.record,
+          ...boundRelayfileRecord(message.record, recordLimit),
         },
       }, { mailbox, workspaceDeliveryPolicy: await resolveWorkspaceDeliveryPolicyById(c.get('db'), c.get('engine').config, workspaceId) }),
     });
@@ -425,6 +428,36 @@ export function formatRelayfileEventMessage(event: RelayfileEventPublic, provide
   if (body && body !== title) lines.push(body);
   lines.push(`Relayfile path: ${event.path}`);
   return { text: lines.filter(Boolean).join('\n'), author, record };
+}
+
+export interface RelayfileRecordOmitted {
+  reason: 'too_large';
+  bytes: number;
+  limit: number;
+}
+
+/**
+ * Bound the provider record stored in message metadata. The metadata is copied
+ * into the message row, the webhook outbox and stream events, so an unbounded
+ * record drives storage growth. A record over `limit` UTF-8 bytes of JSON is
+ * replaced by `null` plus `record_omitted`; the full record stays retrievable
+ * from relayfile by path and revision. `null` is never omitted.
+ */
+export function boundRelayfileRecord(
+  record: unknown,
+  limit: number,
+): { record: unknown; record_omitted?: RelayfileRecordOmitted } {
+  if (record === null || record === undefined) return { record };
+  const bytes = new TextEncoder().encode(JSON.stringify(record)).byteLength;
+  if (bytes <= limit) return { record };
+  return { record: null, record_omitted: { reason: 'too_large', bytes, limit } };
+}
+
+/** Configured record cap; anything but a finite non-negative number uses the default. */
+function relayfileRecordMetadataMaxBytes(value: unknown): number {
+  return typeof value === 'number' && Number.isFinite(value) && value >= 0
+    ? Math.floor(value)
+    : DEFAULT_RELAYFILE_RECORD_METADATA_MAX_BYTES;
 }
 
 function parseSnapshotRecord(snapshot: RelayfileSnapshot | undefined): unknown {
