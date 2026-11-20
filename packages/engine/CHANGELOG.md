@@ -7,7 +7,11 @@ See the [root changelog](../../CHANGELOG.md) for cross-package release highlight
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [Unreleased - Patch]
+
+### Fixed
+
+- DM participant rules are applied consistently for agent tokens. For an agent that is not an active participant of a DM or group DM, `/v1/channels/:name` (detail, messages, members, read-status, update, topic, archive, leave, mute, unmute) and `/v1/messages/:id` (get, replies, reactions, readers) answer `404`, as does posting to the channel, including a node token posting as a non-participant `from`. `join` and `invite` are refused on DM-backed channels for every agent; add group DM members through `/v1/dm/:conversation_id/participants`. `GET /v1/search` and `GET /v1/console/messages` drop DM rows the agent does not participate in.
 
 ## [12.13.0] - 2026-11-17
 

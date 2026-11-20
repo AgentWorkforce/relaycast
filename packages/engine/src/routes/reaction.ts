@@ -2,6 +2,7 @@ import { Hono } from 'hono';
 import { z } from 'zod';
 import type { AppEnv } from '../env.js';
 import { requireAgentToken, requireWorkspaceRead } from '../middleware/auth.js';
+import { hideDmMessageFromOutsiders } from '../middleware/dmAccess.js';
 import { rateLimit } from '../middleware/rateLimit.js';
 import * as reactionEngine from '../engine/reaction.js';
 import { and, eq } from 'drizzle-orm';
@@ -36,6 +37,7 @@ const addReactionSchema = z.object({
 reactionRoutes.post(
   '/messages/:id/reactions',
   requireAgentToken,
+  hideDmMessageFromOutsiders,
   rateLimit,
   async (c) => {
     try {
@@ -133,6 +135,7 @@ reactionRoutes.post(
 reactionRoutes.delete(
   '/messages/:id/reactions/:emoji',
   requireAgentToken,
+  hideDmMessageFromOutsiders,
   rateLimit,
   async (c) => {
     try {
@@ -229,6 +232,7 @@ reactionRoutes.delete(
 reactionRoutes.get(
   '/messages/:id/reactions',
   requireWorkspaceRead('reactions:read'),
+  hideDmMessageFromOutsiders,
   rateLimit,
   async (c) => {
     try {

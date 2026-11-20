@@ -1,6 +1,7 @@
 import { Hono } from 'hono';
 import type { AppEnv } from '../env.js';
 import { requireAuth, requireAgentToken } from '../middleware/auth.js';
+import { hideDmChannelFromOutsiders, hideDmMessageFromOutsiders } from '../middleware/dmAccess.js';
 import { rateLimit } from '../middleware/rateLimit.js';
 import * as receiptEngine from '../engine/receipt.js';
 import { notifySenderDeliveryReceipts } from '../engine/deliveryReceipts.js';
@@ -21,6 +22,7 @@ export const receiptRoutes = new Hono<AppEnv>();
 receiptRoutes.post(
   '/messages/:id/read',
   requireAgentToken,
+  hideDmMessageFromOutsiders,
   rateLimit,
   async (c) => {
     try {
@@ -109,6 +111,7 @@ receiptRoutes.post(
 receiptRoutes.get(
   '/messages/:id/readers',
   requireAuth,
+  hideDmMessageFromOutsiders,
   rateLimit,
   async (c) => {
     try {
@@ -134,6 +137,7 @@ receiptRoutes.get(
 receiptRoutes.get(
   '/channels/:name/read-status',
   requireAuth,
+  hideDmChannelFromOutsiders(),
   rateLimit,
   async (c) => {
     try {

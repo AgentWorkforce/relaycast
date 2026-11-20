@@ -22,6 +22,10 @@ Packages without a separate changelog are covered by the cross-package notes bel
 
 - `@relaycast/mcp` adds `message.dm.history` so an agent can page through a DM conversation without marking messages as read.
 
+### Fixed
+
+- DM and group DM participant rules now apply consistently for agent tokens across the channel, message, search and console routes, matching the `/v1/dm/…` routes. Workspace keys and observer tokens are unchanged.
+
 ## [12.13.0] - 2026-11-17
 
 ### Added

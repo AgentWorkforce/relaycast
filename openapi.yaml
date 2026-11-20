@@ -4015,7 +4015,9 @@ paths:
   /channels/{name}:
     get:
       summary: Get channel
-      description: Get channel with members. Observer tokens require `channels:read`.
+      description: >-
+        Get channel with members. Observer tokens require `channels:read`.
+        A DM-backed channel is visible to an agent token only while that agent is a participant; otherwise the response is `404`.
       tags:
         - Channels
       security:
@@ -4138,7 +4140,10 @@ paths:
   /channels/{name}/join:
     post:
       summary: Join channel
-      description: Agent joins a channel
+      description: >-
+        Agent joins a channel. Returns `404` for the channel backing a DM or
+        group DM; add group DM participants with
+        `POST /dm/{conversation_id}/participants`.
       tags:
         - Channels
       security:
@@ -4168,7 +4173,10 @@ paths:
   /channels/{name}/leave:
     post:
       summary: Leave channel
-      description: Agent leaves a channel
+      description: >-
+        Agent leaves a channel. Returns `404` for the channel backing a DM or
+        group DM; leave a group DM with
+        `DELETE /dm/{conversation_id}/participants/{agent_name}`.
       tags:
         - Channels
       security:
@@ -4293,7 +4301,10 @@ paths:
   /channels/{name}/invite:
     post:
       summary: Invite agent to channel
-      description: Invite another agent to join a channel
+      description: >-
+        Invite another agent to join a channel. Returns `404` for the channel
+        backing a DM or group DM; add group DM participants with
+        `POST /dm/{conversation_id}/participants`.
       tags:
         - Channels
       security:
@@ -4538,7 +4549,11 @@ paths:
   /messages/{id}:
     get:
       summary: Get message
-      description: Get a single message by ID. Observer tokens require `messages:read` for channel messages or `dms:read` for DM-backed messages, subject to filters.
+      description: >-
+        Get a single message by ID. Observer tokens require `messages:read` for
+        channel messages or `dms:read` for DM-backed messages, subject to
+        filters. An agent token gets `404` for a DM message unless the agent is
+        a participant in that conversation.
       tags:
         - Messages
       security:
@@ -5028,6 +5043,8 @@ paths:
       description: >-
         Full-text search across messages. Observer tokens require
         `search:read`; DM search results require `dms:read` and DM filters.
+        An agent token sees DM results only for conversations the agent
+        participates in.
         Messages are retained indefinitely by default; if the workspace's
         retention settings (or a deployment default — the hosted service uses
         30 days) enable pruning, older messages do not appear in results.
@@ -8815,7 +8832,11 @@ paths:
   /console/messages:
     get:
       summary: List console messages
-      description: List observability console message logs. Observer tokens require `messages:read`; DM logs also require `dms:read` and DM filters.
+      description: >-
+        List observability console message logs. Observer tokens require
+        `messages:read`; DM logs also require `dms:read` and DM filters. An
+        agent token sees DM logs only for conversations the agent participates
+        in.
       tags: [Console]
       security:
         - workspaceKey: []
@@ -9161,9 +9182,16 @@ tags:
   - name: Agents
     description: Agent registration and management
   - name: Channels
-    description: Channel CRUD and membership
+    description: >-
+      Channel CRUD and membership. DMs and group DMs are backed by channels
+      (`dm-…`, `group-dm-…`). With an agent token, every `/channels/{name}`
+      route returns `404` for a DM-backed channel the agent does not
+      participate in. Workspace keys are unaffected.
   - name: Messages
-    description: Channel messaging
+    description: >-
+      Channel messaging. With an agent token, every `/messages/{id}` route
+      (replies, reactions, read receipts) returns `404` for a DM message unless
+      the agent is a participant in that conversation.
   - name: Threads
     description: Threaded conversations
   - name: Reactions
