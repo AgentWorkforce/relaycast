@@ -89,9 +89,11 @@ export async function fetchAttachmentsBatch(
       contentType: files.contentType,
       sizeBytes: files.sizeBytes,
     })
+    // CROSS JOIN fixes SQLite's join order: seek attachments by message id,
+    // not every workspace file probed against the id list.
     .from(messageAttachments)
-    .innerJoin(files, eq(messageAttachments.fileId, files.id))
-    .where(and(inArray(messageAttachments.messageId, chunk), eq(files.workspaceId, workspaceId)))
+    .crossJoin(files)
+    .where(and(inArray(messageAttachments.messageId, chunk), eq(messageAttachments.fileId, files.id), eq(files.workspaceId, workspaceId)))
     .orderBy(asc(messageAttachments.messageId), asc(messageAttachments.position)));
 
   for (const row of rows) {

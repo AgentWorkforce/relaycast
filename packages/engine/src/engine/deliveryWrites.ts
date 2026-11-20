@@ -711,12 +711,16 @@ function authorityRecipientSql(db: EngineDb, leases: readonly AuthorityRecipient
 }
 export async function prepareAuthorityFanout(db: EngineDb, workspaceId: string, audience: AuthorityFanoutAudience): Promise<AuthorityRecipientLease[]> {
   if (!nodeLivenessAuthority(db)) return [];
-  const audienceSql = audience.conversationId
-    ? sql`EXISTS (SELECT 1 FROM ${dmParticipants} WHERE ${dmParticipants.conversationId} = ${audience.conversationId} AND ${dmParticipants.agentId} = ${agents.id})`
-    : sql`EXISTS (SELECT 1 FROM ${channelMembers} WHERE ${channelMembers.channelId} = ${audience.channelId} AND ${channelMembers.agentId} = ${agents.id})`;
-  const rows = await db.select({ agentId: agents.id, nodeId: nodes.id, providerName: agents.providerName, role: nodes.role })
-    .from(agents).innerJoin(nodes, and(eq(nodes.workspaceId, workspaceId), eq(nodes.id, agents.locationNodeId)))
-    .where(and(eq(agents.workspaceId, workspaceId), ne(agents.status, 'released'), eq(agents.locationType, 'via_node'), audienceSql));
+  // Drive from the audience's primary key (CROSS JOIN fixes SQLite's join
+  // order) so cost follows audience size, not the workspace's agent roster.
+  const fields = { agentId: agents.id, nodeId: nodes.id, providerName: agents.providerName, role: nodes.role };
+  const recipient = and(eq(agents.workspaceId, workspaceId), ne(agents.status, 'released'), eq(agents.locationType, 'via_node'),
+    eq(nodes.workspaceId, workspaceId), eq(nodes.id, agents.locationNodeId));
+  const rows = audience.conversationId
+    ? await db.select(fields).from(dmParticipants).crossJoin(agents).crossJoin(nodes)
+      .where(and(eq(dmParticipants.conversationId, audience.conversationId), eq(agents.id, dmParticipants.agentId), recipient))
+    : await db.select(fields).from(channelMembers).crossJoin(agents).crossJoin(nodes)
+      .where(and(sql`${channelMembers.channelId} = ${audience.channelId}`, eq(agents.id, channelMembers.agentId), recipient));
   const snapshots = new Map<string, Awaited<ReturnType<typeof inspectNodeLiveness>>>();
   await filterAsync([...new Set(rows.map(r => r.nodeId))], async id => { snapshots.set(id, await inspectNodeLiveness(db, workspaceId, id)); return true; });
   const leases: AuthorityRecipientLease[] = [];
