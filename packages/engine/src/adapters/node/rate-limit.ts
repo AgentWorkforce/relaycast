@@ -1,4 +1,4 @@
-import type { RateLimiter, RateLimitResult } from '../../ports/rate-limit.js';
+import type { RateLimitCheck, RateLimiter, RateLimitResult } from '../../ports/rate-limit.js';
 
 /**
  * In-memory sliding-window rate limiter, mirroring RateLimitDO. Buckets expire
@@ -17,28 +17,33 @@ export class InProcessRateLimiter implements RateLimiter {
     }
   }
 
-  async check(args: { bucketKey: string; limit: number; windowMs: number }): Promise<RateLimitResult> {
-    const { bucketKey, limit, windowMs } = args;
+  async check(args: RateLimitCheck): Promise<RateLimitResult> {
+    return (await this.checkMany([args]))[0];
+  }
+
+  async checkMany(args: RateLimitCheck[]): Promise<RateLimitResult[]> {
     const now = Date.now();
     this.cleanup(now);
 
-    let bucket = this.buckets.get(bucketKey);
-    if (!bucket || bucket.expiresAt <= now) {
-      bucket = { count: 0, expiresAt: now + windowMs };
-      this.buckets.set(bucketKey, bucket);
+    const buckets = args.map(({ bucketKey, windowMs }) => {
+      let bucket = this.buckets.get(bucketKey);
+      if (!bucket || bucket.expiresAt <= now) {
+        bucket = { count: 0, expiresAt: now + windowMs };
+        this.buckets.set(bucketKey, bucket);
+      }
+      return bucket;
+    });
+    const capacity = args.map(({ limit }, index) => buckets[index].count < limit);
+    // A rejected request must not consume either the per-link or shared
+    // observer bucket. The synchronous decision and updates make this atomic
+    // within the in-process limiter's event loop.
+    if (capacity.every(Boolean)) {
+      for (const bucket of new Set(buckets)) bucket.count += 1;
     }
-
-    // A rejected request must not consume the bucket. Counting it lets a client
-    // that retries while throttled drive the count arbitrarily past the limit,
-    // which reports a nonsense `count` and, for any sliding-window backend,
-    // lets the caller's own retries hold its window open.
-    const allowed = bucket.count < limit;
-    if (allowed) bucket.count += 1;
-
-    return {
-      count: bucket.count,
-      remaining: Math.max(0, limit - bucket.count),
-      allowed,
-    };
+    return args.map(({ limit }, index) => ({
+      count: buckets[index].count,
+      remaining: Math.max(0, limit - buckets[index].count),
+      allowed: capacity[index],
+    }));
   }
 }
