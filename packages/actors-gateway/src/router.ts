@@ -28,6 +28,7 @@ import {
 import { handleInternal } from './internal.js';
 import { errorText } from './log.js';
 import { BOOTSTRAP_PROOF_HEADER, chooseWorkspaceId, isWorkspaceIdTaken } from './workspaceId.js';
+import { createSplitRouter, hotPathSend, type SplitRouter } from './split.js';
 
 export const SERVICE_NAME = 'relaycast-actors-gateway';
 /** How long a readiness answer from the control plane is reused. */
@@ -120,6 +121,7 @@ async function longPollDeliveries(ctx: GatewayContext, workspaceId: string, requ
 
 export function createRequestHandler(ctx: GatewayContext, options: RequestHandlerOptions): (req: IncomingMessage, res: ServerResponse) => void {
   const readiness = cachedReadiness(ctx);
+  const split: SplitRouter | undefined = ctx.config.actorsTopology === 'split' ? createSplitRouter(ctx) : undefined;
 
   async function route(req: IncomingMessage, res: ServerResponse, url: URL, requestId: string, signal: AbortSignal, setWorkspace: (id: string) => void): Promise<void> {
     const path = url.pathname;
@@ -212,6 +214,13 @@ export function createRequestHandler(ctx: GatewayContext, options: RequestHandle
     setWorkspace(workspaceId);
     const body = hasBody ? await readBody(req, ctx.config.maxUploadBytes) : null;
     const request = toActorRequest(req, url, body, requestId);
+    if (split) {
+      const send = hotPathSend(req.method, path, request.headers, body, token, credential.kind, workspaceId);
+      const served = send ? await split.send(send, signal) : undefined;
+      if (served) return sendActorResponse(res, served);
+      // A write the Workspace actor serves may change a roster or the directory.
+      if (hasBody) split.invalidate(workspaceId);
+    }
     const waitMs = deliveriesWaitMs(req, url);
     const response = waitMs === undefined
       ? await ctx.actors.handle(workspaceId, request, { signal })

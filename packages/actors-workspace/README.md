@@ -8,6 +8,10 @@ for every other request, `fileStored` after it stores a signed upload, and opens
 the socket lifecycle (`onConnect`, `onMessage`, `onDisconnect`) and `onAlarm`
 (outbound HTTP, maintenance) run the engine's realtime and background work.
 
+The bundle also exports the split topology's per-entity actors (`Channel`,
+`Conversation`, `Inbox`, `src/split.ts`); they are used only when the gateway
+runs with `RELAYCAST_ACTORS_TOPOLOGY=split` (see the gateway README).
+
 ## Environment
 
 The actor reads its configuration from the process environment when it is

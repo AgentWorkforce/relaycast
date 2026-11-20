@@ -52,6 +52,7 @@ so the gateway does not depend on it; replies are validated with zod.
 | `RELAYCAST_SHUTDOWN_GRACE_MS` | `10000` | How long SIGTERM waits for in-flight requests |
 | `RELAYCAST_LOG_FORMAT` | `json` | `json` (one object per line) or `text` |
 | `RELAYCAST_ENV` | `production` | Environment label in the startup log |
+| `RELAYCAST_ACTORS_TOPOLOGY` | `workspace` | `workspace`: one Workspace actor serves a whole workspace. `split` (prototype): DM sends and channel posts run on per-entity actors; see "Split topology" |
 
 A directly set variable wins over its `_FILE` variant. A missing or malformed
 setting, an unreadable `_FILE`, a short internal secret or an invalid keyring
@@ -133,6 +134,37 @@ prints one line and exits with code 64. Secret values are never logged.
 5. SIGTERM stops accepting, closes bridged clients with 1012 `gateway
    restarting`, waits up to `RELAYCAST_SHUTDOWN_GRACE_MS` for in-flight HTTP
    requests, drops the rest and exits 0.
+
+## Split topology (prototype)
+
+With `RELAYCAST_ACTORS_TOPOLOGY=split` the Workspace actor stays the metadata
+owner (credentials, directory, channel rosters, node bindings) and the hot
+path runs on per-entity actors from the same bundle (`src/split.ts`):
+
+- `POST /v1/dm` and `POST /v1/channels/:name/messages` from an agent token,
+  with only `to`/`text`/`mode` (`text`/`mode` for a channel) and no
+  `Idempotency-Key`: the gateway resolves the sender and target on the
+  Workspace actor (cached 5 s, dropped on any write it forwards), commits the
+  message on its `Channel` (`<ws>-ch-<channel id>`) or `Conversation`
+  (`<ws>-dm-<pair key>`) actor in one write, answers, and hands each
+  recipient's pending outbox entries to its `Inbox` actor (`<ws>-in-<agent id>`).
+  Inboxes apply entries idempotently in per-source order; accepted entries are
+  confirmed to the source on its next post (or within 1 s); a source's alarm
+  redrives entries nobody confirmed. The gateway keeps one call in flight per
+  source and per inbox and sends what arrives meanwhile in the next call, as
+  one write (group commit, up to 64 items). Any other request, or a target the
+  Workspace actor does not resolve, goes to the Workspace actor unchanged.
+- `/v1/node/ws`: the client stays bridged to the Workspace actor; after
+  `node.register` (and each `agent.register`) the gateway opens one actor
+  socket per bound agent on its Inbox actor and forwards its `deliver` frames.
+  Inbox seqs start at 10^12, so `delivery.ack` goes to the inbox at or past it
+  and to the Workspace actor only up to the last seq that actor delivered.
+
+Not split (served by the Workspace actor, which does not see split messages):
+history and search, `message_list` across channels, unread counts and read
+receipts, threads, reactions, group DMs, attachments, webhooks and the
+`/v1/ws` event stream, `GET /v1/deliveries`. `e2e/split-bench.ts` measures
+both topologies against a running gateway.
 
 ## File store
 

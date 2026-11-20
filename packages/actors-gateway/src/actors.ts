@@ -19,9 +19,22 @@
  */
 import { randomUUID } from 'node:crypto';
 import { z } from 'zod';
-import type { ActorHttpRequest, ActorHttpResponse } from '@relaycast/engine/gateway';
+import type {
+  ActorHttpRequest,
+  ActorHttpResponse,
+  AgentRef,
+  Confirmation,
+  InboxAcceptResult,
+  InboxHandoff,
+  SourcePost,
+  SourcePostBatchResult,
+  SplitResolveResult,
+} from '@relaycast/engine/gateway';
 
 export const ACTOR_NAME = 'Workspace';
+/** The per-entity actors of the split topology (`@relaycast/actors-workspace` `src/split.ts`). */
+export type SplitActorName = 'Channel' | 'Conversation' | 'Inbox';
+export type SourceActorName = 'Channel' | 'Conversation';
 const DEFAULT_INVOKE_TIMEOUT_MS = 60_000;
 /**
  * `create` activates a brand-new actor: on a production control plane that is a
@@ -68,6 +81,18 @@ export interface ActorClient {
   findWebsocket(workspaceId: string, metadata: unknown): Promise<SocketGrant>;
   /** Whether the control plane answers its health check. */
   healthy(): Promise<boolean>;
+  /** Split topology: authenticate an agent token and resolve a send's target on the Workspace actor. */
+  splitResolve(workspaceId: string, input: { token: string; dm_to?: string; channel?: string }, options?: CallOptions): Promise<SplitResolveResult>;
+  /** Split topology: the agents bound to a node (Workspace actor). */
+  splitNodeAgents(workspaceId: string, nodeId: string, options?: CallOptions): Promise<AgentRef[]>;
+  /** Split topology: commit messages, in order and in one write, on a Channel or Conversation actor. */
+  sourcePost(actorName: SourceActorName, actorId: string, inputs: SourcePost[], options?: CallOptions): Promise<SourcePostBatchResult>;
+  /** Split topology: drop outbox entries the recipients' inboxes accepted. */
+  sourceConfirm(actorName: SourceActorName, actorId: string, confirmations: Confirmation[], options?: CallOptions): Promise<void>;
+  /** Split topology: hand outbox entries to an Inbox actor, in order and in one write. */
+  inboxAccept(actorId: string, handoffs: InboxHandoff[], options?: CallOptions): Promise<InboxAcceptResult[]>;
+  /** Split topology: a socket grant on an Inbox actor. */
+  findSplitWebsocket(actorName: SplitActorName, actorId: string, metadata: unknown): Promise<SocketGrant>;
 }
 
 export interface ActorClientOptions {
@@ -107,12 +132,29 @@ const SocketGrantSchema = z.object({
 
 const ACTOR_COMPONENT = /^[A-Za-z0-9._-]+$/;
 
-function actorPath(projectId: string, actorId: string): string {
+function actorPath(projectId: string, actorId: string, actorName: string = ACTOR_NAME): string {
   if (!ACTOR_COMPONENT.test(actorId) || actorId === '.' || actorId === '..') {
     throw new ActorCallError('invalid_actor_id', 'actor id may contain only ASCII letters, digits, ".", "-" and "_"');
   }
-  return `/v1/projects/${encodeURIComponent(projectId)}/actors/${ACTOR_NAME}/${encodeURIComponent(actorId)}`;
+  return `/v1/projects/${encodeURIComponent(projectId)}/actors/${actorName}/${encodeURIComponent(actorId)}`;
 }
+
+const AgentRefSchema = z.object({ id: z.string(), name: z.string() });
+const SplitResolveResultSchema = z.union([
+  z.object({ ok: z.literal(false), reason: z.enum(['unauthenticated', 'not_found', 'unsupported']) }),
+  z.object({
+    ok: z.literal(true),
+    sender: AgentRefSchema.extend({ address: z.string() }),
+    dm: z.object({ recipient: AgentRefSchema, conversation_id: z.string(), pair_key: z.string() }).optional(),
+    channel: z.object({ id: z.string(), name: z.string(), members: z.array(AgentRefSchema) }).optional(),
+  }),
+]);
+// Hand-offs pass through the gateway to an inbox, which validates them itself.
+const SourcePostResultSchema = z.object({
+  results: z.array(z.object({ status: z.number().int().min(100).max(599), body: z.string() })),
+  handoffs: z.array(z.custom<InboxHandoff>((value) => typeof value === 'object' && value !== null)),
+});
+const InboxAcceptResultSchema = z.object({ through: z.number().int().nonnegative(), accepted: z.number().int().nonnegative() });
 
 function withTimeout(timeoutMs: number, signal: AbortSignal | undefined): AbortSignal {
   const timeout = AbortSignal.timeout(timeoutMs);
@@ -176,9 +218,9 @@ export function createActorClient(options: ActorClientOptions): ActorClient {
       : new ActorCallError('protocol', `control plane answered HTTP ${response.status}`);
   }
 
-  async function invokeOnce(actorId: string, method: string, args: unknown[], signal: AbortSignal): Promise<z.infer<typeof OutcomeSchema>> {
+  async function invokeOnce(actorId: string, method: string, args: unknown[], signal: AbortSignal, actorName: string = ACTOR_NAME): Promise<z.infer<typeof OutcomeSchema>> {
     const requestId = randomUUID();
-    const response = await post(`${actorPath(options.projectId, actorId)}/invoke`, {
+    const response = await post(`${actorPath(options.projectId, actorId, actorName)}/invoke`, {
       requestId,
       method,
       args,
@@ -199,16 +241,17 @@ export function createActorClient(options: ActorClientOptions): ActorClient {
 
   async function invoke<T>(
     actorId: string,
-    method: 'create' | 'handle' | 'importData' | 'fileStored',
+    method: 'create' | 'handle' | 'importData' | 'fileStored' | 'splitResolve' | 'splitNodeAgents' | 'post' | 'confirm' | 'accept',
     args: unknown[],
     timeoutMs: number,
     resultSchema: z.ZodType<T>,
     callOptions?: CallOptions,
+    actorName: string = ACTOR_NAME,
   ): Promise<T> {
     const signal = withTimeout(timeoutMs, callOptions?.signal);
     // A `not_executed` outcome means the host never ran the call; one retry, as the SDK does.
-    let outcome = await invokeOnce(actorId, method, args, signal);
-    if (outcome.type === 'not_executed') outcome = await invokeOnce(actorId, method, args, signal);
+    let outcome = await invokeOnce(actorId, method, args, signal, actorName);
+    if (outcome.type === 'not_executed') outcome = await invokeOnce(actorId, method, args, signal, actorName);
     switch (outcome.type) {
       case 'completed': {
         const result = resultSchema.safeParse(outcome.result);
@@ -235,40 +278,57 @@ export function createActorClient(options: ActorClientOptions): ActorClient {
     importData: (workspaceId, body, credentialTag, callOptions) =>
       invoke(workspaceId, 'importData', [body, credentialTag], createTimeoutMs, ActorHttpResponseSchema, callOptions),
 
-    async findWebsocket(workspaceId, metadata) {
-      const encoded = JSON.stringify(metadata);
-      if (encoded === undefined || Buffer.byteLength(encoded) > MAX_SOCKET_METADATA_BYTES) {
-        throw new ActorCallError('invalid_metadata', 'socket metadata must be JSON of at most 16 KiB');
-      }
-      const requestId = randomUUID();
-      const signal = withTimeout(FIND_WEBSOCKET_TIMEOUT_MS, undefined);
-      const response = await post(`${actorPath(options.projectId, workspaceId)}/find-websocket`, {
-        metadata,
-        ...(options.homeRegion ? { homeRegion: options.homeRegion } : {}),
-      }, requestId, signal);
-      if (response.status === 401 || response.status === 403) {
-        await response.body?.cancel().catch(() => undefined);
-        throw failure(response, undefined);
-      }
-      const document = await jsonDocument(response, signal);
-      if (!response.ok) throw failure(response, document);
-      const grant = SocketGrantSchema.safeParse(document);
-      if (!grant.success) throw new ActorCallError('protocol', 'control plane returned an invalid socket grant');
-      return grant.data;
-    },
+    findWebsocket: (workspaceId, metadata) => findWebsocket(ACTOR_NAME, workspaceId, metadata),
+    findSplitWebsocket: (actorName, actorId, metadata) => findWebsocket(actorName, actorId, metadata),
 
-    async healthy() {
-      try {
-        const response = await fetchImpl(`${options.controlPlaneUrl}/healthz`, {
-          method: 'GET',
-          redirect: 'manual',
-          signal: AbortSignal.timeout(HEALTH_TIMEOUT_MS),
-        });
-        await response.body?.cancel();
-        return response.ok;
-      } catch {
-        return false;
-      }
+    splitResolve: (workspaceId, input, callOptions) =>
+      invoke(workspaceId, 'splitResolve', [input], invokeTimeoutMs, SplitResolveResultSchema, callOptions),
+    splitNodeAgents: (workspaceId, nodeId, callOptions) =>
+      invoke(workspaceId, 'splitNodeAgents', [nodeId], invokeTimeoutMs, z.array(AgentRefSchema), callOptions),
+    sourcePost: (actorName, actorId, inputs, callOptions) =>
+      invoke(actorId, 'post', [inputs], invokeTimeoutMs, SourcePostResultSchema, callOptions, actorName),
+    sourceConfirm: async (actorName, actorId, confirmations, callOptions) => {
+      await invoke(actorId, 'confirm', [confirmations], invokeTimeoutMs, z.unknown(), callOptions, actorName);
     },
+    inboxAccept: (actorId, handoffs, callOptions) =>
+      invoke(actorId, 'accept', [handoffs], invokeTimeoutMs, z.array(InboxAcceptResultSchema), callOptions, 'Inbox'),
+
+    healthy,
   };
+
+  async function findWebsocket(actorName: string, actorId: string, metadata: unknown): Promise<SocketGrant> {
+    const encoded = JSON.stringify(metadata);
+    if (encoded === undefined || Buffer.byteLength(encoded) > MAX_SOCKET_METADATA_BYTES) {
+      throw new ActorCallError('invalid_metadata', 'socket metadata must be JSON of at most 16 KiB');
+    }
+    const requestId = randomUUID();
+    const signal = withTimeout(FIND_WEBSOCKET_TIMEOUT_MS, undefined);
+    const response = await post(`${actorPath(options.projectId, actorId, actorName)}/find-websocket`, {
+      metadata,
+      ...(options.homeRegion ? { homeRegion: options.homeRegion } : {}),
+    }, requestId, signal);
+    if (response.status === 401 || response.status === 403) {
+      await response.body?.cancel().catch(() => undefined);
+      throw failure(response, undefined);
+    }
+    const document = await jsonDocument(response, signal);
+    if (!response.ok) throw failure(response, document);
+    const grant = SocketGrantSchema.safeParse(document);
+    if (!grant.success) throw new ActorCallError('protocol', 'control plane returned an invalid socket grant');
+    return grant.data;
+  }
+
+  async function healthy(): Promise<boolean> {
+    try {
+      const response = await fetchImpl(`${options.controlPlaneUrl}/healthz`, {
+        method: 'GET',
+        redirect: 'manual',
+        signal: AbortSignal.timeout(HEALTH_TIMEOUT_MS),
+      });
+      await response.body?.cancel();
+      return response.ok;
+    } catch {
+      return false;
+    }
+  }
 }
