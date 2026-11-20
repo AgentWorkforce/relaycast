@@ -1,6 +1,7 @@
 import {
   AR_KIND_CODES,
   AR_SECRET_BYTES,
+  LEGACY_AGENT_DEVICE_PREFIX,
   LEGACY_CREDENTIAL_PREFIXES,
   encodeArCredential,
   isArWorkspaceId,
@@ -175,7 +176,9 @@ export async function credentialFromHex(
   workspaceId: string,
   hex: string,
   tag?: string,
+  options: { agentDevice?: boolean } = {},
 ): Promise<string> {
+  if (options.agentDevice && kind !== 'agent') throw new Error('Only an agent credential can be a device token');
   if (!/^[0-9a-f]+$/.test(hex)) throw new Error('Credential secret material must be lowercase hex');
   if (format === 'ar') {
     if (!isArWorkspaceId(workspaceId)) throw new WorkspaceIdNotSnowflakeError(workspaceId);
@@ -187,17 +190,28 @@ export async function credentialFromHex(
       workspaceId,
       tag: tag ?? await tagger!.tag(workspaceId),
       secret: hexToBytes(hex.slice(0, AR_SECRET_BYTES * 2)),
+      ...(options.agentDevice ? { agentDevice: true } : {}),
     });
   }
   const length = LEGACY_SECRET_BYTES[kind] * 2;
   if (hex.length < length) throw new Error('Credential secret material is too short');
-  return `${LEGACY_CREDENTIAL_PREFIXES[kind]}${hex.slice(0, length)}`;
+  return `${options.agentDevice ? LEGACY_AGENT_DEVICE_PREFIX : LEGACY_CREDENTIAL_PREFIXES[kind]}${hex.slice(0, length)}`;
 }
 
 /** Mint a fresh random credential of `kind` for `workspaceId`, in `format`. */
 export function mintCredential(db: object, format: CredentialFormat, kind: CredentialKind, workspaceId: string): Promise<string> {
   const bytes = format === 'ar' ? AR_SECRET_BYTES : LEGACY_SECRET_BYTES[kind];
   return credentialFromHex(db, format, kind, workspaceId, randomHex(bytes));
+}
+
+/**
+ * Mint a fresh agent device token (`at_live_dv_…` / `ar_ad_…`, engine/agentDevice.ts)
+ * in the family bound to `db`.
+ */
+export function issueAgentDeviceCredential(db: object, workspaceId: string): Promise<string> {
+  const format = credentialFormat(db);
+  const bytes = format === 'ar' ? AR_SECRET_BYTES : LEGACY_SECRET_BYTES.agent;
+  return credentialFromHex(db, format, 'agent', workspaceId, randomHex(bytes), undefined, { agentDevice: true });
 }
 
 /** Mint a fresh credential in the family bound to `db`. */

@@ -10,7 +10,7 @@ import type { NodeConnectionRegistry } from '../ports/realtime.js';
 import { isProviderAgentDeliveryReady } from '../ports/realtime.js';
 import { buildDeliverFrame, buildDeliverPayload, buildMessageCreatedEventData, buildThreadReplyEventData, buildDmReceivedEventData, buildGroupDmReceivedEventData } from './deliveryWire.js';
 import { displayAgentName, publicMessageMetadata } from './messageMetadata.js';
-import { senderAddressField } from './address.js';
+import { senderDeviceField, senderFields } from './address.js';
 import { toIso } from '../lib/serialize.js';
 import { readNodeRedriveCandidates } from './nodeRedriveCandidates.js';
 import { fetchAttachmentsBatch, type AttachmentRow } from './attachments.js';
@@ -207,7 +207,7 @@ async function listDeliveriesUnlabeled(
           channel_id: msg.channelId,
           agent_id: msg.agentId ?? null,
           agent_name: msg.agentName ?? null,
-          ...senderAddressField(msg.metadata),
+          ...senderFields(msg.metadata),
           text: msg.body,
           thread_id: msg.threadId ?? null,
           created_at: msg.createdAt.toISOString(),
@@ -1260,7 +1260,7 @@ function buildRoutableDeliveryEvent(
           id: row.delivery.messageId,
           agent_id: row.senderAgentId,
           agent_name: senderName,
-          ...senderAddressField(row.metadata as Record<string, unknown> | null),
+          ...senderFields(row.metadata as Record<string, unknown> | null),
           text: row.body,
           injection_mode: injectionMode,
           attachments,
@@ -1288,6 +1288,8 @@ function buildRoutableDeliveryEvent(
           id: row.delivery.messageId,
           agent_id: row.senderAgentId,
           agent_name: senderName,
+          // Group DMs carry no sender address; the device stamp replays like the live event.
+          ...senderDeviceField(row.metadata as Record<string, unknown> | null),
           text: row.body,
           injection_mode: injectionMode,
           attachments,
@@ -1313,7 +1315,7 @@ function buildRoutableDeliveryEvent(
         channel_name: row.channelName,
         agent_id: row.senderAgentId,
         agent_name: senderName,
-        ...senderAddressField(row.metadata as Record<string, unknown> | null),
+        ...senderFields(row.metadata as Record<string, unknown> | null),
         thread_id: row.threadId,
         reply_to_message_id: row.replyToMessageId,
         text: row.body,
@@ -1333,6 +1335,7 @@ function buildRoutableDeliveryEvent(
       channel_id: row.channelId,
       agent_id: row.senderAgentId,
       agent_name: senderName,
+      ...senderDeviceField(row.metadata as Record<string, unknown> | null),
       text: row.body,
       blocks: (row.blocks as unknown[] | null) || null,
       metadata: publicMessageMetadata(row.metadata as Record<string, unknown> | null),

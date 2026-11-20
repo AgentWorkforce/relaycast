@@ -2,6 +2,7 @@ import type { AuthProvider, Workspace, ObserverToken } from '../ports/auth.js';
 import type { EngineDb } from '../ports/database.js';
 import { getAuthTokenKind } from '../auth/tokenKind.js';
 import { getNodeByTokenHash, getNodeById } from './node.js';
+import { nodeBindingDead } from './agentDevice.js';
 import { sha256Hex } from '../lib/crypto.js';
 import { upgradedLegacyCredential } from './credentialUpgrade.js';
 import { acceptsOnlyAr } from '../auth/credentials.js';
@@ -116,6 +117,21 @@ export async function authenticateRealtimeWs(deps: WsAuthDeps, token: string): P
   return invalidWsToken('Invalid token format');
 }
 
+/**
+ * Attach an authenticated node socket to a registry so that it remembers the
+ * binding of the token that opened it (engine/agentDevice.ts): every host that
+ * attaches node sockets from `authenticateNodeWs` goes through here.
+ */
+export function attachAuthenticatedNodeSocket<H>(
+  registry: { attachNodeSocket(workspaceId: string, nodeId: string, socket: never, options: { deviceTokenHash: string | null }): H },
+  auth: Extract<NodeWsAuthResult, { ok: true }>,
+  socket: unknown,
+): H {
+  return registry.attachNodeSocket(auth.node.workspaceId, auth.node.id, socket as never, {
+    deviceTokenHash: auth.node.deviceTokenHash ?? null,
+  });
+}
+
 export async function authenticateNodeWs(deps: WsAuthDeps, token: string): Promise<NodeWsAuthResult> {
   const family = parseCredential(token)?.family;
   if (getAuthTokenKind(token) !== 'node' || (family !== 'ar' && acceptsOnlyAr(deps.db))) {
@@ -125,9 +141,13 @@ export async function authenticateNodeWs(deps: WsAuthDeps, token: string): Promi
   const hash = await deps.auth.hashToken(token);
   let node = await getNodeByTokenHash(deps.db, hash);
   if (!node && family === 'legacy') {
-    // An upgraded legacy node token works during its grace (`POST /v1/credentials/upgrade`).
+    // An upgraded legacy node token works during its grace (`POST /v1/credentials/upgrade`),
+    // but never past its device: a device-bound node is refused once that device is gone.
     const upgraded = await upgradedLegacyCredential(deps.db, 'node', await sha256Hex(token));
-    if (upgraded) node = await getNodeById(deps.db, upgraded.workspaceId, upgraded.principalId);
+    if (upgraded) {
+      const byId = await getNodeById(deps.db, upgraded.workspaceId, upgraded.principalId);
+      if (byId && !await nodeBindingDead(deps.db, byId.workspaceId, byId.id)) node = byId;
+    }
   }
   if (!node) {
     return invalidWsToken('Invalid node token');

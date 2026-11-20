@@ -1,6 +1,7 @@
 import type { workspaces, agents, nodes, observerTokens } from './db/tables.js';
 import type { Logger } from './lib/logger.js';
 import type { AdmissionDenial } from './ports/admission.js';
+import type { AgentDeviceStamp } from './ports/auth.js';
 import type {
   EngineDb,
   EnginePorts,
@@ -23,10 +24,18 @@ export interface EngineRuntime extends EnginePorts, EngineProviders {
 export interface AppVariables {
   workspace: typeof workspaces.$inferSelect;
   agent: typeof agents.$inferSelect | undefined;
+  /**
+   * The device `agent` authenticated as, when it presented one of its
+   * per-device tokens (engine/agentDevice.ts); undefined for its shared token
+   * and every other principal. Server-owned: sends stamp it, never a caller.
+   */
+  agentDevice: AgentDeviceStamp | undefined;
   /** Hash of the credential actually presented and accepted for this request.
    * May differ from agent.tokenHash during a previous-token grace window. */
   agentCredentialHash: string | undefined;
   node: typeof nodes.$inferSelect | undefined;
+  /** The device a device-bound node token (`node`) was minted with; undefined for unbound node tokens. */
+  nodeDevice: AgentDeviceStamp | undefined;
   observerToken: typeof observerTokens.$inferSelect | undefined;
   db: EngineDb;
   logger: Logger;

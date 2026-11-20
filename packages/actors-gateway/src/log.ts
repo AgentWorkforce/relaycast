@@ -53,5 +53,5 @@ export const silentLogger: Logger = { info() {}, warn() {}, error() {} };
 /** The message of an error, with any `ar_` credential or bearer token masked. */
 export function errorText(error: unknown): string {
   const message = error instanceof Error ? error.message : String(error);
-  return message.replace(/ar_(?:ws|ag|nd|ob|wh)_[0-9A-Za-z_]+/g, 'ar_***').replace(/Bearer\s+\S+/gi, 'Bearer ***');
+  return message.replace(/ar_(?:ws|ag|ad|nd|ob|wh)_[0-9A-Za-z_]+/g, 'ar_***').replace(/Bearer\s+\S+/gi, 'Bearer ***');
 }

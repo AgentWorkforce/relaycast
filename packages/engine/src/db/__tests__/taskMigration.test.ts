@@ -50,6 +50,7 @@ it('upgrades existing actions and results additively, preserving rows and every 
       '0084_strict_spawn_dispatch_generation.sql',
       '0085_action_invocation_requester.sql',
       '0086_workspace_leaders.sql',
+      '0087_agent_device_tokens.sql',
     ]);
     for (const table of before) {
       const columns = db.pragma(`table_info(${table.name})`) as { name: string }[];

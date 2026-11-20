@@ -174,7 +174,11 @@ groupDmRoutes.post(
               data,
               mode,
             },
-            { mailbox, workspaceDeliveryPolicy: await resolveWorkspaceDeliveryPolicyFor(c.get('engine').config, workspace) },
+            {
+              mailbox,
+              workspaceDeliveryPolicy: await resolveWorkspaceDeliveryPolicyFor(c.get('engine').config, workspace),
+              senderDevice: c.get('agentDevice'),
+            },
           );
         },
         afterOperation: async (data) => {

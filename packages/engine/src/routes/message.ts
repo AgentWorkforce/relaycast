@@ -38,6 +38,7 @@ import {
   parseQueryParams,
 } from '../lib/httpResponse.js';
 import { parsePaginationQuery, positiveIntQueryParam } from '../lib/httpQuery.js';
+import { directNodeIdForAgent } from '../engine/node.js';
 import {
   getMessagesBySessionRef,
   SessionRefSchema,
@@ -127,11 +128,20 @@ messageRoutes.post(
           return jsonError(c, 'from_required', 'A node token must set "from" (an agent name in the node workspace)', 400);
         }
         const [fromAgent] = await db
-          .select({ id: agents.id, name: agents.name, type: agents.type, metadata: agents.metadata })
+          .select({
+            id: agents.id, name: agents.name, type: agents.type, metadata: agents.metadata,
+            locationNodeId: agents.locationNodeId,
+          })
           .from(agents)
           .where(and(eq(agents.workspaceId, workspace.id), eq(agents.name, from)));
         if (!fromAgent) {
           return jsonNotFound(c, 'agent_not_found', `Agent "${from}" not found in this workspace`);
+        }
+        // A direct node is one agent's own delivery host: it posts only as that
+        // agent (its implicit node, or the agent located on it), never as
+        // someone else. Broker nodes host many agents and keep `from` as before.
+        if (node.role === 'direct' && node.id !== directNodeIdForAgent(fromAgent.id) && fromAgent.locationNodeId !== node.id) {
+          return jsonError(c, 'from_not_allowed', 'A direct node may post only as its own agent', 403);
         }
         sender = fromAgent;
       } else {
@@ -170,7 +180,16 @@ messageRoutes.post(
             channel.id,
             senderAgentId,
             { text, blocks, attachments, data, content_type, mode },
-            { mailbox, workspaceDeliveryPolicy },
+            // An agent posting as itself carries its token's device. A node posting
+            // as `from` carries the device its token is bound to, but only for the
+            // person whose direct node it is; otherwise the device is unknown.
+            {
+              mailbox,
+              workspaceDeliveryPolicy,
+              senderDevice: agent
+                ? c.get('agentDevice')
+                : node && node.id === directNodeIdForAgent(senderAgentId) ? c.get('nodeDevice') : undefined,
+            },
           );
         },
         afterOperation: async (data) => {

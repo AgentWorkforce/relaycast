@@ -255,6 +255,41 @@ export const agentRecoveryCredentials = sqliteTable(
 );
 
 /**
+ * Per-device tokens of a person (`type: 'human'`) agent, beside
+ * `agents.token_hash`: the same agent, one live token per (agent, device).
+ * A message sent with one is stamped with its device
+ * (`__relaycast_sender_device`). Minted and revoked with the workspace key
+ * (engine/agentDevice.ts); the agent's identity takeover deletes them all.
+ */
+export const agentDeviceTokens = sqliteTable(
+  'agent_device_tokens',
+  {
+    id: text('id').primaryKey(),
+    workspaceId: text('workspace_id')
+      .notNull()
+      .references(() => workspaces.id, { onDelete: 'cascade' }),
+    agentId: text('agent_id').notNull(),
+    deviceId: text('device_id').notNull(),
+    deviceName: text('device_name').notNull(),
+    deviceKind: text('device_kind').notNull(),
+    tokenHash: text('token_hash').notNull(),
+    expiresAt: integer('expires_at', { mode: 'timestamp' }),
+    createdAt: integer('created_at', { mode: 'timestamp' }).notNull().default(sql`(unixepoch())`),
+    updatedAt: integer('updated_at', { mode: 'timestamp' }).notNull().default(sql`(unixepoch())`),
+  },
+  (table) => [
+    uniqueIndex('agent_device_tokens_agent_device_unique').on(table.workspaceId, table.agentId, table.deviceId),
+    uniqueIndex('agent_device_tokens_token_hash_unique').on(table.tokenHash),
+    foreignKey({
+      columns: [table.workspaceId, table.agentId],
+      foreignColumns: [agents.workspaceId, agents.id],
+      name: 'agent_device_tokens_agent_fk',
+    }).onDelete('cascade'),
+  ],
+);
+
+
+/**
  * Append-only security record. There is intentionally no agent foreign key:
  * an identity audit must survive release/deletion and retention pruning.
  */
@@ -294,6 +329,11 @@ export const nodes = sqliteTable(
       .references(() => workspaces.id, { onDelete: 'cascade' }),
     name: text('name').notNull(),
     tokenHash: text('token_hash').notNull().unique(),
+    // Set when the node token was minted with a person's per-device token
+    // (engine/agentDevice.ts): the hash of that device token. The node token
+    // authenticates only while that exact device token is live, so revoking,
+    // re-minting or expiring the device (or a takeover) also ends it.
+    deviceTokenHash: text('device_token_hash'),
     // A successful idempotent rotation retains only the superseded token hash
     // and request binding for a bounded recovery window. This lets a caller
     // recover the replacement after a lost 201 without making the workspace

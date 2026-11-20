@@ -7,7 +7,21 @@ See the [root changelog](../../CHANGELOG.md) for cross-package release highlight
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [Unreleased - Minor]
+
+### Added
+
+- `POST /v1/agents/:name/device-tokens` (workspace key) mints or re-mints one device's token for a person (`type: human`) agent: body `{ agent_id, device: { id, name, kind: desktop|cli|web }, ttl_seconds? }`, response `{ agent_id, device, token, expires_at }`. One live token per (agent, device id), shown once and stored only as a hash in the new `agent_device_tokens` table (SQLite migration 0087, Postgres 0008; additive). `DELETE /v1/agents/:name/device-tokens/:device_id` revokes one at once. Tokens are `at_live_dv_…` / `ar_ad_…` agent credentials; their shape selects the device table, so authentication stays one indexed lookup and ordinary agent tokens are unaffected.
+- Sends by a person agent store the server-owned `__relaycast_sender_device` and serve it as `agent_device` beside `agent_address` (DMs, group DMs, channel posts, thread replies, deliveries, webhooks and realtime events); `kind: unknown` for the shared token or a node / workspace-key send. Caller-supplied `__relaycast_` keys are still dropped. Non-person senders carry no `agent_device`.
+
+### Changed
+
+- A person agent's sender address is `<person>@<device id>`, or `<person>@direct` for an unknown device; the person's direct node `machine_id` is still recorded for the roster but no longer used for the sender address. An address to a person matches whatever its machine part (display only).
+- Identity recovery, takeover, `revoke-token` and agent deletion delete all of the agent's device tokens; `rotate-token` does not. A device token, and a node token minted with one, is refused (403 `device_token_forbidden`) by `rotate-token`, `POST /v1/agents/:name/recover`, the node socket's `agent.recover`, `POST /v1/agent/recovery-credential` and `POST /v1/credentials/upgrade`, so it never obtains the shared token. Device ids `unknown` and `direct` are reserved.
+- A node token minted through `POST /v1/agent/node-token` with a device token is bound to that device (new nullable `nodes.device_token_hash`, in the same migrations): it authenticates only while that exact device token is live, so a device revoke, re-mint or expiry, a takeover, `revoke-token` or agent deletion ends it. Each node socket remembers the binding of the token that opened it (the actor runtime keeps it in the signed socket grant and in `_actor_sockets.device_token_hash`, added in place on existing actors). A revocation closes exactly the sockets opened with that device, whatever the node row's binding is by then. An expired device's socket is closed at its next heartbeat. A socket opened with a device-bound node token cannot `agent.recover` or `agent.register`. An upgraded legacy node token is also refused on the node WebSocket once its device is gone. A host that passes no binding (`connectionDeviceTokenHash` undefined) is judged by the node row's binding, never as unbound; `null` means tracked and unbound. Revocations name the device tokens they killed, and `NodeConnectionRegistry.disconnectNodeDeviceSockets` (optional) closes the sockets opened with them. Heartbeats check a bound socket's device through a cache (until its expiry or 5 minutes), not on every beat. The actor runtime re-checks the device when a grant connects, and tears down a replayed socket whose device is gone. Agent delete closes the direct node's sockets. A post over a bound node token as its person carries that device as `agent_device`. Node tokens minted with the shared token are unchanged.
+- A direct node posts to a channel only as its own agent (its implicit node's agent, or the agent located on it): any other `from` answers 403 `from_not_allowed`. Broker nodes are unchanged.
+- A device token cannot register an A2A agent (`POST /v1/a2a/register`, 403 `device_token_forbidden`).
+- `agent_device` is also served on reconnect replay of channel posts and group DMs and in workspace DM history. `ar_ad_` tokens are redacted in logs and observer text.
 
 ## [12.13.1] - 2026-11-20
 

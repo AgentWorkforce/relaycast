@@ -215,6 +215,25 @@ components:
             $ref: '#/components/schemas/ErrorResponse'
 
   schemas:
+    AgentDevice:
+      type: object
+      description: >-
+        The device a person (`type: human`) agent sent from, stamped by the
+        server from the per-device token it authenticated with
+        (`POST /agents/{name}/device-tokens`); `kind: unknown` for the
+        agent's shared token. Present only for person senders. Never taken
+        from caller metadata: any `__relaycast_` key a caller sends is dropped.
+      required: [id, name, kind]
+      properties:
+        id:
+          type: string
+          description: Address-safe device id; also the machine part of the person's `agent_address`.
+        name:
+          type: string
+          maxLength: 80
+        kind:
+          type: string
+          enum: [desktop, cli, web, unknown]
     WorkspaceProvenanceInput:
       type: object
       description: >-
@@ -891,6 +910,8 @@ components:
         agent_address:
           type: string
           description: Sender's `agent@machine` address at send time when the server recorded one. Omitted when the sender has no location node.
+        agent_device:
+          $ref: '#/components/schemas/AgentDevice'
         agent_type:
           type: string
           enum: [agent, human, system]
@@ -1026,6 +1047,8 @@ components:
         agent_address:
           type: string
           description: Sender's `agent@machine` address at send time when the server recorded one. Omitted when the sender has no location node.
+        agent_device:
+          $ref: '#/components/schemas/AgentDevice'
         thread_id:
           type: string
           nullable: true
@@ -1121,6 +1144,8 @@ components:
         agent_address:
           type: string
           description: Sender's `agent@machine` address at send time when the server recorded one. Omitted when the sender has no location node. Reply with `address` on `POST /dm`.
+        agent_device:
+          $ref: '#/components/schemas/AgentDevice'
         text:
           type: string
         injection_mode:
@@ -1355,6 +1380,8 @@ components:
         agent_address:
           type: string
           description: Sender's `agent@machine` address at send time when the server recorded one. Omitted when the sender has no location node. Reply with `address` on `POST /dm`.
+        agent_device:
+          $ref: '#/components/schemas/AgentDevice'
         text:
           type: string
         injection_mode:
@@ -1554,6 +1581,8 @@ components:
                 agent_address:
                   type: string
                   description: Sender's `agent@machine` address at send time when the server recorded one, on direct messages and thread replies. Omitted when the sender has no location node.
+                agent_device:
+                  $ref: '#/components/schemas/AgentDevice'
                 text:
                   type: string
                 thread_id:
@@ -2789,7 +2818,8 @@ paths:
         '403':
           description: >-
             A workspace key on a deployment whose workspace keys a control
-            plane owns (`workspace_key_rotation_disabled`).
+            plane owns (`workspace_key_rotation_disabled`), or a per-device
+            person token, which is always refused (`device_token_forbidden`).
           content:
             application/json:
               schema:
@@ -3253,6 +3283,8 @@ paths:
                 work_unit_id:
                   type: string
       responses:
+        '403':
+          description: A per-device person token (`POST /agents/{name}/device-tokens`) cannot manage credentials (`device_token_forbidden`).
         '200':
           description: Recovery verifier enrolled
           content:
@@ -3644,7 +3676,7 @@ paths:
                   data:
                     $ref: '#/components/schemas/AgentIdentityRecovery'
         '403':
-          description: Recovery authority does not match the exact identity
+          description: Recovery authority does not match the exact identity. A per-device person token is always refused with `device_token_forbidden`.
         '409':
           description: Identity changed before recovery completed
 
@@ -3692,6 +3724,123 @@ paths:
         '409':
           description: expected_agent_id does not match the current identity
 
+  /agents/{name}/device-tokens:
+    post:
+      summary: Mint a device token for a person agent
+      description: >-
+        Issues (or re-issues) the token of one device of a person
+        (`type: human`) agent. It authenticates as the same agent; what it
+        sends carries `agent_device` = this device, and the person's
+        `agent_address` becomes `<name>@<device id>`. One live token per
+        (agent, device id): a re-mint replaces the device's earlier token at
+        once. The token is shown once and stored only as a hash. Shapes are
+        `at_live_dv_…` / `ar_ad_…`. Identity recovery, takeover and
+        `revoke-token` delete all of an agent's device tokens; `rotate-token`
+        does not. A device token cannot rotate, upgrade or enroll credentials.
+      tags: [Agents]
+      security:
+        - workspaceKey: []
+      parameters:
+        - name: name
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [agent_id, device]
+              properties:
+                agent_id:
+                  type: string
+                  description: The agent's id; a mismatch (the name now names another agent) is a 409.
+                device:
+                  type: object
+                  required: [id, name, kind]
+                  properties:
+                    id:
+                      type: string
+                      pattern: '^[a-z0-9](?:[a-z0-9-]{0,62}[a-z0-9])?$'
+                      description: Lowercase letters, digits and dashes; not `unknown` or `direct`.
+                    name:
+                      type: string
+                      description: Control characters become spaces; trimmed to 80 characters.
+                    kind:
+                      type: string
+                      enum: [desktop, cli, web]
+                ttl_seconds:
+                  type: integer
+                  minimum: 60
+                  maximum: 2592000
+                  description: Lifetime; omitted means the token does not expire.
+      responses:
+        '201':
+          description: Device token issued
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok:
+                    type: boolean
+                  data:
+                    type: object
+                    required: [agent_id, device, token, expires_at]
+                    properties:
+                      agent_id: { type: string }
+                      device:
+                        $ref: '#/components/schemas/AgentDevice'
+                      token: { type: string }
+                      expires_at:
+                        type: string
+                        format: date-time
+                        nullable: true
+        '400':
+          description: Invalid device or ttl_seconds
+        '404':
+          description: Agent not found
+        '409':
+          description: agent_id does not match (`agent_identity_conflict`) or the agent is not a person agent (`not_a_person_agent`)
+  /agents/{name}/device-tokens/{device_id}:
+    delete:
+      summary: Revoke a device token
+      description: >-
+        Revokes one device's token at once. Revoking a device with no token
+        returns `revoked: false`.
+      tags: [Agents]
+      security:
+        - workspaceKey: []
+      parameters:
+        - name: name
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: device_id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Revocation result
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok:
+                    type: boolean
+                  data:
+                    type: object
+                    required: [revoked]
+                    properties:
+                      revoked: { type: boolean }
+        '404':
+          description: Agent not found
   /agents/{name}/revoke-token:
     post:
       summary: Immediately revoke an agent credential
@@ -5213,6 +5362,8 @@ paths:
           schema:
             type: string
       responses:
+        '403':
+          description: A per-device person token (`POST /agents/{name}/device-tokens`) cannot manage credentials (`device_token_forbidden`).
         '200':
           description: Token rotated
           content:

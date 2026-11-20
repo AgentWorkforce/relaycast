@@ -37,6 +37,8 @@ export const SocketPrincipalSchema = z.discriminatedUnion('kind', [
     kind: z.literal('node'),
     workspace_id: z.string().min(1),
     node_id: z.string().min(1),
+    /** The device-token binding of the node token that authenticated the upgrade (signed); absent when unbound. */
+    device_token_hash: z.string().regex(/^[0-9a-f]{64}$/).optional(),
     ...signature,
   }).strict(),
   z.object({
@@ -67,7 +69,11 @@ function hmacKey(secret: string, usage: 'sign' | 'verify'): Promise<CryptoKey> {
 /** The bytes the signature covers: the principal's identity fields, `iat` and `nonce`, as JSON with sorted keys. */
 export function canonicalSocketPrincipal(principal: SocketPrincipal, iat: number, nonce: string): string {
   const fields: Record<string, unknown> = { v: principal.v, kind: principal.kind, workspace_id: principal.workspace_id, iat, nonce };
-  if (principal.kind === 'node') fields.node_id = principal.node_id;
+  if (principal.kind === 'node') {
+    fields.node_id = principal.node_id;
+    // Only when present, so a grant without a binding signs exactly as before.
+    if (principal.device_token_hash !== undefined) fields.device_token_hash = principal.device_token_hash;
+  }
   else fields.observer_token_id = principal.observer_token_id;
   return JSON.stringify(Object.fromEntries(Object.entries(fields).sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))));
 }

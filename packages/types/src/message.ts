@@ -2,7 +2,7 @@ import { z } from 'zod';
 import { SentDeliverySchema } from './delivery.js';
 import { FileAttachmentSchema } from './file.js';
 import { ReactionGroupSchema } from './reaction.js';
-import { AgentTypeSchema } from './agent.js';
+import { AgentDeviceSchema, AgentTypeSchema } from './agent.js';
 
 // Rich Message Blocks
 
@@ -78,6 +78,8 @@ export const CoreMessagePayloadSchema = z.object({
   agent_type: AgentTypeSchema.optional(),
   /** Sender's `agent@machine` address at send time when the server recorded one. Omitted when the sender has no location node. */
   agent_address: z.string().optional(),
+  /** Person senders only: the device it was sent from. */
+  agent_device: AgentDeviceSchema.optional(),
   text: z.string(),
   // The engine accepts arbitrary JSON blocks; realtime must not strip extensions.
   blocks: z.array(z.unknown()).nullable().optional(),
@@ -97,6 +99,8 @@ export const MessageWithMetaSchema = z.object({
   agent_type: AgentTypeSchema.optional(),
   /** Sender's `agent@machine` address at send time when the server recorded one. Omitted when the sender has no location node. */
   agent_address: z.string().optional(),
+  /** Person senders only: the device it was sent from. */
+  agent_device: AgentDeviceSchema.optional(),
   text: z.string(),
   blocks: z.array(MessageBlockSchema).nullable(),
   metadata: z.record(z.string(), z.unknown()).optional(),
@@ -191,6 +195,8 @@ export const SessionMessageSchema = z.object({
   agent_name: z.string(),
   /** Sender's `agent@machine` address at send time when the server recorded one. Omitted when the sender has no location node. */
   agent_address: z.string().optional(),
+  /** Person senders only: the device it was sent from. */
+  agent_device: AgentDeviceSchema.optional(),
   thread_id: z.string().nullable(),
   text: z.string(),
   blocks: z.array(MessageBlockSchema).nullable(),
