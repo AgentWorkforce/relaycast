@@ -115,11 +115,35 @@ describe('strict identity APIs', () => {
         mockResponse({ code: 'agent_already_exists', message: 'exists' }, false, 409),
       );
 
-      await expect(relay.registerOrRotate({ name: 'Bot' })).rejects.toBeInstanceOf(RelayError);
+      const err = await relay.registerOrRotate({ name: 'Bot' }).catch((e: unknown) => e);
+      expect(err).toBeInstanceOf(RelayError);
+      // Pre-9.1 callers upgraded expecting silent rotation; the error now
+      // names the real replacement instead of just repeating the server's
+      // generic "already exists" message, so the collision doesn't look like
+      // the same register() conflict with no path forward.
+      expect((err as RelayError).code).toBe('name_conflict');
+      expect((err as RelayError).retryable).toBe(false);
+      expect((err as RelayError).statusCode).toBe(409);
+      expect((err as RelayError).message).toContain('agents.recover()');
       expect(mockFetch).toHaveBeenCalledTimes(1);
     });
 
-    it('rethrows non-conflict errors', async () => {
+    it('leaves a different 409 on the server message', async () => {
+      const { RelayCast } = await import('../relay.js');
+      const { RelayError } = await import('../errors.js');
+      const relay = new RelayCast({ apiKey: 'rk_live_test123' });
+
+      mockFetch.mockImplementation(() =>
+        mockResponse({ code: 'agent_recovery_proof_conflict', message: 'verifier taken' }, false, 409),
+      );
+
+      const err = await relay.registerOrRotate({ name: 'Bot' }).catch((e: unknown) => e);
+      expect(err).toBeInstanceOf(RelayError);
+      expect((err as RelayError).code).toBe('name_conflict');
+      expect((err as RelayError).message).toBe('verifier taken');
+    });
+
+    it('rethrows non-conflict errors verbatim', async () => {
       const { RelayCast } = await import('../relay.js');
       const { RelayError } = await import('../errors.js');
       const relay = new RelayCast({ apiKey: 'rk_live_test123' });
@@ -131,6 +155,7 @@ describe('strict identity APIs', () => {
       const err = await relay.registerOrRotate({ name: 'Bot' }).catch((e: unknown) => e);
       expect(err).toBeInstanceOf(RelayError);
       expect((err as any).code).toBe('unauthorized');
+      expect((err as any).message).toBe('bad token');
     });
   });
 
