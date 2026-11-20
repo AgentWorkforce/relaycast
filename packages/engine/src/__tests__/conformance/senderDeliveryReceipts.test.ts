@@ -8,6 +8,9 @@ import {
   enforceD1ParameterLimit,
   FakeSocket,
   makeNodeStack,
+  rawGet,
+  rawInsertRows,
+  rawRun,
   registerAgent,
   type TestStack,
 } from './harness.js';
@@ -91,28 +94,14 @@ describe('sender-side delivery receipts', () => {
     return { agentId: reply.data.agent_id, token: reply.data.token, name };
   }
 
-  /** Insert `count` online members of #general straight into SQLite (no per-agent HTTP round trips). */
-  function seedGeneralMembers(workspaceId: string, count: number, prefix: string): string[] {
-    const sqlite = stack.runtime.handle.sqlite;
-    const { id: channelId } = sqlite.prepare(
-      `SELECT id FROM channels WHERE workspace_id = ? AND name = 'general'`,
-    ).get(workspaceId) as { id: string };
-    const insertAgent = sqlite.prepare(`
-      INSERT INTO agents (id, workspace_id, name, token_hash, status)
-      VALUES (?, ?, ?, ?, 'online')
-    `);
-    const insertMember = sqlite.prepare(`
-      INSERT INTO channel_members (channel_id, agent_id) VALUES (?, ?)
-    `);
-    const ids: string[] = [];
-    sqlite.transaction(() => {
-      for (let index = 0; index < count; index += 1) {
-        const id = `agent_${prefix}_${String(index).padStart(3, '0')}`;
-        ids.push(id);
-        insertAgent.run(id, workspaceId, `${prefix}-${index}`, `token-${prefix}-${index}`);
-        insertMember.run(channelId, id);
-      }
-    })();
+  /** Insert `count` online members of #general straight into the database (no per-agent HTTP round trips). */
+  async function seedGeneralMembers(workspaceId: string, count: number, prefix: string): Promise<string[]> {
+    const db = stack.runtime.deps.db;
+    const channel = await rawGet<{ id: string }>(db, `SELECT id FROM channels WHERE workspace_id = ? AND name = 'general'`, [workspaceId]);
+    const ids = Array.from({ length: count }, (_, index) => `agent_${prefix}_${String(index).padStart(3, '0')}`);
+    await rawInsertRows(db, 'agents', ['id', 'workspace_id', 'name', 'token_hash', 'status'],
+      ids.map((id, index) => [id, workspaceId, `${prefix}-${index}`, `token-${prefix}-${index}`, 'online']));
+    await rawInsertRows(db, 'channel_members', ['channel_id', 'agent_id'], ids.map((id) => [channel!.id, id]));
     return ids;
   }
 
@@ -222,7 +211,7 @@ describe('sender-side delivery receipts', () => {
       if (replayPath === 'durable') {
         // The stamped receipt outlives the row: once the delivery is settled and
         // pruned, the durable replay still repeats the original handle.
-        stack.runtime.handle.sqlite.prepare('DELETE FROM deliveries WHERE id = ?').run(original.data.delivery!.id);
+        await rawRun(stack.runtime.deps.db, 'DELETE FROM deliveries WHERE id = ?', [original.data.delivery!.id]);
         await evictKv();
         const afterPrune = await send();
         expect(afterPrune.status).toBe(201);
@@ -306,7 +295,7 @@ describe('sender-side delivery receipts', () => {
     ]);
     expect(smallBody.deliveries_truncated).toBe(false);
 
-    seedGeneralMembers(ws.workspaceId, 60, 'crowd');
+    await seedGeneralMembers(ws.workspaceId, 60, 'crowd');
     const large = await stack.app.request('/v1/channels/general/messages', authed(alice.token, {
       method: 'POST', body: JSON.stringify({ text: 'hello crowd' }),
     }));
@@ -326,7 +315,7 @@ describe('sender-side delivery receipts', () => {
   it('lists a wide fanout under the D1 bound-parameter cap', async () => {
     const ws = await createWorkspace(stack.app, 'receipts-d1');
     const alice = await registerAgent(stack.app, ws.workspaceKey, 'alice');
-    seedGeneralMembers(ws.workspaceId, 150, 'bulk');
+    await seedGeneralMembers(ws.workspaceId, 150, 'bulk');
 
     const post = await stack.app.request('/v1/channels/general/messages', authed(alice.token, {
       method: 'POST', body: JSON.stringify({ text: 'wide fanout' }),
@@ -433,23 +422,16 @@ describe('sender-side delivery receipts', () => {
     stack.runtime.realtime.attachWorkspaceSocket(ws.workspaceId, stream);
 
     const count = 120;
-    const sqlite = stack.runtime.handle.sqlite;
-    const { id: channelId } = sqlite.prepare(
-      `SELECT id FROM channels WHERE workspace_id = ? AND name = 'general'`,
-    ).get(ws.workspaceId) as { id: string };
-    const insertMessage = sqlite.prepare(`INSERT INTO messages (id, workspace_id, channel_id, agent_id, body) VALUES (?, ?, ?, ?, ?)`);
-    const insertDelivery = sqlite.prepare(`
-      INSERT INTO deliveries (id, workspace_id, message_id, agent_id, status, seq, location_type, location_node_id)
-      VALUES (?, ?, ?, ?, 'delivered', ?, 'via_node', ?)
-    `);
-    sqlite.transaction(() => {
-      for (let seq = 1; seq <= count; seq += 1) {
-        const messageId = `msg_bulk_${String(seq).padStart(3, '0')}`;
-        insertMessage.run(messageId, ws.workspaceId, channelId, alice.agentId, `bulk ${seq}`);
-        insertDelivery.run(`del_bulk_${seq}`, ws.workspaceId, messageId, bob.agentId, seq, node.id);
-      }
-      sqlite.prepare('UPDATE agents SET delivery_seq = ? WHERE id = ?').run(count, bob.agentId);
-    })();
+    const db = stack.runtime.deps.db;
+    const channel = await rawGet<{ id: string }>(db, `SELECT id FROM channels WHERE workspace_id = ? AND name = 'general'`, [ws.workspaceId]);
+    const seqs = Array.from({ length: count }, (_, index) => index + 1);
+    // Snowflake-shaped (numeric) like real message ids: the read cursor compares them numerically.
+    const messageId = (seq: number) => String(1_000_000_000 + seq);
+    await rawInsertRows(db, 'messages', ['id', 'workspace_id', 'channel_id', 'agent_id', 'body'],
+      seqs.map((seq) => [messageId(seq), ws.workspaceId, channel!.id, alice.agentId, `bulk ${seq}`]));
+    await rawInsertRows(db, 'deliveries', ['id', 'workspace_id', 'message_id', 'agent_id', 'status', 'seq', 'location_type', 'location_node_id'],
+      seqs.map((seq) => [`del_bulk_${seq}`, ws.workspaceId, messageId(seq), bob.agentId, 'delivered', seq, 'via_node', node.id]));
+    await rawRun(db, 'UPDATE agents SET delivery_seq = ? WHERE id = ?', [count, bob.agentId]);
 
     const guard = enforceD1ParameterLimit(stack);
     try {

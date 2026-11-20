@@ -4,7 +4,9 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { eq } from 'drizzle-orm';
 import type { FleetActionInvokeMessage, FleetActionAcceptMessage, FleetActionResultMessage } from '@relaycast/types';
-import { makeNodeStack, createWorkspace, registerAgent, FakeSocket, type TestStack } from './harness.js';
+import { makeNodeStack, createWorkspace, installFaultTrigger, pgMode, registerAgent, FakeSocket, type TestStack } from './harness.js';
+import { conformancePgDb } from './pgMode.js';
+import type { EngineDb } from '../../ports/database.js';
 import { actionInvocations } from '../../db/tables.js';
 import { getSqliteDb } from '../../adapters/node/database.js';
 import { acceptTaskInvocation, completeTaskInvocation } from '../../engine/taskInvocation.js';
@@ -165,11 +167,14 @@ describe('durable task invocations', () => {
     const t = await setup();
     const { id, frame } = await t.start();
     await t.handle.handleMessage(JSON.stringify(accept(frame)));
-    stack.runtime.handle.sqlite.exec("CREATE TRIGGER reject_task_result BEFORE UPDATE OF status ON action_invocations WHEN NEW.status = 'completed' BEGIN SELECT RAISE(ABORT, 'simulated storage failure'); END");
+    const dropFault = await installFaultTrigger(stack, {
+      name: 'reject_task_result', table: 'action_invocations', event: 'UPDATE OF status',
+      when: "NEW.status = 'completed'", message: 'simulated storage failure',
+    });
     await t.handle.handleMessage(JSON.stringify(result(frame)));
     expect(t.sock.ofType('reply').filter(r => r.id === 'result')).toHaveLength(0);
     expect(await t.read(id)).toMatchObject({ status: 'running', output: null });
-    stack.runtime.handle.sqlite.exec('DROP TRIGGER reject_task_result');
+    await dropFault();
     await t.handle.handleMessage(JSON.stringify(result(frame)));
     expect(t.sock.ofType('reply').at(-1)).toMatchObject({ id: 'result', ok: true });
     expect(await t.read(id)).toMatchObject({ status: 'completed' });
@@ -213,21 +218,29 @@ describe('durable task invocations', () => {
     await stack.settle();
     const directory = await mkdtemp(join(tmpdir(), 'relaycast-task-'));
     const path = join(directory, 'restart.sqlite');
+    // Each reopen is a fresh connection on the durable store: a new SQLite
+    // connection on a backup of the database file, or a new handle on the
+    // PostgreSQL pool.
+    const reopen = (): { db: EngineDb; close(): void } => {
+      if (pgMode) return { db: conformancePgDb()! satisfies EngineDb, close() {} };
+      const handle = getSqliteDb(path);
+      return { db: handle.db, close: () => handle.sqlite.close() };
+    };
     try {
-      await stack.runtime.handle.sqlite.backup(path);
-      const first = getSqliteDb(path);
+      if (!pgMode) await stack.runtime.handle.sqlite.backup(path);
+      const first = reopen();
       const failure = result(frame, { output: undefined, error: 'worker_exited_without_final' });
       try {
         expect(await acceptTaskInvocation(first.db, t.workspaceId, 'node_a', 'default', accept(frame))).toMatchObject({ status: 'running', newly_accepted: false });
         expect(await completeTaskInvocation(first.db, t.workspaceId, 'node_a', 'default', failure)).toMatchObject({ receipt: { status: 'failed', error: 'worker_exited_without_final' } });
-      } finally { first.sqlite.close(); }
-      const second = getSqliteDb(path);
+      } finally { first.close(); }
+      const second = reopen();
       try {
         expect(await getInvocation(second.db, t.workspaceId, 'task.run', id)).toMatchObject({ status: 'failed', error: 'worker_exited_without_final' });
         expect(await completeTaskInvocation(second.db, t.workspaceId, 'node_a', 'default', failure)).toMatchObject({ receipt: { status: 'failed' }, completed: undefined });
         await expect(completeTaskInvocation(second.db, 'different-workspace', 'node_a', 'default', failure)).rejects.toThrow();
         await expect(completeTaskInvocation(second.db, t.workspaceId, 'different-node', 'default', failure)).rejects.toThrow();
-      } finally { second.sqlite.close(); }
+      } finally { second.close(); }
     } finally { await rm(directory, { recursive: true, force: true }); }
   });
 
@@ -258,11 +271,14 @@ describe('durable task invocations', () => {
     const t = await setup();
     const { id, frame } = await t.start();
     const [stale] = await stack.runtime.handle.db.select().from(actionInvocations).where(eq(actionInvocations.id, id));
-    stack.runtime.handle.sqlite.exec("CREATE TRIGGER reject_task_accept BEFORE UPDATE OF status ON action_invocations WHEN NEW.status = 'running' BEGIN SELECT RAISE(ABORT, 'simulated storage failure'); END");
+    const dropFault = await installFaultTrigger(stack, {
+      name: 'reject_task_accept', table: 'action_invocations', event: 'UPDATE OF status',
+      when: "NEW.status = 'running'", message: 'simulated storage failure',
+    });
     await t.handle.handleMessage(JSON.stringify(accept(frame)));
     expect(t.sock.ofType('reply').filter(r => r.id === 'accept')).toHaveLength(0);
     expect(await t.read(id)).toMatchObject({ status: 'dispatched' });
-    stack.runtime.handle.sqlite.exec('DROP TRIGGER reject_task_accept');
+    await dropFault();
     await t.handle.handleMessage(JSON.stringify(accept(frame)));
     await rescheduleNodeInvocation(stack.runtime.handle.db, stack.runtime.realtime, stale, { allowAttemptedFallback: true });
     expect(t.sock.ofType('action.invoke')).toHaveLength(1);

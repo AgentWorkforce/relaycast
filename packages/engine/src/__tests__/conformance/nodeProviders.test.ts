@@ -7,6 +7,8 @@ import {
   FakeSocket,
   deliverFramesOfType,
   contextUpdatesOfType,
+  gateStatements,
+  rawRun,
   type TestStack,
 } from './harness.js';
 import { actions, actionInvocations, agents, nodeProviders, nodes } from '../../db/tables.js';
@@ -845,18 +847,21 @@ describe('node providers', () => {
     const registry = stack.runtime.realtime;
     const originalConnected = registry.isProviderConnected.bind(registry);
     let pruned = false;
+    let prune: Promise<void> = Promise.resolve();
     vi.spyOn(registry, 'isProviderConnected').mockImplementation((workspaceId, nodeId, providerName) => {
       if (!pruned && nodeId === 'node_b') {
         pruned = true;
-        stack.runtime.handle.sqlite
-          .prepare('DELETE FROM actions WHERE workspace_id = ? AND id = ?')
-          .run(ws.workspaceId, originalActionId);
+        prune = rawRun(
+          stack.runtime.handle.db,
+          'DELETE FROM actions WHERE workspace_id = ? AND id = ?',
+          [ws.workspaceId, originalActionId],
+        );
       }
       return originalConnected(workspaceId, nodeId, providerName);
     });
 
     const rescheduled = await rescheduleInvocationsForLostNode(
-      stack.runtime.handle.db,
+      gateStatements(stack.runtime.handle.db, () => prune),
       registry,
       ws.workspaceId,
       'node_a',
@@ -891,11 +896,11 @@ describe('node providers', () => {
     expect(replacement?.id).toBeTruthy();
 
     // A competing retry wins the exact source→replacement CAS first.
-    stack.runtime.handle.sqlite.prepare(`
+    await rawRun(db, `
       UPDATE action_invocations
       SET action_id = ?, dispatched_node_id = 'node_b', dispatched_provider = 'fleet-b'
       WHERE id = ?
-    `).run(replacement!.id, invocationId);
+    `, [replacement!.id, invocationId]);
     beta.sock.received.length = 0;
 
     const rescheduled = await rescheduleNodeInvocation(db, stack.runtime.realtime, retrySnapshot);

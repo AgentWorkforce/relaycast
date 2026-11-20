@@ -49,13 +49,16 @@ describe.skipIf(!enabled)("PostgreSQL engine handle (integration)", { timeout: 1
   beforeAll(async () => {
     m = await freshModules();
     owner = openPostgresPool(configFor(OWNER_URL!, "owner"));
+    // Waits for the fixture lock while other PostgreSQL test files hold it.
     releaseFixture = await holdFixtureLock(owner);
     await resetSchema(owner);
-  });
+  }, 180_000);
 
   afterAll(async () => {
     await handle?.close().catch(() => {});
-    if (owner) await resetSchema(owner).catch(() => {});
+    // Only the lock holder may reset: a beforeAll that timed out waiting must
+    // not drop the schema under the file that holds it.
+    if (owner && releaseFixture) await resetSchema(owner).catch(() => {});
     await releaseFixture?.().catch(() => {});
     await owner?.end().catch(() => {});
   });

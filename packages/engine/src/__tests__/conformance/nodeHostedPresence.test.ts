@@ -10,6 +10,7 @@ import {
   FakeSocket,
   makeNodeStack,
   registerAgent,
+  sqliteOnly,
   type TestStack,
 } from './harness.js';
 
@@ -232,7 +233,8 @@ describe('node-hosted presence', () => {
     expect(await stack.runtime.presence.getOnline(ws.workspaceId)).toEqual([]);
   });
 
-  it('seeks the node heartbeat index and the binding node index', async () => {
+  // SQLite planner check (EXPLAIN QUERY PLAN index choice); no PostgreSQL counterpart.
+  sqliteOnly('seeks the node heartbeat index and the binding node index', async () => {
     const ws = await createWorkspace(stack.app, 'node-hosted-presence-plan');
     const { sql: statement, params } = nodeHostedPresenceQuery(
       stack.runtime.deps.db,

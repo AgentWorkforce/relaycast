@@ -3,21 +3,15 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { AppEnv } from '../../env.js';
 import * as workspaceEngine from '../../engine/workspace.js';
 import { codedError } from '../../lib/httpError.js';
-import { createWorkspace, makeNodeStack, type TestStack } from './harness.js';
+import { createWorkspace, interceptStatements, makeNodeStack, type TestStack } from './harness.js';
 
 const OVERLOAD = 'D1_ERROR: D1 DB is overloaded. Requests queued for too long.';
 
 /** Fail every prepared statement that inserts into `agents`, as D1 does under load. */
 function failAgentInserts(stack: TestStack, message: string): () => void {
-  const sqlite = stack.runtime.handle.sqlite;
-  const originalPrepare = sqlite.prepare.bind(sqlite);
-  sqlite.prepare = ((source: string) => {
+  return interceptStatements(stack, (source) => {
     if (/insert into "agents"/i.test(source)) throw new Error(message);
-    return originalPrepare(source);
-  }) as typeof sqlite.prepare;
-  return () => {
-    sqlite.prepare = originalPrepare as typeof sqlite.prepare;
-  };
+  });
 }
 
 /**

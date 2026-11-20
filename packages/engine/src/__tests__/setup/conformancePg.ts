@@ -1,19 +1,20 @@
 /**
  * vitest setupFiles for the PostgreSQL conformance mode (replaces
- * bindSchema.ts). Opens the verified runtime handle before any test module
- * loads (which binds the engine tables to 'pg'); a connection or verification
+ * bindSchema.ts). Opens and verifies the runtime pool before any test module
+ * loads (which binds the engine tables to 'pg') and publishes it; each test
+ * stack builds its own handle over it (pgMode.ts); a connection or verification
  * failure fails the file, never falls back. Before every test, TRUNCATEs every
  * engine table as the owner (test code only; the runtime never does this).
  */
 import { afterAll, beforeEach } from 'vitest';
 import { openPostgresEngineDb } from '../../adapters/postgres/engineDb.js';
 import { closePostgresPool, openPostgresPool } from '../../adapters/postgres/pool.js';
-import { setConformancePgDb } from '../conformance/pgMode.js';
+import { setConformancePgPools } from '../conformance/pgMode.js';
 import { CONFORMANCE_PG_SCHEMA, conformancePgConfig } from './conformancePgEnv.js';
 
 const handle = await openPostgresEngineDb(conformancePgConfig('runtime'));
 const owner = openPostgresPool(conformancePgConfig('owner'), { log: () => {} });
-setConformancePgDb(handle.db);
+setConformancePgPools({ runtime: handle.pool, owner });
 
 const { rows } = await owner.query<{ name: string }>(
   `SELECT format('%I.%I', n.nspname, c.relname) AS name
@@ -30,7 +31,7 @@ beforeEach(async () => {
 });
 
 afterAll(async () => {
-  setConformancePgDb(undefined);
+  setConformancePgPools(undefined);
   await handle.close().catch(() => {});
   await closePostgresPool(owner).catch(() => {});
 });

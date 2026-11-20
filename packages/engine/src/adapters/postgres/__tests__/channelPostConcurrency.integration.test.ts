@@ -67,7 +67,9 @@ describe.skipIf(!enabled)("PostgreSQL concurrent channel posts (integration)", {
 
   afterAll(async () => {
     await handle?.close().catch(() => {});
-    if (owner) await resetSchema(owner).catch(() => {});
+    // Only the lock holder may reset: a beforeAll that timed out waiting must
+    // not drop the schema under the file that holds it.
+    if (owner && releaseFixture) await resetSchema(owner).catch(() => {});
     await releaseFixture?.().catch(() => {});
     await owner?.end().catch(() => {});
   });

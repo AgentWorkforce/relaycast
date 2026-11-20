@@ -1,26 +1,52 @@
 /**
  * The files migration's row read (relaycast#669 follow-up) against the real
  * PostgreSQL fixture: paged by id, deleted rows excluded. Skipped unless
- * RELAYCAST_PG_TEST_URL_RUNTIME and RELAYCAST_PG_TEST_CA_FILE are set, against
- * a migrated schema. Inserts and removes its own rows as the runtime role.
+ * RELAYCAST_PG_TEST_URL_OWNER, _URL_RUNTIME and RELAYCAST_PG_TEST_CA_FILE are
+ * set (see postgres.integration.test.ts). Holds the fixture lock for its whole
+ * run; resets and migrates the schema as the owner, so it does not depend on
+ * another file having migrated first. Inserts its rows as the runtime role.
  */
 import pg from 'pg';
 import { readFileSync } from 'node:fs';
-import { afterAll, describe, expect, it, vi } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
+import { loadPostgresConfig } from '../config.js';
+import { loadBundledPostgresMigrations, runPostgresMigrations } from '../migrate.js';
+import { openPostgresPool } from '../pool.js';
+import { holdFixtureLock, resetSchema, SCHEMA } from './fixture.js';
 
+const OWNER_URL = process.env.RELAYCAST_PG_TEST_URL_OWNER;
 const RUNTIME_URL = process.env.RELAYCAST_PG_TEST_URL_RUNTIME;
 const CA_FILE = process.env.RELAYCAST_PG_TEST_CA_FILE;
-const enabled = Boolean(RUNTIME_URL && CA_FILE);
+const enabled = Boolean(OWNER_URL && RUNTIME_URL && CA_FILE);
 
 describe.skipIf(!enabled)('migrate-files-to-s3 file rows (integration)', { timeout: 60_000 }, () => {
   const ws = `wsrows${Date.now()}`;
+  let owner: pg.Pool | undefined;
+  let releaseFixture: (() => Promise<void>) | undefined;
   let client: pg.Client;
 
+  beforeAll(async () => {
+    owner = openPostgresPool(loadPostgresConfig(
+      { RELAYCAST_DATABASE_URL: OWNER_URL, RELAYCAST_DATABASE_CA_FILE: CA_FILE },
+      'owner',
+    ));
+    // Waits for the fixture lock while other PostgreSQL test files hold it.
+    releaseFixture = await holdFixtureLock(owner);
+    await resetSchema(owner);
+    await runPostgresMigrations(owner, {
+      schema: SCHEMA,
+      bundled: loadBundledPostgresMigrations(),
+      runtimeRole: 'relaycast_runtime',
+    });
+  }, 180_000);
+
   afterAll(async () => {
-    await client?.query('DELETE FROM files WHERE workspace_id = $1', [ws]).catch(() => {});
-    await client?.query('DELETE FROM agents WHERE workspace_id = $1', [ws]).catch(() => {});
-    await client?.query('DELETE FROM workspaces WHERE id = $1', [ws]).catch(() => {});
     await client?.end().catch(() => {});
+    // Only the lock holder may reset: a beforeAll that timed out waiting must
+    // not drop the schema under the file that holds it.
+    if (owner && releaseFixture) await resetSchema(owner).catch(() => {});
+    await releaseFixture?.().catch(() => {});
+    await owner?.end().catch(() => {});
   });
 
   it('reads every live row across pages and leaves deleted ones out', async () => {
@@ -53,7 +79,6 @@ describe.skipIf(!enabled)('migrate-files-to-s3 file rows (integration)', { timeo
   });
 });
 
-const OWNER_URL = process.env.RELAYCAST_PG_TEST_URL_OWNER;
 const S3_ENDPOINT = process.env.RELAYCAST_S3_TEST_ENDPOINT;
 const S3_BUCKET = process.env.RELAYCAST_S3_TEST_BUCKET;
 

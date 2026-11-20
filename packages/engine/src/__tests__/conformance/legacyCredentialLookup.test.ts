@@ -3,7 +3,7 @@ import { eq } from 'drizzle-orm';
 import { agents, nodes, observerTokens, workspaces } from '../../db/tables.js';
 import { SqliteApiKeyAuthProvider, WORKSPACE_EXPIRED_CODE } from '../../auth/index.js';
 import type { AuthRequire } from '../../ports/auth.js';
-import { createWorkspace, makeNodeStack, registerAgent, type TestStack } from './harness.js';
+import { createWorkspace, interceptStatements, makeNodeStack, registerAgent, type TestStack } from './harness.js';
 
 async function post(stack: TestStack, path: string, token: string, body: unknown): Promise<Record<string, string>> {
   const res = await stack.app.request(path, {
@@ -41,12 +41,13 @@ describe('legacy credential lookup', () => {
     const { stack, credentials } = await legacyCredentials();
     const { db } = stack.runtime.deps;
     const auth = new SqliteApiKeyAuthProvider();
-    const prepare = vi.spyOn(stack.runtime.handle.sqlite, 'prepare');
+    const prepared: string[] = [];
+    interceptStatements(stack, (sql) => { prepared.push(sql); });
     // An observer lookup may also schedule its debounced last_used_at write.
-    const selects = () => prepare.mock.calls.filter(([sql]) => /^\s*select/i.test(String(sql))).length;
+    const selects = () => prepared.filter((sql) => /^\s*select/i.test(sql)).length;
 
     for (const [label, token, require] of credentials) {
-      prepare.mockClear();
+      prepared.length = 0;
       const result = await auth.authenticate({ token, require, db });
       expect(result.ok, label).toBe(true);
       expect(selects(), label).toBe(1);

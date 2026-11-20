@@ -12,10 +12,13 @@ import {
   deliverFramesOfType,
   FakeSocket,
   injectInsertFailure,
+  installFaultTrigger,
   injectUpdateFailure,
   makeNodeStack,
+  sqliteOnly,
   registerAgent,
   stripTransactionCapability,
+  writeFromSyncHook,
   type TestStack,
 } from './harness.js';
 import { sha256Hex } from '../../lib/crypto.js';
@@ -400,10 +403,11 @@ describe('agent presence and release lifecycle', () => {
     vi.spyOn(nodeConnections, 'sendAuthorizedActionToProvider').mockImplementation(async (...args) => {
       if (!invalidated && args[3].action === 'release') {
         invalidated = true;
-        stack.runtime.handle.sqlite.prepare(
+        writeFromSyncHook(stack, [[
           `UPDATE agent_node_bindings SET status = 'inactive', updated_at = unixepoch()
            WHERE workspace_id = ? AND agent_id = ?`,
-        ).run(ws.workspaceId, target.agentId);
+          [ws.workspaceId, target.agentId],
+        ]]);
       }
       return originalSend(...args);
     });
@@ -433,7 +437,10 @@ describe('agent presence and release lifecycle', () => {
     await handle.handleClose();
   });
 
-  it('persists and replays an identity-only local CAS conflict', async () => {
+  // Rewrites agents.id under PRAGMA foreign_keys = OFF. PostgreSQL's agent FKs
+  // are not deferrable and the test roles cannot disable them
+  // (session_replication_role needs superuser), so this has no pg form.
+  sqliteOnly('persists and replays an identity-only local CAS conflict', async () => {
     const ws = await createWorkspace(stack.app, 'exact-release-identity-cas-replay');
     const target = await registerAgent(stack.app, ws.workspaceKey, 'identity-cas-replay');
     const { handle } = await attachDirectNodeSocket(stack, ws.workspaceId, target);
@@ -531,12 +538,11 @@ describe('agent presence and release lifecycle', () => {
         // This synchronous hook is after dispatchRelease's exact name/id
         // snapshot but before its provider-send guard. It models a new agent
         // taking the released name while the old operation is in flight.
-        stack.runtime.handle.sqlite.prepare('UPDATE agents SET name = ? WHERE id = ?')
-          .run('race-agent#old', oldAgent.agentId);
-        stack.runtime.handle.sqlite.prepare(
+        writeFromSyncHook(stack, [['UPDATE agents SET name = ? WHERE id = ?', ['race-agent#old', oldAgent.agentId]], [
           `INSERT INTO agents (id, workspace_id, name, type, token_hash, status, location_type, provider_name, metadata, created_at, last_seen)
            VALUES (?, ?, ?, 'agent', ?, 'active', 'self_connected', 'default', '{}', unixepoch(), unixepoch())`,
-        ).run('agent_race_replacement', ws.workspaceId, 'race-agent', 'f'.repeat(64));
+          ['agent_race_replacement', ws.workspaceId, 'race-agent', 'f'.repeat(64)],
+        ]]);
       }
       return originalConnected(...args);
     });
@@ -571,9 +577,7 @@ describe('agent presence and release lifecycle', () => {
     vi.spyOn(nodeConnections, 'isProviderConnected').mockImplementation((...args) => {
       if (!rotated) {
         rotated = true;
-        stack.runtime.handle.sqlite
-          .prepare('UPDATE agents SET token_hash = ? WHERE id = ?')
-          .run(replacementTokenHash, target.agentId);
+        writeFromSyncHook(stack, [['UPDATE agents SET token_hash = ? WHERE id = ?', [replacementTokenHash, target.agentId]]]);
       }
       return originalConnected(...args);
     });
@@ -983,30 +987,29 @@ describe('agent presence and release lifecycle', () => {
     vi.spyOn(nodeConnections, 'isProviderConnected').mockImplementation(() => {
       if (!rebound) {
         rebound = true;
-        const sqlite = stack.runtime.handle.sqlite;
-        sqlite.transaction(() => {
-          sqlite.prepare(`
+        writeFromSyncHook(stack, [
+          [`
             UPDATE agent_node_bindings
             SET status = 'inactive', updated_at = unixepoch()
             WHERE workspace_id = ? AND agent_id = ? AND status = 'active'
-          `).run(ws.workspaceId, target.agentId);
-          sqlite.prepare(`
+          `, [ws.workspaceId, target.agentId]],
+          [`
             INSERT INTO agent_node_bindings (id, workspace_id, agent_id, node_id, status)
             VALUES (?, ?, ?, 'node_release_new', 'active')
             ON CONFLICT(agent_id, node_id) DO UPDATE
             SET status = 'active', updated_at = unixepoch()
-          `).run('binding_release_race', ws.workspaceId, target.agentId);
-          sqlite.prepare(`
+          `, ['binding_release_race', ws.workspaceId, target.agentId]],
+          [`
             UPDATE agents
             SET location_type = 'via_node', location_node_id = 'node_release_new'
             WHERE workspace_id = ? AND id = ?
-          `).run(ws.workspaceId, target.agentId);
-          sqlite.prepare(`
+          `, [ws.workspaceId, target.agentId]],
+          [`
             UPDATE nodes
             SET active_agents = CASE id WHEN 'node_release_old' THEN 0 ELSE 1 END
             WHERE workspace_id = ? AND id IN ('node_release_old', 'node_release_new')
-          `).run(ws.workspaceId);
-        })();
+          `, [ws.workspaceId]],
+        ]);
       }
       return false;
     });
@@ -1059,14 +1062,13 @@ describe('agent presence and release lifecycle', () => {
       .update(agents)
       .set({ locationType: 'self_connected', locationNodeId: null })
       .where(eq(agents.id, target.agentId));
-    stack.runtime.handle.sqlite.exec(`
-      CREATE TRIGGER fail_local_release_completion
-      BEFORE UPDATE ON action_invocations
-      WHEN NEW.status = 'completed' AND NEW.action_name = 'release'
-      BEGIN
-        SELECT RAISE(ABORT, 'forced invocation completion failure');
-      END
-    `);
+    await installFaultTrigger(stack, {
+      name: 'fail_local_release_completion',
+      table: 'action_invocations',
+      event: 'UPDATE',
+      when: "NEW.status = 'completed' AND NEW.action_name = 'release'",
+      message: 'forced invocation completion failure',
+    });
 
     const response = await stack.app.request('/v1/agents/release', {
       method: 'POST',
@@ -1254,9 +1256,7 @@ describe('agent presence and release lifecycle', () => {
     vi.spyOn(nodeConnections, 'isProviderConnected').mockImplementation((...args) => {
       if (!rotated) {
         rotated = true;
-        stack.runtime.handle.sqlite
-          .prepare('UPDATE agents SET token_hash = ? WHERE id = ?')
-          .run(replacementTokenHash, target.agentId);
+        writeFromSyncHook(stack, [['UPDATE agents SET token_hash = ? WHERE id = ?', [replacementTokenHash, target.agentId]]]);
       }
       return originalConnected(...args);
     });
@@ -1311,9 +1311,7 @@ describe('agent presence and release lifecycle', () => {
     vi.spyOn(nodeConnections, 'sendAuthorizedActionToProvider').mockImplementation(async (...args) => {
       if (!rotated && args[3].action === 'release') {
         rotated = true;
-        stack.runtime.handle.sqlite
-          .prepare('UPDATE agents SET token_hash = ? WHERE id = ?')
-          .run(replacementTokenHash, target.agentId);
+        writeFromSyncHook(stack, [['UPDATE agents SET token_hash = ? WHERE id = ?', [replacementTokenHash, target.agentId]]]);
       }
       return originalSend(...args);
     });
