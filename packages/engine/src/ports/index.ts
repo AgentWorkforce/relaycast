@@ -205,6 +205,14 @@ export interface EngineConfig {
    */
   relayfileInboundSecret?: string;
   /**
+   * Largest provider record, in UTF-8 bytes of its JSON, that the relayfile
+   * inbound bridge stores in message metadata. A larger record is stored as
+   * `record: null` with `record_omitted`; it remains retrievable from
+   * relayfile by path and revision. `0` never stores a record. Omitted,
+   * negative or non-finite values use 8 KiB.
+   */
+  relayfileRecordMetadataMaxBytes?: number;
+  /**
    * Deployment secret used to derive credentials for anonymous, keyed
    * workspace bootstrap creates. Hosts should persist this value so a replay
    * after a process restart recovers the same child credential.

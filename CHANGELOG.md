@@ -21,6 +21,7 @@ Packages without a separate changelog are covered by the cross-package notes bel
 ### Fixed
 
 - DM and group DM participant rules now apply consistently for agent tokens across the channel, message, search and console routes, matching the `/v1/dm/…` routes. Workspace keys and observer tokens are unchanged.
+- Relayfile inbound messages no longer store an oversized provider record in message metadata. A record whose JSON is over 8 KiB is stored as `record: null` with `record_omitted` (`reason`, `bytes`, `limit`); the full record stays in relayfile at `relayfile.path` and `relayfile.revision`, and the message text is unchanged.
 
 ## [12.13.0] - 2026-11-17
 
