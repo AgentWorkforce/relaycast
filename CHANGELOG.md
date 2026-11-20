@@ -22,9 +22,12 @@ Packages without a separate changelog are covered by the cross-package notes bel
 
 - `@relaycast/mcp` adds `message.dm.history` so an agent can page through a DM conversation without marking messages as read.
 
+## [12.13.1] - 2026-11-20
+
 ### Fixed
 
 - DM and group DM participant rules now apply consistently for agent tokens across the channel, message, search and console routes, matching the `/v1/dm/…` routes. Workspace keys and observer tokens are unchanged.
+- Relayfile inbound messages no longer store an oversized provider record in message metadata. A record whose JSON is over 8 KiB is stored as `record: null` with `record_omitted` (`reason`, `bytes`, `limit`); the full record stays in relayfile at `relayfile.path` and `relayfile.revision`, and the message text is unchanged.
 
 ## [12.13.0] - 2026-11-17
 
@@ -1088,7 +1091,8 @@ Packages without a separate changelog are covered by the cross-package notes bel
 
 Earlier releases are available on the [GitHub releases page](https://github.com/AgentWorkforce/relaycast/releases).
 
-[Unreleased]: https://github.com/AgentWorkforce/relaycast/compare/v12.13.0...HEAD
+[Unreleased]: https://github.com/AgentWorkforce/relaycast/compare/v12.13.1...HEAD
+[12.13.1]: https://github.com/AgentWorkforce/relaycast/compare/v12.13.0...v12.13.1
 [12.13.0]: https://github.com/AgentWorkforce/relaycast/compare/v12.12.1...v12.13.0
 [12.12.1]: https://github.com/AgentWorkforce/relaycast/compare/v12.12.0...v12.12.1
 [12.12.0]: https://github.com/AgentWorkforce/relaycast/compare/v12.11.0...v12.12.0
