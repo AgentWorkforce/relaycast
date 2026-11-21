@@ -17,6 +17,10 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 - Upgraded `better-sqlite3` to `^13.2.0` (Node-API prebuilds) and declared `"engines": { "node": ">=22.14.0" }` for Node.js 22.14+, 24, and 26 compatibility.
 
+### Fixed
+
+- `getMessages`, `getDmMessages` and `getDmMessagesForWorkspace` order and compare message ids numerically, by `(length(id), id)`, instead of as text. Snowflake ids are decimal TEXT that widened from 17 to 18 digits in October 2025, so history spanning that change was misordered and `before`/`after` cursors skipped messages across it. A `before` page is read in at most two index seeks. The new `idx_messages_channel_length_id` index `(channel_id, length(id), id)` replaces `idx_messages_channel_time` (SQLite migration 0090, Postgres 0014, where the id is indexed `COLLATE "C"`).
+
 ### Security
 
 - Reject confusable agent names across `POST /v1/agents`, node `agent.register`, and `spawn`: names must be 1–128 printable non-whitespace ASCII characters (`0x21`–`0x7E`), blocking whitespace, control characters, zero-width/bidi characters, and non-ASCII homoglyphs with `400 invalid_agent_name`, and reserved names (`__relay_webhook__`, `#released-`) are matched case-insensitively. Active agent names are now enforced case-insensitively per workspace via `agents.canonical_name` and a partial unique index `agents_workspace_canonical_name_unique` (`WHERE canonical_name IS NOT NULL AND status <> 'released'`; SQLite `0089_agent_canonical_name.sql`, Postgres `0011_agent_canonical_name.sql`–`0013_agent_canonical_name_unique.sql`), returning `409 agent_already_exists` on case variants while preserving display casing and safely migrating pre-existing legacy rows. Releasing or deleting an agent clears `canonical_name` so the name can be re-registered under any casing. Re-exports `validateAgentName`, `canonicalizeAgentName`, `assertRegistrableAgentName`, `AGENT_NAME_MAX_LENGTH`, and `AGENT_NAME_PATTERN`.

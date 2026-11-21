@@ -902,6 +902,13 @@ export const ACTOR_MIGRATIONS: readonly (readonly [string, readonly string[]])[]
       "UPDATE agents\nSET canonical_name = lower(name)\nWHERE id IN (\n  SELECT id\n  FROM (\n    SELECT\n      id,\n      row_number() OVER (\n        PARTITION BY workspace_id, lower(name)\n        ORDER BY created_at ASC, id ASC\n      ) AS rn\n    FROM agents\n    WHERE status <> 'released'\n  ) AS ranked\n  WHERE rn = 1\n)",
       "CREATE UNIQUE INDEX agents_workspace_canonical_name_unique\n  ON agents (workspace_id, canonical_name)\n  WHERE canonical_name IS NOT NULL AND status <> 'released'"
     ]
+  ],
+  [
+    "0090_messages_channel_length_id_index.sql",
+    [
+      "CREATE INDEX IF NOT EXISTS idx_messages_channel_length_id\n  ON messages(channel_id, length(id), id)",
+      "DROP INDEX IF EXISTS idx_messages_channel_time"
+    ]
   ]
 ];
 
