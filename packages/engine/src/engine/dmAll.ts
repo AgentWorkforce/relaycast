@@ -1,4 +1,4 @@
-import { eq, and, sql, lt, gt, gte, inArray } from 'drizzle-orm';
+import { eq, and, sql, gt, gte, inArray } from 'drizzle-orm';
 import type { DmMessage, WorkspaceDmConversation } from '@relaycast/types';
 import type { getDb } from '../db/index.js';
 import {
@@ -10,6 +10,7 @@ import {
 import { codedError } from '../lib/httpError.js';
 import { D1_SAFE_IN_QUERY_CHUNK_SIZE, queryInChunks } from '../lib/queryChunks.js';
 import { publicMessageMetadata } from './messageMetadata.js';
+import { newestSnowflakePage } from './snowflakePage.js';
 
 type Db = ReturnType<typeof getDb>;
 
@@ -214,27 +215,23 @@ export async function getDmMessagesForWorkspace(
     throw codedError('Conversation not found', 'not_found', 404);
   }
 
-  // Compare/sort on the indexed text PK directly: snowflake ids are fixed-width
-  // (19 digits) so lexical order matches numeric order, keeping the PK index
-  // usable for range scans (a CAST would force a full scan).
-  const conditions = [eq(messages.channelId, conv.channelId)];
-  if (opts.before) conditions.push(lt(messages.id, opts.before));
-  if (opts.after) conditions.push(gt(messages.id, opts.after));
-
-  const rows = await db
-    .select({
-      id: messages.id,
-      agentId: messages.agentId,
-      agentName: agents.name,
-      body: messages.body,
-      metadata: messages.metadata,
-      createdAt: messages.createdAt,
-    })
-    .from(messages)
-    .innerJoin(agents, eq(messages.agentId, agents.id))
-    .where(and(...conditions))
-    .orderBy(sql`${messages.id} DESC`)
-    .limit(limit);
+  // Snowflake ids are variable-width decimal TEXT: page numerically over
+  // idx_messages_channel_length_id (channel_id, length(id), id).
+  const rows = await newestSnowflakePage(db, messages.id, { ...opts, limit }, (cursor, orderBy, pageLimit) =>
+    db
+      .select({
+        id: messages.id,
+        agentId: messages.agentId,
+        agentName: agents.name,
+        body: messages.body,
+        metadata: messages.metadata,
+        createdAt: messages.createdAt,
+      })
+      .from(messages)
+      .innerJoin(agents, eq(messages.agentId, agents.id))
+      .where(and(eq(messages.channelId, conv.channelId), cursor))
+      .orderBy(orderBy)
+      .limit(pageLimit));
 
   return rows.map((r) => ({
     id: r.id,

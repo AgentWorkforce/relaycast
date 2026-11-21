@@ -880,6 +880,13 @@ export const ACTOR_MIGRATIONS: readonly (readonly [string, readonly string[]])[]
     [
       "ALTER TABLE workspaces\n  ADD COLUMN leaders text"
     ]
+  ],
+  [
+    "0087_messages_channel_length_id_index.sql",
+    [
+      "CREATE INDEX IF NOT EXISTS idx_messages_channel_length_id\n  ON messages(channel_id, length(id), id)",
+      "DROP INDEX IF EXISTS idx_messages_channel_time"
+    ]
   ]
 ];
 

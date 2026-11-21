@@ -46,6 +46,7 @@ describe('registered invocation handler snapshot backfill', () => {
         '0084_strict_spawn_dispatch_generation.sql',
         '0085_action_invocation_requester.sql',
         '0086_workspace_leaders.sql',
+        '0087_messages_channel_length_id_index.sql',
       ]);
       expect(handle.sqlite.prepare(`
         SELECT id, handler_agent_id, handler_node_id, spawn_dispatch_generation

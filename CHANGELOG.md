@@ -16,7 +16,11 @@ This project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 Packages without a separate changelog are covered by the cross-package notes below.
 
-## [Unreleased]
+## [Unreleased - Patch]
+
+### Fixed
+
+- Channel and DM message history (`GET /v1/channels/:name/messages`, `GET /v1/dm/:conversation_id/messages` and the workspace-key `GET /v1/dm/conversations/:conversation_id/messages`) now lists messages newest first in true numeric id order, and `before`/`after` cursors no longer skip messages. Message ids grew from 17 to 18 digits in October 2025, and history spanning that change was misordered.
 
 ## [12.13.1] - 2026-11-20
 
