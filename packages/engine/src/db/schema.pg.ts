@@ -883,11 +883,11 @@ export const messages = pgTable(
   },
   (table) => [
     uniqueIndex('messages_rowid_unique').on(table.rowid),
-    index('idx_messages_channel_time').on(table.channelId, table.id),
     // (length(id), id) orderings: `id` is indexed COLLATE "C" so the index
     // order is SQLite's binary text order. Queries must order/compare with
     // the same expression - `length(id), id COLLATE "C"` - to use it.
     index('idx_messages_retention').on(sql`length(${table.id})`, idCollateC(table.id)),
+    index('idx_messages_channel_length_id').on(table.channelId, sql`length(${table.id})`, idCollateC(table.id)),
     index('idx_messages_thread').on(table.threadId, table.id),
     index('idx_messages_workspace').on(table.workspaceId, table.id),
     index('idx_messages_workspace_length_id').on(

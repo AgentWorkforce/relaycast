@@ -745,7 +745,8 @@ export const messages = sqliteTable(
     // FTS5 search handled via separate virtual table + triggers
   },
   (table) => [
-    index('idx_messages_channel_time').on(table.channelId, table.id),
+    // Channel/DM history pages by numeric snowflake order (length(id), id).
+    index('idx_messages_channel_length_id').on(table.channelId, sql`length(${table.id})`, table.id),
     index('idx_messages_retention').on(sql`length(${table.id})`, table.id),
     index('idx_messages_thread').on(table.threadId, table.id),
     index('idx_messages_workspace').on(table.workspaceId, table.id),

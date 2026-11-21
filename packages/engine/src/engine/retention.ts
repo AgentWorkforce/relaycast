@@ -2,6 +2,7 @@ import { eq, sql, type Column, type SQL } from 'drizzle-orm';
 import { pruneBounded } from './boundedRetention.js';
 import type { EffectiveMessageRetention } from '@relaycast/types';
 import type { getDb } from '../db/index.js';
+import * as sqlx from '../db/sqlx.js';
 import { workspaces } from '../db/tables.js';
 import { snowflakeIdLowerBound } from './snowflake.js';
 import { pruneRowidPages, type RetentionCursorStore } from './rowidRetention.js';
@@ -142,9 +143,30 @@ export function atOrAfterSnowflake(column: Column, cutoffMs: number): SQL {
   return sql`(length(${column}), ${column}) >= (${bound.length}, ${bound})`;
 }
 
+/**
+ * Snowflake ids are decimal TEXT whose width grows over time (17 digits until
+ * 2025-10, 18 after), so plain text order is not numeric order. The helpers
+ * below compare and order by `(length(id), id)`. Pass the handle (`source`)
+ * so PostgreSQL compares `id COLLATE "C"` and can use the matching
+ * `(…, length(id), id COLLATE "C")` indexes; omitting it emits the bare column.
+ */
+function snowflakeText(column: Column, source?: sqlx.DialectSource): SQL {
+  return source === undefined ? sql`${column}` : sqlx.binaryText(source, column);
+}
+
 /** Numeric `column > cursor` for decimal TEXT snowflake ids. */
-export function afterSnowflake(column: Column, cursor: string): SQL {
-  return sql`(length(${column}), ${column}) > (${cursor.length}, ${cursor})`;
+export function afterSnowflake(column: Column, cursor: string, source?: sqlx.DialectSource): SQL {
+  return sql`(length(${column}), ${snowflakeText(column, source)}) > (${cursor.length}, ${cursor})`;
+}
+
+/** Numeric `column < cursor` for decimal TEXT snowflake ids. */
+export function beforeSnowflake(column: Column, cursor: string, source?: sqlx.DialectSource): SQL {
+  return sql`(length(${column}), ${snowflakeText(column, source)}) < (${cursor.length}, ${cursor})`;
+}
+
+/** Newest-first (numeric descending) ORDER BY terms for decimal TEXT snowflake ids. */
+export function snowflakeDesc(column: Column, source?: sqlx.DialectSource): SQL {
+  return sql`length(${column}) DESC, ${snowflakeText(column, source)} DESC`;
 }
 
 /** Bounded, resumable retention; preserves TTL overrides and event high-water marks. */

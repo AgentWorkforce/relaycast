@@ -1,6 +1,6 @@
 import * as sqlx from '../db/sqlx.js';
 import { z } from 'zod';
-import { eq, and, sql, lt, lte, gt, isNull, inArray, desc } from 'drizzle-orm';
+import { eq, and, sql, lte, isNull, inArray, desc } from 'drizzle-orm';
 import type { DmMessage } from '@relaycast/types';
 import type { getDb } from '../db/index.js';
 import {
@@ -55,6 +55,7 @@ import {
 import { buildMessageSessionWrite, requireSessionRefFromMetadata } from './sessionMessages.js';
 import { fetchAttachmentsBatch, resolveSendAttachments, type AttachmentRow } from './attachments.js';
 import { canonicalJson, canonicalUserMessageMetadata, publicMessageMetadata, sanitizeUserMessageMetadata } from './messageMetadata.js';
+import { newestSnowflakePage } from './snowflakePage.js';
 import { queryInChunks } from '../lib/queryChunks.js';
 
 type Db = ReturnType<typeof getDb>;
@@ -1129,33 +1130,24 @@ export async function getDmMessages(
     throw codedError('Conversation not found', 'not_found', 404);
   }
 
-  const conditions = [eq(messages.channelId, conv.channelId)];
-
-  // Compare/sort on the indexed text PK directly: snowflake ids are fixed-width
-  // (19 digits) so lexical order matches numeric order, and this keeps the PK
-  // index usable for range scans (a CAST would force a full scan).
-  if (opts.before) {
-    conditions.push(lt(messages.id, opts.before));
-  }
-  if (opts.after) {
-    conditions.push(gt(messages.id, opts.after));
-  }
-
-  const rows = await db
-    .select({
-      id: messages.id,
-      agentId: messages.agentId,
-      agentName: agents.name,
-      body: messages.body,
-      metadata: messages.metadata,
-      replyToMessageId: messages.replyToMessageId,
-      createdAt: messages.createdAt,
-    })
-    .from(messages)
-    .innerJoin(agents, eq(messages.agentId, agents.id))
-    .where(and(...conditions))
-    .orderBy(sql`${messages.id} DESC`)
-    .limit(limit);
+  // Snowflake ids are variable-width decimal TEXT: page numerically over
+  // idx_messages_channel_length_id (channel_id, length(id), id).
+  const rows = await newestSnowflakePage(db, messages.id, { ...opts, limit }, (cursor, orderBy, pageLimit) =>
+    db
+      .select({
+        id: messages.id,
+        agentId: messages.agentId,
+        agentName: agents.name,
+        body: messages.body,
+        metadata: messages.metadata,
+        replyToMessageId: messages.replyToMessageId,
+        createdAt: messages.createdAt,
+      })
+      .from(messages)
+      .innerJoin(agents, eq(messages.agentId, agents.id))
+      .where(and(eq(messages.channelId, conv.channelId), cursor))
+      .orderBy(orderBy)
+      .limit(pageLimit));
 
   const attachmentMap = await fetchAttachmentsBatch(db, workspaceId, rows.map((r) => r.id));
 

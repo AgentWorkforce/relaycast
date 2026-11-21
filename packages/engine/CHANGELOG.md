@@ -7,7 +7,11 @@ See the [root changelog](../../CHANGELOG.md) for cross-package release highlight
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [Unreleased - Patch]
+
+### Fixed
+
+- `getMessages`, `getDmMessages` and `getDmMessagesForWorkspace` order and compare message ids numerically, by `(length(id), id)`, instead of as text. Snowflake ids are decimal TEXT that widened from 17 to 18 digits in October 2025, so history spanning that change was misordered and `before`/`after` cursors skipped messages across it. A `before` page is read in at most two index seeks. The new `idx_messages_channel_length_id` index `(channel_id, length(id), id)` replaces `idx_messages_channel_time` (SQLite migration 0087, Postgres 0008, where the id is indexed `COLLATE "C"`).
 
 ## [12.13.1] - 2026-11-20
 
