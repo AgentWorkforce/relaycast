@@ -40,6 +40,8 @@ export type SubscribableEventType = z.infer<typeof SubscribableEventTypeSchema>;
 export const SubscriptionFilterSchema = z.object({
   channel: z.string().optional(),
   mentions: z.string().optional(),
+  /** Matches message events with a recipient whose agent name or id is listed. */
+  recipients: z.array(z.string().min(1)).min(1).max(500).optional(),
 });
 export type SubscriptionFilter = z.infer<typeof SubscriptionFilterSchema>;
 
@@ -70,6 +72,33 @@ export const CreateSubscriptionRequestSchema = z.object({
   signature_scheme: SubscriptionSignatureSchemeSchema.optional(),
 });
 export type CreateSubscriptionRequest = z.infer<typeof CreateSubscriptionRequestSchema>;
+
+/**
+ * Partial update, validated by the engine with this schema; `filter: null`
+ * clears the filter and `headers: null` the headers. At least one field is
+ * required. `events` takes any event name, including `'*'`. Changing `url` on a
+ * subscription with stored headers also needs `headers` (400
+ * `subscription_headers_required` otherwise).
+ */
+export const UpdateSubscriptionRequestSchema = z.object({
+  events: z.array(z.string()).min(1).optional(),
+  filter: SubscriptionFilterSchema.nullable().optional(),
+  url: z.string().min(1).optional(),
+  headers: SubscriptionHeadersSchema.nullable().optional(),
+  secret: z.string().nullable().optional(),
+  signature_scheme: SubscriptionSignatureSchemeSchema.optional(),
+  is_active: z.boolean().optional(),
+}).refine((value) => Object.keys(value).length > 0, 'at least one field is required');
+export type UpdateSubscriptionRequest = z.infer<typeof UpdateSubscriptionRequestSchema>;
+
+/** One `data.recipients` entry on message webhook payloads (webhooks only). */
+export const WebhookRecipientSchema = z.object({
+  agent_id: z.string(),
+  agent_name: z.string(),
+  delivery_id: z.string().optional(),
+  seq: z.number().int().optional(),
+});
+export type WebhookRecipient = z.infer<typeof WebhookRecipientSchema>;
 
 export const CreateSubscriptionResponseSchema = z.object({
   id: z.string(),

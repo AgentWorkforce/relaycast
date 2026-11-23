@@ -70,8 +70,8 @@ interface SendDmOptions {
   skipA2aIntercept?: boolean;
   /** Stable request identity for resuming already admitted outbound A2A. */
   idempotencyKey?: string;
-  /** Whether durable webhook fanout has any subscriber to receive it. */
-  hasWebhookSubscriptions?: boolean;
+  /** Whether durable webhook fanout has any subscriber to receive it (given its webhook data). */
+  hasWebhookSubscriptions?: boolean | ((webhookData: Record<string, unknown>) => boolean);
   /** Count an authenticated inbound peer in the same transaction as its DM. */
   receivedA2aAgentId?: string;
   /** Token hash authenticated by the route; checked with registration at SQL admission. */
@@ -83,7 +83,7 @@ interface SendDmOptions {
   /** Resolve only after durable accepted lookup (cached HTTP replay never calls sendDm). */
   resolveWorkspaceDeliveryPolicy?: () => Promise<WorkspaceDeliveryPolicy | undefined>;
   /** Fast paths only; durable events and delivery already committed before this hook. */
-  afterAdmission?: (data: SendDmResult, event: { seq: number; payload: Record<string, unknown>; data: Record<string, unknown>; outboxId?: string }) => void;
+  afterAdmission?: (data: SendDmResult, event: { seq: number; payload: Record<string, unknown>; data: Record<string, unknown>; webhookData: Record<string, unknown>; outboxId?: string }) => void;
   mailbox?: MailboxConfig;
   /** Server-resolved workspace growth policy; absent => no workspace guard. */
   workspaceDeliveryPolicy?: WorkspaceDeliveryPolicy;
@@ -914,7 +914,16 @@ export async function sendDm(
   });
   const directClaimId = directRequestId;
   const notificationsDurable = Boolean(egressId || options.receivedA2aAgentId || inboundId || directClaimId);
-  const persistWebhookOutbox = notificationsDurable && options.hasWebhookSubscriptions !== false;
+  // Webhook payload only. The subscription pre-filter sees the intended
+  // recipient; the stored and delivered copies carry what the committed
+  // delivery row says (none for a self-DM or a mailbox rejection).
+  const intendedWebhookData = {
+    ...eventData,
+    recipients: deliveryId ? [{ agent_id: toAgent.id, agent_name: toAgent.name, delivery_id: deliveryId }] : [],
+  };
+  const persistWebhookOutbox = notificationsDurable && (typeof options.hasWebhookSubscriptions === 'function'
+    ? options.hasWebhookSubscriptions(intendedWebhookData)
+    : options.hasWebhookSubscriptions !== false);
   // The optional webhook outbox, observer cursor log, response context,
   // delivery and reply link share admission. None can escape a capacity
   // rollback, or depend on external transport success.
@@ -1020,11 +1029,28 @@ export async function sendDm(
       }
     }
     if (persistWebhookOutbox) {
+      // `recipients` is read from the delivery row written earlier in this
+      // batch, so the stored copy carries its SQL-assigned `seq`; no row
+      // (mailbox rejection) aggregates to `[]`. `json()` keeps the subquery
+      // result an array, not a string.
+      const recipientObject = sqlx.jsonObject(writeDb, sql`
+        'agent_id', ${deliveries.agentId}, 'agent_name', ${sqlx.textParam(writeDb, toAgent.name)},
+        'delivery_id', ${deliveries.id}, 'seq', ${deliveries.seq}
+      `);
+      const payload = deliveryId
+        ? sqlx.jsonSet(
+          writeDb,
+          sqlx.json(writeDb, sqlx.textParam(writeDb, JSON.stringify(eventData))),
+          '$.recipients',
+          sqlx.json(writeDb, sql`(SELECT ${sqlx.jsonAgg(writeDb, recipientObject)} FROM ${deliveries} WHERE ${deliveries.id} = ${deliveryId})`),
+          'json',
+        )
+        : { ...eventData, recipients: [] };
       writes.push(writeDb.insert(pendingEvents).values({
         id: messageId,
         workspaceId,
         eventType: 'dm.received',
-        payload: eventData,
+        payload,
         // Migration 0067 cannot change SQLite's existing column default; set
         // the per-target retry headroom explicitly on this direct insert.
         maxAttempts: 32,
@@ -1085,6 +1111,13 @@ export async function sendDm(
     ? await fetchDirectDeliveryOutcomes(db, { messageId, recipientAgentId: toAgent.id })
     : { deliveries: [], rejections: [] };
   const dmDelivery = deliveryOutcomes.deliveries[0] ?? null;
+  // Same entry the outbox INSERT built in SQL from the same delivery row.
+  const webhookData = {
+    ...eventData,
+    recipients: dmDelivery
+      ? [{ agent_id: dmDelivery.agentId, agent_name: toAgent.name, delivery_id: dmDelivery.id, seq: dmDelivery.seq }]
+      : [],
+  };
 
   const result: SendDmResult = {
     ...publicResult,
@@ -1097,7 +1130,7 @@ export async function sendDm(
     // Local fast paths run independently of transport. A crash here still leaves
     // any needed webhook outbox, workspace cursor log and queued delivery recoverable.
     options.afterAdmission?.(result, {
-      seq: admittedEventSeq!, payload: workspacePayload, data: eventData,
+      seq: admittedEventSeq!, payload: workspacePayload, data: eventData, webhookData,
       ...(persistWebhookOutbox ? { outboxId: messageId } : {}),
     });
   }

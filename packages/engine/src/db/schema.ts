@@ -1105,7 +1105,7 @@ export const eventSubscriptions = sqliteTable(
       .notNull()
       .references(() => workspaces.id, { onDelete: 'cascade' }),
     events: text('events', { mode: 'json' }).notNull().$type<string[]>(),
-    filter: text('filter', { mode: 'json' }).$type<{ channel?: string; mentions?: string }>(),
+    filter: text('filter', { mode: 'json' }).$type<{ channel?: string; mentions?: string; recipients?: string[] }>(),
     url: text('url').notNull(),
     headers: text('headers', { mode: 'json' }).$type<Record<string, string>>(),
     secret: text('secret'),

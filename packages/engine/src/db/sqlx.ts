@@ -312,7 +312,12 @@ function pgJsonValue(value: Fragment, kind: JsonValueKind): SQL {
   return kind === 'json' ? sql`(${value})::jsonb` : sql`to_jsonb((${value})::text)`;
 }
 
-/** `json_set(target, path, value)`; `jsonb_set(..., true)` on PostgreSQL. */
+/**
+ * `json_set(target, path, value)`; `jsonb_set(..., true)` on PostgreSQL.
+ * SQLite stores a SQL NULL `value` as JSON `null`; PostgreSQL `jsonb_set` is
+ * STRICT and would return NULL for the whole document, so the PG value falls
+ * back to `'null'::jsonb` for parity.
+ */
 export function jsonSet(
   source: DialectSource,
   target: Fragment,
@@ -322,7 +327,7 @@ export function jsonSet(
 ): SQL {
   return pick(source, {
     sqlite: () => sql`json_set(${target}, ${sqlitePath(path)}, ${value})`,
-    pg: () => sql`jsonb_set((${target})::jsonb, ${pgPath(path)}, ${pgJsonValue(value, kind)}, true)`,
+    pg: () => sql`jsonb_set((${target})::jsonb, ${pgPath(path)}, COALESCE(${pgJsonValue(value, kind)}, 'null'::jsonb), true)`,
   });
 }
 

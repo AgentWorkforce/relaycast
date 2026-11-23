@@ -105,6 +105,14 @@ describe('inbound webhook messages and mention subscriptions', () => {
 
   it('a webhook poster cannot replace or remove the origin through its payload', async () => {
     const { auth } = await workspaceWithMentionSub('webhook-origin-spoof');
+    // The send path writes no outbox row that no subscription wants, and a
+    // webhook post never matches the mentions one; this one keeps rows to inspect.
+    const channelSub = await stack.app.request('/v1/subscriptions', {
+      method: 'POST',
+      headers: auth,
+      body: JSON.stringify({ events: ['message.created'], url: 'https://hooks.example.test/c', filter: { channel: 'hook-chan' } }),
+    });
+    expect(channelSub.status).toBe(201);
     const created = await stack.app.request('/v1/webhooks', {
       method: 'POST',
       headers: auth,
