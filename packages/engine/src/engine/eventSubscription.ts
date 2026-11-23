@@ -1,9 +1,18 @@
-import { eq, and } from 'drizzle-orm';
+import { eq, and, sql } from 'drizzle-orm';
 import type { getDb } from '../db/index.js';
-import { eventSubscriptions } from '../db/schema.js';
+import { eventSubscriptions } from '../db/tables.js';
+import * as sqlx from '../db/sqlx.js';
+import { codedError } from '../lib/httpError.js';
 import { generateId } from './snowflake.js';
 
 type Db = ReturnType<typeof getDb>;
+
+export type SubscriptionFilter = { channel?: string; mentions?: string; recipients?: string[] };
+
+/** Whether a subscription's `events` list covers `eventType`, including the `'*'` wildcard. */
+export function subscribesToEventType(events: readonly string[], eventType: string): boolean {
+  return events.includes(eventType) || events.includes('*');
+}
 
 function redactHeaders(headers: Record<string, string> | null | undefined): Record<string, string> | null {
   if (!headers) return null;
@@ -15,7 +24,7 @@ export async function createSubscription(
   workspaceId: string,
   data: {
     events: string[];
-    filter?: { channel?: string; mentions?: string } | null;
+    filter?: SubscriptionFilter | null;
     url: string;
     headers?: Record<string, string>;
     secret?: string;
@@ -38,16 +47,7 @@ export async function createSubscription(
     })
     .returning();
 
-  return {
-    id: sub.id,
-    events: sub.events as string[],
-    filter: sub.filter as { channel?: string; mentions?: string } | null,
-    url: sub.url,
-    headers: redactHeaders(sub.headers as Record<string, string> | null),
-    signature_scheme: sub.signatureScheme,
-    is_active: sub.isActive,
-    created_at: sub.createdAt.toISOString(),
-  };
+  return toPublicSubscription(sub);
 }
 
 export async function listSubscriptions(db: Db, workspaceId: string) {
@@ -56,19 +56,24 @@ export async function listSubscriptions(db: Db, workspaceId: string) {
     .from(eventSubscriptions)
     .where(eq(eventSubscriptions.workspaceId, workspaceId));
 
-  return rows.map((r) => ({
+  return rows.map(toPublicSubscription);
+}
+
+function toPublicSubscription(r: typeof eventSubscriptions.$inferSelect) {
+  return {
     id: r.id,
     events: r.events as string[],
-    filter: r.filter as { channel?: string; mentions?: string } | null,
+    filter: r.filter as SubscriptionFilter | null,
     url: r.url,
     headers: redactHeaders(r.headers as Record<string, string> | null),
     signature_scheme: r.signatureScheme,
     is_active: r.isActive,
     created_at: r.createdAt.toISOString(),
-  }));
+  };
 }
 
-export async function getSubscription(db: Db, workspaceId: string, subId: string) {
+/** The stored row, secret included, for validating an update against its result. */
+export async function getSubscriptionRow(db: Db, workspaceId: string, subId: string) {
   const [row] = await db
     .select()
     .from(eventSubscriptions)
@@ -78,19 +83,76 @@ export async function getSubscription(db: Db, workspaceId: string, subId: string
         eq(eventSubscriptions.workspaceId, workspaceId),
       ),
     );
+  return row ?? null;
+}
 
-  if (!row) return null;
+export async function getSubscription(db: Db, workspaceId: string, subId: string) {
+  const row = await getSubscriptionRow(db, workspaceId, subId);
+  return row ? toPublicSubscription(row) : null;
+}
 
-  return {
-    id: row.id,
-    events: row.events as string[],
-    filter: row.filter as { channel?: string; mentions?: string } | null,
-    url: row.url,
-    headers: redactHeaders(row.headers as Record<string, string> | null),
-    signature_scheme: row.signatureScheme,
-    is_active: row.isActive,
-    created_at: row.createdAt.toISOString(),
-  };
+/** Whether stored custom headers would be sent with a delivery. */
+export function hasStoredHeaders(headers: unknown): boolean {
+  return !!headers && typeof headers === 'object' && Object.keys(headers).length > 0;
+}
+
+/**
+ * Applies `data` only if the row still matches `expected`, the values the
+ * caller validated the result against: the signing pair, and (when given) the
+ * `url` and that no custom headers are stored. A concurrent change to any of
+ * them makes this a 409 instead of storing an unvalidated result (e.g. a new
+ * URL with headers meant for the old one); a row that is gone returns null.
+ */
+export async function updateSubscription(
+  db: Db,
+  workspaceId: string,
+  subId: string,
+  data: {
+    events?: string[];
+    filter?: SubscriptionFilter | null;
+    url?: string;
+    headers?: Record<string, string> | null;
+    secret?: string | null;
+    signatureScheme?: 'legacy' | 'standard-webhooks';
+    isActive?: boolean;
+  },
+  expected: {
+    signatureScheme: 'legacy' | 'standard-webhooks';
+    secret: string | null;
+    url?: string;
+    noHeaders?: boolean;
+  },
+) {
+  const [row] = await db
+    .update(eventSubscriptions)
+    .set({
+      ...(data.events !== undefined ? { events: data.events } : {}),
+      ...(data.filter !== undefined ? { filter: data.filter } : {}),
+      ...(data.url !== undefined ? { url: data.url } : {}),
+      ...(data.headers !== undefined ? { headers: data.headers } : {}),
+      ...(data.secret !== undefined ? { secret: data.secret || null } : {}),
+      ...(data.signatureScheme !== undefined ? { signatureScheme: data.signatureScheme } : {}),
+      ...(data.isActive !== undefined ? { isActive: data.isActive } : {}),
+    })
+    .where(
+      and(
+        eq(eventSubscriptions.id, subId),
+        eq(eventSubscriptions.workspaceId, workspaceId),
+        eq(eventSubscriptions.signatureScheme, expected.signatureScheme),
+        sqlx.isNotDistinct(db, eventSubscriptions.secret, sqlx.textParam(db, expected.secret)),
+        expected.url !== undefined ? eq(eventSubscriptions.url, expected.url) : undefined,
+        expected.noHeaders
+          ? sql`(${eventSubscriptions.headers} IS NULL OR CAST(${eventSubscriptions.headers} AS TEXT) = '{}')`
+          : undefined,
+      ),
+    )
+    .returning();
+
+  if (row) return toPublicSubscription(row);
+  if (await getSubscriptionRow(db, workspaceId, subId)) {
+    throw codedError('Subscription changed concurrently; retry the update', 'subscription_update_conflict', 409);
+  }
+  return null;
 }
 
 export async function deleteSubscription(db: Db, workspaceId: string, subId: string) {
@@ -107,14 +169,23 @@ export async function deleteSubscription(db: Db, workspaceId: string, subId: str
   return result.length > 0;
 }
 
+/** Read bound for {@link listActiveSubscriptionMatchers}. */
+export const MAX_SUBSCRIPTION_MATCHERS = 100;
+
+export type SubscriptionMatcher = { events: string[]; filter: SubscriptionFilter | null };
+
 /**
- * Whether the workspace has any active event subscription at all — a cheap
- * existence probe (indexed lookup, LIMIT 1) used to skip outbox writes for
- * workspaces that have no webhooks configured.
+ * The `events` and `filter` of every active subscription in the workspace, so
+ * the send path can skip outbox writes no subscription would deliver. Returns
+ * `null` (caller fails open and enqueues) above {@link MAX_SUBSCRIPTION_MATCHERS}
+ * rows, which keeps this read bounded.
  */
-export async function hasActiveSubscriptions(db: Db, workspaceId: string): Promise<boolean> {
+export async function listActiveSubscriptionMatchers(
+  db: Db,
+  workspaceId: string,
+): Promise<SubscriptionMatcher[] | null> {
   const rows = await db
-    .select({ id: eventSubscriptions.id })
+    .select({ events: eventSubscriptions.events, filter: eventSubscriptions.filter })
     .from(eventSubscriptions)
     .where(
       and(
@@ -122,9 +193,10 @@ export async function hasActiveSubscriptions(db: Db, workspaceId: string): Promi
         eq(eventSubscriptions.isActive, true),
       ),
     )
-    .limit(1);
+    .limit(MAX_SUBSCRIPTION_MATCHERS + 1);
 
-  return rows.length > 0;
+  if (rows.length > MAX_SUBSCRIPTION_MATCHERS) return null;
+  return rows.map((r) => ({ events: r.events as string[], filter: r.filter as SubscriptionFilter | null }));
 }
 
 export async function getActiveSubscriptions(
@@ -142,9 +214,5 @@ export async function getActiveSubscriptions(
       ),
     );
 
-  // Filter to subscriptions that include this event type
-  return rows.filter((r) => {
-    const events = r.events as string[];
-    return events.includes(eventType) || events.includes('*');
-  });
+  return rows.filter((r) => subscribesToEventType(r.events as string[], eventType));
 }

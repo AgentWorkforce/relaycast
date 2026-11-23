@@ -3,6 +3,7 @@ import type {
   A2aAgentCard,
   A2aAgentRecord,
   Agent,
+  AgentCard,
   AgentListQuery,
   AgentPresenceInfo,
   Channel,
@@ -19,6 +20,8 @@ import type {
   WorkspaceLookup,
   SystemPrompt,
   SetSystemPromptRequest,
+  SetWorkspaceLeadersRequest,
+  WorkspaceLeadersResponse,
   CreateWebhookRequest,
   CreateWebhookResponse,
   Webhook,
@@ -124,6 +127,7 @@ import type {
   DeliveryAcceptedEvent,
   DeliveryDeliveredEvent,
   DeliveryAckedEvent,
+  DeliveryRepliedEvent,
   DeliveryDeferredEvent,
   DeliveryFailedEvent,
   MessageDeliveriesResponse,
@@ -448,6 +452,7 @@ export class RelayCast {
     deliveryAccepted:  (handler: (e: DeliveryAcceptedEvent) => void): (() => void)  => this.onEvent('delivery.accepted', handler),
     deliveryDelivered: (handler: (e: DeliveryDeliveredEvent) => void): (() => void) => this.onEvent('delivery.delivered', handler),
     deliveryAcked:     (handler: (e: DeliveryAckedEvent) => void): (() => void)     => this.onEvent('delivery.acked', handler),
+    deliveryReplied:   (handler: (e: DeliveryRepliedEvent) => void): (() => void)   => this.onEvent('delivery.replied', handler),
     deliveryDeferred:  (handler: (e: DeliveryDeferredEvent) => void): (() => void)  => this.onEvent('delivery.deferred', handler),
     deliveryFailed:    (handler: (e: DeliveryFailedEvent) => void): (() => void)    => this.onEvent('delivery.failed', handler),
     connected:    (handler: () => void): (() => void) => this.onEvent('open', handler as (e: never) => void),
@@ -695,6 +700,11 @@ export class RelayCast {
     return this.client.request('DELETE', `/v1/a2a/agents/${encodeURIComponent(name)}`);
   }
 
+  /** A local agent's A2A agent card (camelCase, A2A spec shape). */
+  getAgentCard(name: string): Promise<AgentCard> {
+    return this.client.get(`/v1/agents/${encodeURIComponent(name)}/card`);
+  }
+
   getA2aAgentCard(name: string): Promise<A2aAgentCard> {
     return this.client.get(`/v1/a2a/agents/${encodeURIComponent(name)}/card`);
   }
@@ -781,6 +791,18 @@ export class RelayCast {
      */
     rotateKey: (data?: RotateWorkspaceKeyRequest): Promise<RotateWorkspaceKeyResponse> =>
       this.client.post('/v1/workspace/rotate-key', data ?? {}),
+    /**
+     * Resolve the workspace leaders: every registered agent whose name matches
+     * a stored pattern (exact name or `*`/`?` glob), sorted by name, plus the
+     * stored patterns verbatim.
+     */
+    getLeaders: (): Promise<WorkspaceLeadersResponse> => this.client.get('/v1/workspace/leaders'),
+    /**
+     * Replace the leader patterns (workspace key only). `{ patterns: [] }` or
+     * `{ reset: true }` clears them.
+     */
+    setLeaders: (data: SetWorkspaceLeadersRequest): Promise<WorkspaceLeadersResponse> =>
+      this.client.put('/v1/workspace/leaders', data),
     delete: (workspaceId?: string): Promise<void> => workspaceId === undefined
       ? this.client.delete('/v1/workspace')
       : this.client.delete(`/v1/workspaces/${encodeURIComponent(workspaceId)}`),

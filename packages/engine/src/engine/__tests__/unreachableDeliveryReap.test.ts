@@ -8,7 +8,7 @@ import {
   messages,
   nodes,
   workspaces,
-} from '../../db/schema.js';
+} from '../../db/tables.js';
 import {
   deadLetterUnreachableDeliveryBatch,
   UNREACHABLE_NODE_GRACE_MS,

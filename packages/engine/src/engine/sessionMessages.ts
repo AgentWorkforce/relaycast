@@ -2,7 +2,7 @@ import { and, asc, eq, sql } from 'drizzle-orm';
 import { z } from 'zod';
 import type { EffectiveMessageRetention, SessionMessagesResult } from '@relaycast/types';
 import type { getDb } from '../db/index.js';
-import { agents, channels, dmConversations, messageSessions, messages } from '../db/schema.js';
+import { agents, channels, dmConversations, messageSessions, messages } from '../db/tables.js';
 import type { AtomicWrite } from '../ports/database.js';
 import { codedError } from '../lib/httpError.js';
 import { senderAddressField } from './address.js';
@@ -12,6 +12,7 @@ import {
   atOrAfterSnowflake,
   resolveEffectiveMessageRetention,
 } from './retention.js';
+import * as sqlx from '../db/sqlx.js';
 
 type Db = ReturnType<typeof getDb>;
 
@@ -68,8 +69,8 @@ export function buildMessageSessionWrite(
     .onConflictDoUpdate({
       target: [messageSessions.workspaceId, messageSessions.sessionRef],
       set: {
-        firstMessageAt: sql`MIN(${messageSessions.firstMessageAt}, excluded.first_message_at)`,
-        lastMessageAt: sql`MAX(${messageSessions.lastMessageAt}, excluded.last_message_at)`,
+        firstMessageAt: sqlx.least(db, messageSessions.firstMessageAt, sql`excluded.first_message_at`),
+        lastMessageAt: sqlx.greatest(db, messageSessions.lastMessageAt, sql`excluded.last_message_at`),
       },
     });
 }
@@ -205,6 +206,7 @@ export async function getMessagesBySessionRef(
         agentId: messages.agentId,
         agentName: agents.name,
         threadId: messages.threadId,
+      replyToMessageId: messages.replyToMessageId,
         body: messages.body,
         blocks: messages.blocks,
         metadata: messages.metadata,
@@ -238,6 +240,7 @@ export async function getMessagesBySessionRef(
         agent_name: displayAgentName(row.metadata, row.agentName),
         ...senderAddressField(row.metadata),
         thread_id: row.threadId,
+        reply_to_message_id: row.replyToMessageId,
         text: row.body,
         blocks: (row.blocks as never[] | null) ?? null,
         metadata: publicMessageMetadata(row.metadata),

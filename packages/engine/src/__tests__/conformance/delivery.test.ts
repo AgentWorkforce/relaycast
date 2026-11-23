@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { and, eq } from 'drizzle-orm';
+import { and, eq, inArray } from 'drizzle-orm';
 import { FLEET_DELIVERY_CURSOR_CAPABILITY } from '@relaycast/types';
 import {
   makeNodeStack,
@@ -11,7 +11,7 @@ import {
   contextUpdatesOfType,
   type TestStack,
 } from './harness.js';
-import { agents, deliveries, messages, nodeProviders } from '../../db/schema.js';
+import { agents, deliveries, messages, nodeProviders } from '../../db/tables.js';
 import * as messageEngine from '../../engine/message.js';
 import * as deliveryEngine from '../../engine/delivery.js';
 import { ensureDirectNodeForAgent } from '../../engine/node.js';
@@ -21,6 +21,12 @@ import type { NodeConnectionRegistry } from '../../ports/realtime.js';
 import { pruneExpired } from '../../engine/retention.js';
 import { routeDeliveryOutcomes, sweepDueNodeDeliveries, sweepExpiredDeliveries } from '../../routes/deliveryRouting.js';
 import { deliverPendingToNode, handleNodeReconnect } from '../../index.js';
+
+/**
+ * A never-attempted row the sweep may redrive: older than the grace window
+ * during which its live dispatch still owns it (routes/deliveryRouting.ts NODE_REDRIVE_INITIAL_GRACE_SECONDS).
+ */
+const strandedAt = () => new Date(Date.now() - 2 * 60_000);
 
 /**
  * Durable delivery API conformance: listing the queued inbox, and the
@@ -241,6 +247,35 @@ describe('durable delivery api', () => {
     return match as { msg_id: string; seq: number; payload: Record<string, unknown> };
   }
 
+  it('pages by recipient sequence past a retained full page without changing any delivery state', async () => {
+    const { bob, alice } = await seed();
+    for (let i = 0; i < 100; i++) {
+      const response = await stack.app.request('/v1/dm', { method: 'POST', headers: { authorization: `Bearer ${alice.token}`, 'content-type': 'application/json' },
+        body: JSON.stringify({ to: 'bob', text: `queued ${i}` }) });
+      expect(response.status).toBeLessThan(300);
+    }
+    const first = await listDeliveries(bob.token, '?limit=100&after_seq=0');
+    expect(first).toHaveLength(100);
+    const cursor = first.at(-1)!.seq as number;
+    const second = await listDeliveries(bob.token, `?limit=100&after_seq=${cursor}`);
+    expect(second).toHaveLength(1); expect(second[0]!.seq).toBeGreaterThan(cursor);
+    expect(second[0]!.agent_id).toBe(bob.agentId);
+    expect((await listDeliveries(bob.token, '?limit=100&after_seq=0')).map(row => row.id)).toEqual(first.map(row => row.id));
+    const foreign = await listDeliveries(alice.token, `?after_seq=${cursor}`);
+    expect(foreign.every(row => row.agent_id === alice.agentId)).toBe(true);
+  });
+  it('orders cursor pages by sequence even when creation timestamps are out of order', async () => {
+    const { bob, alice } = await seed();
+    await stack.app.request('/v1/dm', { method: 'POST', headers: { authorization: `Bearer ${alice.token}`, 'content-type': 'application/json' }, body: JSON.stringify({ to: 'bob', text: 'second' }) });
+    await stack.runtime.deps.db.update(deliveries).set({ createdAt: new Date(Date.now() + 60_000) }).where(and(eq(deliveries.agentId, bob.agentId), eq(deliveries.seq, 1)));
+    const first = await listDeliveries(bob.token, '?limit=1&after_seq=0'); expect(first[0]!.seq).toBe(1);
+    const second = await listDeliveries(bob.token, '?limit=1&after_seq=1'); expect(second[0]!.seq).toBe(2);
+    expect((await listDeliveries(bob.token, '?limit=1'))[0]!.seq).toBe(2);
+  });
+  it.each(['', '-1', '1.5', 'nope', '9007199254740992'])('refuses invalid after_seq cursor %j', async cursor => {
+    const { bob } = await seed();
+    expect((await stack.app.request(`/v1/deliveries?after_seq=${cursor}`, { headers: { authorization: `Bearer ${bob.token}` } })).status).toBe(400);
+  });
   it('lists the queued delivery for a recipient with the message payload', async () => {
     const { bob, messageId } = await seed();
 
@@ -1392,7 +1427,7 @@ describe('durable delivery api', () => {
     const db = stack.runtime.deps.db;
     await db
       .update(deliveries)
-      .set({ status: 'queued', nextAttemptAt: null, dispatchAttempts: 0, deliveredAt: null, lastDispatchError: null })
+      .set({ status: 'queued', nextAttemptAt: null, createdAt: strandedAt(), dispatchAttempts: 0, deliveredAt: null, lastDispatchError: null })
       .where(and(eq(deliveries.workspaceId, ws.workspaceId), eq(deliveries.agentId, bob.agentId)));
     const beforeDeliver = node.sock.ofType('deliver').length;
 
@@ -1438,7 +1473,7 @@ describe('durable delivery api', () => {
     const strandedRow = and(eq(deliveries.workspaceId, ws.workspaceId), eq(deliveries.agentId, bob.agentId), eq(deliveries.seq, 2));
     await db
       .update(deliveries)
-      .set({ nextAttemptAt: null, dispatchAttempts: 0, lastDispatchError: null })
+      .set({ nextAttemptAt: null, createdAt: strandedAt(), dispatchAttempts: 0, lastDispatchError: null })
       .where(strandedRow);
     const deliverCount = node.sock.ofType('deliver').length;
 
@@ -1523,7 +1558,7 @@ describe('durable delivery api', () => {
     const strandedRow = and(eq(deliveries.workspaceId, ws.workspaceId), eq(deliveries.agentId, bob.agentId), eq(deliveries.seq, 1));
     await db
       .update(deliveries)
-      .set({ status: 'queued', nextAttemptAt: null, dispatchAttempts: 0, deliveredAt: null, lastDispatchError: null })
+      .set({ status: 'queued', nextAttemptAt: null, createdAt: strandedAt(), dispatchAttempts: 0, deliveredAt: null, lastDispatchError: null })
       .where(strandedRow);
 
     // bob is delivery-ready, but the underlying socket send throws — sendToProvider
@@ -1564,7 +1599,7 @@ describe('durable delivery api', () => {
     const db = stack.runtime.deps.db;
     await db
       .update(deliveries)
-      .set({ status: 'queued', nextAttemptAt: null, dispatchAttempts: 0, deliveredAt: null, lastDispatchError: null })
+      .set({ status: 'queued', nextAttemptAt: null, createdAt: strandedAt(), dispatchAttempts: 0, deliveredAt: null, lastDispatchError: null })
       .where(and(eq(deliveries.workspaceId, ws.workspaceId), eq(deliveries.agentId, bob.agentId)));
     const beforeDeliver = node.sock.ofType('deliver').length;
 
@@ -1582,6 +1617,45 @@ describe('durable delivery api', () => {
       .from(deliveries)
       .where(and(eq(deliveries.workspaceId, ws.workspaceId), eq(deliveries.agentId, bob.agentId)));
     expect(rows.every((row) => row.status === 'delivered')).toBe(true);
+  });
+
+  it('sweep leaves a just-created row to its live dispatch instead of sending it twice', async () => {
+    // Regression for the same-socket duplicates in relaycast#659: a live send
+    // can reach the socket before its `delivered` mark commits. A sweep in
+    // that window must not treat the still-queued, never-attempted row as
+    // lost. Rows younger than the grace window wait; the redrive stops at the
+    // first one (in order) rather than skipping past it.
+    const ws = await createWorkspace(stack.app, 'mailbox-ws-sweep-grace');
+    const alice = await registerAgent(stack.app, ws.workspaceKey, 'alice');
+    const node = await enrollAndAttachNode(ws, { cursorHandshake: true });
+    const bob = await registerViaNode(node, 'bob');
+
+    for (const text of ['first', 'second', 'third']) {
+      const post = await stack.app.request('/v1/channels/general/messages', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', authorization: `Bearer ${alice.token}` },
+        body: JSON.stringify({ text }),
+      });
+      expect(post.status).toBe(201);
+    }
+    await waitForAssertion(() => expect(node.sock.ofType('deliver')).toHaveLength(3));
+
+    // seq 1 is a genuinely lost dispatch (old); seq 2 and 3 look like live
+    // sends whose `delivered` mark has not committed yet (just created).
+    const db = stack.runtime.deps.db;
+    const reset = { status: 'queued', nextAttemptAt: null, dispatchAttempts: 0, deliveredAt: null, lastDispatchError: null };
+    await db.update(deliveries).set({ ...reset, createdAt: strandedAt() })
+      .where(and(eq(deliveries.workspaceId, ws.workspaceId), eq(deliveries.agentId, bob.agentId), eq(deliveries.seq, 1)));
+    await db.update(deliveries).set({ ...reset, createdAt: new Date() })
+      .where(and(eq(deliveries.workspaceId, ws.workspaceId), eq(deliveries.agentId, bob.agentId), inArray(deliveries.seq, [2, 3])));
+    const beforeDeliver = node.sock.ofType('deliver').length;
+
+    await sweepDueNodeDeliveries(stack.runtime.deps, { now: new Date() });
+    expect(node.sock.ofType('deliver').slice(beforeDeliver).map((frame) => frame.seq)).toEqual([1]);
+
+    // Past the grace window the same rows are fair game, in order.
+    await sweepDueNodeDeliveries(stack.runtime.deps, { now: new Date(Date.now() + 2 * 60_000) });
+    expect(node.sock.ofType('deliver').slice(beforeDeliver).map((frame) => frame.seq)).toEqual([1, 2, 3]);
   });
 
   it('sweep redrives the whole ws backlog in seq order when only the later seq is due', async () => {
@@ -1615,7 +1689,7 @@ describe('durable delivery api', () => {
     // seq 2: queued and due (its inline dispatch was lost — no next_attempt_at).
     await db
       .update(deliveries)
-      .set({ status: 'queued', nextAttemptAt: null, dispatchAttempts: 0, deliveredAt: null, lastDispatchError: null })
+      .set({ status: 'queued', nextAttemptAt: null, createdAt: strandedAt(), dispatchAttempts: 0, deliveredAt: null, lastDispatchError: null })
       .where(seq2);
     const beforeDeliver = node.sock.ofType('deliver').length;
 
@@ -1649,7 +1723,7 @@ describe('durable delivery api', () => {
     const db = stack.runtime.deps.db;
     const rowsForBob = and(eq(deliveries.workspaceId, ws.workspaceId), eq(deliveries.agentId, bob.agentId));
     await db.update(deliveries).set({
-      status: 'queued', nextAttemptAt: null, dispatchAttempts: 0, deliveredAt: null, lastDispatchError: null,
+      status: 'queued', nextAttemptAt: null, createdAt: strandedAt(), dispatchAttempts: 0, deliveredAt: null, lastDispatchError: null,
     }).where(rowsForBob);
     const before = node.sock.ofType('deliver').length;
 
@@ -1685,7 +1759,7 @@ describe('durable delivery api', () => {
     const db = stack.runtime.deps.db;
     const rowsForBob = and(eq(deliveries.workspaceId, ws.workspaceId), eq(deliveries.agentId, bob.agentId));
     await db.update(deliveries).set({
-      status: 'queued', nextAttemptAt: null, dispatchAttempts: 0, deliveredAt: null, lastDispatchError: null,
+      status: 'queued', nextAttemptAt: null, createdAt: strandedAt(), dispatchAttempts: 0, deliveredAt: null, lastDispatchError: null,
     }).where(rowsForBob);
     const before = node.sock.ofType('deliver').length;
 
@@ -1738,7 +1812,7 @@ describe('durable delivery api', () => {
     // Both queued with no next_attempt_at so the sweep (not the inline post) drives them.
     await db
       .update(deliveries)
-      .set({ nextAttemptAt: null, dispatchAttempts: 0, lastDispatchError: null })
+      .set({ nextAttemptAt: null, createdAt: strandedAt(), dispatchAttempts: 0, lastDispatchError: null })
       .where(and(eq(deliveries.workspaceId, ws.workspaceId), eq(deliveries.agentId, bob.agentId)));
     const beforeDeliver = resumed.sock.ofType('deliver').length;
 

@@ -270,8 +270,29 @@ export interface InvokeActionResult {
   handlerNodeId?: string | null;
   dispatchedNodeId?: string | null;
   input: Record<string, unknown>;
+  /** Agent the caller acted on behalf of (`requester_agent_id`), or null. */
+  requesterAgentId?: string | null;
+  /** Name of the requester agent recorded from `requesterAgentId`, or null when no requester. */
+  requesterName?: string | null;
   status: string;
   createdAt: string;
+}
+
+/** Options for `actions.invoke`. */
+export interface InvokeActionOptions {
+  idempotencyKey?: string;
+  /**
+   * Agent in this workspace the invocation is issued on behalf of. The
+   * authenticated agent stays `callerId`; an unknown id is rejected with 400.
+   */
+  requesterAgentId?: string;
+  /**
+   * Optional requester name. Requires `requesterAgentId` and must equal that
+   * agent's current name exactly (otherwise 400); the recorded name is always
+   * the agent's name. The requester is a claim by the authenticated caller,
+   * not authorization.
+   */
+  requesterName?: string;
 }
 
 export interface CompleteInvocationRequest {
@@ -285,6 +306,10 @@ export interface ActionInvocation {
   actionName: string;
   callerId: string | null;
   callerName?: string | null;
+  /** Agent the caller acted on behalf of, or null when not supplied. */
+  requesterAgentId?: string | null;
+  /** Name of the requester agent recorded from `requesterAgentId`, or null when no requester. */
+  requesterName?: string | null;
   input?: Record<string, unknown>;
   output: JsonValue;
   status: string;
@@ -717,14 +742,23 @@ export type RotateWorkspaceKeyRequest = Camelize<Raw.RotateWorkspaceKeyRequest>;
 export type RotateWorkspaceKeyResponse = Camelize<Raw.RotateWorkspaceKeyResponse>;
 export type SendDmRequest = Camelize<Raw.SendDmRequest>;
 export type SetSystemPromptRequest = Camelize<Raw.SetSystemPromptRequest>;
+export type SetWorkspaceLeadersRequest = Camelize<Raw.SetWorkspaceLeadersRequest>;
 export type SpawnAgentRequest = Camelize<Raw.SpawnAgentRequest>;
 export type SpawnAgentResponse = Camelize<Raw.SpawnAgentResponse>;
 export type SystemPrompt = Camelize<Raw.SystemPrompt>;
+export type WorkspaceLeader = Camelize<Raw.WorkspaceLeader>;
+export type WorkspaceLeadersResponse = Camelize<Raw.WorkspaceLeadersResponse>;
 export type ThreadReplyEvent = Camelize<Raw.ThreadReplyEvent>;
 export type ThreadReplyRequest = Camelize<Raw.ThreadReplyRequest>;
 export type TokenRotateResponse = Camelize<Raw.TokenRotateResponse>;
 export type CredentialUpgradeResponse = Camelize<Raw.CredentialUpgradeResponse>;
 export type UpdateAgentRequest = Camelize<Raw.UpdateAgentRequest>;
+/**
+ * An agent's A2A agent card. Its keys are already the A2A spec's camelCase
+ * (plus the `x-agent-relay` extension), so it is used as-is, not camelized.
+ */
+export type AgentCard = Raw.AgentCard;
+export type AgentCardSkill = Raw.AgentCardSkill;
 export type UpdateChannelRequest = Camelize<Raw.UpdateChannelRequest>;
 export type UpdateWorkspaceRequest = Camelize<Raw.UpdateWorkspaceRequest>;
 export type UploadRequest = Camelize<Raw.UploadRequest>;
@@ -749,7 +783,10 @@ export type DeferDeliveryRequest = Camelize<Raw.DeferDeliveryRequest>;
 export type DeliveryAcceptedEvent = Camelize<Raw.DeliveryAcceptedEvent>;
 export type DeliveryDeliveredEvent = Camelize<Raw.DeliveryDeliveredEvent>;
 export type DeliveryAckedEvent = Camelize<Raw.DeliveryAckedEvent>;
+export type DeliveryRepliedEvent = Camelize<Raw.DeliveryRepliedEvent>;
+export type DeliveryState = Raw.DeliveryState;
 export type SentDelivery = Camelize<Raw.SentDelivery>;
+export type PostMessageResponse = Camelize<Raw.PostMessageResponse>;
 export type MessageDeliveryReceipt = Camelize<Raw.MessageDeliveryReceipt>;
 export type MessageDeliveriesResponse = Camelize<Raw.MessageDeliveriesResponse>;
 export type DeliveryDeferredEvent = Camelize<Raw.DeliveryDeferredEvent>;
@@ -768,6 +805,7 @@ export type WsErrorEvent = Camelize<Raw.WsErrorEvent>;
 export type WsOpenEvent = Camelize<Raw.WsOpenEvent>;
 export type WsPermanentlyDisconnectedEvent = Camelize<Raw.WsPermanentlyDisconnectedEvent>;
 export type WsReconnectingEvent = Camelize<Raw.WsReconnectingEvent>;
+export type WsRegistrationRejectedEvent = Camelize<Raw.WsRegistrationRejectedEvent>;
 export type WsResyncedEvent = Camelize<Raw.WsResyncedEvent>;
 
 // === Compile-level contract assertions =====================================

@@ -2,6 +2,7 @@ import { Hono } from 'hono';
 import { z } from 'zod';
 import type { AppEnv } from '../env.js';
 import { requireAuth, requireWorkspaceRead } from '../middleware/auth.js';
+import { hideDmMessageFromOutsiders } from '../middleware/dmAccess.js';
 import { rateLimit } from '../middleware/rateLimit.js';
 import { admitMessage, assertMessageAdmitted } from '../middleware/admission.js';
 import { jsonIdempotentOk, parseIdempotencyKey, runIdempotent } from '../middleware/idempotency.js';
@@ -9,7 +10,7 @@ import * as threadEngine from '../engine/thread.js';
 import { resolveMailboxConfig } from '../engine/mailboxConfig.js';
 import { resolveWorkspaceDeliveryPolicyFor } from '../engine/workspaceDeliveryPolicy.js';
 import { publishWorkspaceEvent } from './fanout.js';
-import { notifyDeliveryRejections, routeDeliveryOutcomes } from './deliveryRouting.js';
+import { notifyDeliveryRejections, routeDeliveryOutcomes, notifyRepliedDeliveries } from './deliveryRouting.js';
 import { buildThreadReplyEventData } from '../engine/deliveryWire.js';
 import {
   getMessageObserverResource,
@@ -36,6 +37,7 @@ const postReplySchema = z.object({
 threadRoutes.post(
   '/messages/:id/replies',
   requireAuth,
+  hideDmMessageFromOutsiders,
   rateLimit,
   admitMessage,
   async (c) => {
@@ -91,7 +93,7 @@ threadRoutes.post(
             type: 'thread.reply',
             workspaceId: workspace.id,
             data: toThreadReplyEventData(data),
-          });
+          }, data._deliveries);
         },
       });
 
@@ -99,6 +101,7 @@ threadRoutes.post(
         const {
           _deliveries,
           _delivery_rejections,
+          _replied_delivery_ids,
           ...publicReplyData
         } = idempotent.data as typeof idempotent.data & {
           _deliveries?: Parameters<typeof routeDeliveryOutcomes>[1];
@@ -128,6 +131,12 @@ threadRoutes.post(
           );
         }
 
+        // A thread reply answers its parent: the reply's own write marked
+        // that message's delivery to the replier; tell the parent's sender.
+        if (_replied_delivery_ids && _replied_delivery_ids.length > 0) {
+          runInBackground(c, notifyRepliedDeliveries(c, _replied_delivery_ids), 'notify replied delivery');
+        }
+
         emitServerEvent(c, workspace.id, 'thread.reply.created', {
           message_id: publicReplyData.id,
           parent_message_id: parentId,
@@ -146,6 +155,7 @@ threadRoutes.post(
 threadRoutes.get(
   '/messages/:id/replies',
   requireWorkspaceRead('threads:read'),
+  hideDmMessageFromOutsiders,
   rateLimit,
   async (c) => {
     try {

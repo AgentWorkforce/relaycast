@@ -304,15 +304,51 @@ export const FleetAgentDeregisterMessageSchema = z
   .strict();
 export type FleetAgentDeregisterMessage = z.infer<typeof FleetAgentDeregisterMessageSchema>;
 
+/**
+ * Consumption (broker / SDK -> relaycast). Cumulative by `up_to_seq`, or a
+ * single row by `delivery_id` (an out-of-order success behind a row that is
+ * still unconsumed); at least one is required. When `delivery_id` is given it
+ * is applied to that row only and `up_to_seq` is ignored, so a watermark can
+ * never be inferred past a gap.
+ */
 export const FleetDeliveryAckMessageSchema = z
   .object({
     ...FleetRequestEnvelopeFields,
     type: z.literal('delivery.ack'),
     agent: z.string(),
-    up_to_seq: z.number().int().nonnegative(),
+    up_to_seq: z.number().int().nonnegative().optional(),
+    delivery_id: z.string().min(1).optional(),
   })
-  .strict();
+  .strict()
+  .refine((frame) => frame.delivery_id !== undefined || frame.up_to_seq !== undefined, {
+    message: 'delivery.ack requires delivery_id or up_to_seq',
+    path: ['up_to_seq'],
+  });
 export type FleetDeliveryAckMessage = z.infer<typeof FleetDeliveryAckMessageSchema>;
+
+/**
+ * Receiver-software acceptance (broker / SDK -> relaycast): the receiving
+ * client durably stored the delivery in its inbox, before any handler or model
+ * ran. Cumulative by `up_to_seq` like `delivery.ack`, or a single row by
+ * `delivery_id`; at least one is required. It moves the row to `delivered`
+ * and stamps `accepted_at`; `delivery.ack` remains the consumed signal.
+ */
+export const FleetDeliveryAcceptedMessageSchema = z
+  .object({
+    ...FleetRequestEnvelopeFields,
+    type: z.literal('delivery.accepted'),
+    agent: z.string(),
+    delivery_id: z.string().min(1).optional(),
+    up_to_seq: z.number().int().nonnegative().optional(),
+  })
+  .strict()
+  .refine((frame) => frame.delivery_id !== undefined || frame.up_to_seq !== undefined, {
+    message: 'delivery.accepted requires delivery_id or up_to_seq',
+    path: ['up_to_seq'],
+  });
+// When `delivery_id` is given it is applied to that row only and `up_to_seq`
+// is ignored (see `FleetDeliveryAckMessageSchema`).
+export type FleetDeliveryAcceptedMessage = z.infer<typeof FleetDeliveryAcceptedMessageSchema>;
 
 export const FleetTaskContextSchema = z.object({
   run_id: z.string().min(1).max(512).refine(value => value.trim() === value),
@@ -437,11 +473,29 @@ export type AgentRegisterReplyData = z.infer<typeof AgentRegisterReplyDataSchema
  */
 export const NODE_REGISTRATION_CONTRACT_V1 = 'relay:node-registration-v1' as const;
 
+/**
+ * Inbound frames (and frame forms) the engine understands beyond the v5
+ * baseline, announced in the `node.register` reply so a node never parses
+ * versions: send a listed frame only when the reply lists it. Older engines
+ * omit the field.
+ */
+export const NODE_CAPABILITY_DELIVERY_ACCEPTED = 'delivery.accepted' as const;
+/**
+ * `delivery.ack { agent, delivery_id }`: one row consumed on its own, cursor
+ * untouched. Older engines accept only the cumulative `{ agent, up_to_seq }`
+ * form and reject the frame outright.
+ */
+export const NODE_CAPABILITY_DELIVERY_ACK_BY_ID = 'delivery.ack.delivery_id' as const;
+export const NODE_CAPABILITIES = [NODE_CAPABILITY_DELIVERY_ACCEPTED, NODE_CAPABILITY_DELIVERY_ACK_BY_ID] as const;
+export type NodeCapability = (typeof NODE_CAPABILITIES)[number];
+
 export const NodeRegisterReplyDataSchema = z
   .object({
     provider: FleetProviderIdentitySchema,
     accepted_capabilities: z.array(FleetCapabilityAcceptanceSchema),
     registration_contract: z.literal(NODE_REGISTRATION_CONTRACT_V1).optional(),
+    /** Engine-supported inbound frame types (see `NODE_CAPABILITIES`); unknown entries are ignored. */
+    capabilities: z.array(z.string()).optional(),
   })
   .passthrough();
 export type NodeRegisterReplyData = z.infer<typeof NodeRegisterReplyDataSchema>;
@@ -575,7 +629,6 @@ export const FleetBrokerToRelaycastNonActionResultMessageSchema = z.discriminate
   FleetAgentRegisterMessageSchema,
   FleetAgentRecoverMessageSchema,
   FleetAgentDeregisterMessageSchema,
-  FleetDeliveryAckMessageSchema,
   FleetInventorySyncMessageSchema,
 ]);
 export type FleetBrokerToRelaycastNonActionResultMessage = z.infer<
@@ -585,6 +638,9 @@ export type FleetBrokerToRelaycastNonActionResultMessage = z.infer<
 export const FleetBrokerToRelaycastMessageSchema = z.union([
   FleetBrokerToRelaycastNonActionResultMessageSchema,
   FleetActionResultMessageSchema,
+  // Refined (one of `delivery_id` / `up_to_seq`), so they cannot join the discriminated union.
+  FleetDeliveryAcceptedMessageSchema,
+  FleetDeliveryAckMessageSchema,
 ]);
 export type FleetBrokerToRelaycastMessage = z.infer<typeof FleetBrokerToRelaycastMessageSchema>;
 export type FleetBrokerToRelaycastMessageType = FleetBrokerToRelaycastMessage['type'];

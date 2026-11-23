@@ -14,7 +14,7 @@ import {
   messages,
   workspaceEvents,
   workspaces,
-} from '../../db/schema.js';
+} from '../../db/tables.js';
 import { drainFileCleanup, MIN_BOOTSTRAP_IDEMPOTENCY_KEY_LENGTH, reapExpiredWorkspaces } from '../../engine/workspace.js';
 import {
   createWorkspace,

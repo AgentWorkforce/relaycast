@@ -369,6 +369,28 @@ describe('Programmability SDK', () => {
       expect(firstHeaders['X-Idempotency-Key']).toBe(firstHeaders['Idempotency-Key']);
       expect(retryHeaders['X-Idempotency-Key']).toBe(firstHeaders['Idempotency-Key']);
     });
+
+    it('invoke() sends the optional requester and exposes it on the result', async () => {
+      const me = new AgentClient(new HttpClient({ apiKey: 'at_live_agent123' }));
+      mockFetch.mockImplementation(() => mockResponse({
+        invocation_id: 'inv_1',
+        action_name: 'spawn',
+        status: 'dispatched',
+        requester_agent_id: 'agent_owner',
+        requester_name: 'Owner',
+      }, true, 201));
+
+      const result = await me.actions.invoke('spawn', { name: 'worker' }, {
+        idempotencyKey: 'key-1', requesterAgentId: 'agent_owner', requesterName: 'Owner',
+      });
+
+      const [, init] = mockFetch.mock.calls[0]!;
+      expect(init.headers['Idempotency-Key']).toBe('key-1');
+      expect(JSON.parse(init.body)).toEqual({
+        input: { name: 'worker' }, requester_agent_id: 'agent_owner', requester_name: 'Owner',
+      });
+      expect(result).toMatchObject({ requesterAgentId: 'agent_owner', requesterName: 'Owner' });
+    });
   });
 
   // === New engine bindings (actions invocations, agent events, certify, directory, console) ===

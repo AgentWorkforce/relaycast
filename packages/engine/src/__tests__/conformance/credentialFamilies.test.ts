@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import { eq } from 'drizzle-orm';
 import { encodeArCredential, parseCredential } from '@relaycast/types';
-import { agents, credentialUpgrades, nodes, webhooks, workspaces } from '../../db/schema.js';
+import { agents, credentialUpgrades, nodes, webhooks, workspaces } from '../../db/tables.js';
 import { upgradeLegacyCredential } from '../../engine/credentialUpgrade.js';
 import { hmacSha256Hex, sha256Hex } from '../../lib/crypto.js';
 import { SqliteApiKeyAuthProvider } from '../../auth/index.js';

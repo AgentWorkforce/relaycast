@@ -43,9 +43,29 @@ const registerActionSchema = z.object({
   },
 );
 
+// Optional on-behalf-of identity. caller_id/caller_name always remain the
+// authenticated agent; a requester id must name an agent in this workspace and
+// requester_name (which requires the id) must equal that agent's name. The
+// cross-field rules live in resolveInvocationRequester so both invoke routes
+// return the same 400 invalid_request.
+const invocationRequesterFields = {
+  requester_agent_id: z.string().min(1).max(128).optional(),
+  requester_name: z.string().min(1).max(256).optional(),
+};
+
 const invokeActionSchema = z.object({
   input: z.record(z.string(), z.unknown()).optional(),
+  ...invocationRequesterFields,
 });
+
+const invokeStrictSpawnSchema = z.object({
+  input: z.record(z.string(), z.unknown()),
+  ...invocationRequesterFields,
+}).strict();
+
+const replaySpawnSchema = z.object({
+  logical_request: z.record(z.string(), z.unknown()),
+}).strict();
 
 const completeInvocationSchema = z.object({
   output: FleetWireJsonValueSchema.optional(),
@@ -152,6 +172,76 @@ actionRoutes.delete('/actions/:name', requireAuth, rateLimit, async (c) => {
   }
 });
 
+// POST /v1/actions/spawn/strict-invoke - exact-node builtin spawn
+actionRoutes.post('/actions/spawn/strict-invoke', requireAuth, rateLimit, async (c) => {
+  try {
+    const agent = c.get('agent');
+    if (!agent) {
+      return jsonError(c, 'agent_token_required', 'Agent token required to invoke actions', 403);
+    }
+    const parsed = await parseJsonBody(c, invokeStrictSpawnSchema, () => 'invalid strict spawn body');
+    if (!parsed.ok) return parsed.response;
+    const { key, error } = parseIdempotencyKey(c.req.header('Idempotency-Key'));
+    if (error || !key) {
+      return jsonError(c, 'invalid_idempotency_key', error ?? 'Idempotency-Key is required', 400);
+    }
+    const workspace = c.get('workspace');
+    const requester = await actionEngine.resolveInvocationRequester(c.get('db'), workspace.id, parsed.data);
+    const result = await actionEngine.invokeStrictSpawn(
+      c.get('db'),
+      workspace.id,
+      { input: parsed.data.input, caller_id: agent.id, caller_name: agent.name, ...requester },
+      { nodeConnections: c.get('engine').nodeConnections, idempotencyKey: key },
+    );
+    const replayed = actionEngine.wasInvocationReplayed(result);
+    const eventData = {
+      invocation_id: result.invocation_id,
+      action_name: result.action_name,
+      caller_name: agent.name,
+      handler_agent_id: result.handler_agent_id,
+      handler_node_id: result.handler_node_id,
+    };
+    if (!replayed) {
+      await sendWebhookEvent(c, { type: 'action.invoked', workspaceId: workspace.id, data: eventData });
+      emitServerEvent(c, workspace.id, 'action.invoked', {
+        action_name: result.action_name,
+        invocation_id: result.invocation_id,
+        caller_agent_id: agent.id,
+      });
+      runInBackground(c, fanoutToWorkspace(c, 'action.invoked', eventData), 'fanout action.invoked');
+    }
+    return jsonIdempotentOk(c, { status: 201, data: result, replayed });
+  } catch (err: unknown) {
+    return errorResponse(c, err);
+  }
+});
+
+// POST /v1/actions/spawn/replay - replay an existing keyed spawn without creating one
+actionRoutes.post('/actions/spawn/replay', requireAuth, rateLimit, async (c) => {
+  try {
+    const agent = c.get('agent');
+    if (!agent) {
+      return jsonError(c, 'agent_token_required', 'Agent token required to replay actions', 403);
+    }
+    const parsed = await parseJsonBody(c, replaySpawnSchema, () => 'invalid spawn replay body');
+    if (!parsed.ok) return parsed.response;
+    const { key, error } = parseIdempotencyKey(c.req.header('Idempotency-Key'));
+    if (error || !key) {
+      return jsonError(c, 'invalid_idempotency_key', error ?? 'Idempotency-Key is required', 400);
+    }
+    const workspace = c.get('workspace');
+    const result = await actionEngine.replaySpawnInvocation(
+      c.get('db'),
+      workspace.id,
+      { logical_request: parsed.data.logical_request, caller_id: agent.id },
+      { idempotencyKey: key, nodeConnections: c.get('engine').nodeConnections },
+    );
+    return jsonIdempotentOk(c, { status: 200, data: result, replayed: true });
+  } catch (err: unknown) {
+    return errorResponse(c, err);
+  }
+});
+
 // POST /v1/actions/:name/invoke - invoke an action
 actionRoutes.post('/actions/:name/invoke', requireAuth, rateLimit, async (c) => {
   try {
@@ -175,6 +265,7 @@ actionRoutes.post('/actions/:name/invoke', requireAuth, rateLimit, async (c) => 
 
     const actionName = c.req.param('name');
     const { nodeConnections } = c.get('engine');
+    const requester = await actionEngine.resolveInvocationRequester(db, workspace.id, parsed.data);
     const result = await actionEngine.invokeAction(
       db,
       workspace.id,
@@ -183,6 +274,7 @@ actionRoutes.post('/actions/:name/invoke', requireAuth, rateLimit, async (c) => 
         input: parsed.data.input,
         caller_id: agent.id,
         caller_name: agent.name,
+        ...requester,
       },
       {
         nodeConnections,

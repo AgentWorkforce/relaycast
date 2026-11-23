@@ -1,6 +1,6 @@
 # syntax=docker/dockerfile:1.7
 
-ARG RELAYCAST_ENGINE_VERSION=12.7.0
+ARG RELAYCAST_ENGINE_VERSION=12.14.0
 
 # Build the engine from this checkout so a source change is exercised by the
 # self-host image before the matching npm package is published.
@@ -45,7 +45,7 @@ FROM node:22.23.2-bookworm-slim@sha256:d649c27dae7ba0137b3cef5dd75baa422c08dc3d9
 ARG RELAYCAST_ENGINE_VERSION
 
 LABEL org.opencontainers.image.title="Relaycast self-host engine" \
-      org.opencontainers.image.description="Single-process Relaycast engine with SQLite persistence" \
+      org.opencontainers.image.description="Single-process Relaycast engine with SQLite or PostgreSQL persistence" \
       org.opencontainers.image.source="https://github.com/AgentWorkforce/relaycast" \
       org.opencontainers.image.version="${RELAYCAST_ENGINE_VERSION}" \
       io.relaycast.engine.version="${RELAYCAST_ENGINE_VERSION}"
@@ -60,7 +60,7 @@ COPY --from=engine-install /opt/relaycast /opt/relaycast
 COPY --from=engine-build /workspace/packages/a2a/dist /opt/relaycast/node_modules/@relaycast/a2a/dist
 COPY --from=engine-build /workspace/packages/types/dist /opt/relaycast/node_modules/@relaycast/types/dist
 COPY --from=engine-build /workspace/packages/engine/dist /opt/relaycast/node_modules/@relaycast/engine/dist
-COPY --chmod=0555 docker/entrypoint.mjs docker/entrypoint-core.mjs /opt/relaycast/
+COPY --chmod=0555 docker/entrypoint.mjs docker/entrypoint-core.mjs docker/start.sh /opt/relaycast/
 
 RUN install -d -o node -g node /data /data/relaycast-files
 
@@ -69,4 +69,4 @@ VOLUME ["/data"]
 EXPOSE 8787
 USER node
 
-ENTRYPOINT ["node", "/opt/relaycast/entrypoint.mjs"]
+ENTRYPOINT ["/opt/relaycast/start.sh"]

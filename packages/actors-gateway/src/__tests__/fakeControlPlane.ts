@@ -14,6 +14,8 @@ import type { ActorHttpRequest, ActorHttpResponse } from '@relaycast/engine/gate
 export interface FakeWorkspace {
   create?(request: ActorHttpRequest, credentialTag: string): ActorHttpResponse | Promise<ActorHttpResponse>;
   handle(request: ActorHttpRequest): ActorHttpResponse | Promise<ActorHttpResponse>;
+  importData?(body: unknown, credentialTag: string): ActorHttpResponse | Promise<ActorHttpResponse>;
+  fileStored?(key: string, size: number): { recorded: boolean } | Promise<{ recorded: boolean }>;
 }
 
 export interface Invocation {
@@ -32,6 +34,8 @@ export interface FakeControlPlaneOptions {
 }
 
 export interface FakeControlPlane {
+  /** The Host header of every accepted actor socket. */
+  socketHosts: string[];
   url: string;
   projectId: string;
   invocations: Invocation[];
@@ -44,6 +48,8 @@ export interface FakeControlPlane {
   interceptInvoke?: (invocation: Invocation) => { status: number; body: unknown } | undefined;
   /** HTTP status `/find-websocket` fails with, when set. */
   failFindWebsocket?: number;
+  /** Host:port the handed-out socket URLs name instead of this server's (a public URL the gateway may not reach). */
+  socketHost?: string;
   /** When false, `/v1/socket` refuses the upgrade (simulates an upstream that cannot be reached). */
   acceptSockets: boolean;
   healthy: boolean;
@@ -82,6 +88,7 @@ export async function startFakeControlPlane(options: FakeControlPlaneOptions): P
   const actorRoute = new RegExp(`^/v1/projects/${projectId}/actors/Workspace/([^/]+)/(invoke|find-websocket)$`);
 
   const plane: FakeControlPlane = {
+    socketHosts: [],
     url: '',
     projectId,
     invocations: [],
@@ -124,7 +131,8 @@ export async function startFakeControlPlane(options: FakeControlPlaneOptions): P
         }
         const key = randomUUID();
         grants.set(key, body.metadata);
-        reply(res, 200, { websocketUrl: `${plane.url.replace(/^http/, 'ws')}/v1/socket?key=${key}`, homeRegion: 'local', connectByMs: Date.now() + 5_000 });
+        const socketBase = options.socketHost ? `ws://${options.socketHost}` : plane.url.replace(/^http/, 'ws');
+        reply(res, 200, { websocketUrl: `${socketBase}/v1/socket?key=${key}`, homeRegion: 'local', connectByMs: Date.now() + 5_000 });
         return;
       }
       const invocation: Invocation = {
@@ -148,7 +156,11 @@ export async function startFakeControlPlane(options: FakeControlPlaneOptions): P
       try {
         const result = invocation.method === 'create'
           ? await workspace.create?.(invocation.args[0] as ActorHttpRequest, String(invocation.args[1]))
-          : await workspace.handle(invocation.args[0] as ActorHttpRequest);
+          : invocation.method === 'importData'
+            ? await workspace.importData?.(invocation.args[0], String(invocation.args[1]))
+          : invocation.method === 'fileStored'
+            ? await workspace.fileStored?.(String(invocation.args[0]), Number(invocation.args[1]))
+            : await workspace.handle(invocation.args[0] as ActorHttpRequest);
         if (!result) throw new Error(`actor has no method ${invocation.method}`);
         reply(res, 200, { outcome: { type: 'completed', result } });
       } catch (error) {
@@ -169,6 +181,7 @@ export async function startFakeControlPlane(options: FakeControlPlaneOptions): P
     }
     const metadata = grants.get(key);
     grants.delete(key);
+    plane.socketHosts.push(req.headers.host ?? '');
     wss.handleUpgrade(req, socket, head, (ws) => {
       plane.sessions.push(ws);
       plane.onSession(ws, metadata);

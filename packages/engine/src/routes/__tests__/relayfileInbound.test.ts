@@ -4,9 +4,11 @@ import { and, eq } from 'drizzle-orm';
 import { createEngine } from '../../engine.js';
 import { createNodeRuntime, type NodeRuntime } from '../../adapters/node/index.js';
 import { createWorkspace, registerAgent } from '../../__tests__/conformance/harness.js';
-import { deliveries } from '../../db/schema.js';
+import { deliveries, messages as messageRows, pendingEvents } from '../../db/tables.js';
 import type { KeyValueStore } from '../../ports/kv.js';
 import {
+  boundRelayfileRecord,
+  DEFAULT_RELAYFILE_RECORD_METADATA_MAX_BYTES,
   deriveRelayfileInboundSecret,
   formatRelayfileEventMessage,
   verifyRelayfileSignature,
@@ -20,7 +22,7 @@ interface Stack {
 const stacks: Stack[] = [];
 
 /** Create an isolated SQLite engine and register its cleanup for the current test. */
-function makeStack(opts: { kv?: KeyValueStore; depthCap?: number } = {}): Stack {
+function makeStack(opts: { kv?: KeyValueStore; depthCap?: number; recordMaxBytes?: unknown } = {}): Stack {
   const runtime = createNodeRuntime({
     dbPath: ':memory:',
     baseUrl: 'http://localhost:0',
@@ -29,6 +31,7 @@ function makeStack(opts: { kv?: KeyValueStore; depthCap?: number } = {}): Stack 
       environment: 'test',
       ...(opts.depthCap ? { mailbox: { depthCap: opts.depthCap } } : {}),
       relayfileInboundSecret: 'relaycast-master',
+      ...('recordMaxBytes' in opts ? { relayfileRecordMetadataMaxBytes: opts.recordMaxBytes as number } : {}),
     },
     presence: { sweepIntervalMs: 0 },
     eventQueue: { pollIntervalMs: 0 },
@@ -54,6 +57,42 @@ function signedHeaders(secret: string, body: string, timestamp = String(Math.flo
   };
 }
 
+/** UTF-8 bytes of a record's JSON, the measure the metadata cap uses. */
+function recordBytes(record: unknown): number {
+  return Buffer.byteLength(JSON.stringify(record), 'utf8');
+}
+
+/** Provision a Linear target on #general and return a poster for signed record events. */
+async function recordTarget(stack: Stack, name: string) {
+  const ws = await createWorkspace(stack.app, name);
+  const targetRes = await stack.app.request('/v1/integrations/relayfile/inbound-target', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json', authorization: `Bearer ${ws.workspaceKey}` },
+    body: JSON.stringify({ channel: 'general', provider: 'linear', path_glob: '/linear/issues/**' }),
+  });
+  expect(targetRes.status).toBe(201);
+  const target = (await targetRes.json() as { data: { url: string; secret: string } }).data;
+  const post = (eventId: string, record: unknown) => {
+    const body = JSON.stringify({
+      eventId, type: 'file.updated', provider: 'linear', origin: 'provider_sync',
+      path: `/linear/issues/${eventId}.json`, revision: `rev_${eventId}`, contentHash: `hash_${eventId}`,
+      snapshot: { contentType: 'application/json', content: JSON.stringify(record) },
+    });
+    return stack.app.request(target.url, {
+      method: 'POST', body, headers: { ...signedHeaders(target.secret, body), 'X-Relay-Event-Id': eventId },
+    });
+  };
+  /** Post an event and return the metadata stored on its message row. */
+  const storedMetadata = async (eventId: string, record: unknown) => {
+    const response = await post(eventId, record);
+    expect(response.status).toBe(201);
+    const { data } = await response.json() as { data: { message_id: string } };
+    const [row] = await stack.runtime.deps.db.select({ metadata: messageRows.metadata }).from(messageRows).where(eq(messageRows.id, data.message_id));
+    return row.metadata as Record<string, unknown>;
+  };
+  return { ws, post, storedMetadata };
+}
+
 class FailingKeyValueStore implements KeyValueStore {
   async get(): Promise<string | null> {
     throw new Error('kv unavailable');
@@ -69,6 +108,14 @@ class FailingKeyValueStore implements KeyValueStore {
 }
 
 describe('relayfile inbound bridge', () => {
+  it('preserves existing signed target labels while canonicalizing only for matching', async () => {
+    const glob = '/linear//issues/./*__uuid.json/';
+    expect(await deriveRelayfileInboundSecret('master', {
+      workspaceId: 'ws', channelId: 'channel', provider: 'linear', pathGlob: glob,
+    })).toBe(createHmac('sha256', 'master')
+      .update(`relayfile-inbound:v1:ws:channel:linear:${glob}`).digest('hex'));
+  });
+
   it('uses unambiguous field boundaries for semantic target secrets', async () => {
     const common = { provider: 'github', pathGlob: '/github/repos/o/r/pulls/1/**', githubPrIdentityAuthorized: true };
     const first = await deriveRelayfileInboundSecret('master', { ...common, workspaceId: 'ws:channel', channelId: 'id' });
@@ -154,6 +201,87 @@ describe('relayfile inbound bridge', () => {
     const inbox = await stack.app.request('/v1/deliveries', { headers: { authorization: `Bearer ${agent.token}` } });
     const { data: queued } = await inbox.json();
     expect(queued.filter((delivery: { message_id: string }) => deliveredIds.includes(delivery.message_id))).toHaveLength(6);
+  });
+
+  it.each([
+    {
+      label: 'Linear UUID', provider: 'linear', glob: '/linear/issues/*__11111111-2222-4333-8444-555555555555.json',
+      path: '/linear/issues/AR-705__11111111-2222-4333-8444-555555555555.json',
+      wrongPath: '/linear/issues/AR-705__11111111-2222-4333-8444-555555555556.json',
+      eventType: 'issue.create',
+    },
+    {
+      label: 'Jira comments', provider: 'jira', glob: '/jira/issues/*/comments/*.json',
+      path: '/jira/issues/KAN-1/comments/9.json',
+      wrongPath: '/jira/issues/KAN-1/comments/nested/9.json',
+      eventType: 'comment.created',
+    },
+    {
+      label: 'root-level', provider: 'linear', glob: '/*', path: '/issue.json',
+      wrongPath: '/nested/issue.json', eventType: 'issue.create',
+    },
+    {
+      label: 'Jira literal-star path', provider: 'jira', glob: '/jira/issues/*/comments/*.json',
+      path: '/jira/issues/KAN-1/comments/*note.json',
+      wrongPath: '/jira/issues/KAN-1/comments/nested/*note.json', eventType: 'comment.created',
+    },
+  ])('delivers $label segment-glob events once while retaining authenticated target controls', async ({ provider, glob, path, wrongPath, eventType }) => {
+    const stack = makeStack();
+    const ws = await createWorkspace(stack.app, `segment-glob-${provider}`);
+    const agent = await registerAgent(stack.app, ws.workspaceKey, 'glob-reader');
+    await stack.app.request('/v1/channels/general/join', {
+      method: 'POST', headers: { authorization: `Bearer ${agent.token}` },
+    });
+    const targetRes = await stack.app.request('/v1/integrations/relayfile/inbound-target', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', authorization: `Bearer ${ws.workspaceKey}` },
+      body: JSON.stringify({ channel: 'general', provider, path_glob: glob }),
+    });
+    expect(targetRes.status).toBe(201);
+    const { data: target } = await targetRes.json();
+    expect(target.secret).toBe(await deriveRelayfileInboundSecret('relaycast-master', {
+      workspaceId: ws.workspaceId, channelId: target.channel_id, provider, pathGlob: glob,
+    }));
+    const event = { eventId: `evt_glob_${provider}`, type: 'file.updated', provider,
+      providerEventType: eventType, origin: 'provider_sync', path, revision: 'rev_1' };
+    const emit = (patch: Record<string, unknown> = {}, secret = target.secret, url = target.url) => {
+      const payload = JSON.stringify({ ...event, ...patch });
+      return stack.app.request(url, { method: 'POST', body: payload,
+        headers: { ...signedHeaders(secret, payload), 'X-Relay-Event-Id': event.eventId } });
+    };
+    expect((await emit({}, 'wrong-secret')).status).toBe(401);
+    const broadened = new URL(target.url);
+    broadened.searchParams.set('path_glob', '/**');
+    expect((await emit({}, target.secret, broadened.toString())).status).toBe(401);
+    for (const [patch, skipped] of [
+      [{ provider: 'github' }, 'provider_mismatch'],
+      [{ path: wrongPath }, 'path_mismatch'],
+      [{ path: `/${provider}/projects/unrelated.json` }, 'path_mismatch'],
+    ] as const) {
+      expect(await (await emit(patch)).json()).toMatchObject({ data: { skipped } });
+    }
+    const response = await emit();
+    expect(response.status).toBe(201);
+    const { data: accepted } = await response.json();
+    expect(accepted.replayed).toBe(false);
+    expect(await (await emit({ origin: 'agent_write' })).json()).toMatchObject({ data: { skipped: 'agent_write' } });
+    expect(await (await emit()).json()).toMatchObject({
+      data: { replayed: true, message_id: accepted.message_id },
+    });
+    expect(await (await emit({ revision: 'different-event' })).json()).toMatchObject({
+      data: { skipped: 'event_id_reused' },
+    });
+    const list = await stack.app.request('/v1/channels/general/messages', {
+      headers: { authorization: `Bearer ${ws.workspaceKey}` },
+    });
+    const { data: messages } = await list.json();
+    expect(messages).toHaveLength(1);
+    expect(messages[0]).toMatchObject({ id: accepted.message_id,
+      metadata: { provider_event_type: eventType, path, relayfile: { path, eventId: event.eventId } } });
+    const inbox = await stack.app.request('/v1/deliveries', {
+      headers: { authorization: `Bearer ${agent.token}` },
+    });
+    expect((await inbox.json()).data).toMatchObject([{ message_id: accepted.message_id }]);
   });
 
   it('returns retryable overflow and accepts the same unique event after capacity recovers', async () => {
@@ -338,6 +466,84 @@ describe('relayfile inbound bridge', () => {
     const messages = await list.json() as { data: Array<{ text: string }> };
     expect(messages.data.filter((message) => message.text.includes('hello from slack'))).toHaveLength(1);
     expect(messages.data[0]).toMatchObject({ metadata: { provider_event_type: 'message.created', resource_ref: '/slack/channels/C123' } });
+  });
+
+  it('delivers a signed typed deletion without a snapshot once and retains ingress controls', async () => {
+    const stack = makeStack();
+    const ws = await createWorkspace(stack.app, 'relayfile-deletion');
+    const agent = await registerAgent(stack.app, ws.workspaceKey, 'deletion-reader');
+    await stack.app.request('/v1/channels/general/join', {
+      method: 'POST', headers: { authorization: `Bearer ${agent.token}` },
+    });
+    const targetRes = await stack.app.request('/v1/integrations/relayfile/inbound-target', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', authorization: `Bearer ${ws.workspaceKey}` },
+      body: JSON.stringify({ channel: 'general', provider: 'slack', path_glob: '/slack/channels/C123/messages/**' }),
+    });
+    expect(targetRes.status).toBe(201);
+    const { data: target } = await targetRes.json();
+    const event = {
+      eventId: 'evt_reaction_removed', type: 'file.deleted', provider: 'slack',
+      origin: 'provider_sync', providerEventType: 'reaction.removed',
+      resourceRef: '/slack/channels/C123', revision: 'rev_deleted',
+      path: '/slack/channels/C123/messages/123_456/reactions/eyes--U123.json',
+    };
+    const emit = (patch: Record<string, unknown> = {}, secret = target.secret) => {
+      const payload = JSON.stringify({ ...event, ...patch });
+      return stack.app.request(target.url, {
+        method: 'POST', body: payload,
+        headers: { ...signedHeaders(secret, payload), 'X-Relay-Event-Id': event.eventId },
+      });
+    };
+    expect((await emit({}, 'wrong-secret')).status).toBe(401);
+    for (const [patch, skipped] of [
+      [{ provider: 'github' }, 'provider_mismatch'],
+      [{ path: '/slack/channels/OTHER/messages/123/reactions/eyes.json' }, 'path_mismatch'],
+      [{ origin: 'agent_write' }, 'agent_write'],
+      [{ type: 'file.renamed' }, 'ignored_event_type'],
+    ] as const) {
+      expect(await (await emit(patch)).json()).toMatchObject({ data: { skipped } });
+    }
+    const payloadWithoutId = JSON.stringify({ ...event, eventId: undefined });
+    const headersWithoutId = new Headers(signedHeaders(target.secret, payloadWithoutId));
+    headersWithoutId.delete('X-Relay-Event-Id');
+    expect(await (await stack.app.request(target.url, {
+      method: 'POST', body: payloadWithoutId, headers: headersWithoutId,
+    })).json()).toMatchObject({ data: { skipped: 'missing_event_id' } });
+
+    const response = await emit();
+    expect(response.status).toBe(201);
+    const { data: accepted } = await response.json();
+    expect(accepted.replayed).toBe(false);
+    expect(await (await emit()).json()).toMatchObject({
+      data: { replayed: true, message_id: accepted.message_id },
+    });
+    expect(await (await emit({ revision: 'different-event' })).json()).toMatchObject({
+      data: { skipped: 'event_id_reused' },
+    });
+    const list = await stack.app.request('/v1/channels/general/messages', {
+      headers: { authorization: `Bearer ${ws.workspaceKey}` },
+    });
+    const { data: messages } = await list.json();
+    expect(messages).toHaveLength(1);
+    expect(messages[0]).toMatchObject({
+      id: accepted.message_id,
+      text: `Slack reaction.removed\nDeleted file content is unavailable.\nRelayfile path: ${event.path}`,
+      metadata: {
+        event: 'file.deleted', provider_event_type: 'reaction.removed', resource_ref: event.resourceRef,
+        record: null, relayfile: { path: event.path, revision: event.revision },
+      },
+    });
+    const inbox = await stack.app.request('/v1/deliveries', {
+      headers: { authorization: `Bearer ${agent.token}` },
+    });
+    expect((await inbox.json()).data).toMatchObject([{ message_id: accepted.message_id }]);
+  });
+
+  it('labels an untyped deletion without inventing deleted record content', () => {
+    expect(formatRelayfileEventMessage({ type: 'file.deleted', path: '/slack/messages/deleted.json' }, 'slack'))
+      .toEqual({ author: 'slack', record: null,
+        text: 'Slack file.deleted\nDeleted file content is unavailable.\nRelayfile path: /slack/messages/deleted.json' });
   });
 
   it('creates channel deliveries so node/broker agents receive the message', async () => {
@@ -544,4 +750,135 @@ describe('relayfile inbound bridge', () => {
     expect(formatRelayfileEventMessage({ type: 'file.updated', path: '/github/42.json', snapshot: { content: JSON.stringify({ title: 'Ordinary record', payload }) } }, 'github')?.record).toMatchObject({ title: 'Ordinary record', payload });
   });
 
+  describe('provider record metadata cap', () => {
+    /** A `{"pad":"…"}` record whose JSON is exactly `bytes` UTF-8 bytes. */
+    const paddedRecord = (bytes: number) => ({ pad: 'a'.repeat(bytes - recordBytes({ pad: '' })) });
+
+    it('measures UTF-8 bytes of the JSON and never omits null', () => {
+      expect(DEFAULT_RELAYFILE_RECORD_METADATA_MAX_BYTES).toBe(8192);
+      const multiByte = { body: 'é'.repeat(100) };
+      const bytes = recordBytes(multiByte);
+      expect(JSON.stringify(multiByte).length).toBeLessThan(bytes);
+      expect(boundRelayfileRecord(multiByte, bytes)).toEqual({ record: multiByte });
+      expect(boundRelayfileRecord(multiByte, JSON.stringify(multiByte).length))
+        .toEqual({ record: null, record_omitted: { reason: 'too_large', bytes, limit: JSON.stringify(multiByte).length } });
+      expect(boundRelayfileRecord('abc', 5)).toEqual({ record: 'abc' });
+      expect(boundRelayfileRecord('abcd', 5)).toEqual({ record: null, record_omitted: { reason: 'too_large', bytes: 6, limit: 5 } });
+      expect(boundRelayfileRecord(null, 0)).toEqual({ record: null });
+      expect(boundRelayfileRecord({}, 0)).toEqual({ record: null, record_omitted: { reason: 'too_large', bytes: 2, limit: 0 } });
+    });
+
+    it('stores records under and at the default limit unchanged and omits one byte over', async () => {
+      const stack = makeStack();
+      const { storedMetadata } = await recordTarget(stack, 'relayfile-record-boundary');
+      const limit = DEFAULT_RELAYFILE_RECORD_METADATA_MAX_BYTES;
+      for (const [eventId, bytes] of [['under', limit - 1], ['at', limit]] as const) {
+        const record = paddedRecord(bytes);
+        expect(recordBytes(record)).toBe(bytes);
+        const metadata = await storedMetadata(eventId, record);
+        expect(metadata.record).toEqual(record);
+        expect(metadata).not.toHaveProperty('record_omitted');
+      }
+      const over = paddedRecord(limit + 1);
+      expect(await storedMetadata('over', over)).toMatchObject({
+        record: null, record_omitted: { reason: 'too_large', bytes: limit + 1, limit },
+      });
+    });
+
+    it('counts multi-byte characters as bytes at the configured limit', async () => {
+      const record = { title: 'Unicode', body: 'é'.repeat(200) };
+      const bytes = recordBytes(record);
+      const chars = JSON.stringify(record).length;
+      expect(chars).toBeLessThan(bytes);
+      const atLimit = await recordTarget(makeStack({ recordMaxBytes: bytes }), 'relayfile-record-multibyte-at');
+      expect((await atLimit.storedMetadata('mb_at', record)).record).toEqual(record);
+      // A limit at the character count would admit the record if characters were measured.
+      const charLimit = await recordTarget(makeStack({ recordMaxBytes: chars }), 'relayfile-record-multibyte-chars');
+      expect(await charLimit.storedMetadata('mb_chars', record)).toMatchObject({
+        record: null, record_omitted: { reason: 'too_large', bytes, limit: chars },
+      });
+    });
+
+    it('stores the bounded form on the message, outbox event and listed message while text uses the full record', async () => {
+      const stack = makeStack();
+      const { ws, post } = await recordTarget(stack, 'relayfile-record-over');
+      const subscription = await stack.app.request('/v1/subscriptions', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', authorization: `Bearer ${ws.workspaceKey}` },
+        body: JSON.stringify({ events: ['message.created'], url: 'http://127.0.0.1:1/hook' }),
+      });
+      expect(subscription.status).toBe(201);
+      const record = { title: 'T'.repeat(400), description: 'd'.repeat(20_000), user: { name: 'Grace' } };
+      const bytes = recordBytes(record);
+      const bounded = { record: null, record_omitted: { reason: 'too_large', bytes, limit: DEFAULT_RELAYFILE_RECORD_METADATA_MAX_BYTES } };
+      const expectedMetadata = {
+        ...bounded,
+        provider: 'linear', path: '/linear/issues/big.json', event: 'file.updated',
+        relayfile: { path: '/linear/issues/big.json', revision: 'rev_big', contentHash: 'hash_big', eventId: 'big', provider: 'linear' },
+      };
+
+      const response = await post('big', record);
+      expect(response.status).toBe(201);
+      const { data: accepted } = await response.json() as { data: { replayed: boolean; message_id: string } };
+      expect(accepted.replayed).toBe(false);
+
+      const [row] = await stack.runtime.deps.db.select().from(messageRows).where(eq(messageRows.id, accepted.message_id));
+      expect(row.metadata).toMatchObject(expectedMetadata);
+      expect(row.body).toBe(`Linear update\n${'T'.repeat(300)}...\n${'d'.repeat(1200)}...\nRelayfile path: /linear/issues/big.json`);
+      expect(JSON.stringify(row.metadata)).not.toContain('d'.repeat(100));
+
+      const outbox = (await stack.runtime.deps.db.select().from(pendingEvents))
+        .map((event) => event.payload as { id?: string; from_name?: string; metadata?: Record<string, unknown> })
+        .filter((payload) => payload.id === accepted.message_id);
+      expect(outbox).toHaveLength(1);
+      expect(outbox[0]).toMatchObject({ from_name: 'Grace', metadata: expectedMetadata });
+
+      const list = await stack.app.request('/v1/channels/general/messages', { headers: { authorization: `Bearer ${ws.workspaceKey}` } });
+      const { data: listed } = await list.json() as { data: Array<{ id: string; metadata: unknown }> };
+      expect(listed.find((message) => message.id === accepted.message_id)?.metadata).toMatchObject(bounded);
+    });
+
+    it('replays an over-limit event with the same id', async () => {
+      const stack = makeStack();
+      const { post } = await recordTarget(stack, 'relayfile-record-replay');
+      const record = paddedRecord(DEFAULT_RELAYFILE_RECORD_METADATA_MAX_BYTES * 4);
+      const first = await post('replayed', record);
+      expect(first.status).toBe(201);
+      const { data: accepted } = await first.json() as { data: { message_id: string } };
+      const replay = await post('replayed', record);
+      expect(replay.status).toBe(201);
+      expect(await replay.json()).toMatchObject({ data: { replayed: true, message_id: accepted.message_id } });
+      expect(await stack.runtime.deps.db.select().from(messageRows).where(eq(messageRows.id, accepted.message_id))).toHaveLength(1);
+    });
+
+    it('honours a smaller configured limit', async () => {
+      const { storedMetadata } = await recordTarget(makeStack({ recordMaxBytes: 100 }), 'relayfile-record-small-limit');
+      const small = paddedRecord(100);
+      expect((await storedMetadata('small_at', small)).record).toEqual(small);
+      expect(await storedMetadata('small_over', paddedRecord(101))).toMatchObject({
+        record: null, record_omitted: { reason: 'too_large', bytes: 101, limit: 100 },
+      });
+    });
+
+    it('never stores a non-null record with a zero limit', async () => {
+      const { storedMetadata } = await recordTarget(makeStack({ recordMaxBytes: 0 }), 'relayfile-record-zero-limit');
+      const record = { title: 'tiny' };
+      expect(await storedMetadata('zero', record)).toMatchObject({
+        record: null, record_omitted: { reason: 'too_large', bytes: recordBytes(record), limit: 0 },
+      });
+      const nullRecord = await storedMetadata('zero_null', null);
+      expect(nullRecord.record).toBeNull();
+      expect(nullRecord).not.toHaveProperty('record_omitted');
+    });
+
+    it.each([-1, Number.NaN, Number.POSITIVE_INFINITY, '4096'])('falls back to the default limit for invalid config %s', async (recordMaxBytes) => {
+      const { storedMetadata } = await recordTarget(makeStack({ recordMaxBytes }), `relayfile-record-invalid-${String(recordMaxBytes)}`);
+      const limit = DEFAULT_RELAYFILE_RECORD_METADATA_MAX_BYTES;
+      const atDefault = paddedRecord(limit);
+      expect((await storedMetadata('invalid_at', atDefault)).record).toEqual(atDefault);
+      expect(await storedMetadata('invalid_over', paddedRecord(limit + 1))).toMatchObject({
+        record: null, record_omitted: { reason: 'too_large', bytes: limit + 1, limit },
+      });
+    });
+  });
 });

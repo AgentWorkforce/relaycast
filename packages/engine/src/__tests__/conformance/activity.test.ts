@@ -1,6 +1,6 @@
 import { eq } from 'drizzle-orm';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { channels, messages } from '../../db/schema.js';
+import { channels, messages } from '../../db/tables.js';
 import { createWorkspace, makeNodeStack, registerAgent, type TestStack } from './harness.js';
 
 describe('activity feed', () => {

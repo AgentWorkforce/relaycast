@@ -1,9 +1,13 @@
+/* eslint-disable no-restricted-syntax -- SQLite-only recovery mode: it pages by
+   the implicit SQLite rowid with NOT INDEXED scans, and pruneRowidPages
+   rejects a Postgres handle with sqlx.requireSqlite before any SQL runs. */
 import { sql } from 'drizzle-orm';
 import { z } from 'zod';
 import type { EngineDb } from '../ports/database.js';
-import type { WorkspaceRetentionSettings } from '../db/schema.js';
+import type { WorkspaceRetentionSettings } from '../db/tables.js';
 import type { PruneOptions, PruneResult, RetentionDefaults } from './retention.js';
 import { snowflakeIdLowerBound } from './snowflake.js';
+import * as sqlx from '../db/sqlx.js';
 
 const safeRowid = z.number().int().min(Number.MIN_SAFE_INTEGER).max(Number.MAX_SAFE_INTEGER);
 const stateSchema = z.object({
@@ -87,7 +91,7 @@ async function recoverExpiredActiveDeliveries(
   for (let batch = 0; batch < batches; batch++) {
     // This is the pre-existing global active-expiry index from migration 0031;
     // the outer predicate repeats every condition so extension/status races are safe.
-    const changed = await db.all<{ id: string }>(sql`
+    const changed = await sqlx.all<{ id: string }>(db, sql`
       DELETE FROM deliveries
       WHERE status IN ('queued', 'delivered')
         AND expires_at IS NOT NULL AND expires_at < ${cutoffSeconds}
@@ -134,6 +138,7 @@ export async function pruneRowidPages(
   db: EngineDb,
   opts: PruneOptions & { cursorStore: RetentionCursorStore },
 ): Promise<PruneResult> {
+  sqlx.requireSqlite(db, 'rowid retention (cursorStore)', 'it pages by the implicit SQLite rowid; use the indexed retention path');
   const nowMs = (opts.now ?? new Date()).getTime();
   if (!Number.isFinite(nowMs)) throw new Error('Invalid retention clock');
   const limit = bounded(opts.batchLimit, ROWID_PAGE_LIMIT, ROWID_PAGE_LIMIT);
@@ -180,7 +185,7 @@ export async function pruneRowidPages(
     const position = state.tables[table.name] ??= {};
     if (Date.now() >= deadline) break;
     if (position.high === undefined) {
-      const [last] = await db.all<{ _rowid: number }>(sql`
+      const [last] = await sqlx.all<{ _rowid: number }>(db, sql`
         SELECT rowid AS _rowid FROM ${sql.raw(table.name)} NOT INDEXED ORDER BY rowid DESC LIMIT 1
       `);
       if (!last) {
@@ -192,7 +197,7 @@ export async function pruneRowidPages(
       position.high = safeRowid.parse(last._rowid);
     }
     if (Date.now() >= deadline) break;
-    const page = await db.all<Candidate>(sql`
+    const page = await sqlx.all<Candidate>(db, sql`
       WITH page AS MATERIALIZED (
         SELECT rowid AS _rowid, ${sql.raw(table.columns)} FROM ${sql.raw(table.name)} NOT INDEXED
         WHERE rowid <= ${position.high}
@@ -222,7 +227,7 @@ export async function pruneRowidPages(
         const status = table.result === 'deliveries' ? sql`AND status = ${row.status}` : sql``;
         return sql`(rowid = ${row._rowid} AND ${identity} ${policy} ${created} ${status})`;
       });
-      const deleted = await db.all(sql`DELETE FROM ${sql.raw(table.name)} NOT INDEXED
+      const deleted = await sqlx.all(db, sql`DELETE FROM ${sql.raw(table.name)} NOT INDEXED
         WHERE (${sql.join(guards, sql` OR `)}) AND ${sql.raw(table.guard)} RETURNING 1`);
       result[table.result] += deleted.length;
     }

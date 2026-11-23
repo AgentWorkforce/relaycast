@@ -3,7 +3,7 @@ import type {
   WorkspaceProvenanceInput,
   WorkspaceUsageClassification,
 } from '@relaycast/types';
-import type { WorkspaceProvenanceRecord } from '../db/schema.js';
+import type { WorkspaceProvenanceRecord } from '../db/tables.js';
 import {
   extractActorIdentity,
   extractOriginActor,

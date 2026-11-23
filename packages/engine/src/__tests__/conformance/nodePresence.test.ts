@@ -3,7 +3,7 @@ import { eq } from 'drizzle-orm';
 import { AGENT_LIVENESS_TTL_MS, sweepStaleAgents, touchLastSeen, updateAgent } from '../../engine/agent.js';
 import { markNodeOffline } from '../../engine/node.js';
 import { applyStatusEventEffect, recordSessionEvent, type SessionEventType } from '../../engine/sessionEvent.js';
-import { agents, agentNodeBindings, nodes } from '../../db/schema.js';
+import { agents, agentNodeBindings, nodes } from '../../db/tables.js';
 import { attachDirectNodeSocket, createWorkspace, makeNodeStack, registerAgent } from './harness.js';
 
 async function setup() {

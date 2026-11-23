@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { agentNodeBindings, agents, nodes } from '../../db/schema.js';
+import { agentNodeBindings, agents, nodes } from '../../db/tables.js';
 import { makeNodeStack, createWorkspace, registerAgent, type TestStack } from './harness.js';
 
 /**

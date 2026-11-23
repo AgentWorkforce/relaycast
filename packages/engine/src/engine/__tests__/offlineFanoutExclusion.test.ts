@@ -10,7 +10,7 @@ import {
   nodeProviders,
   nodes,
   workspaces,
-} from '../../db/schema.js';
+} from '../../db/tables.js';
 import type { EngineDb } from '../../ports/database.js';
 import * as messageEngine from '../message.js';
 import * as groupDmEngine from '../groupDm.js';

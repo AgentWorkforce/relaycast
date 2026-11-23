@@ -1,5 +1,5 @@
 import { eq, and, ne, sql } from 'drizzle-orm';
-import { files, agents } from '../db/schema.js';
+import { files, agents } from '../db/tables.js';
 import { generateId } from './snowflake.js';
 import type { getDb } from '../db/index.js';
 import type { FileStorage } from '../ports/files.js';

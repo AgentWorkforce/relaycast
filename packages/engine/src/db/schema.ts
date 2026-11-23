@@ -36,6 +36,15 @@ export interface WorkspaceRetentionSettings {
   workspace_event_ttl_days?: number | null;
 }
 
+/**
+ * Admin-set leader patterns, stored in `workspaces.leaders`. Each entry is an
+ * exact agent name or a glob (`*`, `?`) matched against registered agent names.
+ * Owned by `GET/PUT /v1/workspace/leaders`; not part of the workspace shape.
+ */
+export interface WorkspaceLeadersSettings {
+  patterns: string[];
+}
+
 export type WorkspaceProvenanceRecord = WorkspaceProvenance;
 
 export interface ObserverTokenFilters {
@@ -66,6 +75,7 @@ export const workspaces = sqliteTable(
     createdAt: integer('created_at', { mode: 'timestamp' }).notNull().default(sql`(unixepoch())`),
     metadata: text('metadata', { mode: 'json' }).$type<Record<string, unknown>>().default({}),
     retention: text('retention', { mode: 'json' }).$type<WorkspaceRetentionSettings>(),
+    leaders: text('leaders', { mode: 'json' }).$type<WorkspaceLeadersSettings>(),
     // A non-null deadline is an explicit, immutable opt-in to whole-workspace
     // deletion. Persistent workspaces always leave this null.
     expiresAt: integer('expires_at', { mode: 'timestamp' }),
@@ -719,6 +729,9 @@ export const messages = sqliteTable(
       .notNull()
       .references(() => agents.id),
     threadId: text('thread_id').references((): AnySQLiteColumn => messages.id),
+    // The message this one explicitly answers (DM `reply_to_message_id`, or a
+    // thread reply's parent); drives the sender's `replied` delivery state.
+    replyToMessageId: text('reply_to_message_id'),
     body: text('body').notNull(),
     blocks: text('blocks', { mode: 'json' }),
     metadata: text('metadata', { mode: 'json' }).$type<Record<string, unknown>>().default({}),
@@ -1092,7 +1105,7 @@ export const eventSubscriptions = sqliteTable(
       .notNull()
       .references(() => workspaces.id, { onDelete: 'cascade' }),
     events: text('events', { mode: 'json' }).notNull().$type<string[]>(),
-    filter: text('filter', { mode: 'json' }).$type<{ channel?: string; mentions?: string }>(),
+    filter: text('filter', { mode: 'json' }).$type<{ channel?: string; mentions?: string; recipients?: string[] }>(),
     url: text('url').notNull(),
     headers: text('headers', { mode: 'json' }).$type<Record<string, string>>(),
     secret: text('secret'),
@@ -1176,11 +1189,20 @@ export const actionInvocations = sqliteTable(
       .default('legacy_unknown'),
     callerId: text('caller_id').references(() => agents.id, { onDelete: 'set null' }),
     callerName: text('caller_name'),
+    // Agent on whose behalf the caller issued the invocation (for example a
+    // hosted launcher spawning for another agent). Null when the caller is
+    // the requester. Distinct from caller_id, which is always authenticated.
+    requesterAgentId: text('requester_agent_id').references(() => agents.id, { onDelete: 'set null' }),
+    requesterName: text('requester_name'),
     // Immutable response snapshots for idempotent replay. Deliberately not
     // foreign keys: a later handler release/deletion or routing move must not
     // rewrite the 201 acknowledgement for the invocation already dispatched.
     handlerAgentId: text('handler_agent_id'),
     handlerNodeId: text('handler_node_id'),
+    // Ownership token for a strict builtin spawn that is durably placed but
+    // has definitely not crossed the provider send boundary. A retry may
+    // claim only this exact token; the dispatch claim clears it before I/O.
+    spawnPlacementToken: text('spawn_placement_token'),
     input: text('input', { mode: 'json' }).default({}),
     taskState: text('task_state', { mode: 'json' }).$type<TaskInvocationState>(),
     output: text('output', { mode: 'json' }),
@@ -1189,6 +1211,10 @@ export const actionInvocations = sqliteTable(
     durationMs: integer('duration_ms'),
     dispatchedNodeId: text('dispatched_node_id').references(() => nodes.id, { onDelete: 'set null' }),
     dispatchedAt: integer('dispatched_at', { mode: 'timestamp' }),
+    // Monotonic identity for each strict spawn dispatch claim. Timestamps are
+    // stored at second precision, so they cannot fence a restored redispatch
+    // that lands within the same second as the stale attempt.
+    spawnDispatchGeneration: integer('spawn_dispatch_generation').notNull().default(0),
     // Generation of the node liveness epoch that accepted this dispatch.
     // A lost-node settle only reschedules attempts older than its claim.
     nodeLivenessRevision: integer('node_liveness_revision').notNull().default(0),
@@ -1325,7 +1351,12 @@ export const deliveries = sqliteTable(
     lastDispatchError: text('last_dispatch_error'),
     expiresAt: integer('expires_at', { mode: 'timestamp' }),
     deliveredAt: integer('delivered_at', { mode: 'timestamp' }),
+    // The receiving software's acceptance (`delivery.accepted` / http_push 2xx).
+    acceptedAt: integer('accepted_at', { mode: 'timestamp' }),
     ackedAt: integer('acked_at', { mode: 'timestamp' }),
+    // The recipient's DM reply in the same conversation (DMs only).
+    repliedAt: integer('replied_at', { mode: 'timestamp' }),
+    replyMessageId: text('reply_message_id'),
     deadLetteredAt: integer('dead_lettered_at', { mode: 'timestamp' }),
     retryable: integer('retryable', { mode: 'boolean' }),
     availableAt: integer('available_at', { mode: 'timestamp' }),

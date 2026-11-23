@@ -2,6 +2,7 @@ import { Hono } from 'hono';
 import { z } from 'zod';
 import type { AppEnv } from '../env.js';
 import { requireAuth, requireAgentToken, requireWorkspaceRead, requireWorkspaceKey } from '../middleware/auth.js';
+import { hideDmChannelFromOutsiders } from '../middleware/dmAccess.js';
 import { rateLimit } from '../middleware/rateLimit.js';
 import * as channelEngine from '../engine/channel.js';
 import { fanoutToChannel, fanoutToWorkspace } from './fanout.js';
@@ -128,6 +129,7 @@ channelRoutes.get(
 channelRoutes.get(
   '/channels/:name',
   requireWorkspaceRead('channels:read'),
+  hideDmChannelFromOutsiders(),
   rateLimit,
   async (c) => {
     try {
@@ -158,6 +160,7 @@ channelRoutes.get(
 channelRoutes.patch(
   '/channels/:name',
   requireAuth,
+  hideDmChannelFromOutsiders(),
   rateLimit,
   async (c) => {
     try {
@@ -203,6 +206,7 @@ channelRoutes.patch(
 channelRoutes.patch(
   '/channels/:name/topic',
   requireAuth,
+  hideDmChannelFromOutsiders(),
   rateLimit,
   async (c) => {
     try {
@@ -248,6 +252,7 @@ channelRoutes.patch(
 channelRoutes.delete(
   '/channels/:name',
   requireAuth,
+  hideDmChannelFromOutsiders(),
   rateLimit,
   async (c) => {
     try {
@@ -288,6 +293,7 @@ channelRoutes.delete(
 channelRoutes.post(
   '/channels/:name/join',
   requireAgentToken,
+  hideDmChannelFromOutsiders({ refuseParticipants: true }),
   rateLimit,
   async (c) => {
     try {
@@ -333,6 +339,7 @@ channelRoutes.post(
 channelRoutes.post(
   '/channels/:name/leave',
   requireAgentToken,
+  hideDmChannelFromOutsiders({ refuseParticipants: true }),
   rateLimit,
   async (c) => {
     try {
@@ -379,6 +386,7 @@ channelRoutes.post(
 channelRoutes.get(
   '/channels/:name/members',
   requireWorkspaceRead('channels:read'),
+  hideDmChannelFromOutsiders(),
   rateLimit,
   async (c) => {
     try {
@@ -411,6 +419,7 @@ channelRoutes.get(
 channelRoutes.post(
   '/channels/:name/invite',
   requireAuth,
+  hideDmChannelFromOutsiders({ refuseParticipants: true }),
   rateLimit,
   async (c) => {
     try {
@@ -471,6 +480,7 @@ channelRoutes.post(
 channelRoutes.post(
   '/channels/:name/mute',
   requireAgentToken,
+  hideDmChannelFromOutsiders(),
   rateLimit,
   async (c) => {
     try {
@@ -516,6 +526,7 @@ channelRoutes.post(
 channelRoutes.post(
   '/channels/:name/unmute',
   requireAgentToken,
+  hideDmChannelFromOutsiders(),
   rateLimit,
   async (c) => {
     try {

@@ -14,7 +14,9 @@ export const WORKSPACE_KEY_MAX_GRACE_MS = 3_600_000;
  * KV marker to arm or repair. `workspace_admin` is a self-host extension
  * (absent on the hosted gateway): `create` advertises POST /internal/workspaces
  * and `server_minted_key` that POST /internal/workspaces/:id/api-key may omit
- * `api_key` to have the engine mint the replacement.
+ * `api_key` to have the engine mint the replacement. `expiry` advertises
+ * POST /internal/workspaces/:id/expiry (move or clear a live workspace's
+ * deadline), which the hosted gateway serves too.
  */
 export const INTERNAL_CAPABILITIES = {
   workspace_key_push: {
@@ -29,5 +31,6 @@ export const INTERNAL_CAPABILITIES = {
     create: true,
     delete: true,
     server_minted_key: true,
+    expiry: true,
   },
 } as const;

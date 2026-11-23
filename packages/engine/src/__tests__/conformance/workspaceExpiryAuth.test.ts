@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { eq } from 'drizzle-orm';
 import { createWorkspace, makeNodeStack, registerAgent, type TestStack } from './harness.js';
-import { workspaces } from '../../db/schema.js';
+import { workspaces } from '../../db/tables.js';
 import { MIN_BOOTSTRAP_IDEMPOTENCY_KEY_LENGTH } from '../../engine/workspace.js';
 import { authenticateNodeWs, authenticateRealtimeWs } from '../../engine/wsAuth.js';
 import { sha256Hex } from '../../lib/crypto.js';

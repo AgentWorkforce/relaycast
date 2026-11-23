@@ -1,6 +1,6 @@
 import { and, eq, ne, sql } from 'drizzle-orm';
 import type { getDb } from '../db/index.js';
-import { agentIdentityAudit, agentRecoveryCredentials, agents } from '../db/schema.js';
+import { agentIdentityAudit, agentRecoveryCredentials, agents } from '../db/tables.js';
 import { randomHex, sha256Hex } from '../lib/crypto.js';
 import { codedError } from '../lib/httpError.js';
 import { runAtomicWrites } from '../ports/database.js';
@@ -8,6 +8,7 @@ import { generateId } from './snowflake.js';
 import { AGENT_TOKEN_GRACE_MS } from './tokenRotate.js';
 import { RELEASED_AGENT_STATUS } from './agent.js';
 import { issueCredential } from '../auth/credentials.js';
+import * as sqlx from '../db/sqlx.js';
 
 type Db = ReturnType<typeof getDb>;
 
@@ -50,7 +51,7 @@ function auditInsertAfterTokenChange(
   // The SELECT sees the token update earlier in the same transaction/batch.
   // If the target predicate matched no live agent, it produces no row, so D1
   // cannot commit a successful-looking audit entry for a failed mutation.
-  return writeDb.insert(agentIdentityAudit).select(
+  return sqlx.insertSelect(writeDb, agentIdentityAudit,
     writeDb
       .select({
         id: sql<string>`${row.id}`.as('id'),
@@ -64,7 +65,7 @@ function auditInsertAfterTokenChange(
         sessionRef: sql<string | null>`${row.sessionRef ?? null}`.as('session_ref'),
         nodeId: sql<string | null>`${row.nodeId ?? null}`.as('node_id'),
         originActor: sql<string>`${row.originActor}`.as('origin_actor'),
-        createdAt: sql<Date>`unixepoch()`.as('created_at'),
+        createdAt: sql<Date>`${sqlx.now(writeDb)}`.as('created_at'),
       })
       .from(agents)
       .where(and(targetPredicate(target), eq(agents.tokenHash, tokenHash))),

@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { eq } from 'drizzle-orm';
 import { makeNodeStack, createWorkspace, registerAgent, type TestStack } from './harness.js';
 import { triggerIntegrationMessage } from '../../engine/inboundWebhook.js';
-import { messages } from '../../db/schema.js';
+import { messages } from '../../db/tables.js';
 
 describe('integration delivery backpressure and join freshness', () => {
   let stack: TestStack;

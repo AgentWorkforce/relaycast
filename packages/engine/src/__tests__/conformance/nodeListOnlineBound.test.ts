@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { eq } from 'drizzle-orm';
-import { nodes } from '../../db/schema.js';
+import { nodes } from '../../db/tables.js';
 import { listNodes, NODE_ONLINE_CANDIDATE_RECENCY_MS } from '../../engine/node.js';
 import { configureNodeLiveness } from '../../engine/nodeLiveness.js';
 import { NODE_LIVENESS_TTL_MS } from '../../engine/placement.js';

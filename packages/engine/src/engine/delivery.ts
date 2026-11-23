@@ -1,10 +1,11 @@
 import { nodeLivenessAuthority } from './nodeLiveness.js';
 import { parseMessageMentions } from './mentions.js';
-import { eq, and, asc, exists, isNull, isNotNull, inArray, lt, ne, not, notInArray, lte, gt, sql, getTableColumns, type SQL } from 'drizzle-orm';
+import { eq, and, asc, exists, isNull, isNotNull, inArray, lt, ne, not, notInArray, lte, gt, sql, getTableColumns, type AnyColumn, type SQL } from 'drizzle-orm';
 import type { getDb } from '../db/index.js';
-import { deliveries, messages, agents, nodes, readReceipts, channelMembers, channels, dmConversations } from '../db/schema.js';
-import type { DeliveryStatus } from '@relaycast/types';
+import { deliveries, messages, agents, nodes, readReceipts, channelMembers, channels, dmConversations } from '../db/tables.js';
+import type { DeliveryState, DeliveryStatus } from '@relaycast/types';
 import { runAtomicWrites, type AtomicWrite } from '../ports/database.js';
+import type { EngineUpdateSet } from '../ports/engineDb.js';
 import type { NodeConnectionRegistry } from '../ports/realtime.js';
 import { isProviderAgentDeliveryReady } from '../ports/realtime.js';
 import { buildDeliverFrame, buildDeliverPayload, buildMessageCreatedEventData, buildThreadReplyEventData, buildDmReceivedEventData, buildGroupDmReceivedEventData } from './deliveryWire.js';
@@ -25,6 +26,9 @@ import { withEngineOperation } from '../lib/engineDiagnostics.js';
 import { advanceDmParticipantReadCursor } from './receipt.js';
 import { notifySenderDeliveryReceipts } from './deliveryReceipts.js';
 import type { EventDispatchEngine } from './eventDispatch.js';
+import * as sqlx from '../db/sqlx.js';
+import { deliveryStateOf } from './deliveryState.js';
+export { deliveryStateOf } from './deliveryState.js';
 
 type Db = ReturnType<typeof getDb>;
 
@@ -40,9 +44,13 @@ export type DeliveryReplayDeps = Pick<EventDispatchEngine, 'realtime' | 'nodeCon
 type DeliveryRow = typeof deliveries.$inferSelect;
 // SQL-wrapped columns retain Drizzle's timestamp/boolean decoders when FROM
 // includes an explicit SQLite INDEXED BY clause rather than a table object.
-const indexedDeliveryColumns = Object.fromEntries(
-  Object.entries(getTableColumns(deliveries)).map(([name, column]) => [name, sql`${column}`.mapWith(column)]),
-) as { [K in keyof DeliveryRow]: SQL<DeliveryRow[K]> };
+// Memoised on first use: table bindings are resolved at runtime (db/tables.ts).
+let indexedDeliveryColumnsCache: { [K in keyof DeliveryRow]: SQL<DeliveryRow[K]> } | undefined;
+function indexedDeliveryColumns(): { [K in keyof DeliveryRow]: SQL<DeliveryRow[K]> } {
+  return indexedDeliveryColumnsCache ??= Object.fromEntries(
+    Object.entries(getTableColumns(deliveries)).map(([name, column]) => [name, sql`${column}`.mapWith(column)]),
+  ) as { [K in keyof DeliveryRow]: SQL<DeliveryRow[K]> };
+}
 type DeliveryWithChannel = DeliveryRow & { channelId: string };
 type PendingDeliveryRow = {
   delivery: DeliveryRow;
@@ -52,6 +60,7 @@ type PendingDeliveryRow = {
   metadata: unknown;
   hasAttachments: boolean;
   threadId: string | null;
+  replyToMessageId: string | null;
   createdAt: Date;
   channelId: string;
   channelName: string;
@@ -119,7 +128,7 @@ export async function listDeliveries(
   db: Db,
   workspaceId: string,
   agentId: string,
-  opts: { status?: DeliveryStatus; limit?: number } = {},
+  opts: { status?: DeliveryStatus; limit?: number; after_seq?: number } = {},
 ) {
   return withEngineOperation('deliveries.list', workspaceId, () => listDeliveriesUnlabeled(db, workspaceId, agentId, opts));
 }
@@ -128,7 +137,7 @@ async function listDeliveriesUnlabeled(
   db: Db,
   workspaceId: string,
   agentId: string,
-  opts: { status?: DeliveryStatus; limit?: number },
+  opts: { status?: DeliveryStatus; limit?: number; after_seq?: number },
 ) {
   const limit = Math.min(Math.max(opts.limit ?? 100, 1), 200);
   const statusFilter = opts.status
@@ -153,9 +162,10 @@ async function listDeliveriesUnlabeled(
         eq(deliveries.agentId, agentId),
         statusFilter,
         activeExpiryFilter,
+        opts.after_seq === undefined ? undefined : gt(deliveries.seq, opts.after_seq),
       ),
     )
-    .orderBy(asc(deliveries.createdAt), asc(deliveries.id))
+    .orderBy(...(opts.after_seq === undefined ? [asc(deliveries.createdAt), asc(deliveries.id)] : [asc(deliveries.seq)]))
     .limit(limit);
 
   if (rows.length === 0) return [];
@@ -170,6 +180,7 @@ async function listDeliveriesUnlabeled(
       body: messages.body,
       metadata: messages.metadata,
       threadId: messages.threadId,
+      replyToMessageId: messages.replyToMessageId,
       createdAt: messages.createdAt,
       hasAttachments: messages.hasAttachments,
     })
@@ -256,7 +267,65 @@ async function getOwnedDelivery(
 // The outcome of a transition: the (possibly unchanged) delivery plus whether
 // this call actually mutated state. Callers fan out lifecycle events only when
 // `changed` is true so idempotent retries don't emit duplicate notifications.
-export type TransitionResult = { delivery: ReturnType<typeof serializeDelivery>; changed: boolean };
+export type TransitionResult = {
+  delivery: ReturnType<typeof serializeDelivery>;
+  changed: boolean;
+  /** Set by {@link ackDelivery}: the ack applied the row's pending reply link (see {@link markDeliveriesReplied}). */
+  repliedDeliveryIds?: string[];
+};
+
+/**
+ * A reply link {@link markDeliveriesReplied} recorded while the row was still
+ * `queued`: `reply_message_id` set, `replied_at` not yet.
+ */
+export function pendingReplyLink(): SQL {
+  return sql`(${deliveries.replyMessageId} IS NOT NULL AND ${deliveries.repliedAt} IS NULL)`;
+}
+
+/**
+ * `replied_at` for a row this statement moves out of `queued`: a pending reply
+ * link is applied by the transition's own write, never by a follow-up
+ * statement a crash could lose.
+ */
+export function repliedAtOnTransition(source: sqlx.DialectSource): SQL<Date | null> {
+  return sql<Date | null>`CASE WHEN ${pendingReplyLink()} THEN ${sqlx.now(source)} ELSE ${deliveries.repliedAt} END`;
+}
+
+/** A row's reply-link columns as {@link lockReplyLinks} read them. */
+export type ReplyLinkState = { id: string; replyMessageId: string | null; repliedAt: Date | null };
+
+/**
+ * The read that opens a transition's atomic unit: every delivery row `scope`
+ * names, in id order, locked until the unit commits on PostgreSQL
+ * ({@link sqlx.lockSelectedRows}). `scope` must cover every row the
+ * transition's UPDATE can match (its ids, not its status filter), and not only
+ * the rows carrying a pending link: under READ COMMITTED an unlocked read lets
+ * a reply ({@link markDeliveriesReplied}) commit a link between this read and
+ * the UPDATE, which then applies it unreported. Locked, such a reply waits for
+ * this unit and, finding the row no longer `queued`, stamps and reports it
+ * itself. On SQLite / D1 the unit is already serialized.
+ */
+export function lockReplyLinks(tx: Db, scope: SQL) {
+  return sqlx.lockSelectedRows(tx, tx
+    .select({ id: deliveries.id, replyMessageId: deliveries.replyMessageId, repliedAt: deliveries.repliedAt })
+    .from(deliveries)
+    .where(scope)
+    .orderBy(asc(deliveries.id)));
+}
+
+/**
+ * The rows a transition applied a reply link to: pending when
+ * {@link lockReplyLinks} read them, stamped in the UPDATE's RETURNING rows
+ * (which carry only the new values). A reply a concurrent write stamped
+ * before the unit began is not pending, so it is never reported twice.
+ */
+export function appliedReplyLinks(
+  locked: readonly ReplyLinkState[],
+  updated: readonly { id: string; repliedAt: Date | null }[],
+): string[] {
+  const pending = new Set(locked.filter((row) => row.replyMessageId !== null && row.repliedAt === null).map((row) => row.id));
+  return updated.filter((row) => pending.has(row.id) && row.repliedAt !== null).map((row) => row.id);
+}
 
 /**
  * Idempotently transition a delivery to `acked`. `acked` is terminal,
@@ -278,8 +347,10 @@ export async function ackDelivery(
   // cursor — `deliverPendingToNode` filters `seq > delivery_ack_seq`, so an
   // over-advanced cursor would skip the lower unacked row forever on node
   // replay. The row's `acked` status already excludes it from replay.
-  const [updated] = await ackRows(db, workspaceId, agentId, [existing]);
-  return resolveTransition(db, workspaceId, agentId, deliveryId, updated, existing.channelId);
+  // The ack applies a reply recorded while the row was queued in the same write.
+  const { rows: [updated], repliedIds } = await ackRows(db, workspaceId, agentId, [existing]);
+  const result = await resolveTransition(db, workspaceId, agentId, deliveryId, updated, existing.channelId);
+  return result && repliedIds.length > 0 ? { ...result, repliedDeliveryIds: repliedIds } : result;
 }
 
 /**
@@ -363,7 +434,7 @@ export async function deferDelivery(
   // Delta=0 transitions (queued→queued, repeated/no-op defers) stay allowed
   // even at/over cap, and terminal failures are never blocked from draining.
   const workspaceCapacityOk = opts.workspacePolicy
-    ? sql`(${deliveries.status} <> 'failed' OR ${deliveries.expiresAt} <= unixepoch() OR (${workspaceActiveDepthSql(workspaceId)}) < ${workspaceGrowthLimit(opts.workspacePolicy, 'targeted')})`
+    ? sql`(${deliveries.status} <> 'failed' OR ${deliveries.expiresAt} <= ${sqlx.now(db)} OR (${workspaceActiveDepthSql(workspaceId)}) < ${workspaceGrowthLimit(opts.workspacePolicy, 'targeted')})`
     : undefined;
   const [updated] = await db
     .update(deliveries)
@@ -409,27 +480,27 @@ function readCursorWrites(
   // after it, the row is already `acked` and this predicate would match nothing.
   const ackable = deliveryStillAckable(workspaceId, row.id);
   return [
-    tx
-      .insert(readReceipts)
-      .select(
+    sqlx.insertSelect(
+      tx,
+      readReceipts,
         tx.select({
           messageId: sql<string>`${row.messageId}`.as('message_id'),
           agentId: sql<string>`${agentId}`.as('agent_id'),
-          readAt: sql<Date>`unixepoch()`.as('read_at'),
+          readAt: sql<Date>`${sqlx.now(tx)}`.as('read_at'),
         }).from(deliveries).where(and(
           eq(deliveries.id, row.id),
           eq(deliveries.workspaceId, workspaceId),
           notInArray(deliveries.status, ['acked', 'dead_lettered']),
         )),
-      )
-      .onConflictDoNothing(),
+      { onConflictDoNothing: true },
+    ),
     tx
       .update(channelMembers)
       .set({ lastReadId: row.messageId })
       .where(and(
         eq(channelMembers.channelId, row.channelId),
         eq(channelMembers.agentId, agentId),
-        sql`(${channelMembers.lastReadId} IS NULL OR CAST(${channelMembers.lastReadId} AS BIGINT) < CAST(${row.messageId} AS BIGINT))`,
+        sql`(${channelMembers.lastReadId} IS NULL OR ${sqlx.castNumeric(tx, channelMembers.lastReadId)} < ${sqlx.castNumeric(tx, sql`${row.messageId}`)})`,
         ackable,
       )),
     advanceDmParticipantReadCursor(tx, agentId, row.channelId, row.messageId, ackable),
@@ -446,8 +517,10 @@ async function ackRows(
   // out-of-order acks so the cursor is never advanced past a still-unacked
   // lower-seq row (which `deliverPendingToNode` would then skip forever).
   advanceCursorTo?: number,
-): Promise<DeliveryRow[]> {
+): Promise<{ rows: DeliveryRow[]; repliedIds: string[] }> {
   const ids = rows.map((row) => row.id);
+  const scope = and(eq(deliveries.workspaceId, workspaceId), inArray(deliveries.id, ids))!;
+  const ackable = and(scope, notInArray(deliveries.status, ['acked', 'dead_lettered']));
   // One batch with the ack. On D1, `runAtomic` would commit the ack before the
   // cursor write, and a retry skips an already-acked delivery.
   const results = await runAtomicWrites(db, (tx) => {
@@ -468,26 +541,68 @@ async function ackRows(
     ];
     for (const row of rows) writes.push(...readCursorWrites(tx, workspaceId, agentId, row));
     if (ids.length > 0) {
+      // Lock the rows and read their links just before the ack, so the
+      // links seen pending are exactly the ones it applies.
+      writes.push(lockReplyLinks(tx, scope));
       writes.push(tx
         .update(deliveries)
         .set({
           status: TERMINAL_SUCCESS_STATUS,
           nextAttemptAt: null,
           lastDispatchError: null,
+          // Consuming a row implies the receiving software held it.
+          acceptedAt: sql`coalesce(${deliveries.acceptedAt}, ${sqlx.now(tx)})`,
           ackedAt: new Date(),
+          // Leaving `queued` applies a reply recorded while it was queued.
+          repliedAt: repliedAtOnTransition(tx),
           updatedAt: new Date(),
         })
-        .where(and(
-          eq(deliveries.workspaceId, workspaceId),
-          inArray(deliveries.id, ids),
-          notInArray(deliveries.status, ['acked', 'dead_lettered']),
-        ))
+        .where(ackable)
         .returning());
     }
     return writes;
   });
-  // The status update is the last statement, so its RETURNING rows are last.
-  return ids.length > 0 ? results[results.length - 1] as DeliveryRow[] : [];
+  if (ids.length === 0) return { rows: [], repliedIds: [] };
+  // The status update is the last statement, so its RETURNING rows are last;
+  // the locked link read immediately precedes it.
+  const updated = results[results.length - 1] as DeliveryRow[];
+  const locked = results[results.length - 2] as ReplyLinkState[];
+  return { rows: updated, repliedIds: appliedReplyLinks(locked, updated) };
+}
+
+/**
+ * A node agent's per-delivery consumption (`delivery.ack { delivery_id }`):
+ * acks that row only, never moving the cumulative cursor (see
+ * {@link ackDelivery}), so an out-of-order success never hides an unconsumed
+ * lower seq from reconnect replay. `null` when the agent is not hosted by
+ * this node and provider.
+ */
+export async function ackNodeDelivery(
+  db: Db,
+  workspaceId: string,
+  nodeId: string,
+  providerName: string,
+  agentName: string,
+  deliveryId: string,
+): Promise<{ agent_id: string; agent_name: string; acked_delivery_ids: string[]; replied_delivery_ids: string[] } | null> {
+  const [agent] = await db
+    .select({ id: agents.id, name: agents.name })
+    .from(agents)
+    .where(and(
+      eq(agents.workspaceId, workspaceId),
+      eq(agents.name, agentName),
+      eq(agents.locationType, 'via_node'),
+      eq(agents.locationNodeId, nodeId),
+      eq(agents.providerName, providerName),
+    ));
+  if (!agent) return null;
+  const result = await ackDelivery(db, workspaceId, agent.id, deliveryId);
+  return {
+    agent_id: agent.id,
+    agent_name: agent.name,
+    acked_delivery_ids: result?.changed ? [result.delivery.id] : [],
+    replied_delivery_ids: result?.repliedDeliveryIds ?? [],
+  };
 }
 
 export async function ackDeliveriesUpToSeq(
@@ -497,7 +612,7 @@ export async function ackDeliveriesUpToSeq(
   providerName: string,
   agentName: string,
   upToSeq: number,
-): Promise<{ agent_id: string; agent_name: string; up_to_seq: number; acked: number; acked_delivery_ids: string[] } | null> {
+): Promise<{ agent_id: string; agent_name: string; up_to_seq: number; acked: number; acked_delivery_ids: string[]; replied_delivery_ids: string[] } | null> {
   const [agent] = await db
     .select()
     .from(agents)
@@ -511,7 +626,7 @@ export async function ackDeliveriesUpToSeq(
   if (!agent) return null;
 
   if (upToSeq <= agent.deliveryAckSeq) {
-    return { agent_id: agent.id, agent_name: agent.name, up_to_seq: upToSeq, acked: 0, acked_delivery_ids: [] };
+    return { agent_id: agent.id, agent_name: agent.name, up_to_seq: upToSeq, acked: 0, acked_delivery_ids: [], replied_delivery_ids: [] };
   }
 
   const rows = await db
@@ -533,14 +648,16 @@ export async function ackDeliveriesUpToSeq(
   // last chunk, so a later chunk failing cannot skip rows still queued.
   if (pending.length === 0) {
     await ackRows(db, workspaceId, agent.id, [], upToSeq);
-    return { agent_id: agent.id, agent_name: agent.name, up_to_seq: upToSeq, acked: 0, acked_delivery_ids: [] };
+    return { agent_id: agent.id, agent_name: agent.name, up_to_seq: upToSeq, acked: 0, acked_delivery_ids: [], replied_delivery_ids: [] };
   }
   const ackedDeliveryIds: string[] = [];
+  const repliedDeliveryIds: string[] = [];
   for (let offset = 0; offset < pending.length; offset += DELIVERY_EXPIRY_BATCH_SIZE) {
     const chunk = pending.slice(offset, offset + DELIVERY_EXPIRY_BATCH_SIZE);
     const last = offset + chunk.length === pending.length;
-    const updated = await ackRows(db, workspaceId, agent.id, chunk, last ? upToSeq : undefined);
+    const { rows: updated, repliedIds } = await ackRows(db, workspaceId, agent.id, chunk, last ? upToSeq : undefined);
     for (const row of updated) ackedDeliveryIds.push(row.id);
+    repliedDeliveryIds.push(...repliedIds);
   }
   return {
     agent_id: agent.id,
@@ -548,38 +665,293 @@ export async function ackDeliveriesUpToSeq(
     up_to_seq: upToSeq,
     acked: ackedDeliveryIds.length,
     acked_delivery_ids: ackedDeliveryIds,
+    replied_delivery_ids: repliedDeliveryIds,
   };
+}
+
+/**
+ * `column <rest>` with SQLite's unary `+` on the column, which disqualifies the
+ * term from index selection, so `id IN (...)` is the only indexable term of a
+ * bounded id-page write. Without it the planner can pick a workspace/status
+ * index and scan retained history. This replaces `INDEXED BY`, which drizzle's
+ * update builder cannot emit, and a raw UPDATE cannot join the atomic unit in
+ * {@link transitionWithReplyLinks}: on Node a raw `tx.all` executes when it is
+ * built (before the pre-read), and on D1 drizzle's `batch()` cannot bind a raw
+ * statement's parameters (see inbox.ts). PostgreSQL has no such planner pin;
+ * there the term is emitted unchanged ({@link sqlx.unindexed}).
+ */
+function onlyIdIndex(db: Db, column: AnyColumn, rest: SQL): SQL {
+  return sql`${sqlx.unindexed(db, column)} ${rest}`;
+}
+
+/**
+ * One atomic unit (see {@link ackRows}): lock and read the rows `scope` names
+ * ({@link lockReplyLinks}), then move the ones that also match `where` with
+ * `set`, applying their pending reply links in the same UPDATE
+ * ({@link repliedAtOnTransition}). A row reports a reply only if this unit saw
+ * its link pending and the UPDATE returned it stamped, never because its
+ * `replied_at` equals some timestamp: a reply a concurrent write stamped
+ * before this unit began is not reported twice.
+ */
+async function transitionWithReplyLinks(
+  db: Db,
+  scope: SQL,
+  where: SQL,
+  set: EngineUpdateSet<typeof deliveries>,
+): Promise<{ updated: { id: string }[]; appliedReplies: string[] }> {
+  const [locked, updated] = await runAtomicWrites(db, (tx) => [
+    lockReplyLinks(tx, scope),
+    tx.update(deliveries)
+      .set({ ...set, repliedAt: repliedAtOnTransition(tx) })
+      .where(and(scope, where))
+      .returning({ id: deliveries.id, repliedAt: deliveries.repliedAt }),
+  ]) as [ReplyLinkState[], { id: string; repliedAt: Date | null }[]];
+  return { updated, appliedReplies: appliedReplyLinks(locked, updated) };
 }
 
 /**
  * Mark still-queued rows delivered using bounded, explicit ID-index writes.
  * Returns the ids that transitioned (`queued` -> `delivered`), so the caller
- * can tell their senders.
+ * can tell their senders, and the ids whose pending reply link the same
+ * statement applied (see {@link markDeliveriesReplied}); the caller reports
+ * those `replied` after the `delivered`. `accepted` also stamps `accepted_at`: the transport itself
+ * proved the receiving software took the row (an `http_push` 2xx), which a
+ * socket write does not.
  */
 export async function markDeliveriesDelivered(
   db: Db,
   workspaceId: string,
   deliveryIds: string[],
-): Promise<string[]> {
+  opts: { accepted?: boolean } = {},
+): Promise<{ delivered: string[]; replied: string[] }> {
   const delivered: string[] = [];
+  const replied: string[] = [];
   const ids = [...new Set(deliveryIds)];
-  const now = Math.floor(Date.now() / 1000);
-  // Force primary-key writes too: a bounded replay read is not enough if its
-  // status UPDATE chooses a workspace/status index and scans retained history.
+  const now = new Date(Math.floor(Date.now() / 1000) * 1000);
   for (let offset = 0; offset < ids.length; offset += 50) {
     const page = ids.slice(offset, offset + 50);
-    const updated = await db.all<{ id: string }>(sql`
-      UPDATE deliveries INDEXED BY idx_deliveries_id_lookup
-      SET status = 'delivered', next_attempt_at = NULL, last_dispatch_error = NULL,
-          delivered_at = ${now}, updated_at = ${now}
-      WHERE workspace_id = ${workspaceId}
-        AND id IN (${sql.join(page.map(id => sql`${id}`), sql`, `)})
-        AND status = 'queued'
-      RETURNING id
-    `);
+    const { updated, appliedReplies } = await transitionWithReplyLinks(db, and(
+      onlyIdIndex(db, deliveries.workspaceId, sql`= ${workspaceId}`),
+      inArray(deliveries.id, page),
+    )!, onlyIdIndex(db, deliveries.status, sql`= 'queued'`), {
+      status: 'delivered',
+      nextAttemptAt: null,
+      lastDispatchError: null,
+      deliveredAt: now,
+      ...(opts.accepted ? { acceptedAt: now } : {}),
+      updatedAt: now,
+    });
     for (const row of updated) delivered.push(row.id);
+    replied.push(...appliedReplies);
   }
-  return delivered;
+  return { delivered, replied };
+}
+
+/** Rows one `delivery.accepted` frame settles per statement (D1-safe: no IN list, a seq range). */
+export const DELIVERY_ACCEPT_BATCH_SIZE = DELIVERY_EXPIRY_BATCH_SIZE;
+
+/**
+ * The receiving software's acceptance of a node agent's deliveries
+ * (`delivery.accepted` frame): cumulative up to `upToSeq`, or a single row by
+ * `deliveryId` (which wins when both are given). Every not-yet-accepted row that is still `queued` or
+ * `delivered` moves to `delivered` (`delivered_at` set if unset) and records
+ * `accepted_at`. A row the recipient already consumed or that failed is left
+ * alone. Returns the ids this call stamped, so the caller can tell their
+ * senders, and the ids whose pending reply link the same statement applied
+ * (see {@link markDeliveriesReplied}), reported `replied` after the `delivered`;
+ * `null` when the agent is not hosted by this node and provider.
+ *
+ * Bounded like a cumulative ack: `up_to_seq` is caller-supplied, so the
+ * range is settled in id-indexed pages of {@link DELIVERY_ACCEPT_BATCH_SIZE}
+ * rather than one unbounded UPDATE.
+ */
+export async function acceptDeliveries(
+  db: Db,
+  workspaceId: string,
+  nodeId: string,
+  providerName: string,
+  agentName: string,
+  target: { upToSeq?: number; deliveryId?: string },
+): Promise<{ agent_id: string; agent_name: string; accepted_delivery_ids: string[]; replied_delivery_ids: string[] } | null> {
+  const [agent] = await db
+    .select({ id: agents.id, name: agents.name })
+    .from(agents)
+    .where(and(
+      eq(agents.workspaceId, workspaceId),
+      eq(agents.name, agentName),
+      eq(agents.locationType, 'via_node'),
+      eq(agents.locationNodeId, nodeId),
+      eq(agents.providerName, providerName),
+    ));
+  if (!agent) return null;
+
+  const accepted: string[] = [];
+  const replied: string[] = [];
+  // A named row is accepted on its own; `up_to_seq` is then ignored. A client
+  // whose persistence failed for N but succeeded for N+1 names N+1, and a
+  // cumulative watermark must never be inferred across that gap.
+  const rowMatch = target.deliveryId !== undefined
+    ? sql`${deliveries.id} = ${target.deliveryId}`
+    : sql`${deliveries.seq} <= ${target.upToSeq ?? 0}`;
+  for (;;) {
+    const page = await db
+      .select({ id: deliveries.id })
+      .from(deliveries)
+      .where(and(
+        eq(deliveries.workspaceId, workspaceId),
+        eq(deliveries.agentId, agent.id),
+        inArray(deliveries.status, ['queued', 'delivered']),
+        isNull(deliveries.acceptedAt),
+        rowMatch,
+      ))
+      .orderBy(asc(deliveries.seq))
+      .limit(DELIVERY_ACCEPT_BATCH_SIZE);
+    if (page.length === 0) break;
+    const nowSeconds = Math.floor(Date.now() / 1000);
+    const now = new Date(nowSeconds * 1000);
+    // Leaving `queued` applies a pending reply link in this same write (a
+    // `delivered` row left with one is repaired too). A reply stamped between
+    // the page read and this write is not pending, so it is not reported again.
+    const { updated, appliedReplies } = await transitionWithReplyLinks(db, and(
+      onlyIdIndex(db, deliveries.workspaceId, sql`= ${workspaceId}`),
+      inArray(deliveries.id, page.map((row) => row.id)),
+    )!, and(
+      onlyIdIndex(db, deliveries.status, sql`IN ('queued', 'delivered')`),
+      onlyIdIndex(db, deliveries.acceptedAt, sql`IS NULL`),
+    )!, {
+      status: 'delivered',
+      nextAttemptAt: null,
+      lastDispatchError: null,
+      deliveredAt: sql`coalesce(${deliveries.deliveredAt}, ${nowSeconds})`,
+      acceptedAt: now,
+      updatedAt: now,
+    });
+    for (const row of updated) accepted.push(row.id);
+    replied.push(...appliedReplies);
+    // A concurrent ack can settle a selected row first; the page then shrinks
+    // without emptying. Stop once nothing in it was ours to stamp.
+    if (updated.length === 0 || page.length < DELIVERY_ACCEPT_BATCH_SIZE) break;
+  }
+  return { agent_id: agent.id, agent_name: agent.name, accepted_delivery_ids: accepted, replied_delivery_ids: replied };
+}
+
+/** The current sender-facing state of each of `deliveryIds`, read in D1-safe chunks. */
+export async function readDeliveryStates(
+  db: Db,
+  workspaceId: string,
+  deliveryIds: readonly string[],
+): Promise<Map<string, {
+  id: string;
+  agentId: string;
+  status: DeliveryStatus;
+  state: DeliveryState;
+  acceptedAt: Date | null;
+  repliedAt: Date | null;
+  replyMessageId: string | null;
+  error: string | null;
+  expiresAt: Date | null;
+}>> {
+  const ids = [...new Set(deliveryIds)];
+  const rows = await queryInChunks(ids, (chunk) => db
+    .select({
+      id: deliveries.id,
+      agentId: deliveries.agentId,
+      status: deliveries.status,
+      acceptedAt: deliveries.acceptedAt,
+      repliedAt: deliveries.repliedAt,
+      replyMessageId: deliveries.replyMessageId,
+      error: deliveries.error,
+      expiresAt: deliveries.expiresAt,
+    })
+    .from(deliveries)
+    .where(and(eq(deliveries.workspaceId, workspaceId), inArray(deliveries.id, chunk))));
+  return new Map(rows.map((row) => [row.id, {
+    id: row.id,
+    agentId: row.agentId,
+    status: row.status as DeliveryStatus,
+    state: deliveryStateOf(row),
+    acceptedAt: row.acceptedAt,
+    repliedAt: row.repliedAt,
+    // A pending link (recorded while queued) is not a reply yet.
+    replyMessageId: row.repliedAt ? row.replyMessageId : null,
+    error: row.error,
+    expiresAt: row.expiresAt,
+  }]));
+}
+
+/** Whether a sender waiting on this row has anything left to wait for: anything past `queued` is accepted or better. */
+export function deliveryStateSettled(row: { state: DeliveryState }): boolean {
+  return row.state !== 'queued';
+}
+
+/**
+ * The recipient answered `messageId` with `replyMessageId` (a DM's
+ * `reply_to_message_id`, or a thread reply's parent): mark exactly that
+ * message's delivery to the replier `replied_at` / `reply_message_id`.
+ * Explicit correlation only — nothing is inferred from conversation order.
+ * The first reply wins; a later one changes nothing.
+ *
+ * A row already `delivered` or `acked` is marked at once. A row still raw
+ * `queued` may already be in the recipient's hands (reconnect replay sends a
+ * whole page before marking it delivered; a polling recipient answers before
+ * it acks), so the reply is kept as a pending link — `reply_message_id` alone,
+ * `replied_at` unset — which reads as `queued` and tells the sender nothing.
+ * The transition out of `queued` (`markDeliveriesDelivered`,
+ * `acceptDeliveries`, an ack, a read) applies it in its own UPDATE
+ * ({@link repliedAtOnTransition}), so no crash can leave a consumed row with
+ * an unapplied link; its caller reports `replied` after the `delivered` /
+ * `acked`. A failed or dead-lettered row is never marked: a
+ * reply to one is dropped, and a pending link on a row that later fails or
+ * expires stays inert (never applied, never shown) unless the row is
+ * restored and delivered. Both writes are this one statement, so a reply
+ * racing the transition is applied by whichever lands second.
+ *
+ * Returns the ids marked `replied` now (at most one per recipient), so the
+ * caller can tell the sender; a pending link returns nothing.
+ */
+export async function markDeliveriesReplied(
+  db: Db,
+  workspaceId: string,
+  input: { messageId: string; recipientAgentId: string; replyMessageId: string },
+): Promise<string[]> {
+  return repliedByReplyLinkWrite(await buildReplyLinkWrite(db, workspaceId, input));
+}
+
+/**
+ * {@link markDeliveriesReplied}'s UPDATE, built but not executed, so a reply's
+ * send joins it to the atomic unit that inserts the reply message: the link is
+ * durable with the reply, and an idempotent retry that replays the send has
+ * nothing left to redo. Read its rows with {@link repliedByReplyLinkWrite}.
+ */
+export function buildReplyLinkWrite(
+  db: Db,
+  workspaceId: string,
+  input: { messageId: string; recipientAgentId: string; replyMessageId: string },
+) {
+  const now = new Date();
+  return db
+    .update(deliveries)
+    .set({
+      // Transitions apply a pending link in their own write, so a delivered
+      // row with an unapplied link is only legacy state; repair it here, and
+      // that earlier reply wins.
+      replyMessageId: sql`coalesce(${deliveries.replyMessageId}, ${input.replyMessageId})`,
+      repliedAt: sql`CASE WHEN ${deliveries.status} IN ('delivered', 'acked') THEN ${sqlx.now(db)} ELSE NULL END`,
+      updatedAt: now,
+    })
+    .where(and(
+      eq(deliveries.workspaceId, workspaceId),
+      eq(deliveries.messageId, input.messageId),
+      eq(deliveries.agentId, input.recipientAgentId),
+      isNull(deliveries.repliedAt),
+      sql`(${deliveries.status} IN ('delivered', 'acked') OR (${deliveries.status} = 'queued' AND ${deliveries.replyMessageId} IS NULL))`,
+    ))
+    .returning({ id: deliveries.id, repliedAt: deliveries.repliedAt });
+}
+
+/** The ids a {@link buildReplyLinkWrite} statement marked `replied` now; a pending link is not one. */
+export function repliedByReplyLinkWrite(rows: readonly { id: string; repliedAt: Date | null }[]): string[] {
+  return rows.filter((row) => row.repliedAt !== null).map((row) => row.id);
 }
 
 /** Most delivery rows `getMessageDeliveries` returns for one message. */
@@ -604,9 +976,13 @@ export async function getMessageDeliveries(
     agent_id: string;
     agent_name: string;
     status: DeliveryStatus;
+    state: DeliveryState;
     created_at: string;
     delivered_at: string | null;
+    accepted_at: string | null;
     acked_at: string | null;
+    replied_at: string | null;
+    reply_message_id: string | null;
     dead_lettered_at: string | null;
     error: string | null;
     read_at: string | null;
@@ -626,7 +1002,10 @@ export async function getMessageDeliveries(
       status: deliveries.status,
       createdAt: deliveries.createdAt,
       deliveredAt: deliveries.deliveredAt,
+      acceptedAt: deliveries.acceptedAt,
       ackedAt: deliveries.ackedAt,
+      repliedAt: deliveries.repliedAt,
+      replyMessageId: deliveries.replyMessageId,
       deadLetteredAt: deliveries.deadLetteredAt,
       error: deliveries.error,
       readAt: readReceipts.readAt,
@@ -649,9 +1028,14 @@ export async function getMessageDeliveries(
       agent_id: row.agentId,
       agent_name: row.agentName,
       status: row.status as DeliveryStatus,
+      state: deliveryStateOf(row),
       created_at: toIso(row.createdAt) ?? new Date(0).toISOString(),
       delivered_at: toIso(row.deliveredAt),
+      accepted_at: toIso(row.acceptedAt),
       acked_at: toIso(row.ackedAt),
+      replied_at: toIso(row.repliedAt),
+      // A pending link (recorded while queued) is not a reply yet.
+      reply_message_id: row.repliedAt ? row.replyMessageId : null,
       dead_lettered_at: toIso(row.deadLetteredAt),
       error: row.error,
       read_at: toIso(row.readAt),
@@ -814,11 +1198,11 @@ export async function deadLetterUnreachableDeliveryBatch(
   // still active, and stalled the shared D1 for every tenant while it ran.
   const due = await db
     .select({
-      delivery: indexedDeliveryColumns,
+      delivery: indexedDeliveryColumns(),
       senderAgentId: messages.agentId,
       targetAgentName: agents.name,
     })
-    .from(sql`${deliveries} INDEXED BY idx_deliveries_active_location_node`)
+    .from(sql`${deliveries} ${sqlx.indexedBy(db, 'idx_deliveries_active_location_node')}`)
     .innerJoin(nodes, staleNodePredicate)
     .innerJoin(messages, eq(deliveries.messageId, messages.id))
     .innerJoin(agents, eq(deliveries.agentId, agents.id))
@@ -903,6 +1287,7 @@ function buildRoutableDeliveryEvent(
           injection_mode: injectionMode,
           attachments,
           metadata: publicMessageMetadata(row.metadata as Record<string, unknown> | null),
+          reply_to_message_id: row.replyToMessageId,
         },
         created_at: row.createdAt.toISOString(),
         id: row.delivery.messageId,
@@ -952,6 +1337,7 @@ function buildRoutableDeliveryEvent(
         agent_name: senderName,
         ...senderAddressField(row.metadata as Record<string, unknown> | null),
         thread_id: row.threadId,
+        reply_to_message_id: row.replyToMessageId,
         text: row.body,
         blocks: (row.blocks as unknown[] | null) || null,
         metadata: publicMessageMetadata(row.metadata as Record<string, unknown> | null),
@@ -974,6 +1360,7 @@ function buildRoutableDeliveryEvent(
       metadata: publicMessageMetadata(row.metadata as Record<string, unknown> | null),
       has_attachments: row.hasAttachments,
       thread_id: row.threadId,
+      reply_to_message_id: row.replyToMessageId,
       created_at: row.createdAt.toISOString(),
       mentions,
       attachments,
@@ -1000,6 +1387,7 @@ function fanoutRecordFromDeliveryRow(row: PendingDeliveryRow): DeliveryFanoutRec
     deliveryAdapter: row.delivery.deliveryAdapter,
     nextAttemptAt: row.delivery.nextAttemptAt,
     expiresAt: row.delivery.expiresAt,
+    createdAt: row.delivery.createdAt,
   };
 }
 
@@ -1031,13 +1419,14 @@ export async function fetchDueNodeDeliveryEvents(
 
   const fetchRows = (ids: string[]) => db
     .select({
-      delivery: indexedDeliveryColumns,
+      delivery: indexedDeliveryColumns(),
       recipientAgentName: agents.name,
       body: messages.body,
       blocks: messages.blocks,
       metadata: messages.metadata,
       hasAttachments: messages.hasAttachments,
       threadId: messages.threadId,
+      replyToMessageId: messages.replyToMessageId,
       createdAt: messages.createdAt,
       channelId: messages.channelId,
       channelName: channels.name,
@@ -1048,7 +1437,7 @@ export async function fetchDueNodeDeliveryEvents(
         SELECT a.name FROM agents a WHERE a.id = ${messages.agentId}
       )`,
     })
-    .from(sql`${deliveries} INDEXED BY idx_deliveries_id_lookup`)
+    .from(sql`${deliveries} ${sqlx.indexedBy(db, 'idx_deliveries_id_lookup')}`)
     .innerJoin(agents, eq(deliveries.agentId, agents.id))
     .innerJoin(messages, eq(deliveries.messageId, messages.id))
     .innerJoin(channels, eq(messages.channelId, channels.id))
@@ -1174,6 +1563,7 @@ export async function fetchQueuedWsBacklogEvents(
       metadata: messages.metadata,
       hasAttachments: messages.hasAttachments,
       threadId: messages.threadId,
+      replyToMessageId: messages.replyToMessageId,
       createdAt: messages.createdAt,
       channelId: messages.channelId,
       channelName: channels.name,
@@ -1333,7 +1723,7 @@ async function replayPendingToNode(
     name: sql`${agents.name}`.mapWith(agents.name),
     providerName: sql`${agents.providerName}`.mapWith(agents.providerName),
     ackSeq: sql`${agents.deliveryAckSeq}`.mapWith(agents.deliveryAckSeq),
-  }).from(ids === undefined ? sql`${agents} INDEXED BY idx_agents_location_node_fk` : sql`${agents}`).where(and(
+  }).from(ids === undefined ? sql`${agents} ${sqlx.indexedBy(db, 'idx_agents_location_node_fk')}` : sql`${agents}`).where(and(
     eq(agents.workspaceId, workspaceId),
     eq(agents.locationType, 'via_node'),
     eq(agents.locationNodeId, nodeId),
@@ -1365,7 +1755,7 @@ async function replayPendingToNode(
       // The literal predicate is essential: SQLite must prove that this
       // query qualifies for the partial index even with bound parameters.
       const page = await db.select({ id: sql<string>`${deliveries.id}`, seq: sql<number>`${deliveries.seq}` })
-        .from(sql`${deliveries} INDEXED BY idx_deliveries_agent_active_seq`)
+        .from(sql`${deliveries} ${sqlx.indexedBy(db, 'idx_deliveries_agent_active_seq')}`)
         .where(and(
           eq(deliveries.workspaceId, workspaceId), eq(deliveries.agentId, recipient.id),
           sql`${deliveries.status} IN ('queued', 'delivered')`,
@@ -1376,19 +1766,20 @@ async function replayPendingToNode(
       // Hydrate only this bounded ID page. Re-check ownership, ACK, expiry and
       // status here because each await can race a handoff or cumulative ACK.
       const rows = await db.select({
-        delivery: indexedDeliveryColumns,
+        delivery: indexedDeliveryColumns(),
         recipientAgentName: agents.name,
         recipientProviderName: agents.providerName,
         ackSeq: agents.deliveryAckSeq,
         body: messages.body, blocks: messages.blocks, metadata: messages.metadata,
         hasAttachments: messages.hasAttachments, threadId: messages.threadId,
+      replyToMessageId: messages.replyToMessageId,
         createdAt: messages.createdAt, channelId: messages.channelId,
         channelName: channels.name, conversationId: dmConversations.id,
         dmType: dmConversations.dmType, senderAgentId: messages.agentId,
         senderAgentName: sql<string | null>`(
           SELECT a.name FROM agents a WHERE a.id = ${messages.agentId}
         )`,
-      }).from(sql`${deliveries} INDEXED BY idx_deliveries_id_lookup`)
+      }).from(sql`${deliveries} ${sqlx.indexedBy(db, 'idx_deliveries_id_lookup')}`)
         .innerJoin(agents, eq(deliveries.agentId, agents.id))
         .innerJoin(messages, eq(deliveries.messageId, messages.id))
         .innerJoin(channels, eq(messages.channelId, channels.id))
@@ -1412,7 +1803,7 @@ async function replayPendingToNode(
         // ACKs and handoffs can race attachment hydration or an earlier send.
         // Revalidate one exact ID without scanning mailbox history.
         const [current] = await db.select({ id: sql<string>`${deliveries.id}` })
-          .from(sql`${deliveries} INDEXED BY idx_deliveries_id_lookup`)
+          .from(sql`${deliveries} ${sqlx.indexedBy(db, 'idx_deliveries_id_lookup')}`)
           .innerJoin(agents, eq(deliveries.agentId, agents.id))
           .where(and(
             eq(deliveries.id, row.delivery.id), eq(deliveries.workspaceId, workspaceId),
@@ -1440,17 +1831,21 @@ async function replayPendingToNode(
       }
       const transitioned = await markDeliveriesDelivered(db, workspaceId, deliveredIds);
       delivered += deliveredIds.length;
-      // One sender read per replay page, never per row; a notify failure
-      // must not interrupt the drain.
-      if (deps && transitioned.length > 0) {
-        await notifySenderDeliveryReceipts({ db, engine: deps }, workspaceId, transitioned, 'delivered')
-          .catch((err: unknown) => {
-            console.warn('[delivery.replay] sender delivered notify failed', {
-              workspace_id: workspaceId,
-              node_id: nodeId,
-              error: err instanceof Error ? err.message : String(err),
+      // One sender read per replay page and status, never per row; a notify
+      // failure must not interrupt the drain. A reply the recipient sent
+      // while this page was in flight lands after its `delivered`.
+      if (deps) {
+        for (const [ids, status] of [[transitioned.delivered, 'delivered'], [transitioned.replied, 'replied']] as const) {
+          if (ids.length === 0) continue;
+          await notifySenderDeliveryReceipts({ db, engine: deps }, workspaceId, ids, status)
+            .catch((err: unknown) => {
+              console.warn(`[delivery.replay] sender ${status} notify failed`, {
+                workspace_id: workspaceId,
+                node_id: nodeId,
+                error: err instanceof Error ? err.message : String(err),
+              });
             });
-          });
+        }
       }
       if (interrupted) break;
     }

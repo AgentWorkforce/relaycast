@@ -4,7 +4,7 @@ import { Hono } from 'hono';
 import { z } from 'zod';
 import { and, eq } from 'drizzle-orm';
 import type { AppEnv } from '../env.js';
-import { channels } from '../db/schema.js';
+import { channels } from '../db/tables.js';
 import { requireWorkspaceKey } from '../middleware/auth.js';
 import { rateLimit } from '../middleware/rateLimit.js';
 import { jsonCreated, jsonError, jsonNotFound, jsonOk, parseJsonBody } from '../lib/httpResponse.js';
@@ -18,6 +18,7 @@ import { resolveWorkspaceDeliveryPolicyById } from '../engine/workspaceDeliveryP
 import { runInBackground } from './background.js';
 import { sendWebhookEvent } from './webhookOutbox.js';
 import { emitServerEvent } from '../lib/serverTelemetry.js';
+import { eventMatchesRelayfileGlob } from './relayfilePathGlob.js';
 
 export const relayfileInboundRoutes = new Hono<AppEnv>();
 
@@ -25,6 +26,8 @@ const MAX_SKEW_MS = 5 * 60 * 1000;
 const MAX_RELAYFILE_BODY_BYTES = 1024 * 1024;
 const SECRET_LABEL = 'relayfile-inbound:v1';
 const IDEMPOTENCY_TTL_SECONDS = 60 * 60 * 24 * 30;
+/** Default cap on the provider record stored in relayfile message metadata. */
+export const DEFAULT_RELAYFILE_RECORD_METADATA_MAX_BYTES = 8 * 1024;
 
 const createTargetSchema = z.object({
   channel: z.string().min(1),
@@ -205,7 +208,7 @@ async (c) => {
   if (event.origin === 'agent_write') {
     return jsonOk(c, { skipped: 'agent_write' });
   }
-  if (event.type !== 'file.created' && event.type !== 'file.updated') {
+  if (event.type !== 'file.created' && event.type !== 'file.updated' && event.type !== 'file.deleted') {
     return jsonOk(c, { skipped: 'ignored_event_type' });
   }
 
@@ -220,6 +223,7 @@ async (c) => {
   }
 
   const mailbox = resolveMailboxConfig(c.get('engine').config, workspaceId);
+  const recordLimit = relayfileRecordMetadataMaxBytes(c.get('engine').config?.relayfileRecordMetadataMaxBytes);
   try {
     const result = await runIdempotent({
       workspaceId,
@@ -252,7 +256,7 @@ async (c) => {
           event: event.type,
           ...(event.providerEventType ? { provider_event_type: event.providerEventType } : {}),
           ...(event.resourceRef ? { resource_ref: event.resourceRef } : {}),
-          record: message.record,
+          ...boundRelayfileRecord(message.record, recordLimit),
         },
       }, { mailbox, workspaceDeliveryPolicy: await resolveWorkspaceDeliveryPolicyById(c.get('db'), c.get('engine').config, workspaceId) }),
     });
@@ -269,7 +273,7 @@ async (c) => {
         metadata: result.data.metadata,
       };
       try {
-        await sendWebhookEvent(c, { type: 'message.created', workspaceId, data: eventData });
+        await sendWebhookEvent(c, { type: 'message.created', workspaceId, data: eventData }, result.data._deliveries);
       } catch (err) {
         logger.error('relayfile inbound outbox enqueue failed', {
           workspace_id: workspaceId,
@@ -405,6 +409,7 @@ export async function verifyRelayfileSignature(
   return { ok: true };
 }
 
+/** Render authenticated event semantics and optional record content without reconstructing deleted snapshots. */
 export function formatRelayfileEventMessage(event: RelayfileEventPublic, provider: string): { text: string; author: string; record: unknown } | null {
   const stored = parseSnapshotRecord(event.snapshot);
   const envelope = providerRecordEnvelopeSchema.safeParse(stored);
@@ -416,11 +421,43 @@ export function formatRelayfileEventMessage(event: RelayfileEventPublic, provide
   const title = recordTitle(record);
   const body = recordBody(record);
   const providerLabel = provider.charAt(0).toUpperCase() + provider.slice(1);
-  const lines = [event.providerEventType ? `${providerLabel} ${event.providerEventType}` : `${providerLabel} update`];
+  const eventLabel = event.providerEventType || (event.type === 'file.deleted' ? 'file.deleted' : 'update');
+  const lines = [`${providerLabel} ${eventLabel}`];
+  if (event.type === 'file.deleted' && record === null) lines.push('Deleted file content is unavailable.');
   if (title) lines.push(title);
   if (body && body !== title) lines.push(body);
   lines.push(`Relayfile path: ${event.path}`);
   return { text: lines.filter(Boolean).join('\n'), author, record };
+}
+
+export interface RelayfileRecordOmitted {
+  reason: 'too_large';
+  bytes: number;
+  limit: number;
+}
+
+/**
+ * Bound the provider record stored in message metadata. The metadata is copied
+ * into the message row, the webhook outbox and stream events, so an unbounded
+ * record drives storage growth. A record over `limit` UTF-8 bytes of JSON is
+ * replaced by `null` plus `record_omitted`; the full record stays retrievable
+ * from relayfile by path and revision. `null` is never omitted.
+ */
+export function boundRelayfileRecord(
+  record: unknown,
+  limit: number,
+): { record: unknown; record_omitted?: RelayfileRecordOmitted } {
+  if (record === null || record === undefined) return { record };
+  const bytes = new TextEncoder().encode(JSON.stringify(record)).byteLength;
+  if (bytes <= limit) return { record };
+  return { record: null, record_omitted: { reason: 'too_large', bytes, limit } };
+}
+
+/** Configured record cap; anything but a finite non-negative number uses the default. */
+function relayfileRecordMetadataMaxBytes(value: unknown): number {
+  return typeof value === 'number' && Number.isFinite(value) && value >= 0
+    ? Math.floor(value)
+    : DEFAULT_RELAYFILE_RECORD_METADATA_MAX_BYTES;
 }
 
 function parseSnapshotRecord(snapshot: RelayfileSnapshot | undefined): unknown {
@@ -486,36 +523,19 @@ function normalizePathGlob(pathGlob: string): string {
   return trimmed.startsWith('/') ? trimmed : `/${trimmed}`;
 }
 
-function eventMatchesGlob(path: string, glob: string): boolean {
-  const normalizedPath = normalizePathGlob(path);
-  const normalizedGlob = normalizePathGlob(glob);
-  if (normalizedGlob === '/**' || normalizedGlob === normalizedPath) return true;
-  if (normalizedGlob.endsWith('/**')) {
-    const prefix = normalizedGlob.slice(0, -'/**'.length);
-    return normalizedPath === prefix || normalizedPath.startsWith(`${prefix}/`);
-  }
-  if (normalizedGlob.endsWith('/*')) {
-    const prefix = normalizedGlob.slice(0, -'/*'.length);
-    const rest = normalizedPath.slice(prefix.length + 1);
-    return normalizedPath.startsWith(`${prefix}/`) && !rest.includes('/');
-  }
-  if (normalizedGlob.endsWith('*')) return normalizedPath.startsWith(normalizedGlob.slice(0, -1));
-  return false;
-}
-
 /**
- * Match literal paths first, then authorized GitHub PR identities within one repo.
+ * Match provider path globs first, then authorized GitHub PR identities within one repo.
  * The provider comes from the authenticated target; only provider-sync events may
  * use titled pull paths or stable PR references to match sibling event layouts.
  */
 function eventMatchesSubscription(event: RelayfileEvent, glob: string, githubPrIdentityAuthorized: boolean, provider: string): boolean {
-  if (eventMatchesGlob(event.path ?? '', glob)) return true;
+  if (eventMatchesRelayfileGlob(event.path ?? '', glob)) return true;
   // The route provider is normalized and authenticated by the target HMAC;
   // the caller already rejected any conflicting event provider above.
   if (!githubPrIdentityAuthorized || provider !== 'github' || event.origin !== 'provider_sync') return false;
 
   // Keep aligned with relayfile-cloud eventMatchesWebhookSubscription. Only
-  // whole numeric PR subtrees gain identity semantics; generic globs stay literal.
+  // whole numeric PR subtrees gain identity semantics; generic globs match paths.
   const match = /^\/github\/repos\/([^/*]+)\/([^/*]+)\/pulls\/([1-9]\d*)\/\*\*$/.exec(normalizePathGlob(glob));
   if (!match) return false;
   const [, owner, repo, number] = match;

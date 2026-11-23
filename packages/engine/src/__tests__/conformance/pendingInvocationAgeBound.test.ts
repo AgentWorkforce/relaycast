@@ -11,7 +11,7 @@ import {
   PENDING_INVOCATION_MAX_AGE_MS,
   sweepTimedOutInvocations,
 } from '../../engine/action.js';
-import { actionInvocations } from '../../db/schema.js';
+import { actionInvocations } from '../../db/tables.js';
 
 // Issue #357: a `pending` invocation that was never dispatched to any node
 // (`dispatch_attempts = 0`) has no handler connection for the 0032 TTL sweep

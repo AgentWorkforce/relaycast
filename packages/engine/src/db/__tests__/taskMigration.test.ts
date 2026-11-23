@@ -44,17 +44,34 @@ it('upgrades existing actions and results additively, preserving rows and every 
       '0078_dm_participant_read_cursor.sql',
       '0079_credential_upgrades.sql',
       '0080_nodes_context_reachable_index.sql',
+      '0081_delivery_confirmation.sql',
       '0082_pending_events_settled_retention.sql',
+      '0083_strict_spawn_placement_token.sql',
+      '0084_strict_spawn_dispatch_generation.sql',
+      '0085_action_invocation_requester.sql',
+      '0086_workspace_leaders.sql',
     ]);
     for (const table of before) {
       const columns = db.pragma(`table_info(${table.name})`) as { name: string }[];
       expect(columns.slice(0, table.columns.length)).toEqual(table.columns);
-      expect(columns).toHaveLength(table.columns.length + (table.name === 'action_invocations' ? 2 : 1));
-      expect(db.pragma(`foreign_key_list(${table.name})`)).toEqual(table.fks);
+      expect(columns).toHaveLength(table.columns.length + (table.name === 'action_invocations' ? 6 : 1));
+      // 0085 appends the requester FK (numbered first by SQLite); every
+      // original FK must survive unchanged under its original id.
+      const fks = (db.pragma(`foreign_key_list(${table.name})`) as { id: number; from: string }[]);
+      const added = fks.filter(fk => fk.from === 'requester_agent_id');
+      expect(added).toHaveLength(table.name === 'action_invocations' ? 1 : 0);
+      expect(fks.filter(fk => fk.from !== 'requester_agent_id').map(fk => ({ ...fk, id: fk.id - added.length })))
+        .toEqual(table.fks);
       expect(db.prepare(`SELECT ${table.columns.map(c => c.name).join(',')} FROM ${table.name}`).all()).toEqual(table.rows);
     }
     expect(db.prepare('SELECT execution_mode FROM actions').get()).toEqual({ execution_mode: 'short' });
     expect(db.prepare('SELECT task_state FROM action_invocations').get()).toEqual({ task_state: null });
+    expect(db.prepare('SELECT spawn_placement_token FROM action_invocations').get())
+      .toEqual({ spawn_placement_token: null });
+    expect(db.prepare('SELECT spawn_dispatch_generation FROM action_invocations').get())
+      .toEqual({ spawn_dispatch_generation: 0 });
+    expect(db.prepare('SELECT requester_agent_id, requester_name FROM action_invocations').get())
+      .toEqual({ requester_agent_id: null, requester_name: null });
     expect(db.pragma('foreign_key_check')).toEqual([]);
     expect(runMigrations(handle).applied).toEqual([]);
     expect(db.prepare("SELECT name FROM sqlite_master WHERE type='index' AND name='idx_action_invocations_task_deadline'").get()).toBeDefined();

@@ -1,0 +1,62 @@
+{
+  "version": "7",
+  "dialect": "postgresql",
+  "entries": [
+    {
+      "idx": 0,
+      "version": "7",
+      "when": 1794168008943,
+      "tag": "0000_init",
+      "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "7",
+      "when": 1794168009366,
+      "tag": "0001_triggers",
+      "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1794301109417,
+      "tag": "0002_even_silverclaw",
+      "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "7",
+      "when": 1794317401657,
+      "tag": "0003_previous_lila_cheney",
+      "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "7",
+      "when": 1794317435836,
+      "tag": "0004_handler_snapshot_backfill",
+      "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "7",
+      "when": 1794689498379,
+      "tag": "0005_delivery_confirmation",
+      "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "7",
+      "when": 1794900771754,
+      "tag": "0006_action_invocation_requester",
+      "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "7",
+      "when": 1794904190079,
+      "tag": "0007_workspace_leaders",
+      "breakpoints": true
+    }
+  ]
+}

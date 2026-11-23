@@ -3,10 +3,30 @@ import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { createRequire } from 'node:module';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { getSqliteDb, runMigrations, type SqliteDbHandle } from '../../adapters/node/database.js';
 
 const script = fileURLToPath(new URL('../../../../../scripts/retain-agents.mts', import.meta.url));
+const betterSqlite3 = createRequire(import.meta.url).resolve('better-sqlite3');
+
+// Preloaded into the CLI child process for the D1 preview test: replaces
+// global fetch with a fake Cloudflare D1 query endpoint that answers from the
+// fixture SQLite file (opened read-only) and logs every request it receives.
+const d1FetchStub = `
+import { createRequire } from 'node:module';
+import { appendFileSync } from 'node:fs';
+const Database = createRequire(import.meta.url)(${JSON.stringify(betterSqlite3)});
+const db = new Database(process.env.D1_STUB_DATABASE, { readonly: true, fileMustExist: true });
+globalThis.fetch = async (url, init) => {
+  const body = JSON.parse(init.body);
+  appendFileSync(process.env.D1_STUB_LOG, JSON.stringify({ url: String(url), method: init.method,
+    authorization: init.headers.authorization, sql: body.sql, params: body.params }) + '\\n');
+  const results = db.prepare(body.sql).all(...body.params);
+  return new Response(JSON.stringify({ success: true, result: [{ success: true, results }] }),
+    { status: 200, headers: { 'content-type': 'application/json' } });
+};
+`;
 
 describe('agent retention CLI', () => {
   let directory: string;
@@ -118,6 +138,32 @@ describe('agent retention CLI', () => {
       expect(result.stderr).toContain('different source, policy, or mode');
       expect(readFileSync(state, 'utf8')).toBe(checkpoint);
       expect(rows()).toHaveLength(215);
+    }
+  });
+
+  it('previews a D1 database read-only through the Cloudflare query API', () => {
+    const before = rows();
+    const stub = join(directory, 'd1-fetch-stub.mjs');
+    const log = join(directory, 'd1-requests.jsonl');
+    writeFileSync(stub, d1FetchStub);
+    writeFileSync(log, '');
+    const result = spawnSync(process.execPath, ['--import', 'tsx', '--import', stub, script,
+      '--d1-database-id', 'db/1', '--workspace-id', 'fixture', '--limit', '50'], {
+      encoding: 'utf8', timeout: 15_000,
+      env: { ...process.env, CLOUDFLARE_API_TOKEN: 'dummy-token', CLOUDFLARE_ACCOUNT_ID: 'dummy-account',
+        D1_STUB_DATABASE: database, D1_STUB_LOG: log },
+    });
+    expect(summary(result)).toMatchObject({ dry_run: true, complete: true, scanned: 215, eligible: 193, deleted: 0 });
+    expect(rows()).toEqual(before);
+    const requests = readFileSync(log, 'utf8').trim().split('\n').map(line => JSON.parse(line));
+    expect(requests.length).toBeGreaterThan(0);
+    for (const request of requests) {
+      expect(request).toMatchObject({
+        url: 'https://api.cloudflare.com/client/v4/accounts/dummy-account/d1/database/db%2F1/query',
+        method: 'POST', authorization: 'Bearer dummy-token',
+      });
+      expect(request.sql).toMatch(/^\s*(SELECT|WITH)\b/i);
+      expect(Array.isArray(request.params)).toBe(true);
     }
   });
 

@@ -3,9 +3,12 @@ export type { NodeLivenessAuthority, NodeLivenessSnapshot } from './ports/nodeLi
 export {
   InProcessDeliveryWaiters,
   MAX_DELIVERY_WAIT_MS,
+  MAX_SEND_WAIT_MS,
+  RECOMMENDED_SEND_WAIT_MS,
   DELIVERY_NOTIFY_MEMORY_MS,
   type DeliveryWaiters,
   type DeliveryWaitArgs,
+  type DeliveryStateWaitArgs,
 } from './ports/deliveryWaiters.js';
 export const SERVER_VERSION = '0.1.0' as const;
 
@@ -65,6 +68,45 @@ export { createCredentialTagSigner, parseCredentialKeyring } from './auth/creden
 export type { CredentialKeyring, CredentialTagSigner, CredentialTagger } from './auth/credentialTags.js';
 export { NoopTelemetrySink } from './providers/noop-telemetry.js';
 export {
+  CollectorTelemetrySink,
+  createCollectorTelemetrySink,
+  COLLECTOR_TELEMETRY_DEFAULTS,
+  CollectorConfigError,
+  validateCollectorIdentity,
+  resolveTelemetryDestination,
+  TELEMETRY_DESTINATIONS,
+  BEARER_TOKEN_PATTERN,
+  type CollectorConfigErrorCode,
+  type CollectorTelemetrySinkOptions,
+  type CollectorTelemetryStats,
+  type TelemetryDestination,
+} from './providers/collector-telemetry.js';
+export {
+  EXPORT_ENVELOPE_VERSION,
+  ANALYTICS_FIELD_RULES,
+  ANALYTICS_EVENT_FIELDS,
+  ANALYTICS_DROPPED_FIELDS,
+  REGISTERED_ORIGIN_APPS,
+  REGISTERED_ORIGIN_ACTOR_TYPES,
+  REGISTERED_ORIGIN_CLIENTS,
+  REGISTERED_ERROR_NAMES,
+  REGISTERED_ERROR_CODES,
+  isOpaqueId,
+  projectObservation,
+  projectException,
+  validateExportEvent,
+  workspaceIdOf,
+  exportProperties,
+  EXPORT_EVENT_SCOPES,
+  type AnalyticsFieldRule,
+  type ExportEvent,
+  type ExportEventScope,
+  type ExportEventInvalidReason,
+  type ExportIdentity,
+  type ExportOrigin,
+} from './telemetry/exportEnvelope.js';
+export { utf8Bytes, wireEventBytes, WIRE_BATCH_FRAME_BYTES } from './telemetry/httpTransport.js';
+export {
   configureEngineDiagnostics,
   currentEngineOperation,
   engineOperationOf,
@@ -80,6 +122,13 @@ export {
 export { getDb, healthCheck as dbHealthCheck } from './db/index.js';
 export type { Db } from './db/index.js';
 export * as schema from './db/schema.js';
+// Every adapter must brand its drizzle SQLite handle (the cloud D1 adapter included).
+export { brandSqliteEngineDb } from './adapters/sqlite-handle.js';
+// Binds engine table references (db/tables.ts) to a dialect, once per process.
+// brandSqliteEngineDb already binds 'sqlite'; an adapter that does not brand
+// through it (the cloud D1 adapter included) must call bindSchema itself before
+// the engine touches any table.
+export { bindSchema, currentSchemaDialect } from './db/tables.js';
 
 // Webhook delivery + scheduled-task helpers adapters wire to their queue/cron.
 export { deliverEvent } from './engine/eventDelivery.js';

@@ -103,3 +103,20 @@ describe('casing transforms', () => {
     expect(camelizeKeys({ created_at: 'x' })).toEqual({ createdAt: 'x' });
   });
 });
+
+
+it('preserves opaque received block documents while retaining outgoing block casing', () => {
+  const blocks = [{ kind: 'test', payload: signedRevocationList }];
+  expect(camelizeKeys({ agent_id: 'a1', blocks }, { opaqueBlocks: true })).toEqual({ agentId: 'a1', blocks });
+  expect(
+    decamelizeKeys({ blocks: [{ type: 'actions', elements: [{ actionId: 'approve' }] }] }),
+  ).toEqual({
+    blocks: [{ type: 'actions', elements: [{ action_id: 'approve' }] }],
+  });
+});
+
+it('keeps default HTTP block casing unchanged', () => {
+  expect(camelizeKeys({ blocks: [{ type: 'actions', elements: [{ action_id: 'approve' }] }] })).toEqual({
+    blocks: [{ type: 'actions', elements: [{ actionId: 'approve' }] }],
+  });
+});

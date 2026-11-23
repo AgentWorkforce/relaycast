@@ -94,7 +94,16 @@ info:
     and `expected_token_hash` enforcement on `POST /v1/agents/release`. It is
     independent of client-advertised capabilities. Missing/unknown values do not
     establish support; clients must validate the current connection and provider.
-    Lost registration replies are not safe to retry automatically.
+    Lost registration replies are not safe to retry automatically. The reply also
+    lists the inbound frames the engine understands beyond the baseline in
+    `capabilities: string[]` (currently `["delivery.accepted", "delivery.ack.delivery_id"]`); a node sends
+    such a frame only when the reply lists it, never by parsing versions.
+    `delivery.ack.delivery_id` is the named acknowledgement:
+    `delivery.ack { agent, delivery_id }` consumes exactly that one delivery and
+    leaves the agent's `delivery_ack_seq` cursor untouched, so lower
+    unacknowledged rows are still replayed, whereas the cumulative
+    `delivery.ack { agent, up_to_seq }` settles every lower unsettled row. Older
+    engines accept only `up_to_seq` and reject the named frame.
 
     Node action capabilities negotiate authenticated caller provenance with
     capability metadata `{ "relay.action-caller": "v1" }`. Only an exact
@@ -372,6 +381,170 @@ components:
           type: string
           format: date-time
 
+    AgentSkillInput:
+      type: object
+      required: [name]
+      properties:
+        id:
+          type: string
+          description: Unique per agent; kebab-case recommended. Derived from `name` on the card when omitted.
+        name:
+          type: string
+          maxLength: 80
+        description:
+          type: string
+          maxLength: 500
+        tags:
+          type: array
+          items:
+            type: string
+        examples:
+          type: array
+          maxItems: 5
+          description: Short example requests a peer could send for this skill.
+          items:
+            type: string
+            maxLength: 200
+        metadata:
+          type: object
+          additionalProperties: true
+
+    AgentSkillsInput:
+      type: array
+      maxItems: 20
+      description: Stored at `metadata.skills`. Explicit skill ids must be unique.
+      items:
+        $ref: '#/components/schemas/AgentSkillInput'
+
+    AgentCardMetadata:
+      type: object
+      description: The agent card fields stored at `metadata.card`.
+      required: [description, updated_at, version]
+      properties:
+        description:
+          type: string
+          maxLength: 1000
+          description: The agent's purpose; what it does and why work with it.
+        documentation_url:
+          type: string
+          format: uri
+          description: Must be https.
+        tags:
+          type: array
+          maxItems: 10
+          items:
+            type: string
+        updated_at:
+          type: string
+          format: date-time
+        version:
+          type: string
+
+    AgentMetadataInput:
+      type: object
+      additionalProperties: true
+      description: Free-form agent metadata; a `card` key, when present, must be an AgentCardMetadata.
+      properties:
+        card:
+          $ref: '#/components/schemas/AgentCardMetadata'
+
+    AgentCard:
+      type: object
+      description: A2A agent card (camelCase per the A2A spec).
+      required: [protocolVersion, name, description, url, preferredTransport, version, provider, capabilities, defaultInputModes, defaultOutputModes, skills, x-agent-relay]
+      properties:
+        protocolVersion:
+          type: string
+          example: '0.3.0'
+        name:
+          type: string
+        description:
+          type: string
+          description: '`metadata.card.description`, else the persona, else `metadata.description`.'
+        url:
+          type: string
+          description: The workspace A2A JSON-RPC endpoint (`<origin>/a2a/rpc`).
+        preferredTransport:
+          type: string
+          enum: [JSONRPC]
+        version:
+          type: string
+          description: '`metadata.card.version`, else `1`.'
+        provider:
+          type: object
+          properties:
+            organization:
+              type: string
+              description: Workspace name.
+            url:
+              type: string
+        documentationUrl:
+          type: string
+        capabilities:
+          type: object
+          properties:
+            streaming:
+              type: boolean
+            pushNotifications:
+              type: boolean
+        defaultInputModes:
+          type: array
+          items:
+            type: string
+        defaultOutputModes:
+          type: array
+          items:
+            type: string
+        skills:
+          type: array
+          items:
+            type: object
+            required: [id, name, description, tags]
+            properties:
+              id:
+                type: string
+              name:
+                type: string
+              description:
+                type: string
+              tags:
+                type: array
+                items:
+                  type: string
+              examples:
+                type: array
+                items:
+                  type: string
+        x-agent-relay:
+          type: object
+          required: [address, kind, status, tags, hasCard]
+          properties:
+            address:
+              type: string
+              description: Exact `agent@machine` address, or the bare name when the agent is not hosted.
+            kind:
+              type: string
+              description: '`metadata.kind`, else the agent type.'
+            owner:
+              type: string
+              description: '`metadata.owner_name`, else `metadata.owner`; omitted when unset.'
+            where:
+              type: string
+              description: '`metadata.where`, else the machine part of the address.'
+            status:
+              type: string
+              enum: [live, offline]
+            tags:
+              type: array
+              items:
+                type: string
+            cardUpdatedAt:
+              type: string
+              format: date-time
+            hasCard:
+              type: boolean
+              description: The agent declared a card or at least one skill.
+
     Agent:
       type: object
       properties:
@@ -573,6 +746,52 @@ components:
         dispatch_id: { type: string, minLength: 1, maxLength: 512 }
         timeout_ms: { type: integer, minimum: 1, maximum: 86400000 }
 
+    SpawnLogicalRequest:
+      type: object
+      additionalProperties: false
+      required: [schema, target_node_id, target_node, name, cli, task, directory, verify_ready]
+      properties:
+        schema:
+          type: string
+          enum:
+            - relay.spawn.invoke.logical/1
+            - relay.spawn.invoke.logical-replay-resume/1
+          description: >-
+            `logical/1` keeps replay lookup-only. The explicit
+            `logical-replay-resume/1` variant permits replay to resume only an
+            originally marked, definitely-unsent claim from persisted input.
+        target_node_id: { type: string, minLength: 1 }
+        target_node: { type: string, minLength: 1 }
+        name: { type: string, minLength: 1 }
+        cli: { type: string, minLength: 1 }
+        task: { type: string, minLength: 1 }
+        directory:
+          type: string
+          minLength: 1
+          description: The caller's stable requested directory, before local canonicalization.
+        verify_ready: { type: boolean }
+
+    StrictSpawnInput:
+      type: object
+      additionalProperties: false
+      required:
+        [spawn_contract, target_node_id, target_node, name, cli, task, worker_cwd, verify_ready, logical_request]
+      properties:
+        spawn_contract:
+          type: string
+          enum:
+            - relay.spawn.invoke.logical/1
+            - relay.spawn.invoke.logical-replay-resume/1
+        target_node_id: { type: string, minLength: 1 }
+        target_node: { type: string, minLength: 1 }
+        name: { type: string, minLength: 1 }
+        cli: { type: string, minLength: 1 }
+        task: { type: string, minLength: 1 }
+        worker_cwd: { type: string, minLength: 1 }
+        verify_ready: { type: boolean }
+        logical_request:
+          $ref: '#/components/schemas/SpawnLogicalRequest'
+
     TaskExecution:
       type: object
       required: [execution_id, run_id, step_id, dispatch_id, deadline]
@@ -653,6 +872,10 @@ components:
     Message:
       type: object
       properties:
+        reply_to_message_id:
+          type: string
+          nullable: true
+          description: The message this one explicitly answers (a DM's `reply_to_message_id`, or a thread reply's parent).
         id:
           type: string
         channel_id:
@@ -947,11 +1170,13 @@ components:
           nullable: true
           description: >-
             The recipient's durable delivery row, or `null` when none was created
-            (a delivery the mailbox rejected — see `delivery.failed`). `status`
-            is `queued` at send time, and an idempotent replay repeats the
-            original value; follow
-            `delivery.delivered` / `delivery.acked` events or
-            `GET /messages/{id}/deliveries` for what happens next.
+            (a delivery the mailbox rejected — see `delivery.failed`). Without
+            `wait_ms` the `state` is `queued` at send time; with `wait_ms` it is
+            the row's state when the budget ended (`delivered` once the receiving
+            software accepted it). An idempotent replay repeats the original
+            value; follow `delivery.delivered` / `delivery.acked` /
+            `delivery.replied` events or `GET /messages/{id}/deliveries` for
+            what happens next.
           type: object
           properties:
             id:
@@ -959,14 +1184,55 @@ components:
             status:
               type: string
               enum: [queued, delivered, acked, failed, dead_lettered]
+            state:
+              $ref: '#/components/schemas/DeliveryState'
+            accepted_at:
+              type: string
+              format: date-time
+              nullable: true
+              description: When the receiving software accepted the row (`delivery.accepted`, or an `http_push` 2xx).
+            replied_at:
+              type: string
+              format: date-time
+              nullable: true
+              description: >-
+                When the recipient's explicit answer (`reply_to_message_id`, or a thread
+                reply) was recorded against the delivered row; a reply sent while the row
+                was still queued is recorded when the row is delivered.
+            reply_message_id:
+              type: string
+              nullable: true
+              description: The recipient's reply once `replied_at` is set.
+            error:
+              type: string
+              nullable: true
+              description: Failure reason once `state` is `failed`.
             expires_at:
               type: string
               format: date-time
               nullable: true
 
+    DeliveryState:
+      type: string
+      enum: [queued, delivered, consumed, replied, failed]
+      description: >-
+        The sender-facing delivery state, derived from the row: `failed`
+        (status failed / dead-lettered; see `error`), `replied` (the recipient
+        explicitly answered it: `reply_to_message_id` or a thread reply),
+        `consumed` (the recipient acked), `delivered` (the receiving software
+        holds the row and will process it: `accepted_at` set by
+        `delivery.accepted` — sent before any handler runs, from a durable
+        inbox or a queue backed by relaycast's re-delivery-until-ack — or an
+        `http_push` 2xx), else `queued` — including a row the host only
+        wrote to the recipient's socket (raw `status: delivered`, `accepted_at:
+        null`), which proves nothing about the client. The raw `status` is
+        kept beside it.
+
     SentDelivery:
       type: object
-      description: A per-recipient delivery row named in a send response.
+      description: >-
+        A per-recipient delivery row named in a send response. `state` is
+        `queued` at send time unless the send waited (`wait_ms`).
       properties:
         id:
           type: string
@@ -976,6 +1242,29 @@ components:
         status:
           type: string
           enum: [queued, delivered, acked, failed, dead_lettered]
+        state:
+          $ref: '#/components/schemas/DeliveryState'
+        accepted_at:
+          type: string
+          format: date-time
+          nullable: true
+          description: When the receiving software accepted the row; `null` until then.
+        replied_at:
+          type: string
+          format: date-time
+          nullable: true
+          description: >-
+            When the recipient's explicit answer (`reply_to_message_id`, or a thread
+            reply) was recorded against the delivered row; a reply sent while the row
+            was still queued is recorded when the row is delivered.
+        reply_message_id:
+          type: string
+          nullable: true
+          description: The recipient's reply once `replied_at` is set.
+        error:
+          type: string
+          nullable: true
+          description: Failure reason once `state` is `failed`.
         expires_at:
           type: string
           format: date-time
@@ -995,6 +1284,8 @@ components:
         status:
           type: string
           enum: [queued, delivered, acked, failed, dead_lettered]
+        state:
+          $ref: '#/components/schemas/DeliveryState'
         created_at:
           type: string
           format: date-time
@@ -1002,10 +1293,28 @@ components:
           type: string
           format: date-time
           nullable: true
+          description: When the host wrote the row to the recipient's socket or push endpoint.
+        accepted_at:
+          type: string
+          format: date-time
+          nullable: true
+          description: When the receiving software accepted the row (`delivery.accepted` frame, or an `http_push` 2xx).
         acked_at:
           type: string
           format: date-time
           nullable: true
+        replied_at:
+          type: string
+          format: date-time
+          nullable: true
+          description: >-
+            When the recipient's explicit answer (`reply_to_message_id`, or a thread
+            reply) was recorded against the delivered row; a reply sent while the row
+            was still queued is recorded when the row is delivered.
+        reply_message_id:
+          type: string
+          nullable: true
+          description: The recipient's reply once `replied_at` is set.
         dead_lettered_at:
           type: string
           format: date-time
@@ -1750,7 +2059,14 @@ components:
           description: Relayfile provider namespace, such as `slack`, `linear`, or `github`.
         path_glob:
           type: string
-          description: Relayfile path glob to bind to this channel.
+          description: >
+            Relayfile path glob to bind to this channel. Supports * within one
+            segment and whole ** segments across directories, including
+            /linear/issues/*__<id>.json and /jira/issues/*/comments/*.json.
+            Matching resolves repeated slashes and dot segments, preserving case
+            and percent escapes. Existing trailing-prefix behavior, including
+            /* for root-level paths, is retained;
+            target signatures and GitHub identity opt-ins are unchanged.
 
     RelayfileInboundTarget:
       type: object
@@ -1859,6 +2175,68 @@ components:
             - duplicate_in_progress
             - event_id_reused
 
+    WorkspaceLeader:
+      type: object
+      required: [name, agent_id]
+      properties:
+        name:
+          type: string
+          description: Registered agent name.
+        agent_id:
+          type: string
+          description: Agent id.
+
+    WorkspaceLeaders:
+      type: object
+      required: [leaders, patterns]
+      properties:
+        leaders:
+          type: array
+          description: >-
+            Every registered (not released) agent in the workspace whose name
+            matches at least one pattern, sorted by name, each agent once.
+            Resolved at read time, so agents registered after the last `PUT`
+            are included and removed agents drop out.
+          items:
+            $ref: '#/components/schemas/WorkspaceLeader'
+        patterns:
+          type: array
+          description: The stored patterns verbatim (after trimming and de-duplication); empty when unset.
+          items:
+            type: string
+      example:
+        leaders:
+          - name: admin
+            agent_id: '1876543210987654321'
+          - name: opsgrok
+            agent_id: '1876543210987654322'
+        patterns: ['*grok', 'admin']
+
+    SetWorkspaceLeadersRequest:
+      type: object
+      description: >-
+        Replace the leader patterns, or clear them with `{"patterns": []}` or
+        `{"reset": true}` (`reset` may not be combined with `patterns`). Each
+        pattern is an exact agent name or a glob: `*` matches any run of
+        characters (including none), `?` matches exactly one character, every
+        other character is literal; the match is whole-name and case-sensitive.
+        Entries are trimmed and duplicates dropped silently. An entry that is
+        not a string, is empty after trimming, is longer than 128 characters,
+        or contains a control character is rejected with 400
+        `invalid_request`, as is a list longer than 64 entries.
+      properties:
+        patterns:
+          type: array
+          maxItems: 64
+          items:
+            type: string
+            minLength: 1
+            maxLength: 128
+        reset:
+          type: boolean
+      example:
+        patterns: ['*grok', 'admin']
+
     Error:
       type: object
       properties:
@@ -1927,6 +2305,59 @@ paths:
                     type: string
                   build:
                     type: string
+
+  /health/ready:
+    get:
+      summary: Readiness probe
+      description: >-
+        200 while the database answers `SELECT 1` within 2 seconds, 503
+        otherwise. Use it as a readiness probe so traffic stops while the
+        database is unreachable (for example during a failover).
+      tags:
+        - System
+      responses:
+        '200':
+          description: Database reachable
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok:
+                    type: boolean
+                  database:
+                    type: string
+                    enum: [ok, unreachable]
+        '503':
+          description: Database unreachable
+
+  /health/live:
+    get:
+      summary: Liveness probe
+      description: >-
+        Probes the database like `/health/ready`, but returns 503 only once
+        no probe has succeeded for 90 seconds, so an orchestrator restarts a
+        process that did not recover on its own. A brief outage fails only
+        readiness.
+      tags:
+        - System
+      responses:
+        '200':
+          description: Live (the database answered recently)
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok:
+                    type: boolean
+                  database:
+                    type: string
+                    enum: [ok, unreachable]
+                  database_down_ms:
+                    type: integer
+        '503':
+          description: The database has been unreachable past the liveness grace period
 
   /workspaces:
     post:
@@ -2690,7 +3121,12 @@ paths:
                 persona:
                   type: string
                 metadata:
+                  $ref: '#/components/schemas/AgentMetadataInput'
+                skills:
+                  $ref: '#/components/schemas/AgentSkillsInput'
+                capabilities:
                   type: object
+                  additionalProperties: true
                 recovery_proof_hash:
                   type: string
                   pattern: '^[a-f0-9]{64}$'
@@ -2928,7 +3364,10 @@ paths:
     patch:
       summary: Update agent
       description: >-
-        Update agent properties. Platform-managed metadata keys such as
+        Update agent properties. `metadata` is merged into the stored metadata
+        one top-level key at a time: keys not sent are kept, a key sent
+        replaces its stored value whole (no deep merge). `skills` replaces
+        `metadata.skills`. Platform-managed metadata keys such as
         `identity_key` are rejected; use the dedicated legacy identity claim
         endpoint for the one supported backfill operation. A `status` write
         does not renew `last_seen`. The response `status` is derived presence,
@@ -2963,8 +3402,15 @@ paths:
                     (`agent.status.offline`).
                 persona:
                   type: string
+                  nullable: true
                 metadata:
+                  $ref: '#/components/schemas/AgentMetadataInput'
+                skills:
+                  $ref: '#/components/schemas/AgentSkillsInput'
+                capabilities:
                   type: object
+                  nullable: true
+                  additionalProperties: true
       responses:
         '200':
           description: Agent updated
@@ -3001,6 +3447,43 @@ paths:
       responses:
         '204':
           description: Agent deleted
+
+  /agents/{name}/card:
+    get:
+      summary: Get agent card
+      description: >-
+        The agent's A2A agent card, built from `metadata.card` and
+        `metadata.skills`. Unlike the rest of the API the card's keys are the
+        A2A spec's camelCase, so A2A clients can use it unchanged; Agent Relay
+        fields are under `x-agent-relay`. An agent without a card or skills
+        still gets a minimal card with `skills: []` and
+        `x-agent-relay.hasCard: false`. Released agents are not found.
+        Observer tokens require `agents:read`.
+      tags:
+        - Agents
+      security:
+        - workspaceKey: []
+        - observerToken: []
+      parameters:
+        - name: name
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Agent card
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok:
+                    type: boolean
+                  data:
+                    $ref: '#/components/schemas/AgentCard'
+        '404':
+          description: Agent not found (agent_not_found)
 
   /agents/{name}/subscription-channel:
     post:
@@ -3532,7 +4015,9 @@ paths:
   /channels/{name}:
     get:
       summary: Get channel
-      description: Get channel with members. Observer tokens require `channels:read`.
+      description: >-
+        Get channel with members. Observer tokens require `channels:read`.
+        A DM-backed channel is visible to an agent token only while that agent is a participant; otherwise the response is `404`.
       tags:
         - Channels
       security:
@@ -3655,7 +4140,10 @@ paths:
   /channels/{name}/join:
     post:
       summary: Join channel
-      description: Agent joins a channel
+      description: >-
+        Agent joins a channel. Returns `404` for the channel backing a DM or
+        group DM; add group DM participants with
+        `POST /dm/{conversation_id}/participants`.
       tags:
         - Channels
       security:
@@ -3685,7 +4173,10 @@ paths:
   /channels/{name}/leave:
     post:
       summary: Leave channel
-      description: Agent leaves a channel
+      description: >-
+        Agent leaves a channel. Returns `404` for the channel backing a DM or
+        group DM; leave a group DM with
+        `DELETE /dm/{conversation_id}/participants/{agent_name}`.
       tags:
         - Channels
       security:
@@ -3810,7 +4301,10 @@ paths:
   /channels/{name}/invite:
     post:
       summary: Invite agent to channel
-      description: Invite another agent to join a channel
+      description: >-
+        Invite another agent to join a channel. Returns `404` for the channel
+        backing a DM or group DM; add group DM participants with
+        `POST /dm/{conversation_id}/participants`.
       tags:
         - Channels
       security:
@@ -3865,6 +4359,14 @@ paths:
           schema:
             type: string
           description: Idempotency key for duplicate prevention
+        - name: wait_ms
+          in: query
+          required: false
+          description: Query form of the body's `wait_ms`; the body wins when both are given.
+          schema:
+            type: integer
+            minimum: 0
+            maximum: 2000
       requestBody:
         required: true
         content:
@@ -3894,6 +4396,19 @@ paths:
                   enum: [wait, steer]
                   default: wait
                   description: Injection mode for relay delivery
+                wait_ms:
+                  type: integer
+                  minimum: 0
+                  maximum: 2000
+                  default: 0
+                  description: >-
+                    Confirmation budget in milliseconds (1000 recommended). The
+                    response parks until every delivery it names (the first 50)
+                    is accepted by the receiving software or settles, or the
+                    budget ends; each `deliveries[]` row then carries its
+                    current `state`. Not part of the idempotency fingerprint; a
+                    replay never parks. Hosts without a delivery waiter answer
+                    at once.
       responses:
         '201':
           description: Message posted
@@ -4034,7 +4549,11 @@ paths:
   /messages/{id}:
     get:
       summary: Get message
-      description: Get a single message by ID. Observer tokens require `messages:read` for channel messages or `dms:read` for DM-backed messages, subject to filters.
+      description: >-
+        Get a single message by ID. Observer tokens require `messages:read` for
+        channel messages or `dms:read` for DM-backed messages, subject to
+        filters. An agent token gets `404` for a DM message unless the agent is
+        a participant in that conversation.
       tags:
         - Messages
       security:
@@ -4282,6 +4801,14 @@ paths:
           in: header
           schema:
             type: string
+        - name: wait_ms
+          in: query
+          required: false
+          description: Query form of the body's `wait_ms`; the body wins when both are given.
+          schema:
+            type: integer
+            minimum: 0
+            maximum: 2000
       requestBody:
         required: true
         content:
@@ -4316,6 +4843,32 @@ paths:
                   enum: [wait, steer]
                   default: wait
                   description: Injection mode for the DM
+                reply_to_message_id:
+                  type: string
+                  description: >-
+                    The recipient's message this DM answers. Must be a message
+                    from the recipient in this conversation, else
+                    `400 invalid_request`. Marks that message's delivery to the
+                    sender of this DM as `replied` (`delivery.replied` to its
+                    sender) once that delivery is delivered or consumed (a
+                    still-queued delivery keeps the link until then) and is stored on the message as
+                    `reply_to_message_id`.
+                wait_ms:
+                  type: integer
+                  minimum: 0
+                  maximum: 2000
+                  default: 0
+                  description: >-
+                    Confirmation budget in milliseconds (1000 recommended). The
+                    response parks until the receiving software accepts the
+                    delivery (`delivery.accepted`, or an `http_push` 2xx) or the
+                    row settles (consumed, replied, failed), then answers with
+                    the row's `state`; when the budget ends first it answers
+                    with the row as it stands (`state: queued`, even after a
+                    socket write — raw `status: delivered`, `accepted_at:
+                    null`) while delivery continues. Not part of the idempotency fingerprint; a
+                    replay never parks. Hosts without a delivery waiter (the
+                    workspace actor) answer at once.
       responses:
         '201':
           description: DM sent
@@ -4490,6 +5043,8 @@ paths:
       description: >-
         Full-text search across messages. Observer tokens require
         `search:read`; DM search results require `dms:read` and DM filters.
+        An agent token sees DM results only for conversations the agent
+        participates in.
         Messages are retained indefinitely by default; if the workspace's
         retention settings (or a deployment default — the hosted service uses
         30 days) enable pruning, older messages do not appear in results.
@@ -4783,6 +5338,108 @@ paths:
               schema:
                 $ref: '#/components/schemas/SuccessResponse'
 
+  /workspace/leaders:
+    get:
+      summary: Get workspace leaders
+      description: >-
+        Resolve the workspace's admin-set leader patterns against the
+        registered agents. GET accepts a workspace key, agent token or node
+        token; PUT requires the workspace key.
+      tags:
+        - Workspaces
+      security:
+        - workspaceKey: []
+        - agentToken: []
+        - nodeToken: []
+      responses:
+        '200':
+          description: Resolved leaders and the stored patterns
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/SuccessResponse'
+                  - type: object
+                    properties:
+                      data:
+                        $ref: '#/components/schemas/WorkspaceLeaders'
+              example:
+                ok: true
+                data:
+                  leaders:
+                    - name: admin
+                      agent_id: '1876543210987654321'
+                    - name: opsgrok
+                      agent_id: '1876543210987654322'
+                  patterns: ['*grok', 'admin']
+        '401':
+          description: Missing or invalid credential
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '429':
+          $ref: '#/components/responses/Throttled'
+    put:
+      summary: Set workspace leaders
+      description: >-
+        Replace the workspace's leader patterns. PUT requires the workspace
+        key (agent tokens get 401; node tokens get 401 `node_token_forbidden`).
+        Returns the same shape as `GET`, resolved against the current roster.
+      tags:
+        - Workspaces
+      security:
+        - workspaceKey: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SetWorkspaceLeadersRequest'
+            examples:
+              set:
+                value:
+                  patterns: ['*grok', 'admin']
+              clear:
+                value:
+                  patterns: []
+              reset:
+                value:
+                  reset: true
+      responses:
+        '200':
+          description: Leaders updated
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/SuccessResponse'
+                  - type: object
+                    properties:
+                      data:
+                        $ref: '#/components/schemas/WorkspaceLeaders'
+              example:
+                ok: true
+                data:
+                  leaders:
+                    - name: admin
+                      agent_id: '1876543210987654321'
+                  patterns: ['*grok', 'admin']
+        '400':
+          description: '`invalid_request`: the body or a pattern failed validation.'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '401':
+          description: Missing or invalid workspace key (agent and node tokens are refused)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '429':
+          $ref: '#/components/responses/Throttled'
+
   /activity:
     get:
       summary: Get workspace activity feed
@@ -5021,11 +5678,18 @@ paths:
         with `include_dms` (direct messages) and filters that admit the
         message, as for `GET /messages/{id}`. Node tokens are refused.
 
-        Rows are returned in creation order and capped at 500. Senders also
-        receive `delivery.delivered` (the row reached the recipient's socket or
-        push endpoint) and `delivery.acked` (the recipient acknowledged it) as
-        they happen; `delivery.failed` already reports rejected, expired and
-        unreachable rows.
+        Rows are returned in creation order and capped at 500. Each carries
+        the raw `status` and the derived `state` (`queued`, `delivered`,
+        `consumed`, `replied`, `failed`); `delivered` requires `accepted_at`,
+        so a host-side socket write (raw `status: delivered`) still reads as
+        `queued`. Senders also receive `delivery.delivered` (`accepted: true`
+        once the receiving software accepted the row — the only value that
+        means the client has it; `false` for the host's socket write),
+        `delivery.acked` (the recipient consumed it) and `delivery.replied`
+        (the recipient explicitly answered it; `reply_message_id`) as they happen;
+        `delivery.failed` already reports rejected, expired and unreachable
+        rows. A send's `message.id` and `delivery.id` are the lookup keys here;
+        the send's `Idempotency-Key` is the dedupe handle for retries.
       tags:
         - Deliveries
       security:
@@ -5088,7 +5752,9 @@ paths:
         the non-terminal queue (`queued` + `delivered`) so an offline consumer
         can replay what it missed after reconnect, oldest first. Each item
         carries the message payload. Expired rows awaiting scheduled cleanup
-        are excluded from the default active queue.
+        are excluded from the default active queue. When `after_seq` is supplied,
+        pages are ordered by recipient sequence instead of creation time; advance
+        with the last returned `seq`. This neither acknowledges nor changes rows.
       tags:
         - Deliveries
       security:
@@ -5123,6 +5789,18 @@ paths:
             type: integer
             minimum: 0
             maximum: 25000
+        - name: after_seq
+          in: query
+          required: false
+          description: >
+            Exclusive per-recipient sequence cursor. Start at 0 and advance with
+            the last returned seq to scan past retained pending entries without
+            acknowledging them. Only this calling agent's rows are returned.
+            Omitted preserves the existing creation-time order. Blank is invalid.
+          schema:
+            type: integer
+            minimum: 0
+            maximum: 9007199254740991
       responses:
         '200':
           description: Queued delivery items
@@ -5190,10 +5868,12 @@ paths:
     post:
       summary: Acknowledge a delivery
       description: >-
-        Idempotently transition a delivery to `acked`. The first ack emits
-        `delivery.delivered` to the acking agent and `delivery.acked`
-        (`delivery_id`, `message_id`, recipient `agent_id` / `agent_name`,
-        `status`, `at`) to the message sender; repeats emit nothing.
+        Idempotently transition a delivery to `acked` (the sender sees it as
+        `consumed`; `accepted_at` is stamped if the receiver never sent
+        `delivery.accepted`). The first ack emits `delivery.delivered` to the
+        acking agent and `delivery.acked` (`delivery_id`, `message_id`,
+        recipient `agent_id` / `agent_name`, `status`, `at`) to the message
+        sender, and answers a send parked on the row; repeats emit nothing.
       tags:
         - Deliveries
       security:
@@ -5637,7 +6317,8 @@ paths:
         and obsolete attempts/generations return stale_task_execution. Providers
         persist launch state before acceptance and reconcile ambiguous replies
         without launching a second worker. Node-addressed and unkeyed invokes of
-        task actions fail task_idempotency_required.
+        task actions fail task_idempotency_required. Exact-node builtin spawn
+        callers use the dedicated `/actions/spawn/strict-invoke` route.
       tags:
         - Actions
       security:
@@ -5667,9 +6348,37 @@ paths:
               properties:
                 input:
                   type: object
+                requester_agent_id:
+                  type: string
+                  minLength: 1
+                  maxLength: 128
+                  description: >-
+                    Optional agent in this workspace on whose behalf the caller
+                    invokes. Unknown ids return 400 `invalid_request`. Recorded
+                    alongside, never instead of, the authenticated `caller_id`.
+                    The requester is a claim made by the authenticated caller
+                    (any agent token may name any workspace agent); consumers
+                    must not treat it as authorization. Reusing an
+                    Idempotency-Key with a different requester returns 409
+                    `idempotency_key_reused`.
+                requester_name:
+                  type: string
+                  minLength: 1
+                  maxLength: 256
+                  description: >-
+                    Optional requester name. Requires `requester_agent_id` and
+                    must equal that agent's current name exactly; otherwise 400
+                    `invalid_request`. The recorded and returned name is always
+                    the requester agent's name. Never authority. A retry should
+                    send `requester_agent_id` alone or the agent's current name;
+                    if the agent was renamed since the first attempt, a retry
+                    repeating the old name gets 400, while an id-only retry
+                    replays.
       responses:
         '201':
-          description: Action invocation created; response `data` includes `invocation_id`
+          description: >-
+            Action invocation created; response `data` includes `invocation_id`,
+            `requester_agent_id` and `requester_name` (null when not supplied).
           headers:
             Idempotency-Replayed:
               description: Set to `true` when the original invocation is replayed.
@@ -5681,13 +6390,25 @@ paths:
               schema:
                 $ref: '#/components/schemas/SuccessResponse'
         '400':
-          description: Invalid Idempotency-Key, task_idempotency_required, or invalid_task_context.
+          description: >-
+            Invalid Idempotency-Key, task_idempotency_required,
+            invalid_task_context, or a strict spawn contract sent to this
+            generic route instead of `/actions/spawn/strict-invoke`. An unknown
+            `requester_agent_id`, a `requester_name` sent without
+            `requester_agent_id`, or a `requester_name` that does not equal the
+            requester agent's name also returns `invalid_request`.
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
         '409':
-          description: The idempotency key was reused with different input.
+          description: The idempotency key was reused with different input or requester.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: No action has this name.
           content:
             application/json:
               schema:
@@ -5705,8 +6426,208 @@ paths:
             a handler that cannot answer; or `idempotency_unavailable` — the
             durable idempotency claim cannot be read, or a keyed invocation
             replay cannot yet observe its durable placement/dispatch outcome.
-            Retry
-            the same logical request with the same key.
+            Retry the same logical request with the same key.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /actions/spawn/strict-invoke:
+    post:
+      summary: Invoke builtin spawn with an exact-node logical contract
+      description: >-
+        Accepts the lookup-only `relay.spawn.invoke.logical/1` contract or the
+        explicit `relay.spawn.invoke.logical-replay-resume/1` variant, bypasses
+        registered actions and shadow handlers, and binds placement and every
+        retry to the exact target node id and name. The logical request and
+        Idempotency-Key remain stable; only `worker_cwd` may be rematerialized.
+        Before provider I/O, placement and capacity ownership commit atomically.
+        A same-key retry resumes only a definitely-unsent exact-node placement;
+        it never falls back to another node. An indeterminate socket-send
+        outcome is not automatically resent until providers offer a durable
+        invocation acknowledgement.
+        A successful response includes top-level
+        `data.spawn_contract_applied` matching the exact request schema. For
+        `logical-replay-resume/1`, it also includes the independent server-owned
+        `data.spawn_replay_capability_applied: relay.spawn.replay-resume/1`.
+        Clients must verify both proofs before relying on replay-side resume.
+        Older servers lack this route and therefore fail before any spawn side
+        effect.
+      tags:
+        - Actions
+      security:
+        - agentToken: []
+      parameters:
+        - name: Idempotency-Key
+          in: header
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [input]
+              properties:
+                input:
+                  $ref: '#/components/schemas/StrictSpawnInput'
+                requester_agent_id:
+                  type: string
+                  minLength: 1
+                  maxLength: 128
+                  description: >-
+                    Optional agent in this workspace on whose behalf the caller
+                    invokes. Unknown ids return 400 `invalid_request`. Recorded
+                    alongside, never instead of, the authenticated `caller_id`.
+                    The requester is a claim made by the authenticated caller
+                    (any agent token may name any workspace agent); consumers
+                    must not treat it as authorization. Reusing an
+                    Idempotency-Key with a different requester returns 409
+                    `idempotency_key_reused`.
+                requester_name:
+                  type: string
+                  minLength: 1
+                  maxLength: 256
+                  description: >-
+                    Optional requester name. Requires `requester_agent_id` and
+                    must equal that agent's current name exactly; otherwise 400
+                    `invalid_request`. The recorded and returned name is always
+                    the requester agent's name. Never authority. A retry should
+                    send `requester_agent_id` alone or the agent's current name;
+                    if the agent was renamed since the first attempt, a retry
+                    repeating the old name gets 400, while an id-only retry
+                    replays.
+      responses:
+        '201':
+          description: >-
+            Strict builtin spawn accepted or replayed. `data` includes
+            `requester_agent_id` and `requester_name` (null when not supplied).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SuccessResponse'
+        '400':
+          description: >-
+            Missing key, malformed body, or invalid strict contract. An unknown
+            `requester_agent_id`, a `requester_name` sent without
+            `requester_agent_id`, or a `requester_name` that does not equal the
+            requester agent's name also returns `invalid_request`.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '403':
+          description: Agent token required.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: Exact target node id does not exist.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '409':
+          description: Node identity/capability mismatch or key reused for another request.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '503':
+          description: Exact target is unavailable or durable replay is not ready.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /actions/spawn/replay:
+    post:
+      summary: Recover an existing strict spawn invocation
+      description: >-
+        Recover an invocation previously accepted through a strict logical
+        contract. `relay.spawn.invoke.logical/1` remains lookup-only: replay
+        returns its stored snapshot without placement, reservation, or provider
+        dispatch. Only an original
+        `relay.spawn.invoke.logical-replay-resume/1` claim carrying the persisted
+        server-owned `spawn_replay_capability_applied: relay.spawn.replay-resume/1`
+        proof may resume a definitely-unsent dispatch from its original stored
+        materialized input. Replay never creates a claim, selects another node,
+        or falls back to strict-invoke, generic invoke, registered actions, or
+        legacy spawn. Dispatched, terminal, and indeterminate-send snapshots are
+        returned without another send. The agent,
+        Idempotency-Key, and logical request must match the durable claim exactly.
+        Use the explicit variant when a local path cannot be safely
+        rematerialized after a pre-dispatch crash. A successful response includes
+        `data.spawn_contract_applied` matching the accepted schema; explicit
+        replay-resume claims also include the separate replay capability proof.
+      tags:
+        - Actions
+      security:
+        - agentToken: []
+      parameters:
+        - name: Idempotency-Key
+          in: header
+          required: true
+          description: The key persisted for the original strict spawn request.
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [logical_request]
+              properties:
+                logical_request:
+                  $ref: '#/components/schemas/SpawnLogicalRequest'
+      responses:
+        '200':
+          description: >-
+            Existing strict-claim snapshot. Lookup-only claims never dispatch;
+            an explicitly marked replay-resume claim may resume one
+            definitely-unsent dispatch from persisted input.
+          headers:
+            Idempotency-Replayed:
+              description: Always `true` for a recovered invocation.
+              schema:
+                type: string
+                enum: ['true']
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SuccessResponse'
+        '400':
+          description: Invalid key or malformed strict logical request.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '403':
+          description: Agent token required.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: No matching invocation exists for this workspace, agent, action, and key.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '409':
+          description: The key belongs to a different strict logical request.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '503':
+          description: Service temporarily unavailable.
           content:
             application/json:
               schema:
@@ -5782,7 +6703,10 @@ paths:
             type: string
       responses:
         '200':
-          description: Invocation
+          description: >-
+            Invocation, including authenticated `caller_id`/`caller_name` and the
+            optional on-behalf-of `requester_agent_id`/`requester_name` (null when
+            not supplied; `requester_agent_id` becomes null if that agent is deleted).
           content:
             application/json:
               schema:
@@ -6633,6 +7557,15 @@ paths:
         HTTP field names, values cannot contain CR/LF, and stored custom header values are redacted
         from subscription create/list/get responses. Production callback URLs must use HTTPS and
         resolve only to globally routable addresses; redirects are not followed.
+
+        Webhook payloads of `message.created`, `thread.reply`, `dm.received` and `group_dm.received`
+        carry `data.recipients`: one `{ agent_id, agent_name, delivery_id, seq }` entry per delivery
+        record (the sender is not listed; `seq` is that recipient's delivery seq). At most 500
+        entries are sent, and fewer when the full body would exceed 256 KiB;
+        `data.recipients_truncated` is `true` only when entries were dropped. Past 2,000 recipients,
+        a subscription with `filter.recipients` may receive the event with an empty list and
+        `recipients_truncated: true`, since its names may have been among the dropped. This field is
+        webhook-only: WebSocket, stream and HTTP responses do not include it.
       tags:
         - Subscriptions
       security:
@@ -6654,6 +7587,19 @@ paths:
                     type: string
                 filter:
                   type: object
+                  description: Optional `channel` (exact channel name), `mentions` (agent name matched as `@name` in the message text) and `recipients` (agent names or ids; matches an event with a listed entry in `data.recipients`, and the delivered `data.recipients` then holds only the matching entries). Present fields combine with AND, and an event without the field a filter needs never matches. A message posted through an inbound webhook (`POST /hooks/{webhookId}`) never matches `mentions`; its `message.created` event (sent only when the post includes a non-empty `payload`) carries `metadata.__relaycast_origin` = `inbound_webhook`.
+                  properties:
+                    channel:
+                      type: string
+                    mentions:
+                      type: string
+                    recipients:
+                      type: array
+                      minItems: 1
+                      maxItems: 500
+                      items:
+                        type: string
+                        minLength: 1
                 url:
                   type: string
                 headers:
@@ -6713,6 +7659,90 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/SuccessResponse'
+    patch:
+      summary: Update subscription
+      description: |
+        Partially update an outbound event subscription. Only the fields present change; `filter: null`
+        clears the filter and `headers` replaces the stored headers as a whole (no per-key merge);
+        `headers: null` or `{}` clears them. At least one field is required.
+        Changing `url` on a subscription with stored headers requires `headers` in the same request,
+        since stored values are redacted on read and would otherwise be sent to the new endpoint;
+        without it the request fails with 400 `subscription_headers_required` and nothing changes.
+        The URL and `standard-webhooks` secret rules of create apply, the secret rule checked against
+        the resulting subscription. The response has the shape of `GET /subscriptions/{id}` and never
+        includes the secret.
+      tags:
+        - Subscriptions
+      security:
+        - workspaceKey: []
+        - agentToken: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              minProperties: 1
+              properties:
+                events:
+                  type: array
+                  minItems: 1
+                  items:
+                    type: string
+                filter:
+                  type: object
+                  nullable: true
+                  properties:
+                    channel:
+                      type: string
+                    mentions:
+                      type: string
+                    recipients:
+                      type: array
+                      minItems: 1
+                      maxItems: 500
+                      items:
+                        type: string
+                        minLength: 1
+                url:
+                  type: string
+                  minLength: 1
+                headers:
+                  type: object
+                  nullable: true
+                  additionalProperties:
+                    type: string
+                secret:
+                  type: string
+                  nullable: true
+                signature_scheme:
+                  type: string
+                  enum: [legacy, standard-webhooks]
+                is_active:
+                  type: boolean
+      responses:
+        '200':
+          description: Updated subscription
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SuccessResponse'
+        '400':
+          description: >-
+            Invalid body, unsafe URL, missing `whsec_` secret for `standard-webhooks`, or a `url`
+            change without `headers` while headers are stored (`subscription_headers_required`)
+        '404':
+          description: Subscription not found
+        '409':
+          description: >-
+            The signing scheme, secret, or (for a `url` sent without `headers`) the url or stored
+            headers changed concurrently (`subscription_update_conflict`); retry
     delete:
       summary: Delete subscription
       description: Delete outbound event subscription
@@ -6861,8 +7891,15 @@ paths:
       summary: Receive relayfile inbound event
       description: >
         HMAC-authenticated callback used by relayfile to inject matching provider
-        file events into a Relaycast channel. The HMAC input is
+        file.created, file.updated, and file.deleted events into a Relaycast channel.
+        A deletion without a snapshot retains its authenticated event metadata and
+        path; deleted record content is unavailable and is not reconstructed. The HMAC input is
         `X-Relay-Timestamp + "." + raw request body`, signed with SHA-256.
+        The provider record is stored in message metadata as `record` only when its
+        JSON is at most 8 KiB (UTF-8, deployment-configurable); a larger record is
+        stored as `record: null` with `record_omitted: { reason: "too_large", bytes,
+        limit }` and stays retrievable from relayfile by `relayfile.path` and
+        `relayfile.revision`. The message text is still formatted from the full record.
         A full recipient mailbox returns 503 mailbox_full with Retry-After: 30;
         the producer must retry the same event ID. The message and all delivery
         rows roll back together, so no recipient is silently skipped.
@@ -7047,7 +8084,7 @@ paths:
   /hooks/{webhookId}:
     post:
       summary: Trigger inbound webhook
-      description: Trigger a configured inbound webhook. Requires the per-webhook bearer token returned by `POST /webhooks`. Accepts either `{ message, author }` (SDK shape) or `{ text, source, payload }`; `message` maps to message text and `author` is used as the displayed sender without being copied into `source`. A JSON object with none of `text`, `message`, `source`, `author` or `payload` (including `{}`) is rendered as JSON in the message text, capped at 16,000 characters; its fields are not read as message metadata, so they never set `session_ref` or suppress message triggers.
+      description: Trigger a configured inbound webhook. Requires the per-webhook bearer token returned by `POST /webhooks`. Accepts either `{ message, author }` (SDK shape) or `{ text, source, payload }`; `message` maps to message text and `author` is used as the displayed sender without being copied into `source`. A JSON object with none of `text`, `message`, `source`, `author` or `payload` (including `{}`) is rendered as JSON in the message text, capped at 16,000 characters; its fields are not read as message metadata, so they never set `session_ref` or suppress message triggers. A `message.created` event subscription receives the resulting message only when the post includes a non-empty `payload` object (otherwise only `webhook.received` is sent). That event carries `metadata.__relaycast_origin` = `inbound_webhook`, and an `@name` in its text never matches a subscription's `mentions` filter; channel and unfiltered subscriptions still receive it.
       tags:
         - Webhooks
       security:
@@ -7177,6 +8214,8 @@ paths:
                           delete:
                             type: boolean
                           server_minted_key:
+                            type: boolean
+                          expiry:
                             type: boolean
         '401':
           description: Missing or wrong internal secret (`unauthorized`)
@@ -7313,6 +8352,184 @@ paths:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
 
+  /internal/workspaces/{id}/import:
+    servers:
+      - url: https://relaycast.example.com
+        description: Durable-actors gateway (root, no /v1 prefix)
+    post:
+      summary: Import a workspace exported from PostgreSQL (durable-actors only)
+      description: >-
+        One step of moving a workspace from a PostgreSQL deployment
+        (`relaycast-engine export-for-actors`) into its workspace actor under
+        the same id; `relaycast-migrate import` drives it. Served only by the
+        durable-actors gateway. `op` is `begin` (refused unless the actor is
+        empty and the exported column lists equal the engine's), `chunk` (one
+        block of `[rowid, ...values]` rows of one table, idempotent per
+        `table` and `seq`, answered with the digest of the rows read back),
+        `finish` (foreign-key check, then each table's count and digest
+        against the manifest; the workspace becomes `verified` but stays
+        closed), `open` (go-live: the verified workspace serves), `abort`
+        (remove everything imported, before `open`) or `status`. `begin`,
+        `finish` and `open` replay for the same run. Until `open`, every other
+        request to the workspace answers `503 workspace_importing`.
+      tags:
+        - Internal Admin
+      security:
+        - internalSecret: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          description: Workspace id (a 64-bit snowflake).
+          schema:
+            type: string
+            pattern: '^[0-9]{1,20}$'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [op]
+              properties:
+                op:
+                  type: string
+                  enum: [begin, chunk, finish, open, abort, status]
+                run_id:
+                  type: string
+                  pattern: '^[A-Za-z0-9_-]{8,64}$'
+                tables:
+                  type: array
+                  description: '`begin`: every table in plan order with its columns.'
+                  items:
+                    type: object
+                    properties:
+                      name: { type: string }
+                      columns: { type: array, items: { type: string } }
+                table: { type: string }
+                seq: { type: integer, minimum: 0 }
+                rows:
+                  type: array
+                  items: { type: array }
+                manifest:
+                  type: object
+                  description: '`finish`: per table, `{ count, sha256 }` from the export manifest.'
+                  additionalProperties:
+                    type: object
+                    properties:
+                      count: { type: integer }
+                      sha256: { type: string }
+      responses:
+        '200':
+          description: Step applied (or already applied)
+        '201':
+          description: Import begun
+        '400':
+          description: Invalid workspace id or request
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '401':
+          description: Missing or wrong internal secret (`unauthorized`)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '409':
+          description: >-
+            `workspace_exists`, `import_schema_mismatch`, `import_run_mismatch`,
+            `import_not_started`, `import_verified`, `import_open`, `import_chunk_out_of_order`,
+            `import_integrity_failed` or `import_verification_failed` (with
+            `details`).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /internal/workspaces/{id}/expiry:
+    servers:
+      - url: http://localhost:8787
+        description: Self-hosted engine (root, no /v1 prefix)
+    post:
+      summary: Move or clear a live workspace's expiry (control plane)
+      description: >-
+        Moves the deadline of a workspace that has not expired to
+        `expires_in_seconds` from now (a temporary workspace kept alive by
+        activity), or clears it with `null` (the workspace was claimed and is
+        kept). A workspace already past its deadline, including one being
+        deleted, is never revived (`409 workspace_expired`). Served by the
+        hosted gateway too.
+      tags:
+        - Internal Admin
+      security:
+        - internalSecret: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            pattern: '^[A-Za-z0-9_-]{1,128}$'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [expires_in_seconds]
+              properties:
+                expires_in_seconds:
+                  type: integer
+                  nullable: true
+                  minimum: 60
+                  maximum: 7776000
+      responses:
+        '200':
+          description: The new deadline
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok:
+                    type: boolean
+                    enum: [true]
+                  data:
+                    type: object
+                    required: [workspace_id, expires_at]
+                    properties:
+                      workspace_id:
+                        type: string
+                      expires_at:
+                        type: string
+                        format: date-time
+                        nullable: true
+        '400':
+          description: Invalid workspace id or body
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '401':
+          description: Missing or wrong internal secret (`unauthorized`)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: The admin API is disabled, or no such workspace (`not_found`)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '409':
+          description: The workspace is past its deadline (`workspace_expired`)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
   /internal/workspaces/{id}/api-key:
     servers:
       - url: http://localhost:8787
@@ -7465,6 +8682,12 @@ paths:
         otherwise returns 404. An explicit query or path selector that does not
         resolve always returns 404 rather than falling back to any other
         workspace.
+
+        Skills: one per agent, its id and name the agent name (the target a
+        caller sends). An agent with a card or declared skills
+        (`metadata.card`, `metadata.skills`) is described by its card
+        description and skill names, with their tags and up to 5 examples; any
+        other agent by its persona. Released agents are excluded.
       tags: [A2A]
       parameters:
         - in: query
@@ -7762,7 +8985,11 @@ paths:
   /console/messages:
     get:
       summary: List console messages
-      description: List observability console message logs. Observer tokens require `messages:read`; DM logs also require `dms:read` and DM filters.
+      description: >-
+        List observability console message logs. Observer tokens require
+        `messages:read`; DM logs also require `dms:read` and DM filters. An
+        agent token sees DM logs only for conversations the agent participates
+        in.
       tags: [Console]
       security:
         - workspaceKey: []
@@ -8108,9 +9335,16 @@ tags:
   - name: Agents
     description: Agent registration and management
   - name: Channels
-    description: Channel CRUD and membership
+    description: >-
+      Channel CRUD and membership. DMs and group DMs are backed by channels
+      (`dm-…`, `group-dm-…`). With an agent token, every `/channels/{name}`
+      route returns `404` for a DM-backed channel the agent does not
+      participate in. Workspace keys are unaffected.
   - name: Messages
-    description: Channel messaging
+    description: >-
+      Channel messaging. With an agent token, every `/messages/{id}` route
+      (replies, reactions, read receipts) returns `404` for a DM message unless
+      the agent is a participant in that conversation.
   - name: Threads
     description: Threaded conversations
   - name: Reactions

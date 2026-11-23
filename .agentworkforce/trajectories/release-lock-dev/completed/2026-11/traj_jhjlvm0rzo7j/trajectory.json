@@ -1,0 +1,65 @@
+{
+  "id": "traj_jhjlvm0rzo7j",
+  "version": 1,
+  "task": {
+    "title": "Restore dev flags during release lock refresh",
+    "source": {
+      "system": "plain",
+      "id": "release-run-42461576035"
+    }
+  },
+  "status": "completed",
+  "startedAt": "2026-11-08T15:41:01.834Z",
+  "completedAt": "2026-11-08T15:46:40.746Z",
+  "agents": [
+    {
+      "name": "default",
+      "role": "lead",
+      "joinedAt": "2026-11-08T15:41:02.502Z"
+    }
+  ],
+  "chapters": [
+    {
+      "id": "chap_l9rz12t8cy7x",
+      "title": "Work",
+      "agentName": "default",
+      "startedAt": "2026-11-08T15:41:02.502Z",
+      "endedAt": "2026-11-08T15:46:40.746Z",
+      "events": [
+        {
+          "ts": 1794152462505,
+          "type": "decision",
+          "content": "Restore source peer and dev flags without weakening exact tag validation: Restore source peer and dev flags without weakening exact tag validation",
+          "raw": {
+            "question": "Restore source peer and dev flags without weakening exact tag validation",
+            "chosen": "Restore source peer and dev flags without weakening exact tag validation",
+            "alternatives": [],
+            "reasoning": "The12.9.0 artifact differs only by26 nested esbuild dev flags. Add a read-only metadata check after build/tests and before packing so this drift fails before publishing."
+          },
+          "significance": "high"
+        }
+      ]
+    }
+  ],
+  "retrospective": {
+    "summary": "Restores source peer/dev flag values and absence while preserving refreshed versions and source JSON order. Read-only --check guard runs after build/tests before packing. Regression fails before fix; focused tests2/2 and adjacent release tests21/21 pass. Actual failed12.9.0 artifact13610451059 replay restores26flags and unchanged exact version-only validator accepts it. Syntax and whitespace checks pass. Fullrelease suite attempted but stopped after unrelated Windows path/newline failures and Gitfixture stall; no fullsuite pass claimed. Two independent code reviews PASS. No release rerun, publish, tag or production action.",
+    "approach": "Historical implementation at de4f3886260a2bfa251ebe36000b8886143754d8 from a14e189ef7a4cf02baba6b094e7c7231c1c4b179; superseded by the prevalidated-release trajectory. Independent reviews on unchanged implementation at 9eabbf14ebd1689b6d9fc50bb1f92cad8b4bd5f4: review_final_contract https://github.com/AgentWorkforce/relaycast/pull/640#pullrequestreview-5818532189 and review_relay_fix https://github.com/AgentWorkforce/relaycast/pull/640#pullrequestreview-5818533096. Separate failed-build artifact replay is identified in summary.md.",
+    "confidence": 0.93
+  },
+  "commits": [
+    "de4f388"
+  ],
+  "filesChanged": [
+    ".github/workflows/publish-npm.yml",
+    "CHANGELOG.md",
+    "scripts/release-workflow-contract.test.mjs",
+    "scripts/restore-release-lock-metadata.mjs"
+  ],
+  "projectId": "AgentWorkforce/relaycast",
+  "tags": [],
+  "_trace": {
+    "startRef": "a14e189ef7a4cf02baba6b094e7c7231c1c4b179",
+    "endRef": "de4f3886260a2bfa251ebe36000b8886143754d8",
+    "traceId": "4e0ae64c-b10d-433b-a437-e0153d110169"
+  }
+}

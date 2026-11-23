@@ -4,7 +4,7 @@ import type { Context } from 'hono';
 import { and, eq } from 'drizzle-orm';
 import { z } from 'zod';
 import type { AppEnv } from '../env.js';
-import { a2aAgents, a2aInbound, agents, messages, workspaces } from '../db/schema.js';
+import { a2aAgents, a2aInbound, agents, messages, workspaces } from '../db/tables.js';
 import { requireAuth, hashToken } from '../middleware/auth.js';
 import {
   authenticateUnexpired,
@@ -25,7 +25,7 @@ import * as dmEngine from '../engine/dm.js';
 import { buildDmReceivedEventData } from '../engine/deliveryWire.js';
 import { publishWorkspaceEvent } from './fanout.js';
 import { notifyDeliveryRejections, routeDeliveryOutcomes } from './deliveryRouting.js';
-import { sendWebhookEvent } from './webhookOutbox.js';
+import { sendWebhookEvent, webhookEventMatcher } from './webhookOutbox.js';
 import {
   jsonCreated,
   jsonError,
@@ -114,7 +114,8 @@ async function receiveIdempotently(c: Context<AppEnv>, options: Omit<Parameters<
 function admittedInbound(c: Context<AppEnv>, workspaceId: string, senderAgentId: string): NonNullable<Parameters<typeof dmEngine.sendDm>[4]>['afterAdmission'] {
   return (data, event) => {
     runInBackground(c, c.get('engine').realtime.publishToWorkspaceStream({ workspaceId, event: { ...event.payload, seq: event.seq } }), 'publish admitted inbound dm.received');
-    runInBackground(c, c.get('engine').webhookQueue.send({ type: 'dm.received', workspaceId, data: event.data, outboxId: event.outboxId }), 'queue admitted inbound dm.received');
+    // As routes/dm.ts: no outbox row means no subscription wants this event.
+    if (event.outboxId) runInBackground(c, c.get('engine').webhookQueue.send({ type: 'dm.received', workspaceId, data: event.webhookData, outboxId: event.outboxId }), 'queue admitted inbound dm.received');
     if (data._delivery_rejections.length) runInBackground(c, notifyDeliveryRejections(c, senderAgentId, data._delivery_rejections, workspaceId), 'notify admitted inbound rejection');
     if (data._delivery) runInBackground(c, routeDeliveryOutcomes(c, [data._delivery], 'dm.received', event.data, { workspaceId }), 'route admitted inbound delivery');
   };
@@ -546,6 +547,7 @@ a2aRoutes.post('/a2a/rpc', requireAuth, rateLimit, async (c) => {
           receivedA2aAgentId: registeredCaller.id,
           receivedA2aTokenHash: authenticatedAgent!.tokenHash,
           inboundIdentity: inboundMessageId ? { scope: 'a2a:inbound', key: `${registeredCaller.id}:${inboundMessageId}` } : undefined,
+          hasWebhookSubscriptions: await webhookEventMatcher(c, workspace.id, 'dm.received'),
           afterAdmission: admittedInbound(c, workspace.id, authenticatedAgent!.id),
           // Without this, sendDm falls back to its fixed one-hour / 1000-message
           // defaults and a registered peer's deliveries quietly ignore whatever
@@ -573,7 +575,7 @@ a2aRoutes.post('/a2a/rpc', requireAuth, rateLimit, async (c) => {
         const eventData = buildDmReceivedEventData(sent, { fromName: authenticatedAgent!.name });
         runInBackground(
           c,
-          sendWebhookEvent(c, { type: 'dm.received', workspaceId: workspace.id, data: eventData }),
+          sendWebhookEvent(c, { type: 'dm.received', workspaceId: workspace.id, data: eventData }, sent._delivery ? [sent._delivery] : []),
           'a2a inbound webhook dm.received',
         );
         runInBackground(
@@ -761,6 +763,7 @@ a2aRoutes.post('/a2a/webhook/:workspace_id/:agent_name', async (c) => {
         receivedA2aAgentId: relayAgent.registrationId,
         receivedA2aTokenHash: tokenHash,
         inboundIdentity: inboundKey ? { scope: 'a2a:webhook', key: inboundKey } : undefined,
+        hasWebhookSubscriptions: await webhookEventMatcher(c, relayAgent.workspaceId, 'dm.received'),
         afterAdmission: admittedInbound(c, relayAgent.workspaceId, relayAgent.relayAgentId),
         mailbox: resolveMailboxConfig(c.get('engine').config, relayAgent.workspaceId),
         resolveWorkspaceDeliveryPolicy: () => resolveWorkspaceDeliveryPolicyById(db, c.get('engine').config, relayAgent.workspaceId),

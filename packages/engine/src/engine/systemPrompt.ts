@@ -1,6 +1,6 @@
 import { eq } from 'drizzle-orm';
 import type { getDb } from '../db/index.js';
-import { workspaces } from '../db/schema.js';
+import { workspaces } from '../db/tables.js';
 
 type Db = ReturnType<typeof getDb>;
 

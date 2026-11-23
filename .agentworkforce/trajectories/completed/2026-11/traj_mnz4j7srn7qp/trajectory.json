@@ -1,0 +1,121 @@
+{
+  "id": "traj_mnz4j7srn7qp",
+  "version": 1,
+  "task": {
+    "title": "Add exact-node durable spawn replay for Relay Flows callers"
+  },
+  "status": "completed",
+  "startedAt": "2026-11-09T01:11:49.766Z",
+  "completedAt": "2026-11-09T01:49:34.273Z",
+  "agents": [
+    {
+      "name": "default",
+      "role": "lead",
+      "joinedAt": "2026-11-09T01:14:20.851Z"
+    }
+  ],
+  "chapters": [
+    {
+      "id": "chap_08ree8ae8cbq",
+      "title": "Work",
+      "agentName": "default",
+      "startedAt": "2026-11-09T01:14:20.851Z",
+      "endedAt": "2026-11-09T01:49:34.273Z",
+      "events": [
+        {
+          "ts": 1794186860851,
+          "type": "decision",
+          "content": "Use server-owned strict logical spawn claims plus a replay-only recovery route: Use server-owned strict logical spawn claims plus a replay-only recovery route",
+          "raw": {
+            "question": "Use server-owned strict logical spawn claims plus a replay-only recovery route",
+            "chosen": "Use server-owned strict logical spawn claims plus a replay-only recovery route",
+            "alternatives": [],
+            "reasoning": "A bounded local receipt ledger can permanently strand accepted spawns; Relaycast already owns the durable idempotency claim. The strict envelope binds exact node identity while allowing only local worker_cwd rematerialization, and replay-only cannot create, place, or dispatch."
+          },
+          "significance": "high"
+        },
+        {
+          "ts": 1794186861088,
+          "type": "decision",
+          "content": "Preserve legacy action payloads unless spawn_contract explicitly opts into relay.spawn.invoke.logical/1: Preserve legacy action payloads unless spawn_contract explicitly opts into relay.spawn.invoke.logical/1",
+          "raw": {
+            "question": "Preserve legacy action payloads unless spawn_contract explicitly opts into relay.spawn.invoke.logical/1",
+            "chosen": "Preserve legacy action payloads unless spawn_contract explicitly opts into relay.spawn.invoke.logical/1",
+            "alternatives": [],
+            "reasoning": "Existing callers may already use target_node_id or logical_request as application metadata; exact legacy retries must remain byte-compatible."
+          },
+          "significance": "high"
+        },
+        {
+          "ts": 1794186861411,
+          "type": "reflection",
+          "content": "Relaycast and Relay client tests pass, and mutation checks caught both name-reuse retry redirection and unsafe-directory recovery regressions. Desktop still needs its durable pre-spawn intent/worker mapping before real direct-node E2E can close.",
+          "raw": {
+            "focalPoints": [
+              "durability",
+              "compatibility",
+              "end-to-end"
+            ],
+            "adjustments": "Document the new route, obtain exact-head independent reviews, then integrate with Desktop rather than merging Flows early.",
+            "confidence": 0.84
+          },
+          "significance": "high",
+          "tags": [
+            "focal:durability",
+            "focal:compatibility",
+            "focal:end-to-end",
+            "confidence:0.84"
+          ]
+        },
+        {
+          "ts": 1794187544888,
+          "type": "decision",
+          "content": "Require a server-owned applied marker on strict spawn acknowledgments: Require a server-owned applied marker on strict spawn acknowledgments",
+          "raw": {
+            "question": "Require a server-owned applied marker on strict spawn acknowledgments",
+            "chosen": "Require a server-owned applied marker on strict spawn acknowledgments",
+            "alternatives": [],
+            "reasoning": "An older Relaycast can accept the versioned fields as inert metadata and still place by name. Persisting the marker in the durable claim and returning it in invoke/replay responses gives relay-node a fail-closed rolling-upgrade proof; client-supplied markers and pre-proof rows are rejected."
+          },
+          "significance": "high"
+        },
+        {
+          "ts": 1794188884138,
+          "type": "reflection",
+          "content": "The strict spawn contract is now split onto a dedicated pre-side-effect route, server-owned proof is tied to builtin provenance, external retries recover from durable Relaycast claims, and legacy session request bytes remain unchanged. Full engine and client gates plus three targeted mutation checks pass; independent final re-review is pending before draft PR publication.",
+          "raw": {
+            "focalPoints": [
+              "mixed-version safety",
+              "durable idempotency",
+              "legacy compatibility",
+              "independent review"
+            ],
+            "adjustments": "Do not merge or release; publish paired draft PRs only after both independent reviewers clear the final trees, then integrate Desktop service credentials/caller mapping for live lifecycle proof.",
+            "confidence": 0.9
+          },
+          "significance": "high",
+          "tags": [
+            "focal:mixed-version safety",
+            "focal:durable idempotency",
+            "focal:legacy compatibility",
+            "focal:independent review",
+            "confidence:0.9"
+          ]
+        }
+      ]
+    }
+  ],
+  "retrospective": {
+    "summary": "Added a mixed-version-safe strict builtin spawn route and replay-only recovery contract. Exact node identity, caller scope, logical request, durable idempotency, server-owned proof, registered-action bypass, and legacy compatibility are pinned by full gates, targeted mutations, and independent review. Paired Relay client integration is required before release.",
+    "approach": "Standard approach",
+    "confidence": 0.9
+  },
+  "commits": [],
+  "filesChanged": [],
+  "projectId": "AgentWorkforce/relaycast",
+  "tags": [],
+  "_trace": {
+    "startRef": "0858d73ea59f5bc674ae8cc41b023e0688bdde01",
+    "endRef": "0858d73ea59f5bc674ae8cc41b023e0688bdde01"
+  }
+}

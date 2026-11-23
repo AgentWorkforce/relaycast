@@ -1,8 +1,9 @@
 import { afterEach, describe, expect, it } from 'vitest';
+import { brandSqliteEngineDb } from '../../adapters/sqlite-handle.js';
 import { drizzle } from 'drizzle-orm/better-sqlite3';
 import { eq } from 'drizzle-orm';
 import { getSqliteDb, runMigrations, type SqliteDbHandle } from '../../adapters/node/database.js';
-import * as schema from '../../db/schema.js';
+import * as schema from '../../db/tables.js';
 import type { EngineDb } from '../../ports/database.js';
 import type { NodeConnectionRegistry } from '../../ports/realtime.js';
 import { claimNodeOffline, markNodeOffline, settleNodeOffline } from '../node.js';
@@ -46,7 +47,7 @@ function fixture() {
         id,workspace_id,action_name,status,dispatched_node_id,dispatched_at,dispatch_attempts)
       VALUES ('inv1','ws','echo','dispatched','node1',1000,1);
   `);
-  const db = drizzle(sqlite, { schema }) as unknown as EngineDb;
+  const db = brandSqliteEngineDb(drizzle(sqlite, { schema }));
   return { sqlite, db };
 }
 

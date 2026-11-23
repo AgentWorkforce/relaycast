@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { and, eq } from 'drizzle-orm';
 import { attachDirectNodeSocket, createWorkspace, makeNodeStack, registerAgent, type TestStack } from './harness.js';
-import { actionInvocations, agentNodeBindings, agents, deliveries, messages, nodes } from '../../db/schema.js';
+import { actionInvocations, agentNodeBindings, agents, deliveries, messages, nodes } from '../../db/tables.js';
 import { sha256Hex } from '../../lib/crypto.js';
 
 /**

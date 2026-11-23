@@ -1,3 +1,4 @@
+import * as sqlx from '../db/sqlx.js';
 import { z } from 'zod';
 import { eq, and, sql, lt, lte, gt, isNull, inArray, desc } from 'drizzle-orm';
 import type { DmMessage } from '@relaycast/types';
@@ -19,7 +20,7 @@ import {
   nodes,
   directDmIdempotency,
   deliveries,
-} from '../db/schema.js';
+} from '../db/tables.js';
 import { sha256Hex } from '../lib/crypto.js';
 import { runAtomicWrites, databaseConstraintKind, type AtomicWrite } from '../ports/database.js';
 import { generateId } from './snowflake.js';
@@ -37,7 +38,9 @@ import {
 } from './workspaceDeliveryPolicy.js';
 import { A2A_EGRESS_RETRY_WINDOW_MS, dispatchA2aEgress, expireA2aEgressForReuse } from './a2aEgress.js';
 import { buildDmReceivedEventData } from './deliveryWire.js';
+import { buildReplyLinkWrite, repliedByReplyLinkWrite } from './delivery.js';
 import { buildWorkspaceEventWrite } from './workspaceEvents.js';
+import { seqLockedWrite } from './seqLock.js';
 import { transformForClient } from './wsTransform.js';
 import { codedError } from '../lib/httpError.js';
 import {
@@ -61,8 +64,8 @@ interface SendDmOptions {
   skipA2aIntercept?: boolean;
   /** Stable request identity for resuming already admitted outbound A2A. */
   idempotencyKey?: string;
-  /** Whether durable webhook fanout has any subscriber to receive it. */
-  hasWebhookSubscriptions?: boolean;
+  /** Whether durable webhook fanout has any subscriber to receive it (given its webhook data). */
+  hasWebhookSubscriptions?: boolean | ((webhookData: Record<string, unknown>) => boolean);
   /** Count an authenticated inbound peer in the same transaction as its DM. */
   receivedA2aAgentId?: string;
   /** Token hash authenticated by the route; checked with registration at SQL admission. */
@@ -74,7 +77,7 @@ interface SendDmOptions {
   /** Resolve only after durable accepted lookup (cached HTTP replay never calls sendDm). */
   resolveWorkspaceDeliveryPolicy?: () => Promise<WorkspaceDeliveryPolicy | undefined>;
   /** Fast paths only; durable events and delivery already committed before this hook. */
-  afterAdmission?: (data: SendDmResult, event: { seq: number; payload: Record<string, unknown>; data: Record<string, unknown>; outboxId?: string }) => void;
+  afterAdmission?: (data: SendDmResult, event: { seq: number; payload: Record<string, unknown>; data: Record<string, unknown>; webhookData: Record<string, unknown>; outboxId?: string }) => void;
   mailbox?: MailboxConfig;
   /** Server-resolved workspace growth policy; absent => no workspace guard. */
   workspaceDeliveryPolicy?: WorkspaceDeliveryPolicy;
@@ -142,6 +145,7 @@ export function isPairReservationConflict(err: unknown): boolean {
 
     if (
       candidate.code === 'SQLITE_CONSTRAINT_UNIQUE'
+      || candidate.code === '23505'
       || lowerMessage.includes('unique constraint failed')
       || (candidate.code === 'SQLITE_CONSTRAINT' && lowerMessage.includes('unique'))
     ) {
@@ -323,6 +327,7 @@ function buildDmMessageWrites(
     attachments?: string[];
     mode?: 'wait' | 'steer';
     data?: Record<string, unknown> | null;
+    reply_to_message_id?: string;
   },
   attachments: AttachmentRow[],
   messageId: string,
@@ -341,6 +346,7 @@ function buildDmMessageWrites(
         id: messageId,
         workspaceId,
         channelId,
+        replyToMessageId: data.reply_to_message_id ?? null,
         // NULL violates messages.agent_id inside the atomic write. A vanished,
         // reassigned registration or rotated caller token cannot silently make
         // the later counter UPDATE affect zero rows while the DM commits.
@@ -395,7 +401,7 @@ function buildDmMessageWrites(
 
 function buildDmResult(
   message: Pick<typeof messages.$inferSelect, 'id' | 'agentId' | 'body' | 'metadata' | 'createdAt'>,
-  conv: { id: string }, fromAgent: { name: string }, data: { to: string; mode?: 'wait' | 'steer' },
+  conv: { id: string }, fromAgent: { name: string }, data: { to: string; mode?: 'wait' | 'steer'; reply_to_message_id?: string },
   attachments: AttachmentRow[],
 ) {
   const injectionMode = data.mode ?? 'wait';
@@ -411,6 +417,7 @@ function buildDmResult(
       injection_mode: injectionMode,
       attachments,
       metadata: publicMessageMetadata(message.metadata),
+      reply_to_message_id: data.reply_to_message_id ?? null,
     },
     created_at: message.createdAt.toISOString(),
 
@@ -429,6 +436,12 @@ export type AcceptedDmResult = ReturnType<typeof buildDmResult>;
 export type SendDmResult = AcceptedDmResult & {
   _delivery: DeliveryOutcomeRecords['deliveries'][number] | null;
   _delivery_rejections: DeliveryOutcomeRecords['rejections'];
+  /**
+   * The deliveries this send's `reply_to_message_id` marked `replied`, in the
+   * admission's own atomic unit; the caller tells their senders. Absent on a
+   * replay, which created nothing new.
+   */
+  _replied_delivery_ids?: string[];
   _notifications_durable?: boolean;
   _idempotency_replayed?: boolean;
   _idempotency_ttl_seconds?: number;
@@ -529,6 +542,8 @@ export async function sendDm(
     attachments?: string[];
     mode?: 'wait' | 'steer';
     data?: Record<string, unknown> | null;
+    /** The recipient's message this DM answers; must be theirs, in this conversation. */
+    reply_to_message_id?: string;
   },
   options: SendDmOptions = {},
 ): Promise<SendDmResult> {
@@ -654,7 +669,7 @@ export async function sendDm(
     ? await options.resolveWorkspaceDeliveryPolicy() : options.workspaceDeliveryPolicy;
 
   const recipientQuery = db
-    .select({ agent: agents, node: addressNodeSelection })
+    .select({ agent: agents, node: addressNodeSelection() })
     .from(agents)
     .leftJoin(nodes, eq(nodes.id, agents.locationNodeId));
   const [recipient] = options.address !== undefined
@@ -679,7 +694,7 @@ export async function sendDm(
   }
 
   const [fromAgent] = await db
-    .select({ name: agents.name, node: addressNodeSelection })
+    .select({ name: agents.name, node: addressNodeSelection() })
     .from(agents)
     .leftJoin(nodes, eq(nodes.id, agents.locationNodeId))
     .where(and(eq(agents.workspaceId, workspaceId), eq(agents.id, fromAgentId)));
@@ -693,6 +708,18 @@ export async function sendDm(
   // metadata (channel/conversation/participant rows) is created.
   const attachments = await resolveSendAttachments(db, workspaceId, data.attachments);
   const conv = await resolveConversation(db, workspaceId, fromAgentId, toAgent.id);
+  if (data.reply_to_message_id !== undefined) {
+    // An explicit correlation must be one the recipient can verify: their own
+    // message, in this conversation. Anything else is a bad request, never a
+    // silently dropped hint.
+    const [answered] = await db
+      .select({ channelId: messages.channelId, agentId: messages.agentId })
+      .from(messages)
+      .where(and(eq(messages.id, data.reply_to_message_id), eq(messages.workspaceId, workspaceId)));
+    if (!answered || answered.channelId !== conv.channelId || answered.agentId !== toAgent.id) {
+      throw codedError('reply_to_message_id must name a message from the recipient in this conversation', 'invalid_request', 400);
+    }
+  }
   const a2aTarget = options.skipA2aIntercept
     ? null
     : await a2aEngine.getA2aAgentByRelayName(db, workspaceId, toAgent.name);
@@ -752,10 +779,20 @@ export async function sendDm(
   });
   const directClaimId = directRequestId;
   const notificationsDurable = Boolean(egressId || options.receivedA2aAgentId || inboundId || directClaimId);
-  const persistWebhookOutbox = notificationsDurable && options.hasWebhookSubscriptions !== false;
-  // The optional webhook outbox, observer cursor log, response context and
-  // delivery share admission. None can escape a capacity rollback, or depend
-  // on external transport success.
+  // Webhook payload only. The subscription pre-filter sees the intended
+  // recipient; the stored and delivered copies carry what the committed
+  // delivery row says (none for a self-DM or a mailbox rejection).
+  const intendedWebhookData = {
+    ...eventData,
+    recipients: deliveryId ? [{ agent_id: toAgent.id, agent_name: toAgent.name, delivery_id: deliveryId }] : [],
+  };
+  const persistWebhookOutbox = notificationsDurable && (typeof options.hasWebhookSubscriptions === 'function'
+    ? options.hasWebhookSubscriptions(intendedWebhookData)
+    : options.hasWebhookSubscriptions !== false);
+  // The optional webhook outbox, observer cursor log, response context,
+  // delivery and reply link share admission. None can escape a capacity
+  // rollback, or depend on external transport success.
+  let replyLinkIndex = -1;
   const persist = () => runAtomicWrites(db, (writeDb) => {
     const writes = buildDmMessageWrites(writeDb, workspaceId, fromAgentId, conv.channelId, data, attachments, messageId, createdAt,
       options.receivedA2aAgentId ? { id: options.receivedA2aAgentId, tokenHash: options.receivedA2aTokenHash } : undefined,
@@ -823,6 +860,15 @@ export async function sendDm(
       }),
     );
 
+    if (data.reply_to_message_id !== undefined) {
+      // The answered message's delivery to this sender (verified above) is
+      // marked with the reply itself: a crash after commit cannot lose it,
+      // and a replayed retry has nothing left to mark.
+      replyLinkIndex = writes.length;
+      writes.push(buildReplyLinkWrite(writeDb, workspaceId, {
+        messageId: data.reply_to_message_id, recipientAgentId: fromAgentId, replyMessageId: messageId,
+      }));
+    }
     if (inboundId) writes.push(writeDb.insert(a2aInbound).values({ id: inboundId, workspaceId, messageId, fingerprint: inboundFingerprint, response: publicResult }));
     if (egressId) writes.push(writeDb.insert(a2aEgressContext).values({ id: egressId, messageId, response: publicResult }));
     if (deliveryId && (directClaimId || egressId)) {
@@ -831,41 +877,67 @@ export async function sendDm(
       // batch, so a durable replay repeats the original `delivery` even after
       // the row is settled or pruned; a mailbox-rejected send (no row) stamps
       // `null`. `json()` keeps the subquery result an object, not a string.
-      const receipt = sql`json((SELECT json_object(
+      const receiptObject = sqlx.jsonObject(writeDb, sql`
         'id', ${deliveries.id}, 'agentId', ${deliveries.agentId}, 'status', ${deliveries.status},
-        'expiresAt', strftime('%Y-%m-%dT%H:%M:%fZ', ${deliveries.expiresAt}, 'unixepoch')
-      ) FROM ${deliveries} WHERE ${deliveries.id} = ${deliveryId}))`;
+        'expiresAt', ${sqlx.isoFromEpoch(writeDb, deliveries.expiresAt, 'iso-ms')}
+      `);
+      const receipt = sqlx.json(writeDb, sql`(SELECT ${receiptObject} FROM ${deliveries} WHERE ${deliveries.id} = ${deliveryId})`);
       if (directClaimId) {
         writes.push(writeDb.update(directDmIdempotency)
-          .set({ response: sql`json_set(${directDmIdempotency.response}, '$._delivery', ${receipt})` })
+          .set({ response: sqlx.jsonSet(writeDb, directDmIdempotency.response, '$._delivery', receipt, 'json') })
           .where(eq(directDmIdempotency.id, directClaimId)));
       }
       if (egressId) {
         writes.push(writeDb.update(a2aEgressContext)
-          .set({ response: sql`json_set(${a2aEgressContext.response}, '$._delivery', ${receipt})` })
+          .set({ response: sqlx.jsonSet(writeDb, a2aEgressContext.response, '$._delivery', receipt, 'json') })
           .where(eq(a2aEgressContext.id, egressId)));
       }
     }
     if (persistWebhookOutbox) {
+      // `recipients` is read from the delivery row written earlier in this
+      // batch, so the stored copy carries its SQL-assigned `seq`; no row
+      // (mailbox rejection) aggregates to `[]`. `json()` keeps the subquery
+      // result an array, not a string.
+      const recipientObject = sqlx.jsonObject(writeDb, sql`
+        'agent_id', ${deliveries.agentId}, 'agent_name', ${sqlx.textParam(writeDb, toAgent.name)},
+        'delivery_id', ${deliveries.id}, 'seq', ${deliveries.seq}
+      `);
+      const payload = deliveryId
+        ? sqlx.jsonSet(
+          writeDb,
+          sqlx.json(writeDb, sqlx.textParam(writeDb, JSON.stringify(eventData))),
+          '$.recipients',
+          sqlx.json(writeDb, sql`(SELECT ${sqlx.jsonAgg(writeDb, recipientObject)} FROM ${deliveries} WHERE ${deliveries.id} = ${deliveryId})`),
+          'json',
+        )
+        : { ...eventData, recipients: [] };
       writes.push(writeDb.insert(pendingEvents).values({
         id: messageId,
         workspaceId,
         eventType: 'dm.received',
-        payload: eventData,
+        payload,
         // Migration 0067 cannot change SQLite's existing column default; set
         // the per-target retry headroom explicitly on this direct insert.
         maxAttempts: 32,
       }));
     }
     if (notificationsDurable) {
-      writes.push(buildWorkspaceEventWrite(writeDb, workspaceId, { type: 'dm.received', payload: workspacePayload }));
+      writes.push(seqLockedWrite(
+        writeDb,
+        { kind: 'workspace_event', workspaceId },
+        buildWorkspaceEventWrite(writeDb, workspaceId, { type: 'dm.received', payload: workspacePayload }),
+      ));
     }
     return writes;
   }, { requireAtomic: Boolean(workspacePolicy || a2aTarget || options.receivedA2aAgentId || inboundId || directClaimId) });
   let admittedEventSeq: number | undefined;
+  let repliedDeliveryIds: string[] | undefined;
   try {
     const results = await persist();
     if (notificationsDurable) admittedEventSeq = (results[results.length - 1] as { seq: number }[])[0].seq;
+    if (replyLinkIndex >= 0) {
+      repliedDeliveryIds = repliedByReplyLinkWrite(results[replyLinkIndex] as { id: string; repliedAt: Date | null }[]);
+    }
   } catch (error) {
     if (options.address !== undefined && databaseConstraintKind(error) === 'address_changed') {
       throw addressNotFound(options.address);
@@ -904,18 +976,26 @@ export async function sendDm(
     ? await fetchDirectDeliveryOutcomes(db, { messageId, recipientAgentId: toAgent.id })
     : { deliveries: [], rejections: [] };
   const dmDelivery = deliveryOutcomes.deliveries[0] ?? null;
+  // Same entry the outbox INSERT built in SQL from the same delivery row.
+  const webhookData = {
+    ...eventData,
+    recipients: dmDelivery
+      ? [{ agent_id: dmDelivery.agentId, agent_name: toAgent.name, delivery_id: dmDelivery.id, seq: dmDelivery.seq }]
+      : [],
+  };
 
   const result: SendDmResult = {
     ...publicResult,
     _delivery: dmDelivery,
     _delivery_rejections: deliveryOutcomes.rejections,
+    ...(repliedDeliveryIds ? { _replied_delivery_ids: repliedDeliveryIds } : {}),
     ...(notificationsDurable ? { _notifications_durable: true } : {}),
   };
   if (notificationsDurable) {
     // Local fast paths run independently of transport. A crash here still leaves
     // any needed webhook outbox, workspace cursor log and queued delivery recoverable.
     options.afterAdmission?.(result, {
-      seq: admittedEventSeq!, payload: workspacePayload, data: eventData,
+      seq: admittedEventSeq!, payload: workspacePayload, data: eventData, webhookData,
       ...(persistWebhookOutbox ? { outboxId: messageId } : {}),
     });
   }
@@ -939,7 +1019,7 @@ export async function listConversations(
   // Conversation ids are deterministic hashes, while created_at only has
   // second precision. SQLite's insertion rowid supplies the chronological
   // tiebreaker for conversations created within the same second.
-  const insertionOrder = sql<number>`${dmConversations}.rowid`;
+  const insertionOrder = sqlx.rowid(db, dmConversations);
   const conversationQuery = db
     .select({
       id: dmConversations.id,
@@ -1101,6 +1181,7 @@ export async function getDmMessages(
       agentName: agents.name,
       body: messages.body,
       metadata: messages.metadata,
+      replyToMessageId: messages.replyToMessageId,
       createdAt: messages.createdAt,
     })
     .from(messages)
@@ -1120,6 +1201,7 @@ export async function getDmMessages(
     injection_mode: r.metadata?.injection_mode as 'wait' | 'steer' | undefined,
     metadata: publicMessageMetadata(r.metadata),
     attachments: attachmentMap.get(r.id) || [],
+    reply_to_message_id: r.replyToMessageId,
     created_at: r.createdAt.toISOString(),
   }));
 }

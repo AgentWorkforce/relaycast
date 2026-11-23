@@ -8,8 +8,9 @@ import {
   registerAgent,
   type TestStack,
 } from './harness.js';
-import { agents, nodeProviders, nodes } from '../../db/schema.js';
+import { agents, nodeProviders, nodes } from '../../db/tables.js';
 import { NODE_LIVENESS_TTL_MS } from '../../engine/placement.js';
+import type { EngineDb } from '../../ports/database.js';
 import { AGENT_LIVENESS_TTL_MS } from '../../engine/agent.js';
 
 type Workspace = Awaited<ReturnType<typeof createWorkspace>>;
@@ -282,6 +283,9 @@ describe('node inventory presence isolation', () => {
       await stack.settle();
       const db = stack.runtime.handle.db;
       const update = db.update.bind(db);
+      // The spy sees the neutral signature that engine code calls.
+      const engine: EngineDb = db;
+      const engineUpdate = engine.update.bind(engine);
       let changed = false;
       // Change persisted liveness after validation, immediately before the
       // ownership update is built. The real database evaluates the CAS.
@@ -289,7 +293,7 @@ describe('node inventory presence isolation', () => {
       // Date.now() here can fall after that sample and look future-dated,
       // so the default reconnect would not count as live. One second ago is
       // still inside the liveness window and is always at or before the sample.
-      const spy = vi.spyOn(db, 'update').mockImplementation((table) => {
+      const spy = vi.spyOn(engine, 'update').mockImplementation((table) => {
         if (table === agents && !changed) {
           changed = true;
           update(nodeProviders).set(change === 'default-reconnected'
@@ -301,7 +305,7 @@ describe('node inventory presence isolation', () => {
             .where(and(eq(nodeProviders.nodeId, broker.id),
               eq(nodeProviders.name, change === 'default-reconnected' ? 'default' : 'broker'))).run();
         }
-        return update(table);
+        return engineUpdate(table);
       });
       try {
         await syncInventory(broker, 'race-adoption', [worker]);

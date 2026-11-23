@@ -18,9 +18,105 @@ Packages without a separate changelog are covered by the cross-package notes bel
 
 ## [Unreleased - Minor]
 
-- Prevent stalled webhook delivery attempts from overwriting a newer attempt’s status or retry deadline after their lease is reclaimed.
+### Added
 
 - `GET /v1/deliveries/by-message/{messageId}` proves one still-pending delivery to the calling agent token and returns its server-derived sender id. Unknown, foreign, acknowledged, and expired messages share a 404.
+
+## [12.14.0] - 2026-11-23
+
+### Added
+
+- Webhook payloads of `message.created`, `thread.reply`, `dm.received` and `group_dm.received` carry `data.recipients`: one `{ agent_id, agent_name, delivery_id, seq }` entry per delivery record (the sender is not listed), at most 500 per delivery, with `data.recipients_truncated: true` when the list was capped. The list is also cut, with the same flag, to keep the body within the 256 KiB webhook limit. Webhooks only: WebSocket, stream and HTTP responses are unchanged.
+- Event subscriptions accept `filter.recipients` (1 to 500 agent names or ids): the subscription receives only message events with a listed recipient, and its `data.recipients` holds only the matching entries. An event with more than 2,000 recipients is delivered with `data.recipients: []` and `data.recipients_truncated: true` when the stored list cannot show a match.
+- `PATCH /v1/subscriptions/:id` partially updates a subscription (`events`, `filter`, `url`, `headers`, `secret`, `signature_scheme`, `is_active`); `filter: null` clears the filter. A concurrent change to the signing scheme or secret returns 409 `subscription_update_conflict`. Changing `url` on a subscription with stored `headers` requires `headers` in the same request (a new map, or `{}` or `null` to clear them) and otherwise returns 400 `subscription_headers_required`.
+
+### Fixed
+
+- On PostgreSQL, a DM sent with an `Idempotency-Key` (or to an A2A agent) that the recipient's mailbox rejected no longer fails with a 500.
+
+## [12.13.1] - 2026-11-20
+
+### Fixed
+
+- DM and group DM participant rules now apply consistently for agent tokens across the channel, message, search and console routes, matching the `/v1/dm/…` routes. Workspace keys and observer tokens are unchanged.
+- Relayfile inbound messages no longer store an oversized provider record in message metadata. A record whose JSON is over 8 KiB is stored as `record: null` with `record_omitted` (`reason`, `bytes`, `limit`); the full record stays in relayfile at `relayfile.path` and `relayfile.revision`, and the message text is unchanged.
+
+## [12.13.0] - 2026-11-17
+
+### Added
+
+- Action invocations can record an optional on-behalf-of requester (`requester_agent_id`, plus an optional `requester_name` that must equal that agent's name) alongside the authenticated caller. The requester is a caller-made claim, not authorization.
+- Workspace leaders: admins set a list of agent names or `*`/`?` globs with `PUT /v1/workspace/leaders`, and anyone in the workspace reads the matching registered agents with `GET /v1/workspace/leaders` (SDK: `workspace.getLeaders()` / `workspace.setLeaders({ patterns })`). GET accepts a workspace key, agent token or node token; PUT requires the workspace key.
+
+## [12.12.1] - 2026-11-17
+
+### Fixed
+
+- `GET /v1/agents` on a hosted workspace with hundreds of agents no longer outlasts the caller's timeout. Node liveness probes share a 1.5 s budget per request; an agent whose node was not probed keeps the status its node's last checkpoint supports.
+- A message posted through an inbound webhook (`POST /v1/hooks/:id`) no longer matches `mentions` event-subscription filters. Its text comes from whoever holds the webhook URL, so an `@name` in it could deliver the post to an agent that subscribes to its mentions outside that channel. Its `message.created` event now carries `metadata.__relaycast_origin: "inbound_webhook"`. Channel and unfiltered subscriptions still receive it.
+
+## [12.12.0] - 2026-11-17
+
+### Added
+
+- Recipient-scoped delivery queue pagination can scan past retained entries without acknowledging or replaying them.
+
+## [12.11.0] - 2026-11-15
+
+### Added
+
+- `on.registrationRejected` / `registration_rejected` reports a refused direct-node attach (`WsRegistrationRejectedEventSchema` in `@relaycast/types`).
+
+### Fixed
+
+- Several `@relaycast/sdk` clients of one agent no longer supersede each other in a reconnect loop: each client attaches its direct node with its own provider `instance_id`, and a client refused with `provider_instance_conflict` (or close 4009) waits at least 30 s before retrying instead of reconnecting at once; `connected` fires only after the engine accepts the attach.
+
+## [12.10.1] - 2026-11-15
+
+### Fixed
+
+- Address #669 review: create-only migration copy, unreadable dirs fail, no endpoint secrets
+- Re-registered agents adopt their released predecessor's directory entry
+
+## [12.10.0] - 2026-11-15
+
+### Added
+
+- Senders now know when a delivery actually reached the client: a receiving client confirms a delivery with the new `delivery.accepted` node frame once it has durably stored it (an `http_push` 2xx counts too), stamping `accepted_at`. A bare socket write still reports `delivery.delivered`, now with `accepted: false`.
+- Sends report one delivery state, `queued | delivered | consumed | replied | failed`, with `accepted_at`, `replied_at`, `reply_message_id` and `error`, on `POST /v1/dm`, `POST /v1/channels/:name/messages` and `GET /v1/messages/:id/deliveries`. The raw `status` is unchanged.
+- A DM sent with `reply_to_message_id`, or a thread reply, marks exactly that message's delivery `replied` and sends its sender `delivery.replied` with the reply's id; `replied` is never inferred from conversation order.
+- `wait_ms` (0–2000) on a send waits up to that budget for the recipient's acceptance before answering with the delivery state.
+- A send retried with the same `Idempotency-Key` returns the original `message.id` and `delivery.id`, even with a different `wait_ms`, without waiting again; look up its state with `GET /v1/messages/:id/deliveries`. See `docs/delivery-confirmation.md`.
+- The `node.register` reply lists the inbound frames and frame forms the engine understands (`capabilities: ["delivery.accepted", "delivery.ack.delivery_id"]`), so nodes send new frames by capability, never by parsing versions. The TypeScript SDK confirms per delivery (`delivery_id`) on an engine that lists these, settling exactly what it handled; on an older engine (cumulative `up_to_seq` only) it keeps a contiguous watermark and never acks across a failed delivery.
+- TypeScript SDK: the node transport sends `delivery.accepted` only after an application-supplied `acceptDelivery` persistence hook stored the frame (`autoAcceptDeliveries`, default off; nothing is sent without the hook; a hook failure means neither acceptance, dispatch nor ack, and the server re-delivers the frame on reconnect) and only when the reply listed it, before dispatching the frame (`delivery.ack` after, as before); `agent.dm(...)` / `agent.send(...)` take `waitMs` and return the delivery `state`; `agent.dm(..., { replyTo })` sets `reply_to_message_id`; `on.deliveryReplied`. Rust and Swift SDKs do not yet send the frame (documented for them).
+- Self-hosted PostgreSQL servers can keep files in an S3 bucket (`RELAYCAST_FILE_STORE=s3`, credentials from IRSA / Pod Identity / instance role), so the pod needs no persistent volume and can reschedule across zones. `migrate-files-to-s3` copies an existing volume, verifying each object's SHA-256; uploads and downloads still go through the server's signed URLs.
+- Every agent has an A2A agent card at `GET /v1/agents/:name/card` (`relay.getAgentCard(name)`), built from `metadata.card` and `metadata.skills`. Skills accept `examples`, and skills and `metadata.card` are bounded on register and update (at most 20 skills; name <= 80, description <= 500, <= 5 examples of <= 200; card description <= 1000, https `documentation_url`, <= 10 tags). The workspace card (`/.well-known/agent-card.json`) now lists each agent's declared skills and leaves out released agents.
+- Control planes can keep a temporary workspace alive or make it permanent: `POST /internal/workspaces/:id/expiry` (`{ expires_in_seconds }` or `null`), on self-hosted engines and the hosted gateway. An expired workspace is never revived.
+- Self-hosted PostgreSQL deployments can move to durable-actors with every row and file under the same workspace ids: `relaycast-engine migration-preflight` / `export-for-actors` (sealed, owner-only export), then `relaycast-migrate files` / `import` / `verify-realtime` / `open` against the actor gateway (`POST /internal/workspaces/:id/import`), verified per table by count and digest and closed until go-live. See `docs/self-host-postgres.md`.
+- The durable-actors gateway can dial actor sockets through an in-cluster origin (`DURABLE_ACTORS_SOCKET_ORIGIN`) instead of the control plane's public URL, so realtime works in clusters that cannot resolve or reach that URL.
+- `POST /v1/actions/spawn/strict-invoke` binds builtin spawn and definitely-unsent retries to an exact node id with atomic capacity ownership, a versioned logical request, and a server-owned response marker; `POST /v1/actions/spawn/replay` reads that caller's existing keyed claim without creating, placing, reserving, or dispatching work.
+- Strict spawn callers may opt in to `relay.spawn.invoke.logical-replay-resume/1`; its separate server-owned replay proof lets `/spawn/replay` resume only the original marked, definitely-unsent claim from persisted input, while `logical/1`, dispatched, terminal, and unknown-send claims remain lookup-only.
+- Self-hosted servers can run on PostgreSQL (its own database, schema `public`, single replica) with `relaycast-engine migrate` / `verify-db`; see `docs/self-host-postgres.md`.
+- Hosts can supply a message-search backend through the optional `search` engine dependency (`SearchIndex`); without it, existing SQLite search behavior is unchanged. Configured backend errors propagate without falling back to SQLite.
+- Self-hosted servers can export analytics to a collector inside the installation: set `RELAYCAST_TELEMETRY_COLLECTOR_URL` together with the required `RELAYCAST_TELEMETRY_COLLECTOR_TOKEN(_FILE)` and `RELAYCAST_TELEMETRY_DEPLOYMENT_ID` (startup refuses with `missing_telemetry_collector_token` / `missing_telemetry_collector_deployment_id`; there is no hostname default). `RELAYCAST_TELEMETRY_DESTINATION` may select `none` or `collector` explicitly (`collector` without a URL refuses with `missing_telemetry_collector_url`; other values with `invalid_telemetry_destination`); a token with whitespace or control characters refuses with `invalid_telemetry_collector_token`, and a deployment id equal to the replica hostname with `invalid_telemetry_collector_deployment_id`. Optional bounds: `RELAYCAST_TELEMETRY_QUEUE_MAX`, `_QUEUE_MAX_BYTES`, `_BATCH_MAX`, `_BATCH_MAX_BYTES`, `_EVENT_MAX_BYTES`, `_FLUSH_MS`, `_MAX_ATTEMPTS`, `_BACKOFF_MS`, `_RETRY_AFTER_MAX_MS`, `_REQUEST_TIMEOUT_MS`, `_DELIVERY_DEADLINE_MS`, `_SHUTDOWN_TIMEOUT_MS`, with conservative producer defaults documented in `docs/self-hosting.md`. Batches follow the collector's `agent-relay.analytics.batch/v1` contract (`POST` to the collector's `/v1/events`, per-producer bearer credential from a Secret file, a required `trace_id` taken from the request id on every event; events without one are counted and not sent) and export only a reviewed field allowlist with a value rule per field: no content, tokens, credential hashes, agent/channel names, commands, slugs, skills or sender names, origin strings reduced to registered enums, and `tenant_id` never sent. Export is bounded in events and UTF-8 bytes (oversized events and queue overflow are dropped and counted), only `204` counts as accepted, `401`/`403` surface as configuration failures, redirects are never followed, `413` splits the batch, and retries honor `Retry-After` within a total delivery deadline. Only native workspace ids are exported as `workspace_id`, and shutdown cancels the request still in flight and counts it once (delivery stays at-least-once at best). Export never affects requests. Off by default, with no hosted fallback. See `docs/self-hosting.md`.
+
+### Fixed
+
+- The self-host container sizes Node's heap at 75 % of its memory limit (768 MB in a 1 Gi pod) instead of Node's default of about half, so it no longer dies of heap exhaustion with memory to spare; an explicit `--max-old-space-size` in `NODE_OPTIONS` still wins.
+- Node-connected agents no longer receive the same delivery twice on one socket when the database is slow; the redelivery sweep now leaves a fresh delivery to its live send for a minute before treating it as lost.
+- Self-hosted PostgreSQL servers spend far less database time on idle node heartbeats: a heartbeat recomputes the node's capability manifest only when it changed.
+- Self-hosted servers on PostgreSQL recover from a database failover on their own: dead pooled connections time out and are discarded instead of hanging the server until a restart. New `GET /health/ready` and `GET /health/live` probes report database reachability.
+- Durable-actors workspaces answer `GET /v1/inbox` `unread_channels` and `recent_reactions` (and every other raw-SQL read) as objects instead of positional arrays.
+- Self-hosting on durable-actors: completing a file upload (`POST /v1/files/:id/complete`) no longer needs the workspace actor to reach `RELAYCAST_PUBLIC_URL`. The gateway reports each stored upload to the actor and acknowledges the PUT only once the actor recorded it (503 `workspace_unavailable` with `Retry-After` otherwise; retry the same signed URL), and completion verifies the size from that record; this fixes 500s where the public name does not resolve or route from actor pods (e.g. a customer VPC).
+- Channel and thread realtime events retain arbitrary rich blocks across engine workspace frames and TypeScript node deliveries; DM transports preserve blocks when present.
+- Relayfile callbacks deliver events for embedded and internal path wildcards, including per-issue Linear files and Jira comment paths.
+- Relayfile deletion notifications reach subscribed agents, including typed provider removals without a record snapshot.
+- Self-hosted servers on PostgreSQL no longer return `500 deadlock detected` when several agents post to the same channel at once; concurrent channel posts now serialize per recipient without lock cycles.
+
+## [12.8.0] - 2026-11-04
+
+- Prevent stalled webhook delivery attempts from overwriting a newer attempt’s status or retry deadline after their lease is reclaimed.
+
 - A sender can follow its message. `POST /v1/dm` answers with `delivery: { id, status, expires_at } | null` and `POST /v1/channels/:name/messages` with `deliveries: [{ id, agent_id, status, expires_at }]` (first 50, plus `deliveries_truncated`). The sender then receives `delivery.delivered` when a row reaches the recipient's socket or push endpoint and the new `delivery.acked` when the recipient acks it (REST ack, node cumulative ack, or `http_push` `on_2xx` / `response`), each with the recipient's `agent_id` / `agent_name`, `status` and `at`. `GET /v1/messages/:id/deliveries` lists every recipient's delivery and read state (`read_at`) for a message the caller sent; a workspace key or an admitted observer reads any message. Recipient-side events are unchanged.
 - SDKs: TypeScript `agent.messageDeliveries(id)`, `relay.messages.deliveries(id)` and `on.deliveryAcked`. Rust and Swift SDKs do not yet wrap the new route or event.
 - `POST /v1/nodes` accepts a CSPRNG `Idempotency-Key` (32+ characters) on a first enrollment, without `X-Relaycast-Node-Token`. Persist the key before the first request; a retry with the same key and body within 24 hours returns `201` with the node's original token, with no new row and no rotation, so a lost reply no longer strands an orphan node holding the name. A changed body, another key, or no key still gets `409 node_token_proof_required`. TypeScript `nodes.create({...}, { idempotencyKey })` no longer requires `currentToken`.
@@ -1007,7 +1103,16 @@ Packages without a separate changelog are covered by the cross-package notes bel
 
 Earlier releases are available on the [GitHub releases page](https://github.com/AgentWorkforce/relaycast/releases).
 
-[Unreleased]: https://github.com/AgentWorkforce/relaycast/compare/v12.7.0...HEAD
+[Unreleased]: https://github.com/AgentWorkforce/relaycast/compare/v12.14.0...HEAD
+[12.14.0]: https://github.com/AgentWorkforce/relaycast/compare/v12.13.1...v12.14.0
+[12.13.1]: https://github.com/AgentWorkforce/relaycast/compare/v12.13.0...v12.13.1
+[12.13.0]: https://github.com/AgentWorkforce/relaycast/compare/v12.12.1...v12.13.0
+[12.12.1]: https://github.com/AgentWorkforce/relaycast/compare/v12.12.0...v12.12.1
+[12.12.0]: https://github.com/AgentWorkforce/relaycast/compare/v12.11.0...v12.12.0
+[12.11.0]: https://github.com/AgentWorkforce/relaycast/compare/v12.10.1...v12.11.0
+[12.10.1]: https://github.com/AgentWorkforce/relaycast/compare/v12.10.0...v12.10.1
+[12.10.0]: https://github.com/AgentWorkforce/relaycast/compare/v12.8.0...v12.10.0
+[12.8.0]: https://github.com/AgentWorkforce/relaycast/compare/v12.7.0...v12.8.0
 [12.7.0]: https://github.com/AgentWorkforce/relaycast/compare/v12.6.2...v12.7.0
 [12.6.2]: https://github.com/AgentWorkforce/relaycast/compare/v12.6.1...v12.6.2
 [12.6.1]: https://github.com/AgentWorkforce/relaycast/compare/v12.6.0...v12.6.1

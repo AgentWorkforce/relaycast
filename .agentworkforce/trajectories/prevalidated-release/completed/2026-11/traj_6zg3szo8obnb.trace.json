@@ -1,0 +1,258 @@
+{
+  "version": "1.0.0",
+  "id": "fd3ad8be-4263-42c3-8736-b1488b845af0",
+  "timestamp": "2026-11-08T17:38:29.977Z",
+  "trajectory": "traj_6zg3szo8obnb",
+  "files": [
+    {
+      "path": ".github/workflows/ci.yml",
+      "conversations": [
+        {
+          "contributor": {
+            "type": "ai"
+          },
+          "ranges": [
+            {
+              "start_line": 25,
+              "end_line": 31,
+              "revision": "48222811348912c32b97b78f4311bfbbfc4bc376"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "path": ".github/workflows/publish-npm.yml",
+      "conversations": [
+        {
+          "contributor": {
+            "type": "ai"
+          },
+          "ranges": [
+            {
+              "start_line": 74,
+              "end_line": 87,
+              "revision": "48222811348912c32b97b78f4311bfbbfc4bc376"
+            },
+            {
+              "start_line": 92,
+              "end_line": 99,
+              "revision": "48222811348912c32b97b78f4311bfbbfc4bc376"
+            },
+            {
+              "start_line": 122,
+              "end_line": 131,
+              "revision": "48222811348912c32b97b78f4311bfbbfc4bc376"
+            },
+            {
+              "start_line": 195,
+              "end_line": 204,
+              "revision": "48222811348912c32b97b78f4311bfbbfc4bc376"
+            },
+            {
+              "start_line": 232,
+              "end_line": 238,
+              "revision": "48222811348912c32b97b78f4311bfbbfc4bc376"
+            },
+            {
+              "start_line": 253,
+              "end_line": 260,
+              "revision": "48222811348912c32b97b78f4311bfbbfc4bc376"
+            },
+            {
+              "start_line": 272,
+              "end_line": 277,
+              "revision": "48222811348912c32b97b78f4311bfbbfc4bc376"
+            },
+            {
+              "start_line": 321,
+              "end_line": 338,
+              "revision": "48222811348912c32b97b78f4311bfbbfc4bc376"
+            },
+            {
+              "start_line": 350,
+              "end_line": 357,
+              "revision": "48222811348912c32b97b78f4311bfbbfc4bc376"
+            },
+            {
+              "start_line": 578,
+              "end_line": 584,
+              "revision": "48222811348912c32b97b78f4311bfbbfc4bc376"
+            },
+            {
+              "start_line": 604,
+              "end_line": 629,
+              "revision": "48222811348912c32b97b78f4311bfbbfc4bc376"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "path": "CHANGELOG.md",
+      "conversations": [
+        {
+          "contributor": {
+            "type": "ai"
+          },
+          "ranges": [
+            {
+              "start_line": 25,
+              "end_line": 31,
+              "revision": "48222811348912c32b97b78f4311bfbbfc4bc376"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "path": "package.json",
+      "conversations": [
+        {
+          "contributor": {
+            "type": "ai"
+          },
+          "ranges": [
+            {
+              "start_line": 11,
+              "end_line": 18,
+              "revision": "48222811348912c32b97b78f4311bfbbfc4bc376"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "path": "scripts/prepared-release.mjs",
+      "conversations": [
+        {
+          "contributor": {
+            "type": "ai"
+          },
+          "ranges": [
+            {
+              "start_line": 1,
+              "end_line": 338,
+              "revision": "48222811348912c32b97b78f4311bfbbfc4bc376"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "path": "scripts/prepared-release.test.mjs",
+      "conversations": [
+        {
+          "contributor": {
+            "type": "ai"
+          },
+          "ranges": [
+            {
+              "start_line": 1,
+              "end_line": 461,
+              "revision": "48222811348912c32b97b78f4311bfbbfc4bc376"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "path": "scripts/project-release-lock.mjs",
+      "conversations": [
+        {
+          "contributor": {
+            "type": "ai"
+          },
+          "ranges": [
+            {
+              "start_line": 1,
+              "end_line": 71,
+              "revision": "48222811348912c32b97b78f4311bfbbfc4bc376"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "path": "scripts/project-release-lock.test.mjs",
+      "conversations": [
+        {
+          "contributor": {
+            "type": "ai"
+          },
+          "ranges": [
+            {
+              "start_line": 1,
+              "end_line": 136,
+              "revision": "48222811348912c32b97b78f4311bfbbfc4bc376"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "path": "scripts/release-workflow-contract.test.mjs",
+      "conversations": [
+        {
+          "contributor": {
+            "type": "ai"
+          },
+          "ranges": [
+            {
+              "start_line": 403,
+              "end_line": 461,
+              "revision": "48222811348912c32b97b78f4311bfbbfc4bc376"
+            },
+            {
+              "start_line": 576,
+              "end_line": 634,
+              "revision": "48222811348912c32b97b78f4311bfbbfc4bc376"
+            },
+            {
+              "start_line": 641,
+              "end_line": 646,
+              "revision": "48222811348912c32b97b78f4311bfbbfc4bc376"
+            },
+            {
+              "start_line": 653,
+              "end_line": 660,
+              "revision": "48222811348912c32b97b78f4311bfbbfc4bc376"
+            },
+            {
+              "start_line": 667,
+              "end_line": 672,
+              "revision": "48222811348912c32b97b78f4311bfbbfc4bc376"
+            },
+            {
+              "start_line": 687,
+              "end_line": 740,
+              "revision": "48222811348912c32b97b78f4311bfbbfc4bc376"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "path": "scripts/restore-release-lock-metadata.mjs",
+      "conversations": [
+        {
+          "contributor": {
+            "type": "ai"
+          },
+          "ranges": [
+            {
+              "start_line": 3,
+              "end_line": 29,
+              "revision": "48222811348912c32b97b78f4311bfbbfc4bc376"
+            },
+            {
+              "start_line": 40,
+              "end_line": 44,
+              "revision": "48222811348912c32b97b78f4311bfbbfc4bc376"
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

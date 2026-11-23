@@ -4,6 +4,7 @@ import type { AppEnv } from '../env.js';
 import { requireWorkspaceRead } from '../middleware/auth.js';
 import { rateLimit } from '../middleware/rateLimit.js';
 import * as searchEngine from '../engine/search.js';
+import { filterAgentVisibleDmResults } from '../engine/dmAccess.js';
 import {
   filterObserverSearchResults,
   getObserverTokenFromContext,
@@ -47,18 +48,27 @@ searchRoutes.get(
         limit,
         before,
         after,
-      });
+      }, c.get('engine').search);
+      // An agent token sees DM hits only for conversations it participates in.
+      const agentVisibleResults = await filterAgentVisibleDmResults(db, c.get('agent')?.id, results);
       const visibleResults = await filterObserverSearchResults(
         db,
         workspace.id,
         getObserverTokenFromContext(c),
-        results,
+        agentVisibleResults,
       );
-      const responseResults = visibleResults.map(({
-        agent_id: _agentId,
-        channel_type: _channelType,
-        ...result
-      }) => result);
+      // Adapters may carry additional internal metadata. Only publish the
+      // established response fields, after observer visibility filtering.
+      const responseResults = visibleResults.map((result) => ({
+        id: result.id,
+        channel_id: result.channel_id,
+        channel_name: result.channel_name,
+        conversation_id: result.conversation_id,
+        agent_name: result.agent_name,
+        text: result.text,
+        created_at: result.created_at,
+        relevance_score: result.relevance_score,
+      }));
 
       emitServerEvent(c, workspace.id, 'search.executed', {
         query_length: q.trim().length,

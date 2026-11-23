@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { eq } from 'drizzle-orm';
 import { attachFakeBatch, makeNodeStack, createWorkspace, registerAgent, FakeSocket, type TestStack } from './harness.js';
-import { agents, messages, nodes } from '../../db/schema.js';
+import { agents, messages, nodes } from '../../db/tables.js';
 import { addressSplits, SENDER_ADDRESS_METADATA_KEY } from '../../engine/address.js';
 import { canonicalJson } from '../../engine/messageMetadata.js';
 import { sha256Hex } from '../../lib/crypto.js';

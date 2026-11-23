@@ -1,0 +1,71 @@
+{
+  "id": "traj_6zg3szo8obnb",
+  "version": 1,
+  "task": {
+    "title": "Prepare immutable release candidate before npm publication",
+    "source": {
+      "system": "github",
+      "id": "640"
+    }
+  },
+  "status": "completed",
+  "startedAt": "2026-11-08T17:36:14.075Z",
+  "completedAt": "2026-11-08T17:38:28.817Z",
+  "agents": [
+    {
+      "name": "default",
+      "role": "lead",
+      "joinedAt": "2026-11-08T17:36:14.679Z"
+    }
+  ],
+  "chapters": [
+    {
+      "id": "chap_u65f4thbwre2",
+      "title": "Work",
+      "agentName": "default",
+      "startedAt": "2026-11-08T17:36:14.679Z",
+      "endedAt": "2026-11-08T17:38:28.817Z",
+      "events": [
+        {
+          "ts": 1794159374681,
+          "type": "decision",
+          "content": "Project workspace versions onto the source lock and validate the exact commit before publishing: Project workspace versions onto the source lock and validate the exact commit before publishing",
+          "raw": {
+            "question": "Project workspace versions onto the source lock and validate the exact commit before publishing",
+            "chosen": "Project workspace versions onto the source lock and validate the exact commit before publishing",
+            "alternatives": [],
+            "reasoning": "Avoid dependency re-resolution and flag repair. Move the existing exact validator and full-history checkout to build, transport the prevalidated metadata commit with a bundle bound to an independent job-output digest, and restore it after publication. Keep integration fixtures in PR CI to avoid adding release build/test/pack work."
+          },
+          "significance": "high"
+        }
+      ]
+    }
+  ],
+  "retrospective": {
+    "summary": "Implemented version-only root-lock projection and prepublication exact release-candidate validation. Restore the same annotated tag/commit from a small bundle bound to an independent build-output SHA256. No extra release build/test/pack/registry work; integration fixtures run only in PR CI. Product revision 4822281 from 9eabbf1; unchanged validator and peer-restoration helper. New handoff suite 8/8 passes; final positive CLI/output/env check 1/1 passes after conversion; projector 3/3; workflow 19/20 with unchanged Windows CRLF retry failure. Prior broader release suite stopped on Windows path/newline/stall failures; no full-suite pass. Independent reviewers review_final_contract and review_relay_fix report PASS; follow-up reviews will be recorded on PR640. No release, remote tag, publication, deployment, or production access.",
+    "approach": "Preserve the immutable source dependency graph rather than repairing npm normalization. Move exact candidate validation before npm side effects and transport the same prevalidated identity afterward. Existing main reconciliation remains unchanged.",
+    "confidence": 0.93
+  },
+  "commits": [
+    "4822281"
+  ],
+  "filesChanged": [
+    ".github/workflows/ci.yml",
+    ".github/workflows/publish-npm.yml",
+    "CHANGELOG.md",
+    "package.json",
+    "scripts/prepared-release.mjs",
+    "scripts/prepared-release.test.mjs",
+    "scripts/project-release-lock.mjs",
+    "scripts/project-release-lock.test.mjs",
+    "scripts/release-workflow-contract.test.mjs",
+    "scripts/restore-release-lock-metadata.mjs"
+  ],
+  "projectId": "AgentWorkforce/relaycast",
+  "tags": [],
+  "_trace": {
+    "startRef": "9eabbf14ebd1689b6d9fc50bb1f92cad8b4bd5f4",
+    "endRef": "48222811348912c32b97b78f4311bfbbfc4bc376",
+    "traceId": "fd3ad8be-4263-42c3-8736-b1488b845af0"
+  }
+}

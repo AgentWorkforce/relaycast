@@ -1,6 +1,7 @@
 import { sql } from 'drizzle-orm';
 import { z } from 'zod';
 import type { EngineDb } from '../ports/database.js';
+import * as sqlx from '../db/sqlx.js';
 
 const position = z.union([
   z.tuple([z.number(), z.string()]),
@@ -22,7 +23,7 @@ export async function readNodeRedriveCandidates(
 ): Promise<string[]> {
   const lane = opts.retry ? 'retry' : 'initial';
   const cursorId = JSON.stringify(['node-redrive-v1', opts.workspaceId ?? null, lane]);
-  const [saved] = await db.all<{ cursor: string }>(sql`SELECT cursor FROM maintenance_cursors WHERE id = ${cursorId}`);
+  const [saved] = await sqlx.all<{ cursor: string }>(db, sql`SELECT cursor FROM maintenance_cursors WHERE id = ${cursorId}`);
   let cursor: z.infer<typeof cursorSchema> = {};
   try {
     const parsed = cursorSchema.safeParse(saved ? JSON.parse(saved.cursor) : {});
@@ -41,9 +42,9 @@ export async function readNodeRedriveCandidates(
   if (opts.retry) conditions.push(sql`next_attempt_at <= ${opts.nowSeconds}`);
   if (!cursor.high || cursor.high.length !== keys.length) {
     cursor = {};
-    const [last] = await db.all<Candidate>(sql`
+    const [last] = await sqlx.all<Candidate>(db, sql`
       SELECT id, created_at, next_attempt_at, expires_at
-      FROM deliveries INDEXED BY ${sql.raw(index)}
+      FROM deliveries ${sqlx.indexedBy(db, index)}
       WHERE ${sql.join(conditions, sql` AND `)}
       ORDER BY ${sql.raw(keys.map(k => k + ' DESC').join(', '))} LIMIT 1
     `);
@@ -55,9 +56,9 @@ export async function readNodeRedriveCandidates(
   if (cursor.high) {
     conditions.push(sql`(${sql.raw(keys.join(', '))}) <= (${sql.join(cursor.high.map(v => sql`${v}`), sql`, `)})`);
   }
-  const page = await db.all<Candidate>(sql`
+  const page = await sqlx.all<Candidate>(db, sql`
     SELECT id, created_at, next_attempt_at, expires_at
-    FROM deliveries INDEXED BY ${sql.raw(index)}
+    FROM deliveries ${sqlx.indexedBy(db, index)}
     WHERE ${sql.join(conditions, sql` AND `)}
     ORDER BY ${sql.raw(keys.join(', '))} LIMIT ${opts.limit}
   `);
@@ -66,7 +67,7 @@ export async function readNodeRedriveCandidates(
   } else {
     cursor.after = key(page[page.length - 1]!);
   }
-  await db.run(sql`INSERT INTO maintenance_cursors(id, cursor) VALUES (${cursorId}, ${JSON.stringify(cursor)})
+  await sqlx.run(db, sql`INSERT INTO maintenance_cursors(id, cursor) VALUES (${cursorId}, ${JSON.stringify(cursor)})
     ON CONFLICT(id) DO UPDATE SET cursor = excluded.cursor`);
   return page.filter(row => row.expires_at === null || row.expires_at > opts.nowSeconds).map(row => row.id);
 }

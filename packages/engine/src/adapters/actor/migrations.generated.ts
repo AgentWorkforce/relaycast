@@ -841,9 +841,44 @@ export const ACTOR_MIGRATIONS: readonly (readonly [string, readonly string[]])[]
     ]
   ],
   [
+    "0081_delivery_confirmation.sql",
+    [
+      "ALTER TABLE deliveries ADD COLUMN accepted_at INTEGER",
+      "ALTER TABLE deliveries ADD COLUMN replied_at INTEGER",
+      "ALTER TABLE deliveries ADD COLUMN reply_message_id TEXT",
+      "ALTER TABLE messages ADD COLUMN reply_to_message_id TEXT"
+    ]
+  ],
+  [
     "0082_pending_events_settled_retention.sql",
     [
       "CREATE INDEX IF NOT EXISTS idx_pending_events_settled_retention\n  ON pending_events(status, completed_at, id)"
+    ]
+  ],
+  [
+    "0083_strict_spawn_placement_token.sql",
+    [
+      "ALTER TABLE action_invocations ADD COLUMN spawn_placement_token TEXT"
+    ]
+  ],
+  [
+    "0084_strict_spawn_dispatch_generation.sql",
+    [
+      "ALTER TABLE action_invocations\n  ADD COLUMN spawn_dispatch_generation INTEGER NOT NULL DEFAULT 0",
+      "UPDATE action_invocations\nSET handler_agent_id = (\n      SELECT actions.handler_agent_id\n      FROM actions\n      WHERE actions.id = action_invocations.action_id\n        AND actions.workspace_id = action_invocations.workspace_id\n    ),\n    handler_node_id = (\n      SELECT actions.handler_node_id\n      FROM actions\n      WHERE actions.id = action_invocations.action_id\n        AND actions.workspace_id = action_invocations.workspace_id\n    )\nWHERE invocation_origin = 'registered_action'\n  AND action_id IS NOT NULL\n  AND handler_agent_id IS NULL\n  AND handler_node_id IS NULL"
+    ]
+  ],
+  [
+    "0085_action_invocation_requester.sql",
+    [
+      "ALTER TABLE action_invocations\n  ADD COLUMN requester_agent_id TEXT REFERENCES agents(id) ON DELETE SET NULL",
+      "ALTER TABLE action_invocations\n  ADD COLUMN requester_name TEXT"
+    ]
+  ],
+  [
+    "0086_workspace_leaders.sql",
+    [
+      "ALTER TABLE workspaces\n  ADD COLUMN leaders text"
     ]
   ]
 ];

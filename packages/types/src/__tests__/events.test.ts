@@ -762,6 +762,19 @@ describe('WsClientEventSchema — client-only frames', () => {
     expect(hasIssueAtPath(r, 'gap_detected')).toBe(true);
   });
 
+  it('accepts registration_rejected and routes it', () => {
+    expectRoutes(
+      WsClientEventSchema,
+      { type: 'registration_rejected', code: 'provider_instance_conflict', message: 'busy', retry_after_ms: 30_000 },
+      'registration_rejected',
+    );
+    expectRoutes(
+      WsClientEventSchema,
+      { type: 'registration_rejected', code: 'forbidden', message: 'no', retry_after_ms: null },
+      'registration_rejected',
+    );
+  });
+
   it('also carries server events (e.g. pong) in the WsClient union', () => {
     expectRoutes(WsClientEventSchema, { type: 'pong' }, 'pong');
   });
@@ -771,5 +784,23 @@ describe('WsClientEventSchema — client-only frames', () => {
     const r = ServerEventSchema.safeParse({ type: 'open' });
     expect(r.success).toBe(false);
     expect(hasIssueAtPath(r, 'type')).toBe(true);
+  });
+});
+
+
+describe('realtime blocks wire contract', () => {
+  it.each([
+    { blocks: [{ kind: 'test', payload: 'abc' }] },
+    { blocks: [{ type: 'text', text: 'hello', custom_field: { proof_id: 'p1' } }] },
+    { blocks: [null, 7, false, ['arbitrary_json']] },
+  ])('retains accepted block values and extension fields ($blocks)', ({ blocks }) => {
+    const frame = ServerEventSchema.parse({
+      id: UUID,
+      type: 'message.created',
+      channel: 'general',
+      message: { ...channelMessage, blocks },
+    });
+    expect(frame).toMatchObject({ message: { blocks } });
+    expect((frame as { message: { blocks: unknown[] } }).message.blocks).toEqual(blocks);
   });
 });

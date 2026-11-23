@@ -37,6 +37,7 @@ so the gateway does not depend on it; replies are validated with zod.
 | `DURABLE_ACTORS_PROJECT_ID` | required | Project id (`local` for the dev runtime) |
 | `DURABLE_ACTORS_SECRET` (alias `DURABLE_ACTORS_API_KEY`, or `_FILE`) | unset | Application credential sent as `Authorization: Bearer`; a local runtime needs none |
 | `DURABLE_ACTORS_HOME_REGION` | unset | Passed as `homeRegion` on every call |
+| `DURABLE_ACTORS_SOCKET_ORIGIN` | unset | Origin to dial actor sockets at, e.g. the in-cluster control plane (`http://<release>-durable-actors.<ns>.svc:7100`). The control plane hands out socket URLs on its public URL; without split-horizon DNS or hairpin routing the gateway cannot reach that host and every `/v1/ws` and `/v1/node/ws` client is closed with 1011. Set, the grant's path and query are dialled here (`http`→`ws`, `https`→`wss`) with the grant's host as `Host` and TLS server name. |
 | `RELAYCAST_FILE_SIGNING_SECRET` (or `_FILE`) | required | HMAC secret shared with the actors, which sign `/_relayfiles` URLs; at least 32 characters |
 | `RELAYCAST_CREDENTIAL_KEYRING` (or `_FILE`) | required | `{"current":"a","keys":{"a":"<secret ≥16 chars>"}}`; signs new workspaces' tags, verifies every credential's tag. Rotate by adding a version and making it current; removing a version locks out its credentials |
 | `RELAYCAST_INTERNAL_SECRET` (or `_FILE`) | unset | Enables `/internal/*`; at least 32 characters, and the actors must be configured with the same value |
@@ -142,11 +143,19 @@ a `FileStore` (`src/files/store.ts`):
 - `PUT` + `put` token: `content-type` must equal the signed type (400
   `content_type_mismatch`); `content-length` (if present) and the bytes read
   must equal the signed size (400 `size_mismatch`; reading stops past it).
-  The content type is stored with the object.
+  The content type is stored with the object. Once stored, the gateway calls
+  `fileStored(key, size)` on the key's workspace actor (5s budget) and answers
+  200 only when that succeeds, so the actor completes the upload from that
+  record without calling the gateway back. A failed or timed-out call answers
+  503 `workspace_unavailable` with `retry-after: 1` (logged as
+  `files.record_stored_failed`); retrying the same signed URL within its
+  lifetime stores the bytes again and re-records.
 - `GET` + `get`: streams with the stored `content-type`, `content-length`,
   `x-content-type-options: nosniff`, and `content-security-policy: sandbox`
   for active types (HTML, SVG, XML, scripts, PDF).
-- `HEAD` + `stat`: 200 with `x-relaycast-object-size`, or 404.
+- `HEAD` + `stat`: 200 with `x-relaycast-object-size`, or 404. Used by
+  actors only when they hold no `fileStored` record, which happens only with
+  a gateway that predates `fileStored` (rolling deploys).
 - `DELETE` + `delete`: 204; already gone is success; any failure is 500
   `delete_failed` so the engine's cleanup queue retries.
 - 403 `forbidden` for a bad or expired token, 405 `method_not_allowed` for a

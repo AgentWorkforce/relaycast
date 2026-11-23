@@ -15,6 +15,7 @@ import { routeDeliveryOutcomes } from './deliveryRouting.js';
 import { runInBackground } from './background.js';
 import { sendWebhookEvent } from './webhookOutbox.js';
 import { emitServerEvent } from '../lib/serverTelemetry.js';
+import { inboundWebhookEventMetadata } from '../engine/messageMetadata.js';
 import { noteAuthenticatedCredential } from '../lib/credentialNotice.js';
 import { acceptsOnlyAr } from '../auth/credentials.js';
 import { parseCredential } from '@relaycast/types';
@@ -218,9 +219,9 @@ inboundWebhookRoutes.post('/hooks/:webhookId', async (c) => {
           text: result.text,
           created_at: result.created_at,
           from_name: result.author,
-          metadata: result.metadata,
+          metadata: inboundWebhookEventMetadata(result.metadata),
         },
-      });
+      }, _deliveries);
     }
     runInBackground(
       c,

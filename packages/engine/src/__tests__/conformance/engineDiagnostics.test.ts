@@ -50,7 +50,7 @@ describe('engine diagnostics', () => {
     const ws = await createWorkspace(stack.app, 'diagnostics-errors');
     const agent = await registerAgent(stack.app, ws.workspaceKey, 'diag-failing-agent');
     // Fail only the inbox's raw unread-count query; auth and everything else are real.
-    const db = Object.create(stack.runtime.deps.db) as EngineDb & { all: unknown };
+    const db: EngineDb & { all: unknown } = Object.create(stack.runtime.deps.db);
     db.all = () => Promise.reject(new Error('injected inbox failure'));
     const captureException = vi.fn();
     const app = appWithDiagnostics({ db, captureException });
@@ -72,7 +72,7 @@ describe('engine diagnostics', () => {
   ])('keeps the operation when the database rejects with %s', async (_kind, rejection) => {
     const ws = await createWorkspace(stack.app, 'diagnostics-odd-rejection');
     const agent = await registerAgent(stack.app, ws.workspaceKey, 'diag-odd-rejection');
-    const db = Object.create(stack.runtime.deps.db) as EngineDb & { all: unknown };
+    const db: EngineDb & { all: unknown } = Object.create(stack.runtime.deps.db);
     db.all = () => Promise.reject(rejection);
     const captureException = vi.fn();
     const app = appWithDiagnostics({ db, captureException });
@@ -88,7 +88,7 @@ describe('engine diagnostics', () => {
     const ws = await createWorkspace(stack.app, 'diagnostics-plain-rejection');
     const agent = await registerAgent(stack.app, ws.workspaceKey, 'diag-plain-rejection');
     // A database adapter that rejects with a non-Error object.
-    const db = Object.create(stack.runtime.deps.db) as EngineDb & { all: unknown };
+    const db: EngineDb & { all: unknown } = Object.create(stack.runtime.deps.db);
     db.all = () => Promise.reject({ message: 'adapter failure' });
     const captureException = vi.fn();
     const app = appWithDiagnostics({ db, captureException });

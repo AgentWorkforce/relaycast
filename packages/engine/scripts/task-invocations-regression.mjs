@@ -5,6 +5,7 @@ import { Miniflare } from 'miniflare';
 import { drizzle } from 'drizzle-orm/d1';
 import { getSqliteDb, runMigrations } from '../dist/adapters/node/database.js';
 import * as schema from '../dist/db/schema.js';
+import { brandSqliteEngineDb } from '../dist/adapters/sqlite-handle.js';
 import { acceptTaskInvocation, completeTaskInvocation, createTaskState, expireTaskInvocations } from '../dist/engine/taskInvocation.js';
 import { getInvocation } from '../dist/engine/action.js';
 
@@ -13,7 +14,7 @@ const mf = new Miniflare({ modules: true, script: 'export default { fetch() { re
 try {
   runMigrations(sqlite);
   const d1 = await mf.getD1Database('DB');
-  const db = drizzle(d1, { schema });
+  const db = brandSqliteEngineDb(drizzle(d1, { schema }));
   const shadow = new Set(sqlite.sqlite.prepare('PRAGMA table_list').all().filter(row => row.type === 'shadow').map(row => row.name));
   const definitions = sqlite.sqlite.prepare("SELECT name,sql FROM sqlite_schema WHERE sql IS NOT NULL AND name NOT LIKE 'sqlite_%' ORDER BY CASE type WHEN 'table' THEN 0 WHEN 'index' THEN 1 ELSE 2 END,rowid").all();
   for (const row of definitions) {

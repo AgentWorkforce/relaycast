@@ -308,9 +308,20 @@ export class FakeWorkspaceActor {
     return this.call(() => this.runtime.handle(request));
   }
 
+  /** A migration import step, with the tag the gateway's keyring signs for this id (one call). */
+  async importData(body: unknown): Promise<ActorHttpResponse> {
+    const tag = await TEST_CREDENTIAL_TAGS.tag(this.id);
+    return this.call(() => this.runtime.importData(body, tag));
+  }
+
   /** `create` with the tag the gateway hands over (one call, as `handle`). */
   create(request: ActorHttpRequest, tag: string): Promise<ActorHttpResponse> {
     return this.call(() => this.runtime.create(request, tag));
+  }
+
+  /** `fileStored`: the gateway stored an upload (one call, as `handle`). */
+  fileStored(key: string, size: number): Promise<{ recorded: boolean }> {
+    return this.call(() => this.runtime.fileStored(key, size));
   }
 
   /** `onAlarm`: the firing alarm reads as set during the call and is consumed after it unless re-armed. */

@@ -1,12 +1,12 @@
-import { and, eq, gt, notExists, sql } from 'drizzle-orm';
-import type { SQLiteColumn, SQLiteTable } from 'drizzle-orm/sqlite-core';
+import { and, eq, gt, notExists, sql, type Column } from 'drizzle-orm';
 import { isArWorkspaceId, type CredentialKind } from '@relaycast/types';
-import { agents, credentialUpgrades, nodes, observerTokens, webhooks, workspaces } from '../db/schema.js';
+import { agents, credentialUpgrades, nodes, observerTokens, webhooks, workspaces } from '../db/tables.js';
 import type { EngineDb } from '../ports/database.js';
 import { runAtomicWrites } from '../ports/database.js';
 import { credentialTagger, mintCredential } from '../auth/credentials.js';
 import { sha256Hex } from '../lib/crypto.js';
 import { codedError } from '../lib/httpError.js';
+import * as sqlx from '../db/sqlx.js';
 
 /** How long an upgraded legacy credential keeps working, unless configured: 30 days. */
 export const DEFAULT_LEGACY_CREDENTIAL_GRACE_SECONDS = 30 * 24 * 60 * 60;
@@ -14,14 +14,20 @@ export const DEFAULT_LEGACY_CREDENTIAL_GRACE_SECONDS = 30 * 24 * 60 * 60;
 /** The longest grace period a deployment may configure: 10 years. */
 export const MAX_LEGACY_CREDENTIAL_GRACE_SECONDS = 10 * 365 * 24 * 60 * 60;
 
-/** The column each kind of principal keeps its credential hash in. */
-const PRINCIPALS = {
+/**
+ * The column each kind of principal keeps its credential hash in. Built per
+ * call because table bindings are resolved at runtime (db/tables.ts).
+ */
+const principals = () => ({
   workspace: { table: workspaces, id: workspaces.id, hash: workspaces.apiKeyHash },
   agent: { table: agents, id: agents.id, hash: agents.tokenHash },
   node: { table: nodes, id: nodes.id, hash: nodes.tokenHash },
   observer: { table: observerTokens, id: observerTokens.id, hash: observerTokens.tokenHash },
   webhook: { table: webhooks, id: webhooks.id, hash: webhooks.tokenHash },
-} as const;
+}) as const;
+
+/** Principal tables whose credential hash can be upgraded. */
+type CredentialTable = typeof agents | typeof nodes | typeof observerTokens | typeof webhooks | typeof workspaces;
 
 /**
  * The grace record, inserted only when the principal now holds `arHash` (the
@@ -30,9 +36,9 @@ const PRINCIPALS = {
  */
 function graceRecordAfterSwap(
   w: EngineDb,
-  table: SQLiteTable,
-  idColumn: SQLiteColumn,
-  hashColumn: SQLiteColumn,
+  table: CredentialTable,
+  idColumn: Column,
+  hashColumn: Column,
   row: {
     legacyHash: string;
     kind: CredentialKind;
@@ -43,7 +49,7 @@ function graceRecordAfterSwap(
     expiresAt: Date;
   },
 ) {
-  return w.insert(credentialUpgrades).select(
+  return sqlx.insertSelect(w, credentialUpgrades,
     w.select({
       legacyHash: sql<string>`${row.legacyHash}`.as('legacy_hash'),
       kind: sql<string>`${row.kind}`.as('kind'),
@@ -51,7 +57,7 @@ function graceRecordAfterSwap(
       workspaceId: sql<string>`${row.workspaceId}`.as('workspace_id'),
       arHash: sql<string>`${row.arHash}`.as('ar_hash'),
       sealedCredential: sql<string>`${row.sealedCredential}`.as('sealed_credential'),
-      createdAt: sql<Date>`unixepoch()`.as('created_at'),
+      createdAt: sql<Date>`${sqlx.now(w)}`.as('created_at'),
       expiresAt: sql<Date>`${Math.floor(row.expiresAt.getTime() / 1000)}`.as('expires_at'),
     })
       .from(table)
@@ -103,7 +109,7 @@ export async function upgradedLegacyCredential(
     gt(credentialUpgrades.expiresAt, now),
   ));
   if (!row) return undefined;
-  const principal = PRINCIPALS[kind];
+  const principal = principals()[kind];
   const [current] = await db.select({ hash: principal.hash }).from(principal.table)
     .where(eq(principal.id, row.principalId));
   if (current?.hash !== row.arHash) return undefined;
@@ -185,7 +191,7 @@ export async function upgradeLegacyCredential(
     409,
   );
   const legacyHash = await sha256Hex(legacyToken);
-  const principal = PRINCIPALS[kind];
+  const principal = principals()[kind];
 
   /**
    * The upgrade that claimed this legacy credential, while the principal still

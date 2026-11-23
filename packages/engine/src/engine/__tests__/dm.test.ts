@@ -25,7 +25,7 @@ import {
   pendingEvents,
   workspaceEvents,
   workspaces,
-} from '../../db/schema.js';
+} from '../../db/tables.js';
 import { isPairReservationConflict, sendDm } from '../dm.js';
 import {
   DIRECT_DM_IDEMPOTENCY_CLEANUP_BATCH_SIZE,

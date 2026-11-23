@@ -7,7 +7,62 @@ See the [root changelog](../../CHANGELOG.md) for cross-package release highlight
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased - Minor]
+## [Unreleased]
+
+## [12.13.0] - 2026-11-17
+
+### Added
+
+- `actions.invoke(name, input, { requesterAgentId, requesterName })` records an on-behalf-of requester (`requesterName` is optional, requires `requesterAgentId` and must equal that agent's name); invocation results expose `requesterAgentId` / `requesterName`. The requester is a caller-made claim, not authorization.
+- `workspace.getLeaders()` and `workspace.setLeaders({ patterns })` read and replace the workspace leader patterns.
+
+## [12.12.0] - 2026-11-17
+
+### Added
+
+- `deliveries({ afterSeq })` can scan past retained pending deliveries without acknowledging them.
+
+## [12.11.0] - 2026-11-15
+
+### Changed
+
+- **Direct-node `connected` timing:** on the agent's direct-node transport, `'open'` / `on.connected` (and the open hooks: presence `markOnline`, auto-heartbeat, subscription sync, node heartbeat) fire only after the engine accepts `node.register`, not on the socket upgrade. `'close'` / `on.disconnected` fires only for a connection that announced `'open'`. The workspace `/v1/ws` stream is unchanged.
+- The direct-node `node.register` frame carries `provider: { name: 'default', instance_id: 'sdk-<uuid>' }`, generated once per `AgentClient` and kept across reconnects, so several clients of one agent no longer share the implicit `instance_id = node_id` and supersede each other in a loop.
+- The reconnect backoff counter resets only on an accepted `node.register`, so a socket that opens and is then refused keeps backing off.
+
+### Added
+
+- `on.registrationRejected({ code, message, retryAfterMs })` on the agent and the `registration_rejected` WsClient event, emitted when the engine refuses the direct-node registration.
+
+### Fixed
+
+- A `provider_instance_conflict` refusal of the direct-node registration (or a close with code 4009) makes the next attach wait at least `max(retry_after_ms, retry_after * 1000, 30 s)`, capped at 300 s and measured from the refusal. The server closes the refused socket; the client closes it itself only if the server has not once the wait has passed. These refusals do not trip the reconnect circuit breaker or raise the backoff for later failures, but every retry counts toward `maxReconnectAttempts`. The refused attach, including a bare 4009 close (reported as `registration_rejected` with `retryAfterMs: null`), reuses its node token.
+- `NodeProviderClient` retries a `provider_instance_conflict` registration refusal (and a 4009 close) after the same wait instead of failing `serve()` / `whenRegistered()`; other registration errors stay fatal. `NodeRegistrationError` gains `retryAfterMs`. Error replies carrying retry hints are no longer dropped by the strict wire parse.
+- The direct-node transport and `NodeProviderClient` time out a `node.register` that gets no reply after 15 s: the socket is dropped and reconnects with the normal backoff instead of staying attached but unannounced.
+
+## [12.10.0] - 2026-11-15
+
+### Added
+
+- **Ack timing changed:** with `autoAckDeliveries`, `delivery.ack` is sent only after every handler for the delivery returned and every promise it returned resolved (`ackMode: 'after-handlers'`, the default). `ackMode: 'on-receipt'` restores the previous ack right after dispatch.
+- A handler that throws or rejects leaves the delivery unacked (logged) for server re-delivery; later deliveries keep processing. The failure is reported only once the delivery's other handlers settled, so the agent's next delivery never starts beside one still working.
+- `subscribe(channels, handler)` and `Relay.onMessage(cb)` callbacks count as handlers: the ack waits for the callback's promise and a rejection leaves the delivery unacked (previously swallowed, and the delivery acked regardless). On the workspace stream a rejected handler promise is logged instead of going unhandled.
+- Confirmations are per delivery (`delivery_id`) on an engine that lists the capability (`delivery.accepted`, and `delivery.ack.delivery_id` for acks), so each settles exactly the row this client handled. On an older engine `delivery.ack` is cumulative (`up_to_seq`) and sent only while every lower seq seen on the connection was consumed; see `docs/delivery-confirmation.md`.
+- A re-delivered frame whose handlers failed reruns them before it is acked; one whose handlers succeeded is acked without a rerun; a duplicate arriving mid-run shares that run's outcome. Dedupe is per recipient agent. A confirmation for a delivery received on a previous connection is dropped after a reconnect (the server replays it).
+- Intake (persistence hook, `delivery.accepted`) runs in arrival order and never waits for handlers; handlers and acks are ordered per agent, so a hung handler holds only its own agent's later handlers and acks.
+- `dm.received` / `group_dm.received` events from the node transport carry the message's `replyToMessageId` (the recipient's message the DM explicitly answers) through to handlers, as REST history already does.
+- `WsClientOptions.acceptDelivery(delivery)` persistence hook and `autoAcceptDeliveries` (default `false`; set it only when you persist deliveries durably before handlers run): the hook runs for every `deliver` frame before any handler, whatever the engine's capabilities; the node transport sends `delivery.accepted` (`agent`, `delivery_id`) only after it resolved, and only when the engine's `node.register` reply listed the capability (an older engine gets no frame but the delivery is still stored first); `delivery.ack` follows dispatch as before. Without the hook nothing is sent; a hook that throws means neither acceptance, dispatch nor ack (the server re-delivers on reconnect). Frames are processed in arrival order. Type `AcceptedDelivery`.
+- `agent.dm(...)` / `sendTo(...)` take `replyTo` (sent as `reply_to_message_id`; the answered message's delivery becomes `replied` for its sender); `agent.reply(parentId, text)` answers its parent the same way.
+- `agent.dm(...)`, `agent.sendTo(...)`, `agent.send(...)` / `post(...)` take `waitMs` (0–2000; 1000 recommended) and return the delivery `state` the server answered with; `send` / `post` now return `PostMessageResponse` (`MessageWithMeta` plus `deliveries`, `deliveriesTruncated`). Types `SendDmOptions`, `SendMessageOptions`, `DeliveryState`, `DeliveryRepliedEvent`; `SentDelivery` / `MessageDeliveryReceipt` carry the new fields.
+- `on.deliveryReplied` (agent and relay) for the sender-side `delivery.replied` event; `on.deliveryDelivered` events carry `accepted`.
+- `relay.getAgentCard(name)` returns a local agent's A2A card (`AgentCard`), unchanged from the wire's camelCase.
+
+### Fixed
+
+- Message creation, updates, and thread WebSocket events retain arbitrary rich blocks. DM and group-DM handlers also preserve blocks when supplied by the server; DM send/storage support is unchanged.
+- Best-effort `deliver` frames (`seq: 0`, e.g. `action.completed`) are dispatched at once instead of queueing behind the agent's running handler, so a handler awaiting `on.actionCompleted` no longer deadlocks; they never run the persistence hook nor send `delivery.accepted` / `delivery.ack`.
+
+## [12.8.0] - 2026-11-04
 
 ### Added
 

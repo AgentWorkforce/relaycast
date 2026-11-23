@@ -4,7 +4,7 @@ The relaycast `Workspace` actor for [durable-actors](https://github.com/TerseAI/
 (0.14.6): one workspace per actor, the engine running on the actor's own
 SQLite through `@relaycast/engine/adapters/actor`. The gateway
 (`packages/actors-gateway`) calls `create` for `POST /v1/workspaces`, `handle`
-for every other request and opens actor sockets for `/v1/ws` and `/v1/node/ws`;
+for every other request, `fileStored` after it stores a signed upload, and opens actor sockets for `/v1/ws` and `/v1/node/ws`;
 the socket lifecycle (`onConnect`, `onMessage`, `onDisconnect`) and `onAlarm`
 (outbound HTTP, maintenance) run the engine's realtime and background work.
 

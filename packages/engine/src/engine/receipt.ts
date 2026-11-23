@@ -9,8 +9,10 @@ import {
   deliveries,
   dmConversations,
   dmParticipants,
-} from '../db/schema.js';
+} from '../db/tables.js';
 import { runAtomicWrites } from '../ports/database.js';
+import { appliedReplyLinks, lockReplyLinks, repliedAtOnTransition, type ReplyLinkState } from './delivery.js';
+import * as sqlx from '../db/sqlx.js';
 
 type Db = ReturnType<typeof getDb>;
 
@@ -32,7 +34,7 @@ export function advanceDmParticipantReadCursor(
         SELECT ${dmConversations.id} FROM ${dmConversations}
         WHERE ${dmConversations.channelId} = ${channelId}
       )`,
-      sql`(${dmParticipants.lastReadId} IS NULL OR CAST(${dmParticipants.lastReadId} AS BIGINT) < CAST(${messageId} AS BIGINT))`,
+      sql`(${dmParticipants.lastReadId} IS NULL OR ${sqlx.castNumeric(db, dmParticipants.lastReadId)} < ${sqlx.castNumeric(db, sql`${messageId}`)})`,
       when,
     ));
 }
@@ -43,6 +45,24 @@ export async function markRead(
   messageId: string,
   agentId: string,
 ) {
+  const result = await markReadAndApplyReplies(db, workspaceId, messageId, agentId);
+  return result ? result.receipt : null;
+}
+
+/**
+ * {@link markRead}, plus the ids of the reader's deliveries whose pending reply
+ * link (a reply sent while the row was still `queued`) the read's own `acked`
+ * transition applied, so the caller can tell the sender `replied`.
+ */
+export async function markReadAndApplyReplies(
+  db: Db,
+  workspaceId: string,
+  messageId: string,
+  agentId: string,
+): Promise<{
+  receipt: { message_id: string; agent_id: string; read_at: string };
+  repliedDeliveryIds: string[];
+} | null> {
   // Verify message exists and belongs to workspace
   const [msg] = await db
     .select()
@@ -73,28 +93,31 @@ export async function markRead(
   }
   if (!authorized) return null;
 
+  const scope = and(eq(deliveries.messageId, messageId), eq(deliveries.agentId, agentId))!;
+  const consumable = and(scope, inArray(deliveries.status, ['queued', 'delivered']));
   // The three read-state writes (receipt + delivery transition + lastReadId)
   // run as one atomic unit when the adapter supports it.
-  await runAtomicWrites(db, (writeDb) => [
+  const results = await runAtomicWrites(db, (writeDb) => [
     // Upsert read receipt (idempotent)
     writeDb
       .insert(readReceipts)
       .values({ messageId, agentId })
       .onConflictDoNothing(),
 
+    // Lock the row and read its link just before the transition, so a link
+    // seen pending is exactly one the transition applies.
+    lockReplyLinks(writeDb, scope),
+
     // Transition delivery status to acked. Reading consumes the message, so
     // clear any in-flight mailbox state; otherwise a delivery would linger in
     // the durable replay queue after the agent has already seen the message.
+    // Leaving `queued` applies a reply sent while it was queued in this same
+    // write, so no crash can strand the link on a consumed row.
     writeDb
       .update(deliveries)
-      .set({ status: 'acked', ackedAt: new Date(), updatedAt: new Date() })
-      .where(
-        and(
-          eq(deliveries.messageId, messageId),
-          eq(deliveries.agentId, agentId),
-          inArray(deliveries.status, ['queued', 'delivered']),
-        ),
-      ),
+      .set({ status: 'acked', ackedAt: new Date(), repliedAt: repliedAtOnTransition(writeDb), updatedAt: new Date() })
+      .where(consumable)
+      .returning({ id: deliveries.id, repliedAt: deliveries.repliedAt }),
 
     // Update lastReadId for the channel membership (only move forward)
     writeDb
@@ -104,7 +127,7 @@ export async function markRead(
         and(
           eq(channelMembers.channelId, msg.channelId),
           eq(channelMembers.agentId, agentId),
-          sql`(${channelMembers.lastReadId} IS NULL OR CAST(${channelMembers.lastReadId} AS BIGINT) < CAST(${messageId} AS BIGINT))`,
+          sql`(${channelMembers.lastReadId} IS NULL OR ${sqlx.castNumeric(db, channelMembers.lastReadId)} < ${sqlx.castNumeric(db, sql`${messageId}`)})`,
         ),
       ),
 
@@ -122,10 +145,15 @@ export async function markRead(
       ),
     );
 
+  const locked = results[1] as ReplyLinkState[];
+  const transitioned = results[2] as { id: string; repliedAt: Date | null }[];
   return {
-    message_id: receipt.messageId,
-    agent_id: receipt.agentId,
-    read_at: receipt.readAt.toISOString(),
+    receipt: {
+      message_id: receipt.messageId,
+      agent_id: receipt.agentId,
+      read_at: receipt.readAt.toISOString(),
+    },
+    repliedDeliveryIds: appliedReplyLinks(locked, transitioned),
   };
 }
 

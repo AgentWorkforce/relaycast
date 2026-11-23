@@ -1,6 +1,7 @@
-import type { workspaces, agents, nodes, observerTokens } from './db/schema.js';
+import type { workspaces, agents, nodes, observerTokens } from './db/tables.js';
 import type { Logger } from './lib/logger.js';
 import type { AdmissionDenial } from './ports/admission.js';
+import type { SubscriptionMatcher } from './engine/eventSubscription.js';
 import type {
   EngineDb,
   EnginePorts,
@@ -38,11 +39,12 @@ export interface AppVariables {
    */
   originActor: string;
   /**
-   * Per-request memo of whether the workspace has any active event
-   * subscription (set lazily by `sendWebhookEvent`, which may fire several
-   * times per request). Unset until the first webhook-eligible mutation.
+   * Per-request memo of the workspace's active subscriptions' `events` and
+   * `filter` (set lazily by `sendWebhookEvent`, which may fire several times
+   * per request); `null` means unknown, so every event is enqueued. Unset until
+   * the first webhook-eligible mutation.
    */
-  webhookSubscribersExist?: boolean;
+  webhookSubscriptionMatchers?: SubscriptionMatcher[] | null;
   /**
    * Set by `admitMessage` when the host denied a send that carries an
    * `Idempotency-Key`: the route still replays a stored receipt, and refuses

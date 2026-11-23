@@ -44,6 +44,25 @@ export function publicMessageMetadata(
   return sanitizeUserMessageMetadata(metadata);
 }
 
+/**
+ * Whether a message was posted by an inbound webhook (`POST /v1/hooks/:id`).
+ * Its text comes from whoever holds the webhook URL; only the engine writes
+ * this origin (`sanitizeUserMessageMetadata` strips it from agent posts).
+ */
+export function isInboundWebhookMessage(metadata: unknown): boolean {
+  return !!metadata && typeof metadata === 'object'
+    && (metadata as Record<string, unknown>).__relaycast_origin === WEBHOOK_ORIGIN;
+}
+
+/**
+ * The metadata of a webhook-posted message's `message.created` event: the
+ * poster's own (sanitized) metadata plus the engine's origin marker, so event
+ * filters can tell it was posted by an inbound webhook.
+ */
+export function inboundWebhookEventMetadata(metadata: Record<string, unknown>): Record<string, unknown> {
+  return { ...metadata, __relaycast_origin: WEBHOOK_ORIGIN };
+}
+
 export function inboundWebhookMessageMetadata(data: {
   webhookId: string;
   webhookName: string;

@@ -1,7 +1,13 @@
 export type { NodeLivenessAuthority, NodeLivenessSnapshot } from './nodeLiveness.js';
 import type { NodeLivenessAuthority } from './nodeLiveness.js';
-export type { DeliveryWaiters, DeliveryWaitArgs } from './deliveryWaiters.js';
-export { InProcessDeliveryWaiters, MAX_DELIVERY_WAIT_MS, DELIVERY_NOTIFY_MEMORY_MS } from './deliveryWaiters.js';
+export type { DeliveryWaiters, DeliveryWaitArgs, DeliveryStateWaitArgs } from './deliveryWaiters.js';
+export {
+  InProcessDeliveryWaiters,
+  MAX_DELIVERY_WAIT_MS,
+  MAX_SEND_WAIT_MS,
+  RECOMMENDED_SEND_WAIT_MS,
+  DELIVERY_NOTIFY_MEMORY_MS,
+} from './deliveryWaiters.js';
 import type { DeliveryWaiters } from './deliveryWaiters.js';
 /**
  * The complete dependency contract for the Relaycast engine.
@@ -65,6 +71,8 @@ export type {
   EngineProgressSample,
 } from './diagnostics.js';
 
+export type { SearchIndex, MessageSearchOptions, MessageSearchQuery, MessageSearchResult } from './search.js';
+import type { SearchIndex } from './search.js';
 import type { EngineDb } from './database.js';
 import type { RealtimeBus, ConnectionRegistry, NodeConnectionRegistry } from './realtime.js';
 import type { PresenceTracker } from './presence.js';
@@ -83,6 +91,8 @@ import type { CredentialTagger } from '../auth/credentialTags.js';
 /** Infrastructure ports the engine reads off the request context. */
 export interface EnginePorts {
   db: EngineDb;
+  /** Optional message-search backend; omission preserves the existing SQLite/D1 FTS5 behavior. */
+  search?: SearchIndex;
   realtime: RealtimeBus;
   connections: ConnectionRegistry;
   nodeConnections: NodeConnectionRegistry;
@@ -194,6 +204,14 @@ export interface EngineConfig {
    * to disable the relayfile inbound bridge.
    */
   relayfileInboundSecret?: string;
+  /**
+   * Largest provider record, in UTF-8 bytes of its JSON, that the relayfile
+   * inbound bridge stores in message metadata. A larger record is stored as
+   * `record: null` with `record_omitted`; it remains retrievable from
+   * relayfile by path and revision. `0` never stores a record. Omitted,
+   * negative or non-finite values use 8 KiB.
+   */
+  relayfileRecordMetadataMaxBytes?: number;
   /**
    * Deployment secret used to derive credentials for anonymous, keyed
    * workspace bootstrap creates. Hosts should persist this value so a replay

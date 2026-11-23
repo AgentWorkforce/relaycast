@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { getSqliteDb, runMigrations, type SqliteDbHandle } from '../../adapters/node/database.js';
-import { agents, channelMembers, channels, workspaces } from '../../db/schema.js';
+import { agents, channelMembers, channels, workspaces } from '../../db/tables.js';
 import { listChannels } from '../channel.js';
 
 /**

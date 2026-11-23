@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import { eq } from 'drizzle-orm';
 import { getSqliteDb, runMigrations, type SqliteDbHandle } from '../../adapters/node/database.js';
-import { agents, channels, messageSessions, messages, webhooks, workspaces } from '../../db/schema.js';
+import { agents, channels, messageSessions, messages, webhooks, workspaces } from '../../db/tables.js';
 import { createWebhook, triggerWebhook } from '../inboundWebhook.js';
 import { publicMessageMetadata } from '../messageMetadata.js';
 

@@ -18,12 +18,14 @@ export default defineConfig({
   },
   test: {
     include: ['src/**/*.test.ts'],
-    // These spawn the repo's Node maintenance scripts (better-sqlite3) as child
-    // processes; they are not part of the standalone binary.
+    // These spawn the repo's Node maintenance scripts or the Node server
+    // (better-sqlite3, tsx) as child processes; they are not part of the
+    // standalone binary.
     exclude: isBun
-      ? ['src/__tests__/conformance/agentRetentionCli.test.ts', 'src/db/__tests__/compactMigrations.test.ts']
+      ? ['src/__tests__/conformance/agentRetentionCli.test.ts', 'src/db/__tests__/compactMigrations.test.ts', 'src/bin/__tests__/serveStartup.test.ts']
       : [],
     environment: 'node',
+    setupFiles: ['src/__tests__/setup/bindSchema.ts'],
     // vitest's module runner is slower under Bun; the heavier conformance
     // fixtures need more headroom there.
     testTimeout: isBun ? 60_000 : 20_000,

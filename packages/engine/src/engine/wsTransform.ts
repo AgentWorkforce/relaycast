@@ -34,6 +34,7 @@ export function transformForClient(event: WsEvent): Record<string, unknown> {
           agent_id: d.agent_id as string,
           agent_name: d.from_name as string,
           text: d.text as string,
+          ...(d.blocks !== undefined ? { blocks: d.blocks } : {}),
           attachments: (d.attachments as unknown[]) ?? [],
           injection_mode: d.injection_mode as 'wait' | 'steer' | undefined,
           // The same document `GET .../messages` returns; a live feed that
@@ -53,6 +54,7 @@ export function transformForClient(event: WsEvent): Record<string, unknown> {
           agent_id: d.agent_id as string,
           agent_name: d.from_name as string,
           text: d.text as string,
+          ...(d.blocks !== undefined ? { blocks: d.blocks } : {}),
         },
       };
 
@@ -71,6 +73,7 @@ export function transformForClient(event: WsEvent): Record<string, unknown> {
           agent_name: d.from_name as string,
           ...(typeof d.agent_address === 'string' ? { agent_address: d.agent_address } : {}),
           text: d.text as string,
+          ...(d.blocks !== undefined ? { blocks: d.blocks } : {}),
         },
       };
 
@@ -103,6 +106,9 @@ export function transformForClient(event: WsEvent): Record<string, unknown> {
           agent_name: (msg.agent_name ?? d.from_name) as string,
           ...(typeof msg.agent_address === 'string' ? { agent_address: msg.agent_address } : {}),
           text: (msg.text ?? d.text) as string,
+          ...((msg.blocks !== undefined || d.blocks !== undefined)
+            ? { blocks: msg.blocks !== undefined ? msg.blocks : d.blocks }
+            : {}),
           ...(injectionMode ? { injection_mode: injectionMode } : {}),
           ...(attachments.length ? { attachments } : {}),
         },
@@ -123,6 +129,9 @@ export function transformForClient(event: WsEvent): Record<string, unknown> {
           agent_id: (msg.agent_id ?? d.agent_id) as string,
           agent_name: (msg.agent_name ?? d.from_name) as string,
           text: (msg.text ?? d.text) as string,
+          ...((msg.blocks !== undefined || d.blocks !== undefined)
+            ? { blocks: msg.blocks !== undefined ? msg.blocks : d.blocks }
+            : {}),
           ...(injectionMode ? { injection_mode: injectionMode } : {}),
           ...(attachments.length ? { attachments } : {}),
         },

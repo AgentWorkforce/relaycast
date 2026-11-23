@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import { and, count, eq, inArray, sql } from 'drizzle-orm';
 import { makeNodeStack, type TestStack } from '../../__tests__/conformance/harness.js';
-import { agents, channelMembers, channels, deliveries, messages, workspaces } from '../../db/schema.js';
+import { agents, channelMembers, channels, deliveries, messages, workspaces } from '../../db/tables.js';
 import { runAtomicWrites } from '../../ports/database.js';
 import { buildChannelDeliveryWrite } from '../deliveryWrites.js';
 import type { EngineDb } from '../../ports/database.js';

@@ -1,7 +1,7 @@
 {
   "name": "@relaycast/observer-dashboard",
-  "version": "12.7.0",
-  "license": "Apache-2.0",
+  "version": "12.14.0",
+  "license": "FSL-1.1-ALv2",
   "private": true,
   "scripts": {
     "dev": "next dev --port 3100",
@@ -13,9 +13,9 @@
     "start": "next start"
   },
   "dependencies": {
-    "@relaycast/react": "12.7.0",
-    "@relaycast/sdk": "12.7.0",
-    "@relaycast/types": "12.7.0",
+    "@relaycast/react": "12.14.0",
+    "@relaycast/sdk": "12.14.0",
+    "@relaycast/types": "12.14.0",
     "class-variance-authority": "^0.7.0",
     "clsx": "^2.1.0",
     "lucide-react": "^0.400.0",

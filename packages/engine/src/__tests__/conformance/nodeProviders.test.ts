@@ -9,7 +9,7 @@ import {
   contextUpdatesOfType,
   type TestStack,
 } from './harness.js';
-import { actions, actionInvocations, agents, nodeProviders, nodes } from '../../db/schema.js';
+import { actions, actionInvocations, agents, nodeProviders, nodes } from '../../db/tables.js';
 import { NODE_LIVENESS_TTL_MS, PROVIDER_ATTACH_LIVENESS_MS } from '../../engine/placement.js';
 import { drainNodeInvocations } from '../../index.js';
 import {

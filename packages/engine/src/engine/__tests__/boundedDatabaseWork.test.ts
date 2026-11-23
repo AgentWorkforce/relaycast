@@ -1,10 +1,11 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { brandSqliteEngineDb } from '../../adapters/sqlite-handle.js';
 import { drizzle } from 'drizzle-orm/better-sqlite3';
 import { getSqliteDb, runMigrations, type SqliteDbHandle } from '../../adapters/node/database.js';
-import * as schema from '../../db/schema.js';
+import * as schema from '../../db/tables.js';
 import type { EngineDb } from '../../ports/database.js';
 import type { NodeConnectionRegistry } from '../../ports/realtime.js';
-import { deliverPendingToNode, fetchDueNodeDeliveryEvents } from '../delivery.js';
+import { acceptDeliveries, deliverPendingToNode, fetchDueNodeDeliveryEvents } from '../delivery.js';
 import { pruneExpired } from '../retention.js';
 import { reconcileInventory } from '../node.js';
 
@@ -38,7 +39,7 @@ function fixture(history = 10_000, active = 125) {
   })();
   sqlite.exec('ANALYZE');
   const queries: { sql: string; params: unknown[] }[] = [];
-  const db = drizzle(sqlite, { schema, logger: { logQuery: (sql, params) => queries.push({ sql, params }) } }) as unknown as EngineDb;
+  const db = brandSqliteEngineDb(drizzle(sqlite, { schema, logger: { logQuery: (sql, params) => queries.push({ sql, params }) } }));
   const frames: { seq: number }[] = [];
   const send = vi.fn(async (_ws, _node, _provider, frame) => { frames.push(frame); return true; });
   const ready = vi.fn(() => true);
@@ -69,6 +70,20 @@ describe('bounded database work with retained history', () => {
       expect(query.params.length).toBeLessThan(100);
       const plan = JSON.stringify(f.sqlite.prepare('EXPLAIN QUERY PLAN ' + query.sql).all(...query.params));
       expect(plan).toContain('SEARCH deliveries USING INDEX idx_deliveries_id_lookup');
+    }
+  });
+
+  it('settles delivered and accepted id pages with id-index seeks, never a status or workspace index', async () => {
+    const f = fixture();
+    expect(await deliverPendingToNode(f.db, f.registry, 'ws', 'node', { providerName: 'provider' })).toBe(125);
+    const accepted = await acceptDeliveries(f.db, 'ws', 'node', 'provider', 'recipient', { upToSeq: 10_125 });
+    expect(accepted?.accepted_delivery_ids).toHaveLength(125);
+    const writes = f.queries.filter(q => /^update "deliveries"/.test(q.sql) || (q.sql.startsWith('select "id", "reply_message_id", "replied_at" from "deliveries"') && q.sql.includes('"deliveries"."id" in (')));
+    // Three replay pages and three acceptance pages, each a pending-reply read plus its transition.
+    expect(writes).toHaveLength(12);
+    for (const query of writes) {
+      const plan = JSON.stringify(f.sqlite.prepare('EXPLAIN QUERY PLAN ' + query.sql).all(...query.params));
+      expect(plan).toMatch(/SEARCH deliveries USING INDEX (idx_deliveries_id_lookup|sqlite_autoindex_deliveries_1) \(id=\?\)/);
     }
   });
 
@@ -167,7 +182,7 @@ describe('bounded database work with retained history', () => {
     const opts = { limit: 25 };
     expect(await fetchDueNodeDeliveryEvents(f.db, opts)).toHaveLength(0);
     // A new adapter handle reads durable progress, not process-local state.
-    const nextDb = drizzle(f.sqlite, { schema }) as unknown as EngineDb;
+    const nextDb = brandSqliteEngineDb(drizzle(f.sqlite, { schema }));
     expect(await fetchDueNodeDeliveryEvents(nextDb, opts)).toHaveLength(0);
     const due = await fetchDueNodeDeliveryEvents(f.db, opts);
     expect(due.map(event => event.delivery.seq)).toEqual([10051, 10052, 10053, 10054, 10055]);
@@ -232,7 +247,7 @@ describe('bounded database work with retained history', () => {
     const cursor = () => JSON.parse((f.sqlite.prepare("SELECT cursor FROM maintenance_cursors WHERE id = 'retention-v1'").get() as { cursor: string }).cursor);
     expect(cursor().positions.deliveries[1]).toBe('d0000000010');
     // A new handle simulates the next isolate; progress is not process memory.
-    const nextDb = drizzle(f.sqlite, { schema }) as unknown as EngineDb;
+    const nextDb = brandSqliteEngineDb(drizzle(f.sqlite, { schema }));
     await pruneExpired(nextDb, opts);
     expect(cursor().positions.deliveries[1]).toBe('d0000000020');
     const pages = f.queries.filter(q => q.sql.includes('WITH page AS MATERIALIZED'));
@@ -318,7 +333,7 @@ describe('per-node agent lookups in a large workspace without ANALYZE', () => {
       for (let n = 0; n < 2_000; n++) agent.run(`other-${n}`, `other-${n}`, `other-key-${n}`);
     })();
     const queries: { sql: string; params: unknown[] }[] = [];
-    const db = drizzle(sqlite, { schema, logger: { logQuery: (sql, params) => queries.push({ sql, params }) } }) as unknown as EngineDb;
+    const db = brandSqliteEngineDb(drizzle(sqlite, { schema, logger: { logQuery: (sql, params) => queries.push({ sql, params }) } }));
     const registry = {
       sendToProvider: vi.fn(async () => true),
       isProviderAgentDeliveryReady: vi.fn(() => true),

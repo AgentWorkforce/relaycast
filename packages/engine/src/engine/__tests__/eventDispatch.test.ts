@@ -8,7 +8,7 @@ import {
   channels,
   nodes,
   workspaces,
-} from '../../db/schema.js';
+} from '../../db/tables.js';
 import { publishEvent, publishEventsToAgents, type EventDispatchEngine } from '../eventDispatch.js';
 import { NODE_CONTEXT_SEND_CONCURRENCY } from '../nodeContext.js';
 

@@ -1,7 +1,8 @@
 #!/usr/bin/env node
-import { startServer } from '../entrypoints/node.js';
+import { startPostgresServer, startServer } from '../entrypoints/node.js';
 import { credentialConfigFromEnv } from '../config/credentialEnv.js';
 import { ConfigError, secretFromEnv } from './secretEnv.js';
+import { postgresServeRequested } from './postgresServeGuard.js';
 import { engineVersion } from './version.js';
 import { MIN_INTERNAL_SECRET_LENGTH } from '../engine/internalAdmin.js';
 
@@ -9,6 +10,13 @@ const HELP = `relaycast-engine — run a self-hosted Relaycast server (Node + SQ
 
 Usage:
   relaycast-engine [--db <path>] [--port <n>] [--base-url <url>] [--env <name>]
+  relaycast-engine migrate      Apply PostgreSQL migrations (owner identity)
+  relaycast-engine verify-db    Check PostgreSQL runtime identity and migrations
+  relaycast-engine migration-preflight [--workspace <id>]... [--file-dir <dir>] [--ar-since <epoch s>]
+                                Per-workspace counts before a move to durable-actors (read-only)
+  relaycast-engine export-for-actors --out <dir> --run-id <id> [--workspace <id>]... [--block-rows <n>]
+  relaycast-engine migrate-files-to-s3 [--from <dir>]   Copy local files into the RELAYCAST_FILE_S3_* bucket
+                                Export workspaces from one snapshot for relaycast-migrate import
 
 Options:
   --db <path>        SQLite database file (default: $RELAYCAST_DB_PATH or ./relaycast.db)
@@ -35,6 +43,22 @@ Environment:
   RELAYCAST_LEGACY_CREDENTIAL_SUNSET
                                     ISO-8601 date sent as Sunset on legacy-authenticated responses
   A directly set variable wins over its _FILE variant.
+
+PostgreSQL (any RELAYCAST_DATABASE_* variable selects it; the server then
+verifies the runtime role and migrations before listening and never touches
+SQLite, and migrate / verify-db use the same variables):
+  RELAYCAST_DATABASE_URL(_FILE)     postgres://user:password@host:port/database
+                                    (only sslmode=verify-full may appear in the query)
+  RELAYCAST_DATABASE_CA_FILE        PEM CA bundle; TLS is always verify-full
+                                    (NODE_EXTRA_CA_CERTS is the fallback)
+  RELAYCAST_DATABASE_SCHEMA         Engine schema (default public)
+  RELAYCAST_DATABASE_OWNER_ROLE     Role migrate must run as (default relaycast_owner)
+  RELAYCAST_DATABASE_RUNTIME_ROLE   Role verify-db must run as (default relaycast_runtime)
+  RELAYCAST_DATABASE_POOL_MAX       Optional pool size (1-100)
+  RELAYCAST_DATABASE_STATEMENT_TIMEOUT_MS
+                                    Optional statement timeout
+  Exit codes: 0 ok, 64 configuration refused, 65 identity refused, 1 failure
+  (the server uses the same codes when it refuses to start).
 
 After start, create a workspace:
   curl -XPOST http://localhost:<port>/v1/workspaces -H 'content-type: application/json' -d '{"name":"my-team"}'
@@ -72,8 +96,30 @@ function parseArgs(argv: string[], env: NodeJS.ProcessEnv): ServeArgs {
 
 /** Exit code for a configuration the server refuses to run with (EX_USAGE). */
 const CONFIG_EXIT_CODE = 64;
+/** Exit code for a database identity the server refuses (EX_DATAERR). */
+const IDENTITY_EXIT_CODE = 65;
 
 async function main(): Promise<void> {
+  const command = process.argv[2];
+  if (command === 'migrate' || command === 'verify-db') {
+    // Loaded lazily so the SQLite server path never imports pg.
+    const cli = await import('../adapters/postgres/cli.js');
+    process.exitCode = await (command === 'migrate' ? cli.runMigrateCommand() : cli.runVerifyDbCommand());
+    return;
+  }
+  if (command === 'migrate-files-to-s3') {
+    const { runMigrateFilesToS3Command } = await import('../entrypoints/node.js');
+    process.exitCode = await runMigrateFilesToS3Command(process.argv.slice(3));
+    return;
+  }
+  if (command === 'migration-preflight' || command === 'export-for-actors') {
+    const cli = await import('../adapters/postgres/cli.js');
+    const argv = process.argv.slice(3);
+    process.exitCode = await (command === 'migration-preflight'
+      ? cli.runMigrationPreflightCommand(argv)
+      : cli.runMigrationExportCommand(argv));
+    return;
+  }
   const opts = parseArgs(process.argv.slice(2), process.env);
   if (opts.help) {
     process.stdout.write(HELP);
@@ -130,8 +176,7 @@ async function main(): Promise<void> {
 
   const credentials = credentialConfigFromEnv(process.env);
 
-  const running = startServer({
-    dbPath: opts.db,
+  const serverOptions = {
     port: opts.port,
     baseUrl,
     config: {
@@ -146,9 +191,13 @@ async function main(): Promise<void> {
       ...(Object.keys(mailbox).length > 0 ? { mailbox } : {}),
     },
     ...(eventQueue ? { eventQueue } : {}),
-  });
+  };
+  const usePostgres = postgresServeRequested(process.env);
+  const running = usePostgres
+    ? await startPostgresServer({ ...serverOptions, log: (line) => process.stdout.write(`${line}\n`) })
+    : startServer({ ...serverOptions, dbPath: opts.db });
 
-  process.stdout.write(`Relaycast self-host listening on ${baseUrl} (db: ${opts.db})\n`);
+  process.stdout.write(`Relaycast self-host listening on ${baseUrl} (db: ${usePostgres ? 'postgres' : opts.db})\n`);
   process.stdout.write(
     `Create a workspace:\n  curl -XPOST ${baseUrl}/v1/workspaces -H 'content-type: application/json' -d '{"name":"my-team"}'\n`,
   );
@@ -165,5 +214,12 @@ async function main(): Promise<void> {
 
 main().catch((err) => {
   process.stderr.write(`relaycast-engine failed to start: ${err instanceof Error ? err.message : String(err)}\n`);
-  process.exit(err instanceof ConfigError ? CONFIG_EXIT_CODE : 1);
+  // By name: the postgres adapter loads lazily.
+  process.exit(
+    err instanceof ConfigError
+      ? CONFIG_EXIT_CODE
+      : err instanceof Error && err.name === 'PostgresIdentityError'
+        ? IDENTITY_EXIT_CODE
+        : 1,
+  );
 });

@@ -32,6 +32,7 @@ import type {
   Agent,
   TokenRotateResponse,
   InvokeActionResult,
+  InvokeActionOptions,
   CompleteInvocationRequest,
   ActionInvocation,
   WsClientEvent,
@@ -68,11 +69,14 @@ import type {
   DeliveryAcceptedEvent,
   DeliveryDeliveredEvent,
   DeliveryAckedEvent,
+  DeliveryRepliedEvent,
   DeliveryDeferredEvent,
   DeliveryFailedEvent,
   MessageDeliveriesResponse,
+  PostMessageResponse,
   WsReconnectingEvent,
   WsPermanentlyDisconnectedEvent,
+  WsRegistrationRejectedEvent,
   WsResyncedEvent,
 } from './types.js';
 import { HttpClient, type RequestOptions } from './client.js';
@@ -88,6 +92,35 @@ function stripHash(channel: string): string {
 
 interface IdempotencyOption {
   idempotencyKey?: string;
+}
+
+/** Options shared by sends that create delivery rows. */
+interface DeliveryConfirmationOption {
+  /**
+   * Confirmation budget in ms (0–2000; 1000 recommended). The server parks
+   * the response until the receiving software accepts the delivery (or it
+   * settles), then answers with the current `state`. `0` / unset answers at
+   * once with `queued`; hosts that cannot park answer at once too.
+   */
+  waitMs?: number;
+}
+
+export interface SendDmOptions extends IdempotencyOption, DeliveryConfirmationOption {
+  mode?: 'wait' | 'steer';
+  attachments?: string[];
+  data?: Record<string, unknown> | null;
+  /**
+   * The recipient's message this DM answers (must be theirs, in this
+   * conversation). Marks that message's delivery `replied` for its sender.
+   */
+  replyTo?: string;
+}
+
+export interface SendMessageOptions extends IdempotencyOption, DeliveryConfirmationOption {
+  attachments?: string[];
+  blocks?: MessageBlock[];
+  data?: Record<string, unknown> | null;
+  mode?: 'wait' | 'steer';
 }
 
 interface ChannelListOptions {
@@ -106,6 +139,25 @@ function normalizeAutoHeartbeatMs(value?: number | false): number | false {
   }
   return 30_000;
 }
+
+/**
+ * A provider instance id for this client's direct-node attachment. One per
+ * client object, kept across its reconnects: the engine reads a reconnect of
+ * the same client as the same instance (the new socket supersedes the old),
+ * and another process attaching to the same agent's direct node as a
+ * different instance (refused while this one is live) instead of the two
+ * superseding each other forever.
+ */
+function generateProviderInstanceId(): string {
+  const randomUuid = globalThis.crypto?.randomUUID?.();
+  if (typeof randomUuid === 'string' && randomUuid.length > 0) {
+    return `sdk-${randomUuid}`;
+  }
+  return `sdk-${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}${Math.random().toString(36).slice(2)}`;
+}
+
+/** The engine's synthetic provider name for a node client that names none. */
+const DIRECT_NODE_PROVIDER_NAME = 'default';
 
 function generateIdempotencyKey(): string {
   const randomUuid = globalThis.crypto?.randomUUID?.();
@@ -175,6 +227,8 @@ export class AgentClient {
   private wsOptions: Omit<WsClientOptions, 'token' | 'baseUrl' | 'path' | 'nodeRegistration' | 'autoAckDeliveries'>;
   private directNodeToken: DirectNodeToken | null = null;
   private directNodeTokenUses = 0;
+  /** Provider instance id sent on every direct-node `node.register` of this client. */
+  private readonly providerInstanceId = generateProviderInstanceId();
   private manualSubscriptions = new Set<string>();
   private managedSubscriptions = new Map<symbol, ManagedSubscription>();
   private activeWsChannels = new Set<string>();
@@ -275,6 +329,7 @@ export class AgentClient {
       type: 'node.register',
       node_id: this.directNodeToken.nodeId,
       name: this.directNodeToken.nodeName,
+      provider: { name: DIRECT_NODE_PROVIDER_NAME, instance_id: this.providerInstanceId },
       capabilities: [],
       max_agents: 1,
       tags: ['implicit', 'direct', 'sdk'],
@@ -302,6 +357,7 @@ export class AgentClient {
         },
         this.client.internalOrigin,
       ));
+      // 'open' follows an accepted node.register, not the socket upgrade.
       this.ws.on('open', () => {
         this.directNodeTokenUses = 0;
         void this.presence.markOnline().catch(() => {});
@@ -311,6 +367,11 @@ export class AgentClient {
       this.ws.on('close', () => {
         this.stopAutoHeartbeat();
         this.activeWsChannels.clear();
+      });
+      // A refused register still proves the token authenticates (the upgrade
+      // succeeded): keep reusing it rather than minting while we wait.
+      this.ws.on('registration_rejected', () => {
+        this.directNodeTokenUses = 0;
       });
       this.ws.on('permanently_disconnected', () => {
         this.stopAutoHeartbeat();
@@ -407,15 +468,16 @@ export class AgentClient {
     this.connect();
     const key = Symbol('relaycast.subscription');
     const channelSet = new Set(normalized);
-    const invoke = (event: RelaycastMessageEvent): void => {
+    // The callback's outcome is handed back to the transport: on the node
+    // transport the `delivery.ack` waits for it, and a throw or rejection
+    // leaves the delivery unacked for re-delivery; on the workspace stream
+    // the transport logs it. Swallowing it here would ack while the
+    // application is still working, or after it failed.
+    const invoke = (event: RelaycastMessageEvent): Promise<void> | undefined => {
       if (!this.matchesSubscription(channelSet, event)) {
-        return;
+        return undefined;
       }
-      void Promise.resolve()
-        .then(() => onMessage(ensureRelaycastMessageEventId(event)))
-        .catch((err) => {
-          console.error('[relaycast] Subscription handler failed', err);
-        });
+      return Promise.resolve().then(() => onMessage(ensureRelaycastMessageEventId(event)));
     };
 
     const stops = [
@@ -493,6 +555,7 @@ export class AgentClient {
     deliveryDelivered: (handler: (e: DeliveryDeliveredEvent) => void): (() => void) => this.onEvent('delivery.delivered', handler),
     // Sender-side: a recipient acknowledged one of this agent's messages.
     deliveryAcked:     (handler: (e: DeliveryAckedEvent) => void): (() => void)     => this.onEvent('delivery.acked', handler),
+    deliveryReplied:   (handler: (e: DeliveryRepliedEvent) => void): (() => void)   => this.onEvent('delivery.replied', handler),
     deliveryDeferred:  (handler: (e: DeliveryDeferredEvent) => void): (() => void)  => this.onEvent('delivery.deferred', handler),
     deliveryFailed:    (handler: (e: DeliveryFailedEvent) => void): (() => void)    => this.onEvent('delivery.failed', handler),
     // Lifecycle
@@ -504,6 +567,19 @@ export class AgentClient {
     permanentlyDisconnected: (handler: (attempt: number) => void): (() => void) =>
       this.ensureWs().on('permanently_disconnected', (e: WsClientEvent) =>
         handler((e as WsPermanentlyDisconnectedEvent).attempt)),
+    /**
+     * The engine refused this client's direct-node registration. For
+     * `provider_instance_conflict` (another live client holds this agent's
+     * direct node) `retryAfterMs` is the wait before the next attach (>= 30 s);
+     * no `connected` event fires for a refused attach.
+     */
+    registrationRejected: (
+      handler: (info: { code: string; message: string; retryAfterMs: number | null }) => void,
+    ): (() => void) =>
+      this.ensureWs().on('registration_rejected', (e: WsClientEvent) => {
+        const event = e as WsRegistrationRejectedEvent;
+        handler({ code: event.code, message: event.message, retryAfterMs: event.retryAfterMs });
+      }),
     resynced: (handler: (info: { replayed: number; gapDetected: boolean }) => void): (() => void) =>
       this.ensureWs().on('resynced', (e: WsClientEvent) => {
         const event = e as WsResyncedEvent;
@@ -519,17 +595,17 @@ export class AgentClient {
     return this.client.get('/v1/agent');
   }
 
+  /**
+   * Post to a channel. `waitMs` (0–2000; 1000 recommended) parks the response
+   * for the recipients' acceptance: each returned delivery then carries its
+   * current `state` (`delivered` once the receiving software accepted it, or
+   * still `queued` while delivery continues).
+   */
   async send(
     channel: string,
     text: string,
-    opts?: {
-      attachments?: string[];
-      blocks?: MessageBlock[];
-      data?: Record<string, unknown> | null;
-      mode?: 'wait' | 'steer';
-      idempotencyKey?: string;
-    },
-  ): Promise<MessageWithMeta> {
+    opts?: SendMessageOptions,
+  ): Promise<PostMessageResponse> {
     const name = stripHash(channel);
     const body: PostMessageRequest = {
       text,
@@ -537,6 +613,7 @@ export class AgentClient {
       ...(opts?.blocks ? { blocks: opts.blocks } : {}),
       ...(opts?.data !== undefined ? { data: opts.data } : {}),
       mode: opts?.mode ?? 'wait',
+      ...(opts?.waitMs != null ? { waitMs: opts.waitMs } : {}),
     };
     return this.client.post(
       `/v1/channels/${encodeURIComponent(name)}/messages`,
@@ -548,14 +625,8 @@ export class AgentClient {
   post(
     channel: string,
     text: string,
-    opts?: {
-      attachments?: string[];
-      blocks?: MessageBlock[];
-      data?: Record<string, unknown> | null;
-      mode?: 'wait' | 'steer';
-      idempotencyKey?: string;
-    },
-  ): Promise<MessageWithMeta> {
+    opts?: SendMessageOptions,
+  ): Promise<PostMessageResponse> {
     return this.send(channel, text, opts);
   }
 
@@ -615,14 +686,16 @@ export class AgentClient {
 
   // === DMs ===
 
+  /**
+   * Send a DM. `waitMs` (0–2000; 1000 recommended) parks the response for the
+   * recipient's acceptance: `delivery.state` is then `delivered` once the
+   * receiving software accepted it, or still `queued` while delivery
+   * continues (follow `on.deliveryDelivered` or `messageDeliveries(id)`).
+   */
   async dm(
     agent: string,
     text: string,
-    opts?: (IdempotencyOption & {
-      mode?: 'wait' | 'steer';
-      attachments?: string[];
-      data?: Record<string, unknown> | null;
-    }),
+    opts?: SendDmOptions,
   ): Promise<SendDmResponse> {
     const body: SendDmRequest = {
       to: agent,
@@ -630,6 +703,8 @@ export class AgentClient {
       ...(opts?.attachments ? { attachments: opts.attachments } : {}),
       ...(opts?.data !== undefined ? { data: opts.data } : {}),
       mode: opts?.mode ?? 'wait',
+      ...(opts?.replyTo ? { replyToMessageId: opts.replyTo } : {}),
+      ...(opts?.waitMs != null ? { waitMs: opts.waitMs } : {}),
     };
     return this.client.post('/v1/dm', body, idempotencyHeaders(opts));
   }
@@ -638,11 +713,7 @@ export class AgentClient {
   async sendTo(
     address: string,
     text: string,
-    opts?: (IdempotencyOption & {
-      mode?: 'wait' | 'steer';
-      attachments?: string[];
-      data?: Record<string, unknown> | null;
-    }),
+    opts?: SendDmOptions,
   ): Promise<SendDmResponse> {
     const body: SendDmRequest = {
       address,
@@ -650,6 +721,8 @@ export class AgentClient {
       ...(opts?.attachments ? { attachments: opts.attachments } : {}),
       ...(opts?.data !== undefined ? { data: opts.data } : {}),
       mode: opts?.mode ?? 'wait',
+      ...(opts?.replyTo ? { replyToMessageId: opts.replyTo } : {}),
+      ...(opts?.waitMs != null ? { waitMs: opts.waitMs } : {}),
     };
     return this.client.post('/v1/dm', body, idempotencyHeaders(opts));
   }
@@ -921,11 +994,12 @@ export class AgentClient {
    * arrives or the wait expires. A connected agent (`connect()`) receives
    * deliveries over its socket and needs no polling at all.
    */
-  async deliveries(options?: { status?: DeliveryStatus; limit?: number; waitMs?: number }): Promise<DeliveryItem[]> {
+  async deliveries(options?: { status?: DeliveryStatus; limit?: number; waitMs?: number; afterSeq?: number }): Promise<DeliveryItem[]> {
     const params: Record<string, string> = {};
     if (options?.status) params.status = options.status;
     if (options?.limit != null) params.limit = String(options.limit);
     if (options?.waitMs != null) params.wait = String(options.waitMs);
+    if (options?.afterSeq != null) params.after_seq = String(options.afterSeq);
     return this.client.get('/v1/deliveries', params);
   }
 
@@ -958,11 +1032,15 @@ export class AgentClient {
     invoke: (
       name: string,
       input?: Record<string, unknown>,
-      opts?: IdempotencyOption,
+      opts?: InvokeActionOptions,
     ): Promise<InvokeActionResult> =>
       this.client.post(
         `/v1/actions/${encodeURIComponent(name)}/invoke`,
-        { input },
+        {
+          input,
+          ...(opts?.requesterAgentId !== undefined ? { requesterAgentId: opts.requesterAgentId } : {}),
+          ...(opts?.requesterName !== undefined ? { requesterName: opts.requesterName } : {}),
+        },
         idempotencyHeaders(opts),
       ),
 

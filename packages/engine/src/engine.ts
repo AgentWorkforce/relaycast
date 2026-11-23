@@ -11,6 +11,8 @@ import { cors } from 'hono/cors';
 import { secureHeaders } from 'hono/secure-headers';
 import type { AppEnv, EngineRuntime } from './env.js';
 import type { EngineDeps } from './ports/index.js';
+import { SqliteSearchIndex } from './adapters/sqlite/search.js';
+import { PostgresSearchIndex, isPostgresEngineDb } from './adapters/postgres/search.js';
 import { engineContext } from './middleware/engine-context.js';
 import { loggerMiddleware } from './middleware/logger.js';
 import { getRequestLogger, toErrorDetails } from './lib/logger.js';
@@ -46,6 +48,7 @@ import { deliveryRoutes } from './routes/delivery.js';
 import { fileRoutes } from './routes/file.js';
 import { presenceRoutes } from './routes/presence.js';
 import { systemPromptRoutes } from './routes/systemPrompt.js';
+import { leadersRoutes } from './routes/leaders.js';
 import { inboundWebhookRoutes } from './routes/inboundWebhook.js';
 import { credentialRoutes } from './routes/credential.js';
 import { relayfileInboundRoutes } from './routes/relayfileInbound.js';
@@ -93,6 +96,7 @@ export function createEngine(deps: EngineDeps): Hono<AppEnv> {
   }
   const runtime: EngineRuntime = {
     db: deps.db,
+    search: deps.search ?? (isPostgresEngineDb(deps.db) ? new PostgresSearchIndex(deps.db) : new SqliteSearchIndex(deps.db)),
     realtime: deps.realtime,
     connections: deps.connections,
     nodeConnections: deps.nodeConnections,
@@ -234,6 +238,7 @@ export function createEngine(deps: EngineDeps): Hono<AppEnv> {
   const v1 = new Hono<AppEnv>();
   v1.route('/', presenceRoutes);
   v1.route('/', systemPromptRoutes);
+  v1.route('/', leadersRoutes);
   v1.route('/', workspaceRoutes);
   v1.route('/', observerTokenRoutes);
   v1.route('/', agentRoutes);

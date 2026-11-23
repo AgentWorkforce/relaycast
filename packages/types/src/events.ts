@@ -330,6 +330,12 @@ export const DeliveryDeliveredEventSchema = z.object({
   status: z.literal('delivered').optional(),
   /** When the transition happened (sender-side notifications only). */
   at: z.string().optional(),
+  /**
+   * Sender-side only. `true` when the receiving software accepted the row
+   * (`delivery.accepted`, or an `http_push` 2xx) — the authoritative
+   * delivered; `false` when the host only wrote it to the recipient's socket.
+   */
+  accepted: z.boolean().optional(),
 });
 export type DeliveryDeliveredEvent = z.infer<typeof DeliveryDeliveredEventSchema>;
 
@@ -348,6 +354,23 @@ export const DeliveryAckedEventSchema = z.object({
   at: z.string(),
 });
 export type DeliveryAckedEvent = z.infer<typeof DeliveryAckedEventSchema>;
+
+// Sent to a DM's sender when the recipient sends a DM back in the same
+// conversation after the delivery was created (DMs only).
+export const DeliveryRepliedEventSchema = z.object({
+  type: z.literal('delivery.replied'),
+  delivery_id: z.string(),
+  message_id: z.string(),
+  /** Recipient agent id. */
+  agent_id: z.string(),
+  /** Recipient agent name. */
+  agent_name: z.string(),
+  status: z.literal('replied'),
+  /** The recipient's reply. */
+  reply_message_id: z.string(),
+  at: z.string(),
+});
+export type DeliveryRepliedEvent = z.infer<typeof DeliveryRepliedEventSchema>;
 
 export const DeliveryDeferredEventSchema = z.object({
   type: z.literal('delivery.deferred'),
@@ -390,6 +413,17 @@ export const WsPermanentlyDisconnectedEventSchema = z.object({
   attempt: z.number(),
 });
 export type WsPermanentlyDisconnectedEvent = z.infer<typeof WsPermanentlyDisconnectedEventSchema>;
+
+// Emitted by WsClient (node transport) when the server refuses its
+// `node.register`. `retry_after_ms` is the minimum wait before the next attach
+// (set for `provider_instance_conflict`, null otherwise).
+export const WsRegistrationRejectedEventSchema = z.object({
+  type: z.literal('registration_rejected'),
+  code: z.string(),
+  message: z.string(),
+  retry_after_ms: z.number().nullable(),
+});
+export type WsRegistrationRejectedEvent = z.infer<typeof WsRegistrationRejectedEventSchema>;
 
 export const WsCloseEventSchema = z.object({
   type: z.literal('close'),
@@ -437,6 +471,7 @@ export const ServerEventSchema = z.discriminatedUnion('type', [
   DeliveryAcceptedEventSchema,
   DeliveryDeliveredEventSchema,
   DeliveryAckedEventSchema,
+  DeliveryRepliedEventSchema,
   DeliveryDeferredEventSchema,
   DeliveryFailedEventSchema,
   PongEventSchema,
@@ -489,6 +524,7 @@ export const WsClientEventSchema = z.discriminatedUnion('type', [
   DeliveryAcceptedEventSchema,
   DeliveryDeliveredEventSchema,
   DeliveryAckedEventSchema,
+  DeliveryRepliedEventSchema,
   DeliveryDeferredEventSchema,
   DeliveryFailedEventSchema,
   PongEventSchema,
@@ -500,6 +536,7 @@ export const WsClientEventSchema = z.discriminatedUnion('type', [
   WsPermanentlyDisconnectedEventSchema,
   WsCloseEventSchema,
   WsResyncedEventSchema,
+  WsRegistrationRejectedEventSchema,
 ]);
 export type WsClientEvent = z.infer<typeof WsClientEventSchema>;
 export type WsClientEventType = WsClientEvent['type'];

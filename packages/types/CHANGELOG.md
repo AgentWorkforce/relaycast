@@ -7,7 +7,53 @@ See the [root changelog](../../CHANGELOG.md) for cross-package release highlight
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased - Minor]
+## [Unreleased]
+
+## [12.14.0] - 2026-11-23
+
+### Added
+
+- Optional `recipients` (1 to 500 agent names or ids) on `SubscriptionFilterSchema`, plus the `UpdateSubscriptionRequestSchema` and `WebhookRecipientSchema` schemas and their `UpdateSubscriptionRequest` and `WebhookRecipient` types. `UpdateSubscriptionRequestSchema` is the schema the server validates `PATCH /v1/subscriptions/:id` with: `events` is a non-empty string array, `url` is non-empty, `headers` may be `null`, and an empty object is rejected.
+
+## [12.13.0] - 2026-11-17
+
+### Added
+
+- Optional nullable `requester_agent_id` and `requester_name` (always the requester agent's name) on action invocation responses.
+- `WorkspaceLeadersSettings`, `WorkspaceLeader`, `WorkspaceLeadersResponse` and `SetWorkspaceLeadersRequest` schemas, plus the `relaycast_server_workspace_leaders_updated` server telemetry event (`pattern_count`).
+
+## [12.12.0] - 2026-11-17
+
+### Added
+
+- Optional validated `after_seq` cursor on delivery queue queries.
+
+## [12.11.0] - 2026-11-15
+
+### Added
+
+- `WsRegistrationRejectedEventSchema` (`registration_rejected`: `code`, `message`, `retry_after_ms` nullable) in `WsClientEventSchema`, the SDK-side event for a refused direct-node `node.register`.
+
+## [12.10.0] - 2026-11-15
+
+### Added
+
+- `FleetDeliveryAckMessageSchema`: `up_to_seq` optional, optional `delivery_id` (at least one; `delivery_id` wins), moved beside `FleetDeliveryAcceptedMessageSchema` in the outer `FleetBrokerToRelaycastMessageSchema` union.
+- `NodeRegisterReplyDataSchema.capabilities` (optional `string[]`; older engines omit it), `NODE_CAPABILITIES` / `NODE_CAPABILITY_DELIVERY_ACCEPTED` / `NODE_CAPABILITY_DELIVERY_ACK_BY_ID` (`delivery.ack.delivery_id`: the per-delivery `delivery.ack` form) / `NodeCapability`.
+- `FleetDeliveryAcceptedMessageSchema` (`delivery.accepted`: `agent`, optional `delivery_id` / `up_to_seq`, at least one) in `FleetBrokerToRelaycastMessageSchema`; fixture `delivery.accepted.json`.
+- `DeliveryStateSchema` (`queued | delivered | consumed | replied | failed`; `delivered` only with `accepted_at`). `SentDeliverySchema` gains `state`, `accepted_at`, `replied_at`, `reply_message_id`, `error`; `MessageDeliveryReceiptSchema` gains `state`, `accepted_at`, `replied_at`, `reply_message_id`. `SendDmRequestSchema` accepts `reply_to_message_id`; `SendDmRequestSchema` / `PostMessageRequestSchema` accept `wait_ms` (0–2000); `CoreMessagePayloadSchema` and `MessageWithMetaSchema` gain optional `reply_to_message_id`; `PostMessageResponseSchema` is the channel post response with `deliveries` / `deliveries_truncated`.
+- `DeliveryRepliedEventSchema` (`delivery.replied`: `delivery_id`, `message_id`, recipient `agent_id` / `agent_name`, `status: 'replied'`, `reply_message_id`, `at`) in `ServerEventSchema`, `WsClientEventSchema` and `SubscribableEventTypeSchema`; `DeliveryDeliveredEventSchema` gains optional sender-side `accepted`.
+- `AgentCardSchema`, `AgentCardMetadataSchema`, `AgentSkillsInputSchema`, `AgentMetadataInputSchema` and the card/skill bound constants. `AgentSkillInputSchema` gains `examples` and length bounds.
+
+### Fixed
+
+- `UpdateAgentRequestSchema` accepts `skills` and `capabilities`, matching the server.
+
+### Fixed
+
+- Realtime message payload schemas retain optional rich blocks, including explicit null and empty arrays.
+
+## [12.8.0] - 2026-11-04
 
 ### Added
 
