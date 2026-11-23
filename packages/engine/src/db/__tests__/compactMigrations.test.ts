@@ -67,6 +67,11 @@ function snapshot(handle: SqliteDbHandle) {
         } = row as Record<string, unknown>;
         return JSON.stringify(existing);
       }
+      // 0087 adds the nullable, immutable owner approval column.
+      if (name === 'messages') {
+        const { owner_approval: _ownerApproval, ...existing } = row as Record<string, unknown>;
+        return JSON.stringify(existing);
+      }
       if (name === 'agents') {
         const {
           status_updated_at: _statusUpdatedAt,
@@ -234,6 +239,10 @@ function expectConstraintsPreserved(before: ReturnType<typeof constraints>, afte
             .replace(', rotation_request_digest TEXT DEFAULT NULL', '')
             .replace(', liveness_revision INTEGER NOT NULL DEFAULT 0', ''),
         };
+      }
+      // 0087 appends the owner approval column. Remove only that additive column.
+      if (table.name === 'messages') {
+        table = { ...table, sql: table.sql.replace(', owner_approval TEXT', '') };
       }
       if (table.name === 'node_providers') {
         table = {
