@@ -212,6 +212,20 @@ describe('workspace actor import', () => {
     expect((await importAll(target, exported)).status).toBe(200);
   });
 
+  it('keeps the owner_approval immutability trigger installed through an import and its abort', async () => {
+    const { source } = await seededSource();
+    const exported = await exportFrom(source);
+    const target = new FakeWorkspaceActor(WORKSPACE_ID);
+    const guard = () => target.sql.raw
+      .prepare(`SELECT name FROM sqlite_master WHERE type = 'trigger' AND name = 'messages_owner_approval_immutable'`).all();
+    expect((await step(target, { op: 'begin', run_id: RUN, tables: exported.tables })).status).toBe(201);
+    // Suspended triggers are dropped while the import runs; this one is a
+    // pure update check and stays.
+    expect(guard()).toHaveLength(1);
+    expect((await step(target, { op: 'abort', run_id: RUN })).status).toBe(200);
+    expect(guard()).toHaveLength(1);
+  });
+
   it('replays begin, finish and open for the same run, so a lost response or a rerun succeeds', async () => {
     const { source } = await seededSource();
     const exported = await exportFrom(source);

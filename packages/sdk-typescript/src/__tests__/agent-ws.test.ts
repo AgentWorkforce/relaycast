@@ -211,6 +211,45 @@ describe('AgentClient WebSocket integration', () => {
 
   // --- typed on.* handlers ---
 
+  it('passes has_owner_approval from node frames to channel and DM callbacks, only when flagged', async () => {
+    const agent = createAgent();
+    agent.connect();
+    const ws = await nextSocket();
+    ws.simulateOpen();
+    const channel = vi.fn();
+    const dm = vi.fn();
+    agent.on.messageCreated(channel);
+    agent.on.dmReceived(dm);
+
+    const frame = (seq: number, type: string, data: Record<string, unknown>) => ws.simulateMessage({
+      v: 1, type: 'deliver', delivery_id: `del_${seq}`, agent_id: 'agent_1', agent: 'worker',
+      msg_id: `m_${seq}`, seq, mode: 'wait', payload: { type, data },
+    });
+    frame(1, 'message.created', {
+      id: 'm_1', channel_name: 'general', agent_id: 'bot_1', from_name: 'Bot', text: 'merge it',
+      attachments: [], has_owner_approval: true,
+    });
+    frame(2, 'message.created', {
+      id: 'm_2', channel_name: 'general', agent_id: 'bot_1', from_name: 'Bot', text: 'plain', attachments: [],
+    });
+    frame(3, 'dm.received', {
+      conversation_id: 'dm_1', id: 'm_3', from_name: 'Bot', text: 'merge it', has_owner_approval: true,
+      message: { id: 'm_3', agent_id: 'bot_1', agent_name: 'Bot', text: 'merge it', has_owner_approval: true },
+    });
+    frame(4, 'dm.received', {
+      conversation_id: 'dm_1', id: 'm_4', from_name: 'Bot', text: 'plain',
+      message: { id: 'm_4', agent_id: 'bot_1', agent_name: 'Bot', text: 'plain' },
+    });
+    await settleDeliveries();
+
+    expect(channel).toHaveBeenCalledTimes(2);
+    expect(channel.mock.calls[0]![0].message.hasOwnerApproval).toBe(true);
+    expect(channel.mock.calls[1]![0].message).not.toHaveProperty('hasOwnerApproval');
+    expect(dm).toHaveBeenCalledTimes(2);
+    expect(dm.mock.calls[0]![0].message.hasOwnerApproval).toBe(true);
+    expect(dm.mock.calls[1]![0].message).not.toHaveProperty('hasOwnerApproval');
+  });
+
   it('on.messageCreated fires with message.created event', async () => {
     const agent = createAgent();
     agent.connect();

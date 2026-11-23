@@ -55,6 +55,7 @@ describe('internal admin API', () => {
     expect(response.status).toBe(200);
     expect(await readJson(response)).toEqual({ ok: true, data: INTERNAL_CAPABILITIES });
     expect(INTERNAL_CAPABILITIES.workspace_admin).toEqual({ create: true, delete: true, server_minted_key: true, expiry: true });
+    expect(INTERNAL_CAPABILITIES.owner_approval).toEqual({ redact_quote: true });
   });
 
   it('creates a workspace: the gateway mints the id and tag, the actor answers 201', async () => {
@@ -174,7 +175,7 @@ describe('internal admin API', () => {
     expect(harness.controlPlane.invocations).toHaveLength(0);
   });
 
-  it('forwards delete, key push and expiry to the named workspace actor with the Authorization header', async () => {
+  it('forwards delete, key push, expiry and quote redaction to the named workspace actor with the Authorization header', async () => {
     harness = await startHarness({ workspace: adminWorkspace, env: { RELAYCAST_INTERNAL_SECRET: INTERNAL_SECRET } });
     const deleted = await fetch(`${harness.baseUrl}/internal/workspaces/${WORKSPACE_ID}`, { method: 'DELETE', headers: { authorization: `Bearer ${INTERNAL_SECRET}` } });
     expect(deleted.status).toBe(200);
@@ -194,7 +195,20 @@ describe('internal admin API', () => {
     });
     expect(expiry.status).toBe(200);
     expect((await readJson(expiry)).data).toMatchObject({ url: `${harness.baseUrl}/internal/workspaces/${WORKSPACE_ID}/expiry`, body: '{"expires_in_seconds":null}' });
-    expect(harness.controlPlane.invocations.map((call) => [call.method, call.actorId])).toEqual([['handle', WORKSPACE_ID], ['handle', WORKSPACE_ID], ['handle', WORKSPACE_ID]]);
+    const redactPath = `/internal/workspaces/${WORKSPACE_ID}/messages/250624319058784256/owner-approval/redact-quote`;
+    const redacted = await fetch(`${harness.baseUrl}${redactPath}`, {
+      method: 'POST',
+      headers: { authorization: `Bearer ${INTERNAL_SECRET}` },
+    });
+    expect(redacted.status).toBe(200);
+    expect((await readJson(redacted)).data).toMatchObject({ url: `${harness.baseUrl}${redactPath}`, authorization: `Bearer ${INTERNAL_SECRET}` });
+    // Other message sub-paths are not forwarded.
+    const other = await fetch(`${harness.baseUrl}/internal/workspaces/${WORKSPACE_ID}/messages/1/owner-approval`, {
+      method: 'POST',
+      headers: { authorization: `Bearer ${INTERNAL_SECRET}` },
+    });
+    expect(other.status).toBe(404);
+    expect(harness.controlPlane.invocations.map((call) => [call.method, call.actorId])).toEqual([['handle', WORKSPACE_ID], ['handle', WORKSPACE_ID], ['handle', WORKSPACE_ID], ['handle', WORKSPACE_ID]]);
   });
 
   it('answers 400 for a workspace id segment whose percent-encoding is malformed', async () => {

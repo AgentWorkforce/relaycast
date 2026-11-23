@@ -58,8 +58,13 @@ export const ACTOR_IMPORT_CHUNKS_TABLE = {
   )`,
 } as const;
 
-/** Triggers the import keeps: search indexes, and checks that only validate. */
-const KEPT_TRIGGER = /(_fts_(insert|update|delete)$)|(^agent_node_bindings_workspace_)/;
+/**
+ * Triggers the import keeps: search indexes, and checks that only validate.
+ * `messages_owner_approval_immutable` guards updates only, so it never blocks
+ * import inserts or abort deletes, and suspending it would let an abort that
+ * straddles migration 0087 restore a list without it.
+ */
+const KEPT_TRIGGER = /(_fts_(insert|update|delete)$)|(^agent_node_bindings_workspace_)|(^messages_owner_approval_immutable$)/;
 
 interface ImportState {
   run_id: string;

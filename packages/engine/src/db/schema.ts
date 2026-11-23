@@ -740,6 +740,11 @@ export const messages = sqliteTable(
     // callers must never scan JSON metadata across workspace history.
     sessionRef: text('session_ref'),
     hasAttachments: integer('has_attachments', { mode: 'boolean' }).notNull().default(false),
+    // A delegate's owner approval claim (validated at send). Server-side and
+    // immutable: never merged into caller-editable `metadata`, and a trigger
+    // refuses any UPDATE that changes it. Only the recipient's by-message
+    // proof route returns the content; payloads carry `has_owner_approval`.
+    ownerApproval: text('owner_approval', { mode: 'json' }).$type<Record<string, unknown>>(),
     createdAt: integer('created_at', { mode: 'timestamp' }).notNull().default(sql`(unixepoch())`),
     updatedAt: integer('updated_at', { mode: 'timestamp' }),
     // FTS5 search handled via separate virtual table + triggers

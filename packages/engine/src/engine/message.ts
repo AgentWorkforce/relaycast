@@ -17,6 +17,7 @@ import { DEFAULT_MAILBOX_DEPTH_CAP, DEFAULT_MAILBOX_TTL_MS, DEFAULT_OFFLINE_FANO
 import type { WorkspaceDeliveryPolicy } from './workspaceDeliveryPolicy.js';
 import { fetchAttachmentsBatch, resolveSendAttachments, type AttachmentRow } from './attachments.js';
 import { buildMessageSessionWrite, requireSessionRefFromMetadata } from './sessionMessages.js';
+import { ownerApprovalFlag, type OwnerApproval } from './ownerApproval.js';
 
 type Db = ReturnType<typeof getDb>;
 
@@ -32,6 +33,8 @@ export async function postMessage(
     data?: Record<string, unknown> | null;
     content_type?: string;
     mode?: 'wait' | 'steer';
+    /** Validated by the route; stored in its own immutable column. */
+    owner_approval?: OwnerApproval | null;
   },
   options: { mailbox?: MailboxConfig; workspaceDeliveryPolicy?: WorkspaceDeliveryPolicy } = {},
 ) {
@@ -74,6 +77,7 @@ export async function postMessage(
           metadata,
           sessionRef,
           hasAttachments,
+          ownerApproval: data.owner_approval ?? null,
           createdAt,
         })
         .returning(),
@@ -158,6 +162,7 @@ export async function postMessage(
     mentions: Array.from(mentionedHandles),
     attachments,
     injection_mode: data.mode ?? 'wait',
+    ...ownerApprovalFlag(message.ownerApproval),
     _deliveries: deliveryOutcomes.deliveries,
     _delivery_rejections: deliveryOutcomes.rejections,
   };

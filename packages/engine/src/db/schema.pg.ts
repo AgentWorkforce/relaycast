@@ -877,6 +877,11 @@ export const messages = pgTable(
     // callers must never scan JSON metadata across workspace history.
     sessionRef: text('session_ref'),
     hasAttachments: boolean('has_attachments').notNull().default(false),
+    // A delegate's owner approval claim (validated at send). Server-side and
+    // immutable: never merged into caller-editable `metadata`, and a trigger
+    // refuses any UPDATE that changes it. Only the recipient's by-message
+    // proof route returns the content; payloads carry `has_owner_approval`.
+    ownerApproval: jsonb('owner_approval').$type<Record<string, unknown>>(),
     createdAt: epochSeconds('created_at').notNull().default(epochNow),
     updatedAt: epochSeconds('updated_at'),
     // FTS5 search handled via separate virtual table + triggers

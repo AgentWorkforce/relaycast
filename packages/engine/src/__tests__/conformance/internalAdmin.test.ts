@@ -90,6 +90,7 @@ describe('internal admin API', () => {
           previous_key_slot: true,
         },
         workspace_admin: { create: true, delete: true, server_minted_key: true, expiry: true },
+        owner_approval: { redact_quote: true },
       });
     });
 
