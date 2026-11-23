@@ -11,7 +11,7 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Added
 
-- `ownerApproval` option on `agent.send`, `agent.post`, `agent.dm` and `agent.sendTo` (sent as `owner_approval`), plus `OwnerApproval`, `OwnerApprovalAction` and `OwnerApprovalCondition` types. Delivery and message payloads expose `hasOwnerApproval`.
+- `ownerApproval` option on `agent.send`, `agent.post`, `agent.dm` and `agent.sendTo` (sent as `owner_approval`), plus `OwnerApproval`, `OwnerApprovalAction` and `OwnerApprovalCondition` types (`OwnerApprovalActionClass` includes `prompt_approval` and `config_change`). Delivery and message payloads expose `hasOwnerApproval`.
 
 ## [12.13.0] - 2026-11-17
 

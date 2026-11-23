@@ -899,22 +899,24 @@ components:
             properties:
               class:
                 type: string
-                enum: [merge, pr_ops, deploy, release, secret_change, destructive, spend, external_comms, prompt_approval]
+                enum: [merge, pr_ops, deploy, release, secret_change, destructive, spend, external_comms, prompt_approval, config_change]
               target:
                 type: string
                 maxLength: 256
                 description: >-
                   For `prompt_approval`, `<agent id>:<request ref>` (no
-                  wildcard). Otherwise a target such as `owner/repo#N` or
-                  `service:env`.
+                  wildcard). For `config_change`, exactly
+                  `<agent id>:<setting>=<value>` with a non-empty setting and
+                  value and no `*` anywhere. Otherwise a target such as
+                  `owner/repo#N` or `service:env`.
               conditions:
                 type: array
                 maxItems: 5
                 description: >-
                   Checked by Cloud at redeem. `ci_green`, `head_sha`,
                   `reviews_approved` and `mergeable` are valid only on
-                  `owner/repo#N` targets; `prompt_approval` accepts only
-                  `not_before`. Unknown types or extra fields are refused
+                  `owner/repo#N` targets; `prompt_approval` and
+                  `config_change` accept only `not_before`. Unknown types or extra fields are refused
                   with `400 invalid_owner_approval`.
                 items:
                   $ref: '#/components/schemas/OwnerApprovalCondition'

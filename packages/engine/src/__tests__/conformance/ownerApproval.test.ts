@@ -158,6 +158,31 @@ describe('owner_approval on messages', () => {
     ['a non-RFC 3339 not_before', { ...approval(), actions: [{ class: 'merge', target: 'o/r#1', conditions: [{ type: 'not_before', at: 'tomorrow 9am' }] }] }],
     ['an extra field on not_before', { ...approval(), actions: [{ class: 'merge', target: 'o/r#1', conditions: [{ type: 'not_before', at: '2026-11-23T09:00:00Z', tz: 'UTC' }] }] }],
     ['six conditions', { ...approval(), actions: [{ class: 'merge', target: 'o/r#1', conditions: Array.from({ length: 6 }, () => ({ type: 'ci_green' })) }] }],
+    // config_change targets: `<agent id>:<setting>=<value>`, exact (§16.1).
+    ...([
+      ['without an agent id', ':model=opus'],
+      ['without a colon', 'agent_1model=opus'],
+      ['without a setting', 'agent_1:=opus'],
+      ['without =', 'agent_1:model'],
+      ['without a value', 'agent_1:model='],
+      ['with * in the value', 'agent_1:model=opus*'],
+      ['with * in the setting', 'agent_1:*=opus'],
+      ['with * as the agent', '*:model=opus'],
+      ['as a bare wildcard', '*'],
+      ['with whitespace in the setting', 'agent_1:mo del=opus'],
+      ['over 256 characters', `agent_1:model=${long(243)}`],
+    ] as const).map(([label, target]): [string, unknown] => [
+      `a config_change target ${label}`,
+      { ...approval(), actions: [{ class: 'config_change', target }] },
+    ]),
+    ...(['ci_green', 'mergeable'] as const).map((type): [string, unknown] => [
+      `${type} on config_change`,
+      { ...approval(), actions: [{ class: 'config_change', target: 'agent_1:model=opus', conditions: [{ type }] }] },
+    ]),
+    ['head_sha on config_change', { ...approval(), actions: [{ class: 'config_change', target: 'agent_1:model=opus', conditions: [{ type: 'head_sha', sha: 'a'.repeat(40) }] }] }],
+    ['reviews_approved on config_change', { ...approval(), actions: [{ class: 'config_change', target: 'agent_1:model=opus', conditions: [{ type: 'reviews_approved', min: 1 }] }] }],
+    // A config_change target that also parses as owner/repo#N still takes only not_before.
+    ['ci_green on a repo-shaped config_change target', { ...approval(), actions: [{ class: 'config_change', target: 'agent_1:a/b=c#1', conditions: [{ type: 'ci_green' }] }] }],
     ['conditions that are not an array', { ...approval(), actions: [{ class: 'merge', target: 'o/r#1', conditions: { type: 'ci_green' } }] }],
   ];
 
@@ -246,6 +271,33 @@ describe('owner_approval on messages', () => {
     const text = JSON.stringify(await deliveries(bob.token));
     expect(text).not.toContain('0123456789abcdef0123456789abcdef01234567');
     expect(text).not.toContain('reviews_approved');
+  });
+
+  it('accepts config_change targets and round-trips them through by-message', async () => {
+    const { alice, bob } = await seed();
+    const config = {
+      ...approval(),
+      actions: [
+        { class: 'config_change', target: 'agent_250624318991675392:model=claude-opus', conditions: [{ type: 'not_before', at: '2026-11-23T09:00:00Z' }] },
+        { class: 'config_change', target: 'agent_1:permissions.allow=Bash(git push)' },
+        { class: 'config_change', target: 'agent_1:sandbox=off', note: 'for the release run' },
+        { class: 'config_change', target: 'agent_1:env.MODE=a=b' },
+        { class: 'config_change', target: `agent_1:model=${long(242)}` },
+      ],
+    };
+    for (const send of [
+      () => dm(alice.token, { to: 'bob', text: 'config change', owner_approval: config }),
+      () => post(alice.token, { text: 'config change', owner_approval: config }),
+    ]) {
+      const sent = await send();
+      expect(sent.status).toBe(201);
+      const messageId = ((await sent.json()) as { data: { id: string } }).data.id;
+      expect((await storedApproval(messageId)).ownerApproval).toEqual(config);
+      const proof = await byMessage(bob.token, messageId);
+      expect(proof.status).toBe(200);
+      expect(((await proof.json()) as { data: Record<string, unknown> }).data.owner_approval).toEqual(config);
+    }
+    expect(JSON.stringify(await deliveries(bob.token))).not.toContain('sandbox=off');
   });
 
   it('stores the approval in its own column, never in caller metadata', async () => {

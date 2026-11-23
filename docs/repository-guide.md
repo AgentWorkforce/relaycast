@@ -804,11 +804,12 @@ reveal other recipients.
 A trusted delegate can attach an owner approval to a channel post or DM with `owner_approval`
 (`{ v: 1, owner_id, actions: [{ class, target, conditions?, note? }], quote?, quoted_at?,
 quote_source?, expires_at?, approval_ref? }`; classes `merge`, `pr_ops`, `deploy`, `release`,
-`secret_change`, `destructive`, `spend`, `external_comms`, `prompt_approval`). A `prompt_approval`
-target is `<agent id>:<request ref>`. Each action takes up to 5 conditions for Cloud to check at
+`secret_change`, `destructive`, `spend`, `external_comms`, `prompt_approval`, `config_change`). A
+`prompt_approval` target is `<agent id>:<request ref>`; a `config_change` target is exactly
+`<agent id>:<setting>=<value>` (non-empty setting and value, no `*`). Each action takes up to 5 conditions for Cloud to check at
 redeem: `ci_green`, `head_sha` (`sha`: 40 lowercase hex), `reviews_approved` (`min`: 1-10) and
 `mergeable` on `owner/repo#N` targets only, and `not_before` (`at`: RFC 3339) on any target;
-`prompt_approval` accepts only `not_before`. Any other shape is `400 invalid_owner_approval`.
+`prompt_approval` and `config_change` accept only `not_before`. Any other shape is `400 invalid_owner_approval`.
 Relaycast stores it immutably in its own column (SQLite and Postgres), never in `metadata`.
 Recipients see only `has_owner_approval: true` on websocket events, `deliver` frames and
 `GET /deliveries`; the content is returned only as `owner_approval` by the recipient's by-message

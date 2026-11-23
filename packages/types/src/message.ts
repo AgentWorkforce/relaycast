@@ -82,6 +82,7 @@ export const OWNER_APPROVAL_ACTION_CLASSES = [
   'spend',
   'external_comms',
   'prompt_approval',
+  'config_change',
 ] as const;
 export const OwnerApprovalActionClassSchema = z.enum(OWNER_APPROVAL_ACTION_CLASSES);
 export type OwnerApprovalActionClass = z.infer<typeof OwnerApprovalActionClassSchema>;
@@ -89,7 +90,8 @@ export type OwnerApprovalActionClass = z.infer<typeof OwnerApprovalActionClassSc
 /**
  * A condition Cloud checks at redeem. `ci_green`, `head_sha`,
  * `reviews_approved` and `mergeable` apply only to `owner/repo#N` targets;
- * `not_before` applies to any target and is the only one on `prompt_approval`.
+ * `not_before` applies to any target and is the only one on `prompt_approval`
+ * and `config_change`.
  */
 export const OwnerApprovalConditionSchema = z.discriminatedUnion('type', [
   z.object({ type: z.literal('ci_green') }).strict(),
@@ -105,6 +107,14 @@ export type OwnerApprovalConditionType = OwnerApprovalCondition['type'];
 const PULL_REQUEST_TARGET = /^[^\s/#]+\/[^\s/#]+#[1-9]\d*$/;
 /** A `prompt_approval` target in an approval: `<agent id>:<request ref>`, no wildcard. */
 const PROMPT_APPROVAL_TARGET = /^[^\s:*]+:[^\s*]+$/;
+/**
+ * A `config_change` target: `<agent id>:<setting>=<value>`, exact. Non-empty
+ * agent id and setting (the setting is everything before the first `=`), a
+ * non-empty value, and no `*` anywhere.
+ */
+const CONFIG_CHANGE_TARGET = /^[^\s:*]+:[^\s=*]+=[^*]+$/;
+/** Classes whose targets are not repository targets: only `not_before` applies. */
+const NOT_BEFORE_ONLY_CLASSES: ReadonlySet<string> = new Set(['prompt_approval', 'config_change']);
 const PULL_REQUEST_CONDITIONS: ReadonlySet<string> = new Set(['ci_green', 'head_sha', 'reviews_approved', 'mergeable']);
 
 export const OwnerApprovalActionSchema = z.object({
@@ -116,14 +126,18 @@ export const OwnerApprovalActionSchema = z.object({
   if (action.class === 'prompt_approval' && !PROMPT_APPROVAL_TARGET.test(action.target)) {
     ctx.addIssue({ code: 'custom', path: ['target'], message: 'prompt_approval target must be <agent id>:<request ref>' });
   }
-  const pullRequest = action.class !== 'prompt_approval' && PULL_REQUEST_TARGET.test(action.target);
+  if (action.class === 'config_change' && !CONFIG_CHANGE_TARGET.test(action.target)) {
+    ctx.addIssue({ code: 'custom', path: ['target'], message: 'config_change target must be <agent id>:<setting>=<value> with no *' });
+  }
+  const notBeforeOnly = NOT_BEFORE_ONLY_CLASSES.has(action.class);
+  const pullRequest = !notBeforeOnly && PULL_REQUEST_TARGET.test(action.target);
   action.conditions?.forEach((condition, index) => {
     if (PULL_REQUEST_CONDITIONS.has(condition.type) && !pullRequest) {
       ctx.addIssue({
         code: 'custom',
         path: ['conditions', index, 'type'],
-        message: action.class === 'prompt_approval'
-          ? 'only not_before is valid on prompt_approval'
+        message: notBeforeOnly
+          ? `only not_before is valid on ${action.class}`
           : `${condition.type} is valid only on owner/repo#N targets`,
       });
     }
