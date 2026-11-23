@@ -110,14 +110,14 @@ const cases: Case[] = [
     helper: 'jsonSet (json value)', site: 'engine/dm.ts:840',
     build: (s) => sqlx.jsonSet(s, raw('"direct_dm_idempotency"."response"'), '$._delivery', raw('r'), 'json'),
     sqlite: `json_set("direct_dm_idempotency"."response", '$._delivery', r)`,
-    pg: `jsonb_set(("direct_dm_idempotency"."response")::jsonb, '{_delivery}', (r)::jsonb, true)`,
+    pg: `jsonb_set(("direct_dm_idempotency"."response")::jsonb, '{_delivery}', COALESCE((r)::jsonb, 'null'::jsonb), true)`,
   },
   {
     helper: 'jsonSet (text value, bound path)', site: 'engine/agent.ts:762',
     build: (s) => sqlx.jsonSet(s, raw(`COALESCE("agents"."metadata", '{}')`), { bind: '$.identity_key' }, sql`${'h'}`, 'text'),
     sqlite: `json_set(COALESCE("agents"."metadata", '{}'), ?, ?)`,
     sqliteParams: ['$.identity_key', 'h'],
-    pg: `jsonb_set((COALESCE("agents"."metadata", '{}'))::jsonb, $1::text[], to_jsonb(($2)::text), true)`,
+    pg: `jsonb_set((COALESCE("agents"."metadata", '{}'))::jsonb, $1::text[], COALESCE(to_jsonb(($2)::text), 'null'::jsonb), true)`,
     pgParams: ['{identity_key}', 'h'],
   },
   {

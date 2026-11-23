@@ -17,6 +17,18 @@ filter, since its text comes from whoever holds the webhook URL. Such a post
 emits `message.created` only when it includes a non-empty `payload`, and that
 event carries `metadata.__relaycast_origin: "inbound_webhook"`.
 
+Webhook payloads of `message.created`, `thread.reply`, `dm.received` and
+`group_dm.received` carry `data.recipients`: one
+`{ agent_id, agent_name, delivery_id, seq }` entry per delivery record (the
+sender is not listed), at most 500, with `data.recipients_truncated: true` when
+the list was capped. A subscription with `filter.recipients` (1 to 500 agent
+names or ids) receives only the events with a listed recipient, and only the
+matching entries. `PATCH /v1/subscriptions/:id` updates the fields it is given
+(`events`, `filter`, `url`, `headers`, `secret`, `signature_scheme`,
+`is_active`; `filter: null` clears the filter) and returns 409
+`subscription_update_conflict` if the signing scheme or secret changed
+concurrently.
+
 Action invokes may name an on-behalf-of requester with optional
 `requester_agent_id` (an agent in the same workspace) and an optional
 `requester_name` that requires `requester_agent_id` and must equal that agent's

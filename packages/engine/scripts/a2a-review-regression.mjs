@@ -115,6 +115,12 @@ try {
     await run('INSERT INTO channel_members(channel_id,agent_id) SELECT ?,id FROM agents WHERE workspace_id=?',ws+'ch',ws);
     return ws;
   }
+  // An a2a inbound DM writes its dm.received outbox row only when an active
+  // subscription wants the event; fixtures that count that row subscribe.
+  // Blocks that keep their workspace drop its rows when done, so a later
+  // case's workspace-wide sweepPendingEvents does not deliver them.
+  const subscribeDmReceived=ws=>run("INSERT INTO event_subscriptions(id,workspace_id,events,url) VALUES(?,?,'[\"dm.received\"]','https://hooks.example/dm')",ws+'dm-sub',ws);
+  const dropDmOutbox=ws=>run('DELETE FROM pending_events WHERE workspace_id=?',ws);
   const record=(test,details={})=>{results.push({adapter,test,...details});console.log('PASS',adapter,test,JSON.stringify(details));};
 
   const targetUrl='https://example.com/a2a';
@@ -218,6 +224,7 @@ try {
     for(const endpoint of ['rpc','webhook'])for(const source of ['retained','pruned'])for(const changed of (process.env.REVIEW_EXPIRED_CHANGED==='1'?[true]:[false,true])) {
       const ws=await seed('completion-expiry-'+endpoint+'-'+source+'-'+changed,1,{cap:100});
       await run('INSERT INTO a2a_agents(id,workspace_id,relay_agent_id,external_url,agent_card) VALUES(?,?,?,?,?)',ws+'peer',ws,ws+'sender',targetUrl,'{}');
+      await subscribeDmReceived(ws);
       const payload={jsonrpc:'2.0',id:42,method:'message/send',params:{target_agent:'recipient-1',message:{message_id:'expiry-key',role:'agent',parts:[{kind:'text',text:'original accepted body'}]}}};
       const path=endpoint==='rpc'?'/a2a/rpc':`/a2a/webhook/${ws}/sender`;
       const writes=[];let kvDown=false;
@@ -288,6 +295,7 @@ try {
     for(const method of methods)for(const route of routes)for(const form of forms)for(const id of [0,42,'string-id',undefined]){
       const ws=await seed('required-message-'+method.replace('/','-')+'-'+route+'-'+form+'-'+String(id),1,{cap:100});
       await run('INSERT INTO a2a_agents(id,workspace_id,relay_agent_id,external_url,agent_card) VALUES(?,?,?,?,?)',ws+'peer',ws,ws+'sender',targetUrl,'{}');
+      await subscribeDmReceived(ws);
       const messageId='incoming-'+ws;
       // Seed a retained message from the local recipient. Numeric/string IDs
       // are real lookup targets even if a malformed request loses its method
@@ -335,6 +343,7 @@ try {
     for(const form of ['absent','null','number','incomplete','valid'])for(const route of ['target','correlation'])for(const id of [0,42,'string-id',undefined]){
       const ws=await seed('response-envelope-'+route+'-'+form+'-'+String(id),1,{cap:100});
       await run('INSERT INTO a2a_agents(id,workspace_id,relay_agent_id,external_url,agent_card) VALUES(?,?,?,?,?)',ws+'peer',ws,ws+'sender',targetUrl,'{}');
+      await subscribeDmReceived(ws);
       const messageId='response-'+ws,originalId=String(id??messageId);
       await run('INSERT INTO messages(id,workspace_id,channel_id,agent_id,body) VALUES(?,?,?,?,?)',originalId,ws,ws+'ch',ws+'r1','retained original');
       const effects=async()=>({messages:await scalar('SELECT count(*) FROM messages WHERE workspace_id=?',ws),counter:await scalar('SELECT messages_recv FROM a2a_agents WHERE workspace_id=?',ws),inbound:await scalar('SELECT count(*) FROM a2a_inbound WHERE workspace_id=?',ws),deliveries:await scalar('SELECT count(*) FROM deliveries WHERE workspace_id=?',ws),outbox:await scalar('SELECT count(*) FROM pending_events WHERE workspace_id=?',ws),events:await scalar('SELECT count(*) FROM workspace_events WHERE workspace_id=?',ws)});
@@ -562,6 +571,7 @@ try {
   if (!process.env.REVIEW_CASE || process.env.REVIEW_CASE==='inboundAtomic') {
     for(const table of ['a2a_inbound','pending_events','workspace_events']){
       const ws=await seed('inbound-atomic-'+table,1,{cap:100});
+      await subscribeDmReceived(ws);
       await run('INSERT INTO a2a_agents(id,workspace_id,relay_agent_id,external_url,agent_card) VALUES(?,?,?,?,?)',ws+'peer',ws,ws+'sender',targetUrl,JSON.stringify({name:'fixture',url:targetUrl,version:'1',skills:[{name:'message'}]}));
       const payload={jsonrpc:'2.0',id:'atomic-inbound',method:'message/send',params:{target_agent:'recipient-1',message:{message_id:'atomic-inbound',role:'agent',parts:[{kind:'text',text:'atomic local receive'}]}}};
       const path=`/a2a/webhook/${ws}/sender`;
@@ -576,6 +586,7 @@ try {
       assert.equal(await scalar('SELECT messages_recv FROM a2a_agents WHERE workspace_id=?',ws),1);
       assert.equal(await scalar('SELECT count(*) FROM a2a_inbound WHERE workspace_id=?',ws),1);
       record('real SQL '+table+' failure rolls back inbound identity/message/counter/notifications; retry admits once');
+      await dropDmOutbox(ws);
     }
   }
   if (!process.env.REVIEW_CASE || process.env.REVIEW_CASE==='inbound') {
@@ -583,6 +594,7 @@ try {
       for (const failure of ['race','completion']) {
         const ws=await seed('inbound-'+endpoint+'-'+failure,1,{cap:100});
         await run('INSERT INTO a2a_agents(id,workspace_id,relay_agent_id,external_url,agent_card) VALUES(?,?,?,?,?)',ws+'peer',ws,ws+'sender',targetUrl,JSON.stringify({name:'fixture',url:targetUrl,version:'1',skills:[{name:'message'}]}));
+        await subscribeDmReceived(ws);
         const payload={jsonrpc:'2.0',id:'inbound-correlation',method:'message/send',params:{target_agent:'recipient-1',message:{message_id:'durable-inbound',role:'agent',parts:[{kind:'text',text:'one accepted inbound'}]}}};
         const path=endpoint==='rpc'?'/a2a/rpc':`/a2a/webhook/${ws}/sender`;
         let arrivals=0,release;const gate=new Promise(r=>release=r);
@@ -631,6 +643,7 @@ try {
         }
         assert.deepEqual(await rows('PRAGMA foreign_key_check'),[]);
         record(endpoint+' inbound '+failure+' retained identity rejects payload reuse/current bad auth and cascades source or expires in bounded sweep');
+        await dropDmOutbox(ws);
 
       }
     }
