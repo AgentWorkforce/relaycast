@@ -5887,12 +5887,18 @@ paths:
                         description: >-
                           From the server's conversation records, read when
                           this answer is served. `dm` guarantees exactly a
-                          1:1 conversation record with exactly two
-                          participants ever recorded (participants who left
-                          still count). `group_dm` is any other DM
-                          conversation, including a 1:1 that ever had a third
-                          participant added, even after that participant
-                          left. `null` is a channel message.
+                          1:1 conversation record whose recorded participants
+                          are the calling agent and the message's sender and
+                          nobody else (participants who left still count).
+                          `group_dm` is any other DM conversation, including
+                          a 1:1 with a third participant added, even after
+                          that participant left. This is not a history:
+                          releasing or deleting an agent removes its
+                          participant records, so a 1:1 whose third
+                          participant was released reports `dm` again for
+                          messages between the remaining two, including
+                          messages sent while the third was present. `null`
+                          is a channel message.
                       created_at:
                         type: string
                         format: date-time

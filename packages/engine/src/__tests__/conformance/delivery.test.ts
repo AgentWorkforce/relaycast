@@ -261,7 +261,7 @@ describe('durable delivery api', () => {
     expect((await proofData(bob.token, dmId, '?include_acked=true')).conversation_type).toBe('group_dm');
   });
 
-  it('reports a 1:1 DM as group_dm once a third participant was ever recorded', async () => {
+  it('reports a 1:1 DM as group_dm while a third participant is recorded, also after it left', async () => {
     const { ws, alice, bob } = await seed();
     const carol = await registerAgent(stack.app, ws.workspaceKey, 'carol');
     const asAgent = (token: string) => ({ authorization: `Bearer ${token}` });
@@ -319,6 +319,51 @@ describe('durable delivery api', () => {
     }
     await ackByMessage(bob.token, pairId);
     expect((await proofData(bob.token, pairId, '?include_acked=true')).conversation_type).toBe('group_dm');
+  });
+
+  it('never reports dm for a message whose sender has no participant record', async () => {
+    const { ws, alice, bob } = await seed();
+    const carol = await registerAgent(stack.app, ws.workspaceKey, 'carol');
+    const asAgent = (token: string) => ({ authorization: `Bearer ${token}` });
+    const both = ['', '?include_acked=true'];
+
+    const pairId = await postJson(alice.token, '/v1/dm', { to: 'bob', text: 'just us?' });
+    const listRes = await stack.app.request('/v1/dm/conversations', { headers: asAgent(alice.token) });
+    const [conversation] = ((await listRes.json()) as { data: Array<{ id: string }> }).data;
+    const add = await stack.app.request(`/v1/dm/${conversation!.id}/participants`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', ...asAgent(alice.token) },
+      body: JSON.stringify({ agent_name: 'carol' }),
+    });
+    expect(add.status).toBe(200);
+    const carolPostId = await postJson(carol.token, `/v1/dm/${conversation!.id}/messages`, { text: 'from carol' });
+    const toBothId = await postJson(alice.token, `/v1/dm/${conversation!.id}/messages`, { text: 'to both of you' });
+    for (const query of both) {
+      for (const id of [pairId, carolPostId, toBothId]) {
+        expect((await proofData(bob.token, id, query)).conversation_type).toBe('group_dm');
+      }
+    }
+
+    // Releasing an agent deletes its participant rows (leaving only stamps
+    // left_at), so the records show two participants again.
+    const release = await stack.app.request('/v1/agents/carol', {
+      method: 'DELETE', headers: asAgent(ws.workspaceKey),
+    });
+    expect(release.status).toBe(204);
+    const rows = await stack.runtime.deps.db.select({ agentId: dmParticipants.agentId })
+      .from(dmParticipants).where(eq(dmParticipants.conversationId, conversation!.id));
+    expect(rows.map((r) => r.agentId).sort()).toEqual([alice.agentId, bob.agentId].sort());
+
+    for (const query of both) {
+      // Carol's message is not a message between the two recorded participants.
+      const carolProof = await proofData(bob.token, carolPostId, query);
+      expect(carolProof).toMatchObject({ sender_agent_id: carol.agentId, conversation_type: 'group_dm' });
+      // The documented limit: nothing records that carol was ever there, so
+      // the pair's own messages read as a 1:1 again, including the one that
+      // was also delivered to carol.
+      expect((await proofData(bob.token, pairId, query)).conversation_type).toBe('dm');
+      expect((await proofData(bob.token, toBothId, query)).conversation_type).toBe('dm');
+    }
   });
 
   it('rejects a malformed include_acked value and treats a blank one as absent', async () => {

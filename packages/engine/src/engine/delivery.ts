@@ -224,9 +224,9 @@ export type DeliveryProofStatus = 'queued' | 'delivered' | 'acked';
 
 /**
  * Server-derived kind of the conversation the message was posted in, read
- * when the proof is served: `dm` means a 1:1 conversation record with exactly
- * two participants ever recorded; `group_dm` is any other DM-backed
- * conversation; `null` is channel traffic.
+ * when the proof is served: `dm` means a 1:1 conversation record whose
+ * recorded participants are exactly the recipient and the message's sender;
+ * `group_dm` is any other DM-backed conversation; `null` is channel traffic.
  */
 export type DeliveryProofConversationType = 'dm' | 'group_dm' | null;
 
@@ -248,20 +248,28 @@ export interface DeliveryProof {
  * `channels.channel_type` (what DM access checks use), the `dm_conversations`
  * row(s) behind the channel (what DM fanout uses) and, when both say 1:1, its
  * `dm_participants` rows. `dm` therefore guarantees exactly this: one 1:1
- * conversation record, and exactly two participant rows ever recorded,
- * counting rows whose `left_at` is set. A participant added to a 1:1 (the
- * add-participant route does not check `dm_type`) turns it into `group_dm`
- * for good, even after that participant leaves. Any other DM signal (a
- * `group` row, an unknown `dm_type`, several rows, or a DM-backed channel
- * without its row) is `group_dm` too.
+ * conversation record whose participant rows, counting rows whose `left_at`
+ * is set, are the recipient and the message's sender and nobody else. A
+ * participant added to a 1:1 (the add-participant route does not check
+ * `dm_type`) turns it into `group_dm`, and leaving does not turn it back.
+ *
+ * This is the state of the records when the proof is served, not a history:
+ * releasing or deleting an agent removes its participant rows, so a 1:1 whose
+ * third participant was released counts two rows again. The released agent's
+ * own messages still classify as `group_dm` (their sender has no row); the
+ * remaining pair's messages classify as `dm`, including ones posted while the
+ * third participant was there.
+ *
+ * Any other DM signal (a `group` row, an unknown `dm_type`, several rows, or
+ * a DM-backed channel without its row) is `group_dm` too.
  */
 function classifyConversation(
   channelType: number | null,
   dmTypes: string[],
-  participantRowCount: number | null,
+  onlySenderAndRecipient: boolean,
 ): DeliveryProofConversationType {
   if (!isDmBackedChannelType(channelType) && dmTypes.length === 0) return null;
-  if (isOneToOneRecord(channelType, dmTypes) && participantRowCount === 2) return 'dm';
+  if (isOneToOneRecord(channelType, dmTypes) && onlySenderAndRecipient) return 'dm';
   return 'group_dm';
 }
 
@@ -314,19 +322,24 @@ export async function deliveryProofForMessage(
   const dmTypes = conversations.map((c) => c.dmType);
   // Only a would-be `dm` pays for the participant read: a prefix seek on the
   // (conversation_id, agent_id) primary key, every row including left ones,
-  // capped at three because only "exactly two" matters.
-  let participantRowCount: number | null = null;
+  // capped at three because only "exactly these two" matters. The key makes
+  // agent ids distinct, so two rows holding both ids hold nothing else.
+  let onlySenderAndRecipient = false;
   if (isOneToOneRecord(row.channelType, dmTypes)) {
     const participants = await db.select({ agentId: dmParticipants.agentId })
       .from(dmParticipants)
       .where(eq(dmParticipants.conversationId, conversations[0]!.id))
       .limit(3);
-    participantRowCount = participants.length;
+    const ids = participants.map((p) => p.agentId);
+    onlySenderAndRecipient = ids.length === 2
+      && row.senderAgentId !== recipientAgentId
+      && ids.includes(row.senderAgentId)
+      && ids.includes(recipientAgentId);
   }
   return { message_id: row.messageId, sender_agent_id: row.senderAgentId,
     workspace_id: row.workspaceId, channel_id: row.channelId, delivery_reason: row.reason,
     status: row.status as DeliveryProofStatus,
-    conversation_type: classifyConversation(row.channelType, dmTypes, participantRowCount),
+    conversation_type: classifyConversation(row.channelType, dmTypes, onlySenderAndRecipient),
     created_at: row.createdAt.toISOString() };
 }
 

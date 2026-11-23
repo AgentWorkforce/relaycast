@@ -800,11 +800,15 @@ The by-message read returns only the calling agent's own row for that message: b
 while it is queued or delivered and unexpired, and with `include_acked=true` also once the agent
 has acked it. The answer carries the server-derived sender agent id, `status`, `conversation_type`
 and the message's `created_at`. `conversation_type` is read from the conversation records, not the
-message: `dm` means a 1:1 conversation record with exactly two participants ever recorded (left
-ones count), `group_dm` is any other DM conversation (including a 1:1 that ever had a third
-participant added), and `null` is a channel. Unknown message ids, messages addressed to another
-agent, failed, dead-lettered or expired deliveries, and acked ones without `include_acked=true`
-all return the same `404 delivery_not_found`; it does not reveal other recipients.
+message: `dm` means a 1:1 conversation record whose recorded participants are the caller and the
+message's sender and nobody else (left ones count), `group_dm` is any other DM conversation
+(including a 1:1 with a third participant added, even after that participant left), and `null` is
+a channel. It describes the records when the answer is served, not their history: releasing or
+deleting an agent removes its participant rows, so a 1:1 whose third participant was released
+reports `dm` again for messages between the remaining two. Unknown message ids, messages
+addressed to another agent, failed, dead-lettered or expired deliveries, and acked ones without
+`include_acked=true` all return the same `404 delivery_not_found`; it does not reveal other
+recipients.
 
 The sender can follow what happened to its message. `POST /dm` answers with
 `delivery: { id, status, state, accepted_at, error, expires_at } | null`;
