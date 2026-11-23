@@ -5822,8 +5822,9 @@ paths:
       description: >
         Return only the calling agent token's queued or delivered, unexpired
         delivery for the given message id. The sender agent id, workspace id,
-        channel id, and delivery reason are server-derived. Unknown, foreign,
-        acknowledged, and expired message ids all return the same 404.
+        channel id, and delivery reason are server-derived. Unknown message
+        ids, messages addressed to another agent, and acknowledged or expired
+        deliveries all return the same `404 delivery_not_found`.
       tags:
         - Deliveries
       security:
@@ -5862,7 +5863,13 @@ paths:
                         type: string
                         nullable: true
         '404':
-          description: Delivery absent, not addressed to this agent, acknowledged, or expired
+          description: >-
+            `delivery_not_found`: delivery absent, not addressed to this agent,
+            acknowledged, or expired
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
 
   /deliveries/{id}/ack:
     post:
