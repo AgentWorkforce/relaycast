@@ -15,7 +15,7 @@ import { notifyDeliveryRejections, notifyRepliedDeliveries, routeDeliveryOutcome
 import { buildDmReceivedEventData, sentDmDeliveryReceipt, withoutRecipient } from '../engine/deliveryWire.js';
 import { awaitSentDeliveries, resolveSendWaitMs, sendWaitMsSchema } from './sendWait.js';
 import { runInBackground } from './background.js';
-import { sendWebhookEvent, shouldEnqueueWebhookEvent } from './webhookOutbox.js';
+import { sendWebhookEvent, webhookEventMatcher } from './webhookOutbox.js';
 import { emitServerEvent } from '../lib/serverTelemetry.js';
 import { asCodedError, errorResponse } from '../lib/httpError.js';
 import { jsonError, jsonOk, parseJsonBody, parseQueryParams } from '../lib/httpResponse.js';
@@ -143,7 +143,7 @@ dmRoutes.post(
         kv: c.get('engine').kv,
         operation: async () => {
           assertMessageAdmitted(c);
-          const hasWebhookSubscriptions = await shouldEnqueueWebhookEvent(c, workspace.id, 'dm.received');
+          const hasWebhookSubscriptions = await webhookEventMatcher(c, workspace.id, 'dm.received');
           return dmEngine.sendDm(db, workspace.id, agent!.id, {
             to,
             text,
@@ -160,7 +160,7 @@ dmRoutes.post(
               if (event.outboxId) {
                 runInBackground(c, c.get('engine').webhookQueue.send({
                   type: 'dm.received', workspaceId: workspace.id,
-                  data: event.data, outboxId: event.outboxId,
+                  data: event.webhookData, outboxId: event.outboxId,
                 }), 'queue admitted dm.received');
               }
               if (data._delivery) runInBackground(c,
@@ -179,7 +179,7 @@ dmRoutes.post(
             type: 'dm.received',
             workspaceId: workspace.id,
             data: toDmReceivedEventData(data),
-          });
+          }, data._delivery ? [data._delivery] : []);
         },
       });
 

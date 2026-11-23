@@ -273,7 +273,7 @@ async (c) => {
         metadata: result.data.metadata,
       };
       try {
-        await sendWebhookEvent(c, { type: 'message.created', workspaceId, data: eventData });
+        await sendWebhookEvent(c, { type: 'message.created', workspaceId, data: eventData }, result.data._deliveries);
       } catch (err) {
         logger.error('relayfile inbound outbox enqueue failed', {
           workspace_id: workspaceId,

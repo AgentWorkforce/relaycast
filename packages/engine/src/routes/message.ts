@@ -178,7 +178,7 @@ messageRoutes.post(
             type: 'message.created',
             workspaceId: workspace.id,
             data: toMessageCreatedEventData(data),
-          });
+          }, data._deliveries);
         },
       });
 
