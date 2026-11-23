@@ -21,6 +21,7 @@ import { asCodedError, errorResponse } from '../lib/httpError.js';
 import { jsonError, jsonOk, parseJsonBody, parseQueryParams } from '../lib/httpResponse.js';
 import { parsePaginationQuery, positiveIntQueryParam } from '../lib/httpQuery.js';
 import { canonicalJson } from '../engine/messageMetadata.js';
+import { INVALID_OWNER_APPROVAL, parseOwnerApproval } from '../engine/ownerApproval.js';
 
 export const dmRoutes = new Hono<AppEnv>();
 
@@ -38,6 +39,8 @@ const sendDmSchema = z.object({
   // Confirmation budget (ms, 0–2000): park for the recipient's acceptance.
   // Not part of the idempotency fingerprint: a retry may wait differently.
   wait_ms: sendWaitMsSchema.optional(),
+  // Validated separately so a bad approval is `invalid_owner_approval`.
+  owner_approval: z.unknown().optional(),
 }).refine((body) => (body.to === undefined) !== (body.address === undefined), {
   path: ['to'],
 });
@@ -72,6 +75,11 @@ dmRoutes.post(
       const { address, text, attachments, data, mode, reply_to_message_id: replyToMessageId } = parsed.data;
       const wait = resolveSendWaitMs(c, parsed.data.wait_ms);
       if (!wait.ok) return wait.response;
+      const ownerApproval = parseOwnerApproval(parsed.data.owner_approval);
+      if (!ownerApproval.ok) {
+        return jsonError(c, INVALID_OWNER_APPROVAL, ownerApproval.message, 400);
+      }
+      const owner_approval = ownerApproval.value;
       if (address !== undefined) requireAgentAddress(address);
       // The engine resolves an addressed recipient from `address`; `to` then
       // only names the request in the idempotency fingerprint.
@@ -94,6 +102,8 @@ dmRoutes.post(
         ...(data !== undefined ? { data_sha256: await sha256Hex(canonicalJson(data)) } : {}),
         // Only when given, so records written before the field existed still replay.
         ...(replyToMessageId !== undefined ? { reply_to_message_id: replyToMessageId } : {}),
+        // Present only with an approval, so earlier fingerprints still replay.
+        ...(owner_approval ? { owner_approval_sha256: await sha256Hex(canonicalJson(owner_approval)) } : {}),
       };
       // Existing KV records used insertion-order JSON. Accept that format only
       // as a replay-compatible fingerprint during the 24-hour TTL window.
@@ -151,6 +161,7 @@ dmRoutes.post(
             data,
             mode,
             reply_to_message_id: replyToMessageId,
+            ...(owner_approval ? { owner_approval } : {}),
           }, { mailbox, resolveWorkspaceDeliveryPolicy: () => resolveWorkspaceDeliveryPolicyFor(c.get('engine').config, workspace), idempotencyKey, address,
             hasWebhookSubscriptions,
             afterAdmission: (data, event) => {

@@ -1158,6 +1158,8 @@ export class WsClient {
             attachments: Array.isArray(data.attachments) ? data.attachments : [],
             ...(typeof data.injection_mode === 'string' ? { injection_mode: data.injection_mode } : {}),
             ...(isRecord(data.metadata) ? { metadata: data.metadata } : {}),
+            // A flag only; the approval itself is never on the wire to recipients.
+            ...(data.has_owner_approval === true ? { has_owner_approval: true } : {}),
           },
         };
       case 'thread.reply':
@@ -1218,6 +1220,7 @@ export class WsClient {
             ...((message.injection_mode ?? data.injection_mode) ? { injection_mode: message.injection_mode ?? data.injection_mode } : {}),
             ...(attachments.length ? { attachments } : {}),
             ...(typeof message.reply_to_message_id === 'string' ? { reply_to_message_id: message.reply_to_message_id } : {}),
+            ...((message.has_owner_approval ?? data.has_owner_approval) === true ? { has_owner_approval: true } : {}),
           },
         };
       }

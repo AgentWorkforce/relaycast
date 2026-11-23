@@ -55,6 +55,7 @@ import {
 import { buildMessageSessionWrite, requireSessionRefFromMetadata } from './sessionMessages.js';
 import { fetchAttachmentsBatch, resolveSendAttachments, type AttachmentRow } from './attachments.js';
 import { canonicalJson, canonicalUserMessageMetadata, publicMessageMetadata, sanitizeUserMessageMetadata } from './messageMetadata.js';
+import { ownerApprovalFlag, type OwnerApproval } from './ownerApproval.js';
 import { queryInChunks } from '../lib/queryChunks.js';
 
 type Db = ReturnType<typeof getDb>;
@@ -328,6 +329,7 @@ function buildDmMessageWrites(
     mode?: 'wait' | 'steer';
     data?: Record<string, unknown> | null;
     reply_to_message_id?: string;
+    owner_approval?: OwnerApproval | null;
   },
   attachments: AttachmentRow[],
   messageId: string,
@@ -374,6 +376,7 @@ function buildDmMessageWrites(
         hasAttachments,
         metadata,
         sessionRef,
+        ownerApproval: data.owner_approval ?? null,
         createdAt,
       })
       .returning(),
@@ -400,11 +403,13 @@ function buildDmMessageWrites(
 }
 
 function buildDmResult(
-  message: Pick<typeof messages.$inferSelect, 'id' | 'agentId' | 'body' | 'metadata' | 'createdAt'>,
+  message: Pick<typeof messages.$inferSelect, 'id' | 'agentId' | 'body' | 'metadata' | 'createdAt'>
+    & Partial<Pick<typeof messages.$inferSelect, 'ownerApproval'>>,
   conv: { id: string }, fromAgent: { name: string }, data: { to: string; mode?: 'wait' | 'steer'; reply_to_message_id?: string },
   attachments: AttachmentRow[],
 ) {
   const injectionMode = data.mode ?? 'wait';
+  const approvalFlag = ownerApprovalFlag(message.ownerApproval);
   return {
     // Canonical converged shape (new)
     conversation_id: conv.id,
@@ -418,6 +423,7 @@ function buildDmResult(
       attachments,
       metadata: publicMessageMetadata(message.metadata),
       reply_to_message_id: data.reply_to_message_id ?? null,
+      ...approvalFlag,
     },
     created_at: message.createdAt.toISOString(),
 
@@ -429,6 +435,7 @@ function buildDmResult(
     injection_mode: injectionMode,
     attachments,
     metadata: publicMessageMetadata(message.metadata),
+    ...approvalFlag,
   };
 }
 
@@ -544,6 +551,7 @@ export async function sendDm(
     data?: Record<string, unknown> | null;
     /** The recipient's message this DM answers; must be theirs, in this conversation. */
     reply_to_message_id?: string;
+    owner_approval?: OwnerApproval | null;
   },
   options: SendDmOptions = {},
 ): Promise<SendDmResult> {
@@ -704,6 +712,19 @@ export async function sendDm(
   }
   const senderAddress = formatAgentAddress(fromAgent.name, fromAgent.node);
 
+  // Resolved once: the owner-approval guard below and the dispatch decision
+  // must agree on whether this recipient is an external A2A agent.
+  const a2aTarget = options.skipA2aIntercept
+    ? null
+    : await a2aEngine.getA2aAgentByRelayName(db, workspaceId, toAgent.name);
+  // An external A2A agent has no relay node to ask Cloud for an attestation
+  // and no by-message proof route, so an approval sent there would be
+  // reported as attached while the recipient never learns of it. Refuse it
+  // before anything is written.
+  if (data.owner_approval && a2aTarget) {
+    throw codedError('owner_approval cannot be sent to an external A2A agent', 'invalid_owner_approval', 400);
+  }
+
   // Resolve attachments first so invalid attachments fail before any DM
   // metadata (channel/conversation/participant rows) is created.
   const attachments = await resolveSendAttachments(db, workspaceId, data.attachments);
@@ -720,10 +741,6 @@ export async function sendDm(
       throw codedError('reply_to_message_id must name a message from the recipient in this conversation', 'invalid_request', 400);
     }
   }
-  const a2aTarget = options.skipA2aIntercept
-    ? null
-    : await a2aEngine.getA2aAgentByRelayName(db, workspaceId, toAgent.name);
-
   const egressId = a2aTarget
     ? `a2ae_${await sha256Hex(JSON.stringify([workspaceId, fromAgentId, options.idempotencyKey ?? generateId()]))}`
     : null;
@@ -772,6 +789,7 @@ export async function sendDm(
   const publicResult = buildDmResult({
     id: messageId, agentId: fromAgentId, body: data.text, createdAt,
     metadata: dmMessageMetadata(data, senderAddress),
+    ownerApproval: data.owner_approval ?? null,
   }, conv, fromAgent, options.address !== undefined ? { ...data, to: toAgent.name } : data, attachments);
   const eventData = buildDmReceivedEventData(publicResult, { fromName: fromAgent.name });
   const workspacePayload = transformForClient({

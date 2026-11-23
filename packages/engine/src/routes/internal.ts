@@ -25,6 +25,7 @@ import {
   setWorkspaceExpiry,
 } from '../engine/internalAdmin.js';
 import { WORKSPACE_KEY_MAX_GRACE_MS } from '../engine/tokenRotate.js';
+import { redactOwnerApprovalQuote } from '../engine/ownerApproval.js';
 
 /**
  * Internal admin API for a trusted control plane (self-host).
@@ -236,6 +237,34 @@ internalRoutes.post('/workspaces/:id/expiry', async (c) => {
         : jsonNotFound(c, 'not_found', 'Workspace not found');
     }
     return jsonOk(c, { workspace_id: result.workspaceId, expires_at: result.expiresAt?.toISOString() ?? null });
+  } catch (err: unknown) {
+    return errorResponse(c, err);
+  }
+});
+
+const MESSAGE_ID_PATTERN = /^[A-Za-z0-9_-]{1,128}$/;
+
+// POST /internal/workspaces/:id/messages/:messageId/owner-approval/redact-quote
+// — Cloud's quote redaction (owner-named trusted delegates §8): sets the
+// stored approval's `quote` to null and records `quote_redacted_at`, the only
+// change the immutability trigger allows. Idempotent: a repeat answers with
+// the first redaction (`already_redacted: true`). A message that is absent or
+// carries no approval is `404 owner_approval_not_found`.
+// → `{ message_id, quote_redacted_at, already_redacted }`.
+internalRoutes.post('/workspaces/:id/messages/:messageId/owner-approval/redact-quote', async (c) => {
+  try {
+    const workspaceId = c.req.param('id');
+    const messageId = c.req.param('messageId');
+    if (!WORKSPACE_ID_PATTERN.test(workspaceId)) {
+      return jsonError(c, 'invalid_request', 'Invalid workspace id', 400);
+    }
+    if (!MESSAGE_ID_PATTERN.test(messageId)) {
+      return jsonError(c, 'invalid_request', 'Invalid message id', 400);
+    }
+    if (foreignWorkspace(c, workspaceId)) return jsonNotFound(c, 'not_found', 'Workspace not found');
+    const result = await redactOwnerApprovalQuote(c.get('db'), workspaceId, messageId);
+    if (!result) return jsonNotFound(c, 'owner_approval_not_found', 'Message has no owner approval');
+    return jsonOk(c, result);
   } catch (err: unknown) {
     return errorResponse(c, err);
   }

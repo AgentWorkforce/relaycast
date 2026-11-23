@@ -880,6 +880,20 @@ export const ACTOR_MIGRATIONS: readonly (readonly [string, readonly string[]])[]
     [
       "ALTER TABLE workspaces\n  ADD COLUMN leaders text"
     ]
+  ],
+  [
+    "0087_message_owner_approval.sql",
+    [
+      "ALTER TABLE messages ADD COLUMN owner_approval TEXT",
+      "CREATE TRIGGER IF NOT EXISTS messages_owner_approval_immutable\nBEFORE UPDATE OF owner_approval ON messages\nWHEN OLD.owner_approval IS NOT NEW.owner_approval\nBEGIN\n  SELECT RAISE(ABORT, 'owner_approval is immutable');\nEND"
+    ]
+  ],
+  [
+    "0088_owner_approval_quote_redaction.sql",
+    [
+      "DROP TRIGGER IF EXISTS messages_owner_approval_immutable",
+      "CREATE TRIGGER IF NOT EXISTS messages_owner_approval_immutable\nBEFORE UPDATE OF owner_approval ON messages\nWHEN OLD.owner_approval IS NOT NEW.owner_approval\n  AND NOT (\n    OLD.owner_approval IS NOT NULL\n    AND NEW.owner_approval IS NOT NULL\n    AND json_type(OLD.owner_approval, '$.quote_redacted_at') IS NULL\n    AND json_type(NEW.owner_approval, '$.quote_redacted_at') = 'text'\n    AND NEW.owner_approval = json_set(\n      json_set(OLD.owner_approval, '$.quote', NULL),\n      '$.quote_redacted_at', json_extract(NEW.owner_approval, '$.quote_redacted_at')\n    )\n  )\nBEGIN\n  SELECT RAISE(ABORT, 'owner_approval is immutable');\nEND"
+    ]
   ]
 ];
 

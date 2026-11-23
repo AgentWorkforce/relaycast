@@ -38,6 +38,8 @@ export const DeliveryMessageSchema = z.object({
   created_at: z.string(),
   /** Stored files attached to the message; `GET /v1/files/{file_id}` returns a `download_url` for the bytes. */
   attachments: z.array(FileAttachmentSchema).optional(),
+  /** `true` when the sender attached an owner approval; ask Cloud to attest it. Never the approval itself. */
+  has_owner_approval: z.literal(true).optional(),
 });
 export type DeliveryMessage = z.infer<typeof DeliveryMessageSchema>;
 

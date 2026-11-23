@@ -52,7 +52,8 @@ const RUNTIME_URL = process.env.RELAYCAST_PG_TEST_URL_RUNTIME;
 const CA_FILE = process.env.RELAYCAST_PG_TEST_CA_FILE;
 const enabled = Boolean(OWNER_URL && RUNTIME_URL && CA_FILE);
 
-const TRIGGER_FUNCTIONS = 28;
+// The 28 ported in 0001_triggers.sql, plus messages_owner_approval_immutable (0009).
+const TRIGGER_FUNCTIONS = 29;
 
 /** Dev fixture credentials (not secrets) for the refusal roles. */
 function roleUrl(
