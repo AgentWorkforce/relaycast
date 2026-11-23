@@ -6079,7 +6079,7 @@ paths:
                           `acked` only with `include_acked=true`.
                       conversation_type:
                         type: string
-                        enum: [dm, group_dm]
+                        enum: [dm, group_dm, null]
                         nullable: true
                         description: >-
                           From the server's conversation records, read when
@@ -6094,8 +6094,10 @@ paths:
                           participant records, so a 1:1 whose third
                           participant was released reports `dm` again for
                           messages between the remaining two, including
-                          messages sent while the third was present. `null`
-                          is a channel message.
+                          messages sent while the third was present, and a
+                          1:1 message whose sender was since released or
+                          deleted reports `group_dm`. `null` is a channel
+                          message.
                       created_at:
                         type: string
                         format: date-time

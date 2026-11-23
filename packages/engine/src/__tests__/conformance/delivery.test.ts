@@ -366,6 +366,22 @@ describe('durable delivery api', () => {
     }
   });
 
+  it('reports an untouched 1:1 as group_dm once its sender is released', async () => {
+    const { ws, alice, bob } = await seed();
+    const dmId = await postJson(alice.token, '/v1/dm', { to: 'bob', text: 'approve?' });
+    expect((await proofData(bob.token, dmId)).conversation_type).toBe('dm');
+
+    const release = await stack.app.request('/v1/agents/alice', {
+      method: 'DELETE', headers: { authorization: `Bearer ${ws.workspaceKey}` },
+    });
+    expect(release.status).toBe(204);
+    // The release removed alice's participant row; the proof fails closed.
+    for (const query of ['', '?include_acked=true']) {
+      expect(await proofData(bob.token, dmId, query))
+        .toMatchObject({ sender_agent_id: alice.agentId, conversation_type: 'group_dm' });
+    }
+  });
+
   it('rejects a malformed include_acked value and treats a blank one as absent', async () => {
     const { bob, messageId } = await seed();
     for (const value of ['1', 'yes', 'TRUE']) {
