@@ -7512,10 +7512,9 @@ paths:
 
         Webhook payloads of `message.created`, `thread.reply`, `dm.received` and `group_dm.received`
         carry `data.recipients`: one `{ agent_id, agent_name, delivery_id, seq }` entry per delivery
-        record (the sender is not listed; `seq` is that recipient's delivery seq and is absent on a
-        DM sent with an `Idempotency-Key`). At most 500 entries are sent; `data.recipients_truncated`
-        is `true` only when the list was capped. This field is webhook-only: WebSocket, stream and
-        HTTP responses do not include it.
+        record (the sender is not listed; `seq` is that recipient's delivery seq). At most 500
+        entries are sent; `data.recipients_truncated` is `true` only when the list was capped. This
+        field is webhook-only: WebSocket, stream and HTTP responses do not include it.
       tags:
         - Subscriptions
       security:

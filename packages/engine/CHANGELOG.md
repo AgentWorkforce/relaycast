@@ -7,7 +7,21 @@ See the [root changelog](../../CHANGELOG.md) for cross-package release highlight
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [Unreleased - Minor]
+
+### Added
+
+- Webhook payloads of `message.created`, `thread.reply`, `dm.received` and `group_dm.received` carry `data.recipients`: one `{ agent_id, agent_name, delivery_id, seq }` entry per delivery record of the event (the sender is not listed; a self-DM or a mailbox-rejected DM carries `[]`). A delivered body holds at most 500 entries and the outbox row at most 2,000; `data.recipients_truncated: true` marks a capped list. The field is webhook-only.
+- `filter.recipients` on event subscriptions (1 to 500 agent names or ids): matches an event with a listed entry in `data.recipients`, and the delivered `data.recipients` then holds only the matching entries. An event without a recipient list never matches.
+- `PATCH /v1/subscriptions/:id` partially updates `events`, `filter` (`null` clears), `url`, `headers` (replaced as a whole), `secret` (`null` clears), `signature_scheme` and `is_active`, with the URL and `whsec_` secret rules of create checked against the resulting row. The write is conditional on the signing scheme and secret that were read; a concurrent change returns 409 `subscription_update_conflict`.
+
+### Changed
+
+- The webhook outbox pre-check asks whether an active subscription wants the event (`events` and `filter`) instead of whether any subscription exists, so events no subscription matches write no outbox row. The read is bounded and cached per request; with more than 100 active subscriptions, or when the read fails, every event is enqueued as before. Inbound A2A DMs use the same pre-check as `/v1/dm`.
+
+### Fixed
+
+- PostgreSQL: `sqlx.jsonSet` stores a SQL NULL value as JSON `null`, as SQLite does, instead of nulling the whole document. A keyed or A2A-egress DM rejected by the recipient's mailbox failed its receipt stamp with a NOT NULL violation (500).
 
 ## [12.13.1] - 2026-11-20
 
