@@ -423,12 +423,9 @@ export async function listA2aAgents(db: Db, workspaceId: string): Promise<A2aAge
   return rows.map(formatA2aRecord);
 }
 
-export async function getA2aAgentByRelayName(
-  db: Db,
-  workspaceId: string,
-  relayName: string,
-): Promise<A2aAgentRecord | null> {
-  const [row] = await db
+/** The lookup behind {@link getA2aAgentByRelayName}, unawaited so it can join a read batch. */
+export function a2aAgentByRelayNameQuery(db: Db, workspaceId: string, relayName: string) {
+  return db
     .select({
       id: a2aAgents.id,
       workspaceId: a2aAgents.workspaceId,
@@ -445,15 +442,30 @@ export async function getA2aAgentByRelayName(
       createdAt: a2aAgents.createdAt,
       updatedAt: a2aAgents.updatedAt,
       relayName: agents.name,
-      relayStatus: agents.status,
+      // Own output name: D1 batch() maps rows by column name, so a plain agents.status would collide with a2a_agents.status.
+      relayStatus: sql<string>`${agents.status}`.as('relay_status'),
       relayPersona: agents.persona,
       relayMetadata: agents.metadata,
     })
     .from(a2aAgents)
     .innerJoin(agents, eq(a2aAgents.relayAgentId, agents.id))
     .where(and(eq(a2aAgents.workspaceId, workspaceId), eq(agents.name, relayName)));
+}
 
+/** Format the rows {@link a2aAgentByRelayNameQuery} returned. */
+export function a2aAgentFromRows(
+  rows: Awaited<ReturnType<typeof a2aAgentByRelayNameQuery>>,
+): A2aAgentRecord | null {
+  const [row] = rows;
   return row ? formatA2aRecord(row) : null;
+}
+
+export async function getA2aAgentByRelayName(
+  db: Db,
+  workspaceId: string,
+  relayName: string,
+): Promise<A2aAgentRecord | null> {
+  return a2aAgentFromRows(await a2aAgentByRelayNameQuery(db, workspaceId, relayName));
 }
 
 /**

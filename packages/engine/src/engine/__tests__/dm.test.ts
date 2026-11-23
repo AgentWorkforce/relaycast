@@ -10,9 +10,12 @@
  */
 
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { and, eq, isNotNull } from 'drizzle-orm';
+import { and, eq, isNotNull, mapResultRow } from 'drizzle-orm';
+import { drizzle } from 'drizzle-orm/better-sqlite3';
 
 import { getSqliteDb, runMigrations, type SqliteDbHandle } from '../../adapters/node/database.js';
+import { brandSqliteEngineDb } from '../../adapters/sqlite-handle.js';
+import * as schema from '../../db/tables.js';
 import {
   a2aAgents,
   a2aEgress,
@@ -23,6 +26,7 @@ import {
   dmConversations,
   dmParticipants,
   messages,
+  nodes,
   pendingEvents,
   workspaceEvents,
   workspaces,
@@ -34,6 +38,8 @@ import {
   sweepPendingA2aEgress,
 } from '../a2aEgress.js';
 import { sha256Hex } from '../../lib/crypto.js';
+import { runIndependentReads } from '../../ports/database.js';
+import { a2aAgentByRelayNameQuery, a2aAgentFromRows, getA2aAgentByRelayName } from '../a2a.js';
 
 type Db = SqliteDbHandle['db'];
 
@@ -833,5 +839,272 @@ describe('1:1 DM resolution fast path', () => {
       code: 'dm_conversation_id_collision',
       status: 409,
     });
+  });
+});
+
+describe('1:1 DM send read batching on a D1-style handle', () => {
+  /**
+   * A D1 stand-in over the fixture's connection: `batch()` and no
+   * `withTransaction`, like drizzle's D1 handle. Like D1 it applies a batch
+   * in one transaction. `trips` logs each request: one entry per statement
+   * run outside a batch, one `batch[...]` entry per batch call.
+   */
+  function d1Fixture() {
+    const fixture = seed();
+    const { sqlite } = fixture;
+    const trips: string[] = [];
+    let inBatch = false;
+    const base = brandSqliteEngineDb(drizzle(sqlite, { schema }));
+    const d1 = Object.assign(base, {
+      batch: async (statements: readonly PromiseLike<unknown>[]) => {
+        trips.push(`batch[${statements.map((statement) => tableOf((statement as unknown as { toSQL(): { sql: string } }).toSQL().sql)).join(',')}]`);
+        inBatch = true;
+        sqlite.exec('BEGIN');
+        try {
+          const results: unknown[] = [];
+          for (const statement of statements) results.push(await d1BatchResult(statement));
+          sqlite.exec('COMMIT');
+          return results;
+        } catch (error) {
+          sqlite.exec('ROLLBACK');
+          throw error;
+        } finally {
+          inBatch = false;
+        }
+      },
+    }) as unknown as Db;
+    /**
+     * Map a batched statement's rows the way drizzle's D1 `batch()` does: D1
+     * returns rows as objects keyed by output column name, and drizzle turns
+     * them into arrays with `Object.keys(row)` (d1ToRawMapping). Two output
+     * columns with one name collapse into one key, so the row loses a column
+     * and every later field shifts.
+     */
+    async function d1BatchResult(statement: PromiseLike<unknown>): Promise<unknown> {
+      const query = statement as unknown as {
+        _prepare(): {
+          fields?: Parameters<typeof mapResultRow>[0];
+          joinsNotNullableMap?: Record<string, boolean>;
+          customResultMapper?: (rows: unknown[][]) => unknown;
+        };
+        toSQL(): { sql: string; params: unknown[] };
+      };
+      const { fields, joinsNotNullableMap, customResultMapper } = query._prepare();
+      if (!fields && !customResultMapper) return await statement;
+      const { sql: source, params } = query.toSQL();
+      const objects = sqlite.prepare(source).all(...params) as Array<Record<string, unknown>>;
+      const rows = objects.map((row) => Object.keys(row).map((key) => row[key]));
+      if (customResultMapper) return customResultMapper(rows);
+      return rows.map((row) => mapResultRow(fields!, row, joinsNotNullableMap));
+    }
+    const original = sqlite.prepare.bind(sqlite);
+    vi.spyOn(sqlite, 'prepare').mockImplementation(((source: string) => {
+      if (!inBatch && !/^\s*(?:BEGIN|COMMIT|ROLLBACK)/i.test(source)) trips.push(tableOf(source));
+      return original(source);
+    }) as typeof sqlite.prepare);
+    return { ...fixture, d1, trips };
+  }
+
+  /** `select:<table>` / `insert:<table>` / ... for the statement's target table. */
+  function tableOf(source: string): string {
+    const write = /^\s*(insert\s+into|update|delete\s+from)\s+"([a-z_0-9]+)"/i.exec(source);
+    if (write) return `${write[1].split(/\s+/)[0].toLowerCase()}:${write[2]}`;
+    const read = /\bfrom\s+"([a-z_0-9]+)"/i.exec(source);
+    return `select:${read ? read[1] : '?'}`;
+  }
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it('sends a repeat keyed DM in four requests: two read batches, the admission batch, the outcome reads', async () => {
+    const { d1, trips, ws, alice } = d1Fixture();
+    const first = await sendDm(d1, ws, alice, { to: 'bob', text: 'one' }, { idempotencyKey: 'warm-up' });
+    trips.length = 0;
+
+    const sent = await sendDm(d1, ws, alice, { to: 'bob', text: 'two' }, { idempotencyKey: 'repeat-key' });
+
+    expect(sent.conversation_id).toBe(first.conversation_id);
+    expect(sent._idempotency_replayed).toBeUndefined();
+    const admission = trips.find((trip) => trip.startsWith('batch[insert:direct_dm_idempotency'));
+    expect(admission).toBeDefined();
+    expect(trips).toEqual([
+      // Recipient, sender, idempotency claim, A2A request identity: one round trip.
+      'batch[select:agents,select:agents,select:direct_dm_idempotency,select:a2a_egress]',
+      // Steady conversation and A2A target: one round trip.
+      'batch[select:dm_conversation_reservations,select:a2a_agents]',
+      admission,
+      // Post-commit outcome reads (already concurrent via Promise.all).
+      'select:deliveries',
+      'select:agents',
+    ]);
+    // Before batching this send was 8 sequential round trips (9 requests):
+    // six single SELECTs, the admission batch and the concurrent outcome pair.
+    const roundTrips = trips.filter((trip) => trip.startsWith('batch[')).length + 1;
+    expect(roundTrips).toBe(4);
+  });
+
+  it('keeps the sequential reads on a transaction-capable handle', async () => {
+    const { db, sqlite, ws, alice } = seed();
+    await sendDm(db, ws, alice, { to: 'bob', text: 'one' }, { idempotencyKey: 'warm-up' });
+    const statements: string[] = [];
+    const original = sqlite.prepare.bind(sqlite);
+    vi.spyOn(sqlite, 'prepare').mockImplementation(((source: string) => {
+      statements.push(tableOf(source));
+      return original(source);
+    }) as typeof sqlite.prepare);
+
+    await sendDm(db, ws, alice, { to: 'bob', text: 'two' }, { idempotencyKey: 'repeat-key' });
+
+    // The same six reads, one at a time and in today's order, before admission.
+    expect(statements.slice(0, 6)).toEqual([
+      'select:direct_dm_idempotency',
+      'select:a2a_egress',
+      'select:agents',
+      'select:agents',
+      'select:dm_conversation_reservations',
+      'select:a2a_agents',
+    ]);
+  });
+
+  it('reports a missing recipient with the same 404 and writes nothing', async () => {
+    const { d1, trips, db, ws, alice } = d1Fixture();
+    await expect(sendDm(d1, ws, alice, { to: 'nobody', text: 'hi' }, { idempotencyKey: 'k-missing' }))
+      .rejects.toMatchObject({ code: 'agent_not_found', status: 404 });
+    expect(trips).toEqual(['batch[select:agents,select:agents,select:direct_dm_idempotency,select:a2a_egress]']);
+    expect(db.select().from(messages).all()).toHaveLength(0);
+    expect(db.select().from(dmConversations).all()).toHaveLength(0);
+  });
+
+  it('sends and repeats a self-DM with no delivery', async () => {
+    const { d1, trips, db, ws, alice } = d1Fixture();
+    const first = await sendDm(d1, ws, alice, { to: '@self', text: 'note' }, { idempotencyKey: 'self-1' });
+    trips.length = 0;
+    const second = await sendDm(d1, ws, alice, { to: '@self', text: 'note 2' }, { idempotencyKey: 'self-2' });
+
+    expect(second.conversation_id).toBe(first.conversation_id);
+    expect(first.conversation_id).toBe(await expectedConversationId(ws, alice, alice));
+    expect(second._delivery).toBeNull();
+    expect(trips).toEqual([
+      'batch[select:agents,select:agents,select:direct_dm_idempotency,select:a2a_egress]',
+      'batch[select:dm_conversation_reservations,select:a2a_agents]',
+      trips.find((trip) => trip.startsWith('batch[insert:direct_dm_idempotency')),
+    ]);
+    expect(db.select().from(messages).all()).toHaveLength(2);
+  });
+
+  it('replays the same key and body from the claim without another admission', async () => {
+    const { d1, trips, db, ws, alice } = d1Fixture();
+    const request = { to: 'bob', text: 'once' };
+    const first = await sendDm(d1, ws, alice, request, { idempotencyKey: 'replay' });
+    trips.length = 0;
+
+    const replay = await sendDm(d1, ws, alice, request, { idempotencyKey: 'replay' });
+
+    expect(replay.id).toBe(first.id);
+    expect(replay._idempotency_replayed).toBe(true);
+    expect(trips).toEqual(['batch[select:agents,select:agents,select:direct_dm_idempotency,select:a2a_egress]']);
+    expect(db.select().from(messages).all()).toHaveLength(1);
+    expect(db.select().from(directDmIdempotency).all()).toHaveLength(1);
+  });
+
+  it('rejects the same key with a different body with the same 409', async () => {
+    const { d1, db, ws, alice } = d1Fixture();
+    await sendDm(d1, ws, alice, { to: 'bob', text: 'first body' }, { idempotencyKey: 'conflict' });
+
+    await expect(sendDm(d1, ws, alice, { to: 'bob', text: 'second body' }, { idempotencyKey: 'conflict' }))
+      .rejects.toMatchObject({ code: 'idempotency_key_reused', status: 409 });
+    expect(db.select().from(messages).all()).toHaveLength(1);
+  });
+
+  it('rejects a key reused for a missing recipient with the 409, not the 404', async () => {
+    const { d1, ws, alice } = d1Fixture();
+    await sendDm(d1, ws, alice, { to: 'bob', text: 'body' }, { idempotencyKey: 'order' });
+
+    await expect(sendDm(d1, ws, alice, { to: 'nobody', text: 'body' }, { idempotencyKey: 'order' }))
+      .rejects.toMatchObject({ code: 'idempotency_key_reused', status: 409 });
+  });
+
+  it('rejoins a departed participant through the write path after a steady miss', async () => {
+    const { d1, trips, db, ws, alice, bob } = d1Fixture();
+    const first = await sendDm(d1, ws, alice, { to: 'bob', text: 'hello' }, { idempotencyKey: 'rejoin-1' });
+    db.update(dmParticipants)
+      .set({ leftAt: new Date() })
+      .where(and(eq(dmParticipants.conversationId, first.conversation_id), eq(dmParticipants.agentId, bob)))
+      .run();
+    trips.length = 0;
+
+    const again = await sendDm(d1, ws, alice, { to: 'bob', text: 'again' }, { idempotencyKey: 'rejoin-2' });
+
+    expect(again.conversation_id).toBe(first.conversation_id);
+    expect(trips).toContain('insert:dm_participants');
+    const departed = db.select().from(dmParticipants)
+      .where(and(eq(dmParticipants.conversationId, first.conversation_id), isNotNull(dmParticipants.leftAt)))
+      .all();
+    expect(departed).toEqual([]);
+  });
+
+  it('drops the first read batch after deleting an expired claim and reads the rest sequentially', async () => {
+    const { d1, db, trips, ws, alice } = d1Fixture();
+    const first = await sendDm(d1, ws, alice, { to: 'bob', text: 'same' }, { idempotencyKey: 'expiring' });
+    db.update(directDmIdempotency)
+      .set({ createdAt: new Date(Date.now() - 25 * 60 * 60 * 1000) })
+      .run();
+    trips.length = 0;
+
+    const again = await sendDm(d1, ws, alice, { to: 'bob', text: 'same' }, { idempotencyKey: 'expiring' });
+    const sendTrips = [...trips];
+
+    expect(again._idempotency_replayed).toBeUndefined();
+    expect(again.id).not.toBe(first.id);
+    expect(db.select().from(messages).all()).toHaveLength(2);
+    const admission = sendTrips.find((trip) => trip.startsWith('batch[insert:direct_dm_idempotency'));
+    expect(admission).toBeDefined();
+    expect(sendTrips).toEqual([
+      'batch[select:agents,select:agents,select:direct_dm_idempotency,select:a2a_egress]',
+      'delete:direct_dm_idempotency',
+      // No row from the first batch is reused after the delete.
+      'select:direct_dm_idempotency',
+      'select:a2a_egress',
+      'select:agents',
+      'select:agents',
+      'select:dm_conversation_reservations',
+      'select:a2a_agents',
+      admission,
+      'select:deliveries',
+      'select:agents',
+    ]);
+  });
+
+  it('maps batched rows whose joined tables share column names like sequential reads', async () => {
+    // agents.name / nodes.name and a2a_agents.status / agents.status share an
+    // output column name. D1 batch() maps rows by name, so these reads must
+    // give every output column its own name or the row shifts.
+    const { d1, db, ws, alice, bob } = d1Fixture();
+    db.insert(nodes).values([
+      { id: 'node_a', workspaceId: ws, name: 'laptop-a', tokenHash: 'node_tok_a', machineId: 'mach-a' },
+      { id: 'node_b', workspaceId: ws, name: 'laptop-b', tokenHash: 'node_tok_b', machineId: 'mach-b' },
+    ]).run();
+    db.update(agents).set({ locationNodeId: 'node_a' }).where(eq(agents.id, alice)).run();
+    db.update(agents).set({ locationNodeId: 'node_b', status: 'online' }).where(eq(agents.id, bob)).run();
+    db.insert(agents).values({ id: `${bob}_carol`, workspaceId: ws, name: 'carol', tokenHash: `${bob}_tok_c`, status: 'offline' }).run();
+    db.insert(a2aAgents).values({
+      id: 'a2a_carol',
+      workspaceId: ws,
+      relayAgentId: `${bob}_carol`,
+      externalUrl: 'https://carol.example',
+      status: 'paused',
+      agentCard: { name: 'carol', url: 'https://carol.example', version: '1', skills: [{ id: 'chat', name: 'chat' }] },
+    }).run();
+
+    // The addressed recipient matches only through its node name.
+    const sent = await sendDm(d1, ws, alice, { to: 'bob', text: 'hi' }, { idempotencyKey: 'addressed', address: 'bob@laptop-b' });
+    const [stored] = db.select({ metadata: messages.metadata }).from(messages).where(eq(messages.id, sent.id)).all();
+    expect(JSON.stringify(stored?.metadata)).toContain('alice@laptop-a');
+
+    const [batched] = await runIndependentReads(d1, [a2aAgentByRelayNameQuery(d1, ws, 'carol')] as const);
+    const record = a2aAgentFromRows(batched);
+    expect(record).toEqual(await getA2aAgentByRelayName(db, ws, 'carol'));
+    expect(record).toMatchObject({ status: 'paused', relay_status: 'offline' });
   });
 });

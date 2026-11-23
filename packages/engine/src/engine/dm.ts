@@ -22,7 +22,13 @@ import {
   deliveries,
 } from '../db/tables.js';
 import { sha256Hex } from '../lib/crypto.js';
-import { runAtomicWrites, databaseConstraintKind, type AtomicWrite } from '../ports/database.js';
+import {
+  runAtomicWrites,
+  runIndependentReads,
+  supportsReadBatch,
+  databaseConstraintKind,
+  type AtomicWrite,
+} from '../ports/database.js';
 import { generateId } from './snowflake.js';
 import * as a2aEngine from './a2a.js';
 import { buildMessageLogWrite } from './console.js';
@@ -234,6 +240,30 @@ async function resolveOrReserveConversation(
 }
 
 /**
+ * {@link addressNodeSelection} with the node name read under its own output
+ * column name. Drizzle maps D1 `batch()` rows by `Object.keys(row)`, so two
+ * output columns both named `name` (agents.name, nodes.name) collide and shift
+ * every later column. `role` stays the first plain column, so a missing node
+ * still nullifies to `null` as before.
+ */
+function batchSafeNodeSelection() {
+  return { ...addressNodeSelection(), name: sql<string>`${nodes.name}`.as('node_name') };
+}
+
+interface ConversationKeys {
+  sortedPair: [string, string];
+  pairKey: string;
+  conversationId: string;
+  channelId: string;
+}
+
+async function conversationKeys(workspaceId: string, fromAgentId: string, toAgentId: string): Promise<ConversationKeys> {
+  const sortedPair = [fromAgentId, toAgentId].sort() as [string, string];
+  const pairKey = await deriveDmPairKey(workspaceId, sortedPair[0], sortedPair[1]);
+  return { sortedPair, pairKey, conversationId: `dm_${pairKey}`, channelId: `dmch_${pairKey}` };
+}
+
+/**
  * Read-only fast path for an established 1:1: one SELECT that proves every
  * write in `resolveConversation` would be a no-op, so a repeat send skips them.
  *
@@ -250,18 +280,14 @@ async function resolveOrReserveConversation(
  *   - both roster rows exist with `left_at` NULL, so the rejoin upserts would
  *     change nothing. A departed participant falls through and is rejoined.
  *
- * Anything else returns undefined and the caller runs the write path
+ * Anything else returns no row and the caller runs the write path
  * unchanged. Those writes were never one transaction, so answering from a
- * single read that sees them all as no-ops is the same outcome.
+ * single read that sees them all as no-ops is the same outcome. The query is
+ * returned unawaited so `sendDm` can put it in a D1 read batch.
  */
-async function readSteadyConversation(
-  db: Db,
-  conversationId: string,
-  channelId: string,
-  workspaceId: string,
-  sortedPair: readonly [string, string],
-): Promise<{ id: string; channelId: string } | undefined> {
-  const [participantOneId, participantTwoId] = sortedPair;
+function steadyConversationQuery(db: Db, keys: ConversationKeys, workspaceId: string) {
+  const { conversationId, channelId } = keys;
+  const [participantOneId, participantTwoId] = keys.sortedPair;
   const activeParticipant = (agentId: string) => exists(
     db
       .select({ agentId: dmParticipants.agentId })
@@ -273,7 +299,7 @@ async function readSteadyConversation(
       )),
   );
 
-  const [conv] = await db
+  return db
     .select({ id: dmConversations.id, channelId: dmConversations.channelId })
     .from(dmConversationReservations)
     .innerJoin(dmConversations, and(
@@ -293,22 +319,23 @@ async function readSteadyConversation(
       activeParticipant(participantTwoId),
     ))
     .limit(1);
-
-  return conv;
 }
 
+/**
+ * `prefetched` carries a steady read the caller already ran (in a read batch)
+ * with the keys it was built from; undefined runs the read here.
+ */
 async function resolveConversation(
   db: Db,
   workspaceId: string,
   fromAgentId: string,
   toAgentId: string,
+  prefetched?: { keys: ConversationKeys; steady: Array<{ id: string; channelId: string }> },
 ) {
-  const sortedPair = [fromAgentId, toAgentId].sort() as [string, string];
-  const pairKey = await deriveDmPairKey(workspaceId, sortedPair[0], sortedPair[1]);
-  const conversationId = `dm_${pairKey}`;
-  const channelId = `dmch_${pairKey}`;
+  const keys = prefetched?.keys ?? await conversationKeys(workspaceId, fromAgentId, toAgentId);
+  const { sortedPair, pairKey, conversationId, channelId } = keys;
 
-  const steady = await readSteadyConversation(db, conversationId, channelId, workspaceId, sortedPair);
+  const [steady] = prefetched?.steady ?? await steadyConversationQuery(db, keys, workspaceId);
   if (steady) return steady;
 
   // This is the mandatory resolution seam. It must happen before any metadata
@@ -633,9 +660,50 @@ export async function sendDm(
     ? await sha256Hex(JSON.stringify(data))
     : '';
   const idempotencyNow = new Date();
-  let [acceptedDirect] = directRequestId
-    ? await db.select().from(directDmIdempotency).where(eq(directDmIdempotency.id, directRequestId))
-    : [];
+  const directRead = (id: string) => db.select().from(directDmIdempotency).where(eq(directDmIdempotency.id, id));
+  const egressRead = (id: string) => db.select().from(a2aEgress).where(eq(a2aEgress.id, id));
+  const recipientRead = () => {
+    const query = db
+      .select({ agent: agents, node: batchSafeNodeSelection() })
+      .from(agents)
+      .leftJoin(nodes, eq(nodes.id, agents.locationNodeId));
+    return options.address !== undefined
+      ? query.where(and(
+        eq(agents.workspaceId, workspaceId),
+        inArray(agents.name, addressSplits(options.address).map((split) => split.agent)),
+      ))
+      : query.where(and(
+        eq(agents.workspaceId, workspaceId),
+        data.to === '@self' ? eq(agents.id, fromAgentId) : eq(agents.name, data.to),
+      ));
+  };
+  const senderRead = () => db
+    .select({ name: agents.name, node: batchSafeNodeSelection() })
+    .from(agents)
+    .leftJoin(nodes, eq(nodes.id, agents.locationNodeId))
+    .where(and(eq(agents.workspaceId, workspaceId), eq(agents.id, fromAgentId)));
+  // On D1 these (up to four) independent SELECTs share one round trip. Every decision
+  // below still runs on their rows in today's order (replay, conflict, A2A
+  // replay, recipient 404, sender 500), so the same error reaches the caller.
+  // Other handles keep today's lazy, one-at-a-time reads.
+  type DirectRow = typeof directDmIdempotency.$inferSelect;
+  type EgressRow = typeof a2aEgress.$inferSelect;
+  type RecipientRow = Awaited<ReturnType<typeof recipientRead>>[number];
+  type SenderRow = Awaited<ReturnType<typeof senderRead>>[number];
+  let prefetched: { recipient: RecipientRow[]; sender: SenderRow[]; direct: DirectRow[]; egress: EgressRow[] } | undefined;
+  if (supportsReadBatch(db)) {
+    // requestEgressId implies directRequestId: both need an idempotency key.
+    const [recipient, sender, direct = [], egress = []] = await runIndependentReads(db, [
+      recipientRead(),
+      senderRead(),
+      ...(directRequestId ? [directRead(directRequestId)] : []),
+      ...(requestEgressId ? [egressRead(requestEgressId)] : []),
+    ]) as [RecipientRow[], SenderRow[], DirectRow[]?, EgressRow[]?];
+    prefetched = { recipient, sender, direct, egress };
+  }
+  let [acceptedDirect] = prefetched
+    ? prefetched.direct
+    : directRequestId ? await directRead(directRequestId) : [];
   if (
     acceptedDirect
     && acceptedDirect.createdAt.getTime() + DIRECT_DM_IDEMPOTENCY_TTL_MS <= idempotencyNow.getTime()
@@ -644,18 +712,17 @@ export async function sendDm(
       eq(directDmIdempotency.id, acceptedDirect.id),
       lte(directDmIdempotency.createdAt, new Date(idempotencyNow.getTime() - DIRECT_DM_IDEMPOTENCY_TTL_MS)),
     ));
-    [acceptedDirect] = await db
-      .select()
-      .from(directDmIdempotency)
-      .where(eq(directDmIdempotency.id, directRequestId!));
+    // Rows prefetched before this delete may predate a concurrent re-admission; read everything after it afresh, as before.
+    prefetched = undefined;
+    [acceptedDirect] = await directRead(directRequestId!);
   }
   if (acceptedDirect) {
     if (acceptedDirect.fingerprint !== directFingerprint) {
       throw codedError('Idempotency-Key was reused with a different request payload', 'idempotency_key_reused', 409);
     }
-    const [acceptedEgress] = requestEgressId
-      ? await db.select().from(a2aEgress).where(eq(a2aEgress.id, requestEgressId))
-      : [];
+    const [acceptedEgress] = prefetched
+      ? prefetched.egress
+      : requestEgressId ? await egressRead(requestEgressId) : [];
     if (acceptedEgress) await replayAcceptedA2aEgress(db, acceptedEgress.id);
     return {
       ...(acceptedDirect.response as Omit<SendDmResult, '_delivery' | '_delivery_rejections'>),
@@ -670,9 +737,9 @@ export async function sendDm(
   }
   // Resolve durable request identity before mutable recipient/attachment metadata.
   // A removed/recreated target must never turn an accepted retry into a new send.
-  let accepted: typeof a2aEgress.$inferSelect | undefined = requestEgressId
-    ? (await db.select().from(a2aEgress).where(eq(a2aEgress.id, requestEgressId)))[0]
-    : undefined;
+  let [accepted]: Array<typeof a2aEgress.$inferSelect | undefined> = prefetched
+    ? prefetched.egress
+    : requestEgressId ? await egressRead(requestEgressId) : [];
   if (
     accepted
     && accepted.createdAt.getTime() + A2A_EGRESS_RETRY_WINDOW_MS <= idempotencyNow.getTime()
@@ -683,7 +750,7 @@ export async function sendDm(
     } else {
       // A live transport lease may have won between the read and conditional
       // delete. Re-read the row rather than admitting a competing identity.
-      [accepted] = await db.select().from(a2aEgress).where(eq(a2aEgress.id, requestEgressId!));
+      [accepted] = await egressRead(requestEgressId!);
     }
   }
   if (accepted) {
@@ -735,19 +802,10 @@ export async function sendDm(
   const workspacePolicy = options.resolveWorkspaceDeliveryPolicy
     ? await options.resolveWorkspaceDeliveryPolicy() : options.workspaceDeliveryPolicy;
 
-  const recipientQuery = db
-    .select({ agent: agents, node: addressNodeSelection() })
-    .from(agents)
-    .leftJoin(nodes, eq(nodes.id, agents.locationNodeId));
+  const recipientRows = prefetched?.recipient ?? await recipientRead();
   const [recipient] = options.address !== undefined
-    ? [selectAddressedRecipient(options.address, await recipientQuery.where(and(
-      eq(agents.workspaceId, workspaceId),
-      inArray(agents.name, addressSplits(options.address).map((split) => split.agent)),
-    )))]
-    : await recipientQuery.where(and(
-      eq(agents.workspaceId, workspaceId),
-      data.to === '@self' ? eq(agents.id, fromAgentId) : eq(agents.name, data.to),
-    ));
+    ? [selectAddressedRecipient(options.address, recipientRows)]
+    : recipientRows;
   const addressedRecipient = options.address !== undefined && recipient?.agent.locationNodeId
     ? {
       agentId: recipient.agent.id,
@@ -760,11 +818,7 @@ export async function sendDm(
     throw codedError(`Agent "${data.to}" not found`, 'agent_not_found', 404);
   }
 
-  const [fromAgent] = await db
-    .select({ name: agents.name, node: addressNodeSelection() })
-    .from(agents)
-    .leftJoin(nodes, eq(nodes.id, agents.locationNodeId))
-    .where(and(eq(agents.workspaceId, workspaceId), eq(agents.id, fromAgentId)));
+  const [fromAgent] = prefetched?.sender ?? await senderRead();
 
   if (!fromAgent?.name) {
     throw codedError('Sender agent not found', 'internal_error', 500);
@@ -774,7 +828,21 @@ export async function sendDm(
   // Resolve attachments first so invalid attachments fail before any DM
   // metadata (channel/conversation/participant rows) is created.
   const attachments = await resolveSendAttachments(db, workspaceId, data.attachments);
-  const conv = await resolveConversation(db, workspaceId, fromAgentId, toAgent.id);
+  // On D1 the steady conversation read and the A2A target lookup share one
+  // round trip; both depend only on the resolved recipient. Their results are
+  // used where today's code reads them (the A2A rows only after reply_to).
+  let a2aRows: Awaited<ReturnType<typeof a2aEngine.a2aAgentByRelayNameQuery>> | undefined;
+  let steadyPrefetch: Parameters<typeof resolveConversation>[4];
+  if (prefetched && !options.skipA2aIntercept) {
+    const keys = await conversationKeys(workspaceId, fromAgentId, toAgent.id);
+    const [steady, target] = await runIndependentReads(db, [
+      steadyConversationQuery(db, keys, workspaceId),
+      a2aEngine.a2aAgentByRelayNameQuery(db, workspaceId, toAgent.name),
+    ] as const);
+    steadyPrefetch = { keys, steady };
+    a2aRows = target;
+  }
+  const conv = await resolveConversation(db, workspaceId, fromAgentId, toAgent.id, steadyPrefetch);
   if (data.reply_to_message_id !== undefined) {
     // An explicit correlation must be one the recipient can verify: their own
     // message, in this conversation. Anything else is a bad request, never a
@@ -789,7 +857,7 @@ export async function sendDm(
   }
   const a2aTarget = options.skipA2aIntercept
     ? null
-    : await a2aEngine.getA2aAgentByRelayName(db, workspaceId, toAgent.name);
+    : a2aRows ? a2aEngine.a2aAgentFromRows(a2aRows) : await a2aEngine.getA2aAgentByRelayName(db, workspaceId, toAgent.name);
 
   const egressId = a2aTarget
     ? `a2ae_${await sha256Hex(JSON.stringify([workspaceId, fromAgentId, options.idempotencyKey ?? generateId()]))}`
