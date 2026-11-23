@@ -4,8 +4,9 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createRequire } from 'node:module';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, expect, it } from 'vitest';
 import { getSqliteDb, runMigrations, type SqliteDbHandle } from '../../adapters/node/database.js';
+import { describeSqliteOnly } from './harness.js';
 
 const script = fileURLToPath(new URL('../../../../../scripts/retain-agents.mts', import.meta.url));
 const betterSqlite3 = createRequire(import.meta.url).resolve('better-sqlite3');
@@ -28,7 +29,8 @@ globalThis.fetch = async (url, init) => {
 };
 `;
 
-describe('agent retention CLI', () => {
+// The retention CLI operates on SQLite files and D1 only; it has no PostgreSQL target.
+describeSqliteOnly('agent retention CLI', () => {
   let directory: string;
   let database: string;
   let handle: SqliteDbHandle;

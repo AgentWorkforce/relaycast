@@ -18,7 +18,11 @@ import {
 import { drainFileCleanup, MIN_BOOTSTRAP_IDEMPOTENCY_KEY_LENGTH, reapExpiredWorkspaces } from '../../engine/workspace.js';
 import {
   createWorkspace,
+  installFaultTrigger,
   makeNodeStack,
+  pgMode,
+  rawAll,
+  rawGet,
   registerAgent,
   type TestStack,
 } from './harness.js';
@@ -298,14 +302,24 @@ describe('workspace lifecycle', () => {
       eventQueue: { pollIntervalMs: 0 },
       presence: { ttlMs: 60_000, sweepIntervalMs: 0 },
     } as const;
-    let firstRuntime: ReturnType<typeof createNodeRuntime> | undefined;
-    let restartedRuntime: ReturnType<typeof createNodeRuntime> | undefined;
-    let unconfiguredRuntime: ReturnType<typeof createNodeRuntime> | undefined;
-    try {
-      firstRuntime = createNodeRuntime({
+    type Restartable = { deps: ReturnType<typeof createNodeRuntime>['deps']; close(): unknown };
+    // A restart is a new runtime over the same database: the SQLite file, or
+    // on PostgreSQL a fresh handle on the same (untruncated) schema.
+    const openRuntime = (workspaceBootstrapSecret: string | undefined): Restartable => {
+      if (pgMode) {
+        const restarted = makeNodeStack({ workspaceBootstrapSecret });
+        return { deps: restarted.runtime.deps, close: () => restarted.close() };
+      }
+      return createNodeRuntime({
         ...baseOptions,
-        config: { environment: 'test', workspaceBootstrapSecret: 'stable-test-secret' },
+        config: { environment: 'test', ...(workspaceBootstrapSecret ? { workspaceBootstrapSecret } : {}) },
       });
+    };
+    let firstRuntime: Restartable | undefined;
+    let restartedRuntime: Restartable | undefined;
+    let unconfiguredRuntime: Restartable | undefined;
+    try {
+      firstRuntime = openRuntime('stable-test-secret');
       const first = await createEngine(firstRuntime.deps).request('/v1/workspaces', {
         method: 'POST',
         headers: {
@@ -316,13 +330,10 @@ describe('workspace lifecycle', () => {
       });
       expect(first.status).toBe(201);
       const firstData = (await first.json() as { data: { workspace_id: string; api_key: string } }).data;
-      firstRuntime.close();
+      await firstRuntime.close();
       firstRuntime = undefined;
 
-      restartedRuntime = createNodeRuntime({
-        ...baseOptions,
-        config: { environment: 'test', workspaceBootstrapSecret: 'stable-test-secret' },
-      });
+      restartedRuntime = openRuntime('stable-test-secret');
       const replay = await createEngine(restartedRuntime.deps).request('/v1/workspaces', {
         method: 'POST',
         headers: {
@@ -334,10 +345,10 @@ describe('workspace lifecycle', () => {
       expect(replay.status).toBe(200);
       expect((await replay.json() as { data: unknown }).data).toEqual(firstData);
 
-      restartedRuntime.close();
+      await restartedRuntime.close();
       restartedRuntime = undefined;
 
-      unconfiguredRuntime = createNodeRuntime({ ...baseOptions, config: { environment: 'test' } });
+      unconfiguredRuntime = openRuntime(undefined);
       const unkeyed = await createEngine(unconfiguredRuntime.deps).request('/v1/workspaces', {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
@@ -364,9 +375,9 @@ describe('workspace lifecycle', () => {
       expect((await unavailable.json() as { error: { code: string } }).error.code)
         .toBe('workspace_create_idempotency_unavailable');
     } finally {
-      unconfiguredRuntime?.close();
-      restartedRuntime?.close();
-      firstRuntime?.close();
+      await unconfiguredRuntime?.close();
+      await restartedRuntime?.close();
+      await firstRuntime?.close();
       rmSync(dir, { recursive: true, force: true });
     }
   });
@@ -569,13 +580,12 @@ describe('workspace lifecycle', () => {
       type: 'workspace.test',
       payload: JSON.stringify({ retain: true }),
     });
-    stack.runtime.handle.sqlite.exec(`
-      CREATE TRIGGER reject_workspace_delete
-      BEFORE DELETE ON workspaces
-      BEGIN
-        SELECT RAISE(ABORT, 'workspace delete rejected');
-      END;
-    `);
+    await installFaultTrigger(stack, {
+      name: 'reject_workspace_delete',
+      table: 'workspaces',
+      event: 'DELETE',
+      message: 'workspace delete rejected',
+    });
     const deleteObjects = vi.spyOn(stack.runtime.deps.files, 'deleteObjects');
 
     const response = await stack.app.request(`/v1/workspaces/${workspace.workspaceId}`, {
@@ -796,6 +806,9 @@ describe('workspace lifecycle', () => {
   it('does not schedule a reap for an idempotent create hit', async () => {
     const persistent = await createWorkspace(stack.app, 'dedupe-hit');
     const expired = await createWorkspace(stack.app, 'expired-bystander');
+    // Each real create schedules its own bounded reap; let those finish before
+    // backdating, so only the idempotent hit below could reap the bystander.
+    await stack.settle();
     await stack.runtime.handle.db
       .update(workspaces)
       .set({ expiresAt: new Date(Date.now() - 1_000) })
@@ -818,24 +831,16 @@ describe('workspace lifecycle', () => {
       .where(eq(workspaces.id, expired.workspaceId))).toHaveLength(1);
   });
 
-  it('accounts for every workspace_id table and enables foreign-key enforcement', () => {
-    const coverage = stack.runtime.handle.sqlite.prepare(`
-      SELECT schema_table.name AS table_name,
-             (
-               SELECT foreign_key.on_delete
-               FROM pragma_foreign_key_list(schema_table.name) AS foreign_key
-               WHERE foreign_key."table" = 'workspaces'
-                 AND foreign_key."from" = 'workspace_id'
-             ) AS on_delete
-      FROM sqlite_schema AS schema_table
-      JOIN pragma_table_info(schema_table.name) AS column
-        ON column.name = 'workspace_id'
-      WHERE schema_table.type = 'table'
-      ORDER BY schema_table.name
-    `).all() as Array<{ table_name: string; on_delete: string | null }>;
+  it('accounts for every workspace_id table and enables foreign-key enforcement', async () => {
+    const coverage = pgMode ? await pgWorkspaceCoverage() : sqliteWorkspaceCoverage();
     const withoutDirectCascade = coverage.filter((table) => table.on_delete !== 'CASCADE');
 
-    expect(stack.runtime.handle.sqlite.pragma('foreign_keys', { simple: true })).toBe(1);
+    if (pgMode) {
+      // PostgreSQL enforces foreign keys unless replication mode suspends them.
+      expect(await rawGet(stack.runtime.deps.db, 'SHOW session_replication_role')).toEqual({ session_replication_role: 'origin' });
+    } else {
+      expect(stack.runtime.handle.sqlite.pragma('foreign_keys', { simple: true })).toBe(1);
+    }
     expect(coverage).toHaveLength(37);
     expect(coverage).toContainEqual({ table_name: 'a2a_inbound', on_delete: 'CASCADE' });
     expect(coverage).toContainEqual({ table_name: 'a2a_egress', on_delete: 'CASCADE' });
@@ -847,5 +852,43 @@ describe('workspace lifecycle', () => {
       { table_name: 'workspace_create_idempotency', on_delete: null },
       { table_name: 'workspace_events', on_delete: null },
     ]);
+
+    function sqliteWorkspaceCoverage() {
+      return stack.runtime.handle.sqlite.prepare(`
+      SELECT schema_table.name AS table_name,
+               (
+                 SELECT foreign_key.on_delete
+                 FROM pragma_foreign_key_list(schema_table.name) AS foreign_key
+                 WHERE foreign_key."table" = 'workspaces'
+                   AND foreign_key."from" = 'workspace_id'
+               ) AS on_delete
+        FROM sqlite_schema AS schema_table
+        JOIN pragma_table_info(schema_table.name) AS column
+          ON column.name = 'workspace_id'
+        WHERE schema_table.type = 'table'
+        ORDER BY schema_table.name
+    `).all() as Array<{ table_name: string; on_delete: string | null }>;
+    }
+
+    /** The same rows from the PostgreSQL catalog: tables with workspace_id and its FK's delete rule. */
+    function pgWorkspaceCoverage() {
+      return rawAll<{ table_name: string; on_delete: string | null }>(stack.runtime.deps.db, `
+        SELECT cls.relname AS table_name,
+               (
+                 SELECT CASE con.confdeltype
+                          WHEN 'c' THEN 'CASCADE' WHEN 'a' THEN 'NO ACTION' WHEN 'r' THEN 'RESTRICT'
+                          WHEN 'n' THEN 'SET NULL' WHEN 'd' THEN 'SET DEFAULT' END
+                 FROM pg_constraint con
+                 JOIN pg_attribute fk_column ON fk_column.attrelid = con.conrelid AND fk_column.attnum = con.conkey[1]
+                 WHERE con.conrelid = cls.oid AND con.contype = 'f' AND cardinality(con.conkey) = 1
+                   AND con.confrelid = 'workspaces'::regclass AND fk_column.attname = 'workspace_id'
+               ) AS on_delete
+        FROM pg_class cls
+        JOIN pg_namespace ns ON ns.oid = cls.relnamespace
+        JOIN pg_attribute col ON col.attrelid = cls.oid AND col.attname = 'workspace_id' AND NOT col.attisdropped
+        WHERE ns.nspname = current_schema() AND cls.relkind IN ('r', 'p')
+        ORDER BY cls.relname
+      `);
+    }
   });
 });

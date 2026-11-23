@@ -1,6 +1,9 @@
+import { isDeepStrictEqual } from 'node:util';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { AGENT_LIVENESS_TTL_MS, AGENT_ROSTER_RECENCY_MS, RELEASED_AGENT_STATUS, listAgents } from '../../engine/agent.js';
-import { createWorkspace, makeNodeStack, type TestStack } from './harness.js';
+import {
+  createWorkspace, interceptStatements, makeNodeStack, observeStatementRows, pgMode, rawAll, rawRun, rejectWrites, type TestStack,
+} from './harness.js';
 
 // bun:sqlite (the standalone binary's driver, under `npm run test:bun`) has no
 // user-defined SQL functions, which this visit-counting probe relies on.
@@ -48,18 +51,17 @@ describe('agent roster read contract', () => {
     stack = makeNodeStack();
     ({ workspaceId, workspaceKey } = await createWorkspace(stack.app, 'roster-read-contract'));
     const other = await createWorkspace(stack.app, 'other-roster');
-    const insert = stack.runtime.handle.sqlite.prepare(`
-      INSERT INTO agents (id, workspace_id, name, token_hash, status, last_seen)
-      VALUES (?, ?, ?, ?, ?, ?)
-    `);
     for (const scope of [workspaceId, other.workspaceId]) {
       for (const row of fixtures) {
         const id = `${scope}-${row.name}`;
-        insert.run(id, scope, row.name, `test-hash-${id}`, row.status, row.lastSeen);
+        await rawRun(stack.runtime.deps.db, `
+      INSERT INTO agents (id, workspace_id, name, token_hash, status, last_seen)
+      VALUES (?, ?, ?, ?, ?, ?)
+    `, [id, scope, row.name, `test-hash-${id}`, row.status, row.lastSeen]);
       }
     }
     // Reject even zero-row UPDATEs, not just observable status changes.
-    stack.runtime.handle.sqlite.pragma('query_only = ON');
+    rejectWrites(stack);
   });
 
   afterEach(() => {
@@ -72,21 +74,8 @@ describe('agent roster read contract', () => {
       `filters status=%s in SQL with the same presence at TTL + ${offset}ms`,
       async (status) => {
         vi.spyOn(Date, 'now').mockReturnValue(NOW + offset);
-        const sqlite = stack.runtime.handle.sqlite;
-        const prepare = sqlite.prepare.bind(sqlite);
         const materialized: number[] = [];
-        vi.spyOn(sqlite, 'prepare').mockImplementation((source: string) => {
-          const statement = prepare(source);
-          if (/from "agents"/i.test(source)) {
-            const all = statement.all.bind(statement);
-            vi.spyOn(statement, 'all').mockImplementation((...params: unknown[]) => {
-              const rows = all(...params);
-              materialized.push(rows.length);
-              return rows;
-            });
-          }
-          return statement;
-        });
+        observeStatementRows(stack, /from "agents"/i, (_source, rows) => { materialized.push(rows); });
         const query = status === undefined ? '' : `?status=${status}`;
         const response = await stack.app.request(`/v1/agents${query}`, {
           headers: { authorization: `Bearer ${workspaceKey}` },
@@ -99,7 +88,7 @@ describe('agent roster read contract', () => {
         expect(body.data.map(({ name, status }) => ({ name, status })).sort((a, b) => a.name.localeCompare(b.name)))
           .toEqual(expected.sort((a, b) => a.name.localeCompare(b.name)));
         // A JS post-filter can return the right API response while still
-        // loading every row. Count actual SQLite results to catch that cost.
+        // loading every row. Count actual database results to catch that cost.
         expect(materialized).toEqual([expected.length]);
       },
     );
@@ -107,12 +96,8 @@ describe('agent roster read contract', () => {
 
   it('uses one presence snapshot when a SELECT crosses the TTL boundary', async () => {
     const clock = vi.spyOn(Date, 'now').mockReturnValue(NOW);
-    const sqlite = stack.runtime.handle.sqlite;
-    const prepare = sqlite.prepare.bind(sqlite);
-    vi.spyOn(sqlite, 'prepare').mockImplementation((source: string) => {
-      const statement = prepare(source);
+    interceptStatements(stack, (source) => {
       if (/from "agents"/i.test(source)) clock.mockReturnValue(NOW + 1_000);
-      return statement;
     });
     const roster = await listAgents(stack.runtime.deps.db, workspaceId, 'active');
     expect(roster.filter((row) => row.name.startsWith('boundary-')).map((row) => row.status))
@@ -122,9 +107,8 @@ describe('agent roster read contract', () => {
 
   it('serves repeated roster and detail reads with writes disabled and leaves stored presence untouched', async () => {
     vi.spyOn(Date, 'now').mockReturnValue(NOW + 1);
-    const sqlite = stack.runtime.handle.sqlite;
-    const snapshot = () => sqlite.prepare('SELECT id, status, last_seen FROM agents ORDER BY id').all();
-    const before = snapshot();
+    const snapshot = () => rawAll(stack.runtime.deps.db, 'SELECT id, status, last_seen FROM agents ORDER BY id');
+    const before = await snapshot();
     for (let attempt = 0; attempt < 2; attempt++) {
       for (const expected of expectedRoster(1)) {
         const response = await stack.app.request(`/v1/agents/${expected.name}`, {
@@ -140,7 +124,7 @@ describe('agent roster read contract', () => {
       });
       expect(missing.status).toBe(404);
     }
-    expect(snapshot()).toEqual(before);
+    expect(await snapshot()).toEqual(before);
   });
 });
 
@@ -149,34 +133,24 @@ describe('agent roster recency and projection', () => {
     const stack = makeNodeStack();
     const { workspaceId, workspaceKey } = await createWorkspace(stack.app, 'recent-roster');
     const other = await createWorkspace(stack.app, 'other-recent-roster');
-    const sqlite = stack.runtime.handle.sqlite;
     const cutoff = (NOW - AGENT_ROSTER_RECENCY_MS) / 1_000;
     const metadata = { cli: 'codex', host: 'finn-mini', session_id: 'session', objective: 'investigate', padding: 'x'.repeat(10_000) };
-    const insert = sqlite.prepare(`INSERT INTO agents(id, workspace_id, name, token_hash, status, last_seen, metadata)
-      VALUES (?, ?, ?, ?, ?, ?, ?)`);
     for (const scope of [workspaceId, other.workspaceId]) {
       for (const [name, status, lastSeen] of [
         ['old', 'offline', cutoff - 1], ['boundary', 'offline', cutoff],
         ['recent', 'active', NOW / 1_000], ['released', 'released', NOW / 1_000],
-      ] as const) insert.run(scope + name, scope, name, scope + name, status, lastSeen, JSON.stringify(metadata));
+      ] as const) {
+        await rawRun(stack.runtime.deps.db, `INSERT INTO agents(id, workspace_id, name, token_hash, status, last_seen, metadata)
+      VALUES (?, ?, ?, ?, ?, ?, ?)`, [scope + name, scope, name, scope + name, status, lastSeen, JSON.stringify(metadata)]);
+      }
     }
-    const prepare = sqlite.prepare.bind(sqlite);
     const queries: string[] = [];
     const materialized: number[] = [];
-    vi.spyOn(sqlite, 'prepare').mockImplementation((source: string) => {
-      const statement = prepare(source);
-      if (/from "agents"/i.test(source)) {
-        queries.push(source);
-        const all = statement.all.bind(statement);
-        vi.spyOn(statement, 'all').mockImplementation((...params: unknown[]) => {
-          const rows = all(...params);
-          materialized.push(rows.length);
-          return rows;
-        });
-      }
-      return statement;
+    observeStatementRows(stack, /from "agents"/i, (source, rows) => {
+      queries.push(source);
+      materialized.push(rows);
     });
-    sqlite.pragma('query_only = ON');
+    rejectWrites(stack);
     vi.spyOn(Date, 'now').mockReturnValue(NOW);
     const read = async (query = '') => {
       const response = await stack.app.request(`/v1/agents${query}`, { headers: { authorization: `Bearer ${workspaceKey}` } });
@@ -188,7 +162,10 @@ describe('agent roster recency and projection', () => {
       for (const query of ['', '?status=all', '?status=all&include_stale=0']) {
         const rows = await read(query);
         expect(rows.map(row => row.name).sort()).toEqual(['boundary', 'recent']);
-        expect(rows.every(row => JSON.stringify(row.metadata) === JSON.stringify(metadata))).toBe(true);
+        // pg: jsonb keeps its own key order, so the document itself must match there.
+        expect(rows.every(row => pgMode
+          ? isDeepStrictEqual(row.metadata, metadata)
+          : JSON.stringify(row.metadata) === JSON.stringify(metadata))).toBe(true);
         expect(materialized.at(-1)).toBe(2);
         expect(queries.at(-1)).not.toMatch(/token_hash|session_ref|delivery_seq/);
       }
@@ -215,7 +192,9 @@ describe('agent roster recency and projection', () => {
 });
 
 describe('agent roster row visits', () => {
-  it.skipIf(!userFunctions)('skips released history and seeks live status ranges within one workspace', async () => {
+  // Counts SQLite planner row visits through a user-defined function behind a
+  // view over the renamed table; PostgreSQL's planner has no equivalent probe.
+  it.skipIf(!userFunctions || pgMode)('skips released history and seeks live status ranges within one workspace', async () => {
     const stack = makeNodeStack();
     const { workspaceId, workspaceKey } = await createWorkspace(stack.app, 'roster-row-visits');
     const other = await createWorkspace(stack.app, 'other-row-visits');

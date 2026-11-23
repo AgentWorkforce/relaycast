@@ -88,8 +88,10 @@ describe('node delivery contracts', () => {
     return res;
   }
 
-  async function waitForAssertion(assertion: () => void | Promise<void>) {
-    await stack.settle();
+  // Pass `target` for tests that build their own stack, so its background
+  // dispatch (always background on pg) is the work that gets settled.
+  async function waitForAssertion(assertion: () => void | Promise<void>, target: { settle(): Promise<void> } = stack) {
+    await target.settle();
     await assertion();
   }
 
@@ -501,7 +503,7 @@ describe('node delivery contracts', () => {
       expect((await authed('/v1/channels/general/messages', alice.token, { text: 'via proxy' })).status).toBe(201);
 
       const deliveryCall = () => fetchMock.mock.calls.find((c) => (c[1]?.headers)?.['X-Relaycast-Event'] === 'message.created');
-      await waitForAssertion(() => expect(deliveryCall()).toBeTruthy());
+      await waitForAssertion(() => expect(deliveryCall()).toBeTruthy(), proxyStack);
       const [reqUrl, init] = deliveryCall();
       // The POST goes to the PROXY, with the real target + auth in control headers,
       // and the node's own webhook auth header preserved for the proxy to forward.
@@ -541,7 +543,7 @@ describe('node delivery contracts', () => {
         const [item] = ((await queued.json()) as { data: Array<{ status: string; last_dispatch_error: string | null }> }).data;
         expect(item).toMatchObject({ status: 'queued' });
         expect(item.last_dispatch_error).toMatch(/no http_push proxy configured/);
-      });
+      }, proxyStack);
     } finally {
       proxyStack.close();
     }

@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { eq } from 'drizzle-orm';
-import { attachFakeBatch, makeNodeStack, createWorkspace, registerAgent, FakeSocket, type TestStack } from './harness.js';
+import { beforeAtomicWrites, makeNodeStack, createWorkspace, rawRun, registerAgent, FakeSocket, type TestStack } from './harness.js';
 import { agents, messages, nodes } from '../../db/tables.js';
 import { addressSplits, SENDER_ADDRESS_METADATA_KEY } from '../../engine/address.js';
 import { canonicalJson } from '../../engine/messageMetadata.js';
@@ -159,12 +159,11 @@ describe('addressed send', () => {
   it('rolls back an addressed send when the agent moves between selection and commit', async () => {
     const { ws, alice, bob } = await seed();
     await enrollBroker(ws, 'node_desktop', 'desktop', 'mach-456');
-    const sqlite = stack.runtime.handle.sqlite;
     let moved = false;
-    attachFakeBatch(stack, stack.runtime.deps.db, async () => {
+    beforeAtomicWrites(stack, stack.runtime.deps.db, async () => {
       if (moved) return;
       moved = true;
-      sqlite.prepare('UPDATE agents SET location_node_id = ? WHERE id = ?').run('node_desktop', bob.agentId);
+      await rawRun(stack.runtime.deps.db, 'UPDATE agents SET location_node_id = ? WHERE id = ?', ['node_desktop', bob.agentId]);
     });
 
     const res = await send(alice.token, 'bob@laptop', { text: 'raced' });
@@ -178,12 +177,11 @@ describe('addressed send', () => {
     const { alice, bob } = await seed();
     const nodeId = `node_direct_${alice.agentId}`;
     await stack.runtime.deps.db.update(nodes).set({ machineId: 'old-machine' }).where(eq(nodes.id, nodeId));
-    const sqlite = stack.runtime.handle.sqlite;
     let changed = false;
-    attachFakeBatch(stack, stack.runtime.deps.db, async () => {
+    beforeAtomicWrites(stack, stack.runtime.deps.db, async () => {
       if (changed) return;
       changed = true;
-      sqlite.prepare('UPDATE nodes SET machine_id = ? WHERE id = ?').run('new-machine', nodeId);
+      await rawRun(stack.runtime.deps.db, 'UPDATE nodes SET machine_id = ? WHERE id = ?', ['new-machine', nodeId]);
     });
 
     const stale = await send(bob.token, 'alice@old-machine', { text: 'stale address' });

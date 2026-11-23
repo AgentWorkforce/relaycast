@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { AGENT_ROSTER_RECENCY_MS, listAgents } from '../../engine/agent.js';
 import { configureNodeLiveness, inspectNodesLiveness } from '../../engine/nodeLiveness.js';
-import { createWorkspace, makeNodeStack, type TestStack } from './harness.js';
+import { createWorkspace, makeNodeStack, observeStatementRows, pgMode, rawRun, sqliteOnly, type TestStack } from './harness.js';
 import type { NodeLivenessSnapshot } from '../../ports/nodeLiveness.js';
 
 // Rows a hosted (node-authority) roster holds in a large workspace: most are
@@ -38,15 +38,15 @@ describe('hosted roster reads under node authority', () => {
     vi.spyOn(Date, 'now').mockReturnValue(NOW);
     stack = makeNodeStack();
     ({ workspaceId, workspaceKey } = await createWorkspace(stack.app, 'hosted-roster'));
-    const sqlite = stack.runtime.handle.sqlite;
-    const insertNode = sqlite.prepare('INSERT INTO nodes (id, workspace_id, name, token_hash) VALUES (?, ?, ?, ?)');
-    for (const node of new Set(fixtures.map(row => row[4]))) insertNode.run(node, workspaceId, node, `hash-${node}`);
-    const insert = sqlite.prepare(`
+    const db = stack.runtime.deps.db;
+    for (const node of new Set(fixtures.map(row => row[4]))) {
+      await rawRun(db, 'INSERT INTO nodes (id, workspace_id, name, token_hash) VALUES (?, ?, ?, ?)', [node, workspaceId, node, `hash-${node}`]);
+    }
+    for (const [name, status, before, lastSeen, node] of fixtures) {
+      await rawRun(db, `
       INSERT INTO agents (id, workspace_id, name, token_hash, status, status_before_liveness_loss, last_seen, location_type, location_node_id)
       VALUES (?, ?, ?, ?, ?, ?, ?, 'via_node', ?)
-    `);
-    for (const [name, status, before, lastSeen, node] of fixtures) {
-      insert.run(`ag_${name}`, workspaceId, name, `hash-${name}`, status, before, lastSeen, node);
+    `, [`ag_${name}`, workspaceId, name, `hash-${name}`, status, before, lastSeen, node]);
     }
     inspected = [];
     configureNodeLiveness(stack.runtime.deps.db, {
@@ -57,19 +57,9 @@ describe('hosted roster reads under node authority', () => {
     });
     materialized = [];
     statements = [];
-    const prepare = sqlite.prepare.bind(sqlite);
-    vi.spyOn(sqlite, 'prepare').mockImplementation((source: string) => {
-      const statement = prepare(source);
-      if (/^select .* from "agents"/i.test(source)) {
-        const all = statement.all.bind(statement);
-        vi.spyOn(statement, 'all').mockImplementation((...params: unknown[]) => {
-          const rows = all(...params);
-          statements.push({ source, params });
-          materialized.push(rows.length);
-          return rows;
-        });
-      }
-      return statement;
+    observeStatementRows(stack, /^select .* from "agents"/i, (source, rows, params) => {
+      statements.push({ source, params });
+      materialized.push(rows);
     });
   });
 
@@ -116,11 +106,11 @@ describe('hosted roster reads under node authority', () => {
     expect(names(roster)).toEqual(['dead-1', 'dead-2', 'dead-3']);
   });
 
-  it('serves the roster SELECTs from the roster index', async () => {
+  // SQLite planner check (EXPLAIN QUERY PLAN index choice); no PostgreSQL counterpart.
+  sqliteOnly('serves the roster SELECTs from the roster index', async () => {
     for (const status of [undefined, 'waiting', 'active']) await listAgents(stack.runtime.deps.db, workspaceId, status);
     expect(statements).toHaveLength(3);
     const sqlite = stack.runtime.handle.sqlite;
-    vi.mocked(sqlite.prepare).mockRestore();
     for (const { source, params } of statements) {
       const plan = sqlite.prepare(`EXPLAIN QUERY PLAN ${source}`).all(...params) as Array<{ detail: string }>;
       expect(plan.map(step => step.detail).join('\n')).toMatch(/SEARCH agents USING INDEX idx_agents_roster \(workspace_id=/);
@@ -135,9 +125,12 @@ describe('hosted roster reads under node authority', () => {
       expect(body.data.map(row => [row.name, row.status]).sort()).toEqual([['dead-1', 'offline'], ['live-a', 'active']]);
       expect(materialized).toEqual([2]);
       expect(inspected.sort()).toEqual(['nd_dead', 'nd_live']);
-      const plan = stack.runtime.handle.sqlite.prepare(`EXPLAIN QUERY PLAN ${statements[0].source}`)
-        .all(...statements[0].params) as Array<{ detail: string }>;
-      expect(plan.map(step => step.detail).join('\n')).toMatch(/SEARCH agents USING INDEX (agents_workspace_name_unique|idx_agents_roster)/);
+      // SQLite planner check (EXPLAIN QUERY PLAN); no PostgreSQL counterpart.
+      if (!pgMode) {
+        const plan = stack.runtime.handle.sqlite.prepare(`EXPLAIN QUERY PLAN ${statements[0].source}`)
+          .all(...statements[0].params) as Array<{ detail: string }>;
+        expect(plan.map(step => step.detail).join('\n')).toMatch(/SEARCH agents USING INDEX (agents_workspace_name_unique|idx_agents_roster)/);
+      }
     });
 
     it('drops metadata on request', async () => {
@@ -169,8 +162,7 @@ describe('hosted roster reads under node authority', () => {
       expect(await unchanged.text()).toBe('');
       expect(unchanged.headers.get('etag')).toBe(etag);
 
-      vi.mocked(stack.runtime.handle.sqlite.prepare).mockRestore();
-      stack.runtime.handle.sqlite.prepare("UPDATE agents SET status = 'blocked' WHERE name = 'live-b'").run();
+      await rawRun(stack.runtime.deps.db, "UPDATE agents SET status = 'blocked' WHERE name = 'live-b'");
       const changed = await get('/v1/agents?status=all', { 'if-none-match': etag! });
       expect(changed.status).toBe(200);
       expect(changed.headers.get('etag')).not.toBe(etag);

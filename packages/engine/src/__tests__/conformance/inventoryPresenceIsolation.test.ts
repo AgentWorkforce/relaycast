@@ -7,6 +7,7 @@ import {
   makeNodeStack,
   registerAgent,
   type TestStack,
+  writeFromSyncHook,
 } from './harness.js';
 import { agents, nodeProviders, nodes } from '../../db/tables.js';
 import { NODE_LIVENESS_TTL_MS } from '../../engine/placement.js';
@@ -155,6 +156,8 @@ describe('node inventory presence isolation', () => {
       body: JSON.stringify({ text }),
     });
     expect(response.status).toBe(201);
+    // Node delivery is dispatched in the background; wait for it on either dialect.
+    await stack.settle();
   }
 
   async function readAgent(ws: Workspace, name: string) {
@@ -282,7 +285,6 @@ describe('node inventory presence isolation', () => {
       await setProvider(worker, 'default', 'offline');
       await stack.settle();
       const db = stack.runtime.handle.db;
-      const update = db.update.bind(db);
       // The spy sees the neutral signature that engine code calls.
       const engine: EngineDb = db;
       const engineUpdate = engine.update.bind(engine);
@@ -296,14 +298,15 @@ describe('node inventory presence isolation', () => {
       const spy = vi.spyOn(engine, 'update').mockImplementation((table) => {
         if (table === agents && !changed) {
           changed = true;
-          update(nodeProviders).set(change === 'default-reconnected'
-            ? { status: 'online', handlersLive: true, lastHeartbeatAt: new Date(Date.now() - 1_000) }
-            : change === 'offline' ? { status: 'offline' }
-            : change === 'handlers-down' ? { handlersLive: false }
-            : { lastHeartbeatAt: change === 'missing-heartbeat' ? null
-              : new Date(Date.now() + (change === 'future' ? 60_000 : -NODE_LIVENESS_TTL_MS - 1_000)) })
-            .where(and(eq(nodeProviders.nodeId, broker.id),
-              eq(nodeProviders.name, change === 'default-reconnected' ? 'default' : 'broker'))).run();
+          const seconds = (ms: number) => Math.floor(ms / 1_000);
+          const [assignments, values]: [string, unknown[]] = change === 'default-reconnected'
+            ? ["status = 'online', handlers_live = TRUE, last_heartbeat_at = ?", [seconds(Date.now() - 1_000)]]
+            : change === 'offline' ? ["status = 'offline'", []]
+            : change === 'handlers-down' ? ['handlers_live = FALSE', []]
+            : ['last_heartbeat_at = ?', [change === 'missing-heartbeat' ? null
+              : seconds(Date.now() + (change === 'future' ? 60_000 : -NODE_LIVENESS_TTL_MS - 1_000))]];
+          writeFromSyncHook(stack, [[`UPDATE node_providers SET ${assignments} WHERE node_id = ? AND name = ?`,
+            [...values, broker.id, change === 'default-reconnected' ? 'default' : 'broker']]]);
         }
         return engineUpdate(table);
       });

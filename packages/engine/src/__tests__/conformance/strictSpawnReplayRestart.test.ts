@@ -4,33 +4,22 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { expect, it } from 'vitest';
 import { and, eq } from 'drizzle-orm';
-import { createNodeRuntime } from '../../adapters/node/index.js';
 import { actionInvocations, nodes } from '../../db/tables.js';
-import { createEngine } from '../../engine.js';
-import { createWorkspace, FakeSocket, registerAgent } from './harness.js';
-import { conformancePgDb } from './pgMode.js';
+import { createWorkspace, FakeSocket, makeNodeStack, pgMode, registerAgent, type TestStack } from './harness.js';
 
 const schema = 'relay.spawn.invoke.logical/1';
 const replayResumeSchema = 'relay.spawn.invoke.logical-replay-resume/1';
 const replayResumeCapability = 'relay.spawn.replay-resume/1';
 
 it('replay stays lookup-only while strict-invoke resumes a pre-dispatch claim after restart', async () => {
-  if (conformancePgDb()) return;
-  const dir = mkdtempSync(join(tmpdir(), 'relaycast-strict-spawn-restart-'));
-  const dbPath = join(dir, 'relaycast.db');
-  const options = {
-    dbPath,
-    baseUrl: 'http://localhost:0',
-    migrate: true,
-    config: { environment: 'test', workspaceBootstrapSecret: 'strict-spawn-restart-secret' },
-    eventQueue: { pollIntervalMs: 0 },
-    presence: { ttlMs: 60_000, sweepIntervalMs: 0 },
-  } as const;
-  let first: ReturnType<typeof createNodeRuntime> | undefined;
-  let restarted: ReturnType<typeof createNodeRuntime> | undefined;
+  // SQLite: a database file both stacks open; PostgreSQL: the shared schema.
+  const dir = pgMode ? undefined : mkdtempSync(join(tmpdir(), 'relaycast-strict-spawn-restart-'));
+  const dbPath = dir ? join(dir, 'relaycast.db') : undefined;
+  let first: TestStack | undefined;
+  let restarted: TestStack | undefined;
   try {
-    first = createNodeRuntime(options);
-    const firstApp = createEngine(first.deps);
+    first = makeNodeStack({ dbPath });
+    const firstApp = first.app;
     const ws = await createWorkspace(firstApp, 'strict-spawn-restart');
     const caller = await registerAgent(firstApp, ws.workspaceKey, 'restart-caller');
     const nodeId = 'node_strict_restart';
@@ -76,7 +65,7 @@ it('replay stays lookup-only while strict-invoke resumes a pre-dispatch claim af
     const invocationId = `inv_idem_${createHash('sha256')
       .update(['action-invoke-v1', ws.workspaceId, caller.agentId, 'spawn', key].join('\0'))
       .digest('hex')}`;
-    await first.deps.db.insert(actionInvocations).values({
+    await first.runtime.deps.db.insert(actionInvocations).values({
       id: invocationId,
       workspaceId: ws.workspaceId,
       actionName: 'spawn',
@@ -91,7 +80,7 @@ it('replay stays lookup-only while strict-invoke resumes a pre-dispatch claim af
       .update(['action-invoke-v1', ws.workspaceId, caller.agentId, 'spawn', replayResumeKey].join('\0'))
       .digest('hex')}`;
     const replayResumeLogical = { ...logical, schema: replayResumeSchema, task: 'resume stored input' };
-    await first.deps.db.insert(actionInvocations).values({
+    await first.runtime.deps.db.insert(actionInvocations).values({
       id: replayResumeId,
       workspaceId: ws.workspaceId,
       actionName: 'spawn',
@@ -108,12 +97,12 @@ it('replay stays lookup-only while strict-invoke resumes a pre-dispatch claim af
       },
       status: 'pending',
     });
-    first.close();
+    await first.close();
     first = undefined;
 
-    restarted = createNodeRuntime(options);
+    restarted = makeNodeStack({ dbPath });
     const sock = new FakeSocket();
-    const handle = restarted.realtime.attachNodeSocket(ws.workspaceId, nodeId, sock);
+    const handle = restarted.runtime.realtime.attachNodeSocket(ws.workspaceId, nodeId, sock);
     await handle.handleMessage(JSON.stringify({
       v: 1,
       id: 'register-strict-restart',
@@ -133,7 +122,7 @@ it('replay stays lookup-only while strict-invoke resumes a pre-dispatch claim af
       handlers_live: true,
     }));
 
-    const replay = await createEngine(restarted.deps).request('/v1/actions/spawn/replay', {
+    const replay = await restarted.app.request('/v1/actions/spawn/replay', {
       method: 'POST',
       headers: {
         'content-type': 'application/json',
@@ -145,13 +134,13 @@ it('replay stays lookup-only while strict-invoke resumes a pre-dispatch claim af
     expect(replay.status).toBe(200);
     expect(replay.headers.get('Idempotency-Replayed')).toBe('true');
     expect(sock.ofType('action.invoke')).toEqual([]);
-    const [nodeAfterReplay] = await restarted.deps.db
+    const [nodeAfterReplay] = await restarted.runtime.deps.db
       .select({ reservedAgents: nodes.reservedAgents })
       .from(nodes)
       .where(and(eq(nodes.workspaceId, ws.workspaceId), eq(nodes.id, nodeId)));
     expect(nodeAfterReplay.reservedAgents).toBe(0);
 
-    const replayResume = await createEngine(restarted.deps).request('/v1/actions/spawn/replay', {
+    const replayResume = await restarted.app.request('/v1/actions/spawn/replay', {
       method: 'POST',
       headers: {
         'content-type': 'application/json',
@@ -182,7 +171,7 @@ it('replay stays lookup-only while strict-invoke resumes a pre-dispatch claim af
       ...requestInput,
       worker_cwd: '/materialized/repo-after-restart',
     };
-    const resumed = await createEngine(restarted.deps).request('/v1/actions/spawn/strict-invoke', {
+    const resumed = await restarted.app.request('/v1/actions/spawn/strict-invoke', {
       method: 'POST',
       headers: {
         'content-type': 'application/json',
@@ -201,14 +190,14 @@ it('replay stays lookup-only while strict-invoke resumes a pre-dispatch claim af
         input: expect.objectContaining({ worker_cwd: '/materialized/repo-after-restart' }),
       }),
     ]);
-    const [nodeAfterResume] = await restarted.deps.db
+    const [nodeAfterResume] = await restarted.runtime.deps.db
       .select({ reservedAgents: nodes.reservedAgents })
       .from(nodes)
       .where(and(eq(nodes.workspaceId, ws.workspaceId), eq(nodes.id, nodeId)));
     expect(nodeAfterResume.reservedAgents).toBe(2);
   } finally {
-    restarted?.close();
-    first?.close();
-    rmSync(dir, { recursive: true, force: true });
+    await restarted?.close();
+    await first?.close();
+    if (dir) rmSync(dir, { recursive: true, force: true });
   }
 });

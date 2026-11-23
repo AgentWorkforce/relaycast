@@ -9,6 +9,7 @@ import {
   FakeSocket,
   attachDirectNodeSocket,
   deliverFramesOfType,
+  injectUpdateFailure,
   type TestStack,
 } from './harness.js';
 
@@ -1075,42 +1076,17 @@ describe('SDK v8 service contract', () => {
     // durable — exactly the interrupted window relaycast#425 is about.
     const { agents } = await import('../../db/tables.js');
 
-    // Recursively proxy the builder chain (`.update(...).set(...).where(...)`)
-    // so the failure surfaces only when the final statement is executed
-    // (awaited), not when it is merely built — matching the real crash
-    // window (the process dies mid-statement, not before it starts).
-    function failOnExecute<T extends object>(target: T, message: string): T {
-      return new Proxy(target, {
-        get(obj, prop) {
-          if (prop === 'then') {
-            return (onFulfilled?: (v: unknown) => unknown, onRejected?: (e: unknown) => unknown) =>
-              Promise.reject(new Error(message)).then(onFulfilled, onRejected);
-          }
-          const value = Reflect.get(obj, prop) as unknown;
-          if (typeof value === 'function') {
-            return (...args: unknown[]) => {
-              const result = (value as (...a: unknown[]) => unknown).apply(obj, args);
-              return result && typeof result === 'object' ? failOnExecute(result as object, message) : result;
-            };
-          }
-          return value;
-        },
-      });
-    }
-
-    const db = stack.runtime.deps.db as unknown as { update: (t: unknown) => object };
-    const realUpdate = db.update.bind(db);
-    let failNext = true;
-    db.update = (table: unknown) => {
-      const builder = realUpdate(table);
-      if (table !== agents || !failNext) return builder;
-      failNext = false;
-      return failOnExecute(builder, 'injected crash before status write');
-    };
+    // The injection fails the statement only when it is executed (awaited),
+    // not when it is merely built — matching the real crash window (the
+    // process dies mid-statement, not before it starts). It reaches the
+    // transaction handle too, which PostgreSQL's withTransaction hands out.
+    const restoreUpdate = injectUpdateFailure(
+      stack.runtime.deps.db, agents, 'injected crash before status write', { times: 1 },
+    );
 
     const first = await stack.app.request('/v1/agents/runner/events', { method: 'POST', headers, body });
     expect(first.status).toBe(500);
-    db.update = realUpdate;
+    restoreUpdate();
 
     // The event claim committed despite the crash; the agent row must not
     // have moved yet, and the completion marker must still be NULL.
