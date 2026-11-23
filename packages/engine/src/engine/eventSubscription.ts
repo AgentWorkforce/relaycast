@@ -1,4 +1,4 @@
-import { eq, and } from 'drizzle-orm';
+import { eq, and, sql } from 'drizzle-orm';
 import type { getDb } from '../db/index.js';
 import { eventSubscriptions } from '../db/tables.js';
 import * as sqlx from '../db/sqlx.js';
@@ -91,11 +91,17 @@ export async function getSubscription(db: Db, workspaceId: string, subId: string
   return row ? toPublicSubscription(row) : null;
 }
 
+/** Whether stored custom headers would be sent with a delivery. */
+export function hasStoredHeaders(headers: unknown): boolean {
+  return !!headers && typeof headers === 'object' && Object.keys(headers).length > 0;
+}
+
 /**
- * Applies `data` only if the signing pair still matches `expected`, the values
- * the caller validated the result against. A concurrent change to the scheme or
- * secret makes this a 409 instead of storing an unvalidated pair; a row that is
- * gone returns null.
+ * Applies `data` only if the row still matches `expected`, the values the
+ * caller validated the result against: the signing pair, and (when given) the
+ * `url` and that no custom headers are stored. A concurrent change to any of
+ * them makes this a 409 instead of storing an unvalidated result (e.g. a new
+ * URL with headers meant for the old one); a row that is gone returns null.
  */
 export async function updateSubscription(
   db: Db,
@@ -105,12 +111,17 @@ export async function updateSubscription(
     events?: string[];
     filter?: SubscriptionFilter | null;
     url?: string;
-    headers?: Record<string, string>;
+    headers?: Record<string, string> | null;
     secret?: string | null;
     signatureScheme?: 'legacy' | 'standard-webhooks';
     isActive?: boolean;
   },
-  expected: { signatureScheme: 'legacy' | 'standard-webhooks'; secret: string | null },
+  expected: {
+    signatureScheme: 'legacy' | 'standard-webhooks';
+    secret: string | null;
+    url?: string;
+    noHeaders?: boolean;
+  },
 ) {
   const [row] = await db
     .update(eventSubscriptions)
@@ -129,6 +140,10 @@ export async function updateSubscription(
         eq(eventSubscriptions.workspaceId, workspaceId),
         eq(eventSubscriptions.signatureScheme, expected.signatureScheme),
         sqlx.isNotDistinct(db, eventSubscriptions.secret, sqlx.textParam(db, expected.secret)),
+        expected.url !== undefined ? eq(eventSubscriptions.url, expected.url) : undefined,
+        expected.noHeaders
+          ? sql`(${eventSubscriptions.headers} IS NULL OR CAST(${eventSubscriptions.headers} AS TEXT) = '{}')`
+          : undefined,
       ),
     )
     .returning();

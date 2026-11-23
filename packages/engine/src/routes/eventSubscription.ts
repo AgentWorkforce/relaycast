@@ -1,5 +1,6 @@
 import { Hono, type Context } from 'hono';
 import { z } from 'zod';
+import { UpdateSubscriptionRequestSchema } from '@relaycast/types';
 import type { AppEnv } from '../env.js';
 import { requireAuth } from '../middleware/auth.js';
 import { rateLimit } from '../middleware/rateLimit.js';
@@ -53,13 +54,7 @@ const createSubscriptionSchema = subscriptionFieldsSchema.superRefine((value, ct
   }
 });
 
-const updateSubscriptionSchema = subscriptionFieldsSchema
-  .extend({
-    signature_scheme: z.enum(['legacy', 'standard-webhooks']),
-    is_active: z.boolean(),
-  })
-  .partial()
-  .refine((value) => Object.keys(value).length > 0, 'at least one field is required');
+const updateSubscriptionSchema = UpdateSubscriptionRequestSchema;
 
 function isSafeSubscriptionUrl(c: Context<AppEnv>, url: string): boolean {
   const strict = c.get('engine').config?.environment !== 'test';
@@ -158,6 +153,17 @@ eventSubscriptionRoutes.patch('/subscriptions/:id', requireAuth, rateLimit, asyn
     if (!current) {
       return jsonNotFound(c, 'subscription_not_found', 'Subscription not found');
     }
+    // Stored headers (often credentials) are redacted on read; a caller that
+    // moves the URL must restate them, or they would go to the new endpoint.
+    const urlChanges = update.url !== undefined && update.url !== current.url;
+    if (urlChanges && update.headers === undefined && eventSubscriptionEngine.hasStoredHeaders(current.headers)) {
+      return jsonError(
+        c,
+        'subscription_headers_required',
+        'Changing url on a subscription with stored headers requires headers in the same request (a new map, or {} or null to clear them)',
+        400,
+      );
+    }
     const scheme = update.signature_scheme ?? current.signatureScheme;
     const secret = update.secret !== undefined ? update.secret : current.secret;
     if (!hasValidSignatureSecret(scheme, secret)) {
@@ -172,7 +178,14 @@ eventSubscriptionRoutes.patch('/subscriptions/:id', requireAuth, rateLimit, asyn
       secret: update.secret,
       signatureScheme: update.signature_scheme,
       isActive: update.is_active,
-    }, { signatureScheme: current.signatureScheme, secret: current.secret });
+    }, {
+      signatureScheme: current.signatureScheme,
+      secret: current.secret,
+      // A url without headers is valid only for the url and headers read above.
+      ...(update.url !== undefined && update.headers === undefined
+        ? { url: current.url, noHeaders: urlChanges }
+        : {}),
+    });
     if (!result) {
       return jsonNotFound(c, 'subscription_not_found', 'Subscription not found');
     }

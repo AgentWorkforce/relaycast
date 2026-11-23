@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { eq } from 'drizzle-orm';
 import { eventSubscriptions } from '../../db/tables.js';
+import { UpdateSubscriptionRequestSchema } from '@relaycast/types';
 import { updateSubscription } from '../../engine/eventSubscription.js';
 import { createWorkspace, makeNodeStack, type TestStack } from '../../__tests__/conformance/harness.js';
 
@@ -53,7 +54,7 @@ describe('PATCH /v1/subscriptions/:id', () => {
     res = await patch(id, { filter: null });
     expect(res.json.data.filter).toBeNull();
 
-    res = await patch(id, { url: 'https://hooks.example.test/b' });
+    res = await patch(id, { url: 'https://hooks.example.test/b', headers: { 'x-a': '1' } });
     expect(res.json.data.url).toBe('https://hooks.example.test/b');
 
     res = await patch(id, { headers: { 'x-b': '2' } });
@@ -158,5 +159,85 @@ describe('PATCH /v1/subscriptions/:id', () => {
     expect(await updateSubscription(db, current.workspaceId, id, { url: 'https://hooks.example.test/d' }, {
       signatureScheme: 'standard-webhooks', secret: WHSEC,
     })).toBeNull();
+  });
+
+  describe('url change with stored headers', () => {
+    const NEW_URL = 'https://hooks.example.test/new';
+
+    it('refuses a url-only change with 400 and leaves the row unchanged', async () => {
+      const id = await create({ headers: { authorization: 'Bearer old-endpoint-token' } });
+      const before = await row(id);
+      const res = await patch(id, { url: NEW_URL });
+      expect(res.status).toBe(400);
+      expect(res.json.error?.code).toBe('subscription_headers_required');
+      expect(res.json.error?.message).toMatch(/headers/);
+      expect(res.text).not.toContain('old-endpoint-token');
+      expect(await row(id)).toEqual(before);
+    });
+
+    it('stores new headers sent with the new url', async () => {
+      const id = await create({ headers: { authorization: 'Bearer old' } });
+      const res = await patch(id, { url: NEW_URL, headers: { authorization: 'Bearer new' } });
+      expect(res.status).toBe(200);
+      expect(await row(id)).toMatchObject({ url: NEW_URL, headers: { authorization: 'Bearer new' } });
+    });
+
+    it('clears the headers with null or {}', async () => {
+      for (const headers of [null, {}]) {
+        const id = await create({ headers: { authorization: 'Bearer old' } });
+        const res = await patch(id, { url: NEW_URL, headers });
+        expect(res.status, JSON.stringify(headers)).toBe(200);
+        const stored = await row(id);
+        expect(stored.url).toBe(NEW_URL);
+        expect(stored.headers ?? {}).toEqual({});
+      }
+    });
+
+    it('allows a url-only change without stored headers, and the same url with them', async () => {
+      for (const headers of [undefined, {}]) {
+        const id = await create(headers ? { headers } : {});
+        expect((await patch(id, { url: NEW_URL })).status, JSON.stringify(headers)).toBe(200);
+        expect((await row(id)).url).toBe(NEW_URL);
+      }
+      const id = await create({ headers: { authorization: 'Bearer old' } });
+      expect((await patch(id, { url: 'https://hooks.example.test/a' })).status).toBe(200);
+      expect((await row(id)).headers).toEqual({ authorization: 'Bearer old' });
+    });
+
+    it('refuses with 409 when headers were stored after a url-only change was validated', async () => {
+      const id = await create();
+      const current = await row(id);
+      const db = stack.runtime.handle.db;
+      // A concurrent PATCH stored headers after this one read the row.
+      await db.update(eventSubscriptions).set({ headers: { authorization: 'Bearer old' } })
+        .where(eq(eventSubscriptions.id, id));
+      await expect(updateSubscription(db, current.workspaceId, id, { url: NEW_URL }, {
+        signatureScheme: current.signatureScheme, secret: current.secret, url: current.url, noHeaders: true,
+      })).rejects.toMatchObject({ code: 'subscription_update_conflict', status: 409 });
+      // A concurrent url change also invalidates the check.
+      await db.update(eventSubscriptions).set({ headers: null, url: 'https://hooks.example.test/other' })
+        .where(eq(eventSubscriptions.id, id));
+      await expect(updateSubscription(db, current.workspaceId, id, { url: NEW_URL }, {
+        signatureScheme: current.signatureScheme, secret: current.secret, url: current.url, noHeaders: true,
+      })).rejects.toMatchObject({ code: 'subscription_update_conflict', status: 409 });
+      expect(await row(id)).toMatchObject({ url: 'https://hooks.example.test/other', headers: null });
+    });
+  });
+
+  it('accepts exactly the bodies UpdateSubscriptionRequestSchema in @relaycast/types accepts', async () => {
+    const bodies: unknown[] = [
+      {}, { events: [] }, { events: ['*'] }, { events: ['custom.event'] }, { events: ['message.created'] },
+      { url: '' }, { url: 'https://hooks.example.test/p' }, { headers: null }, { headers: {} },
+      { headers: { 'x-a': '1' } }, { headers: { 'bad header': 'x' } }, { headers: { 'x-a': 'a\nb' } },
+      { filter: null }, { filter: { recipients: [] } }, { filter: { recipients: ['bob'] } },
+      { secret: null }, { secret: 'plain' }, { signature_scheme: 'hmac' }, { signature_scheme: 'legacy' },
+      { is_active: 'no' }, { is_active: false },
+    ];
+    for (const body of bodies) {
+      const id = await create();
+      const res = await patch(id, body);
+      const accepted = UpdateSubscriptionRequestSchema.safeParse(body).success;
+      expect(res.status, JSON.stringify(body)).toBe(accepted ? 200 : 400);
+    }
   });
 });

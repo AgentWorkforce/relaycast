@@ -100,7 +100,7 @@ export async function sendWebhookEvent(
   const list = recipients ? toWebhookRecipients(recipients) : undefined;
   const matchers = await subscriptionMatchers(c, event.workspaceId, event.type);
   if (!wantedBy(matchers, event.type, list ? { ...event.data, recipients: list } : event.data)) return;
-  const data = list ? withStoredRecipients(event.data, list, matchers) : event.data;
+  const data = list ? withStoredRecipients(event.data, list, matchers, event.type) : event.data;
 
   let outboxId: string | undefined;
   try {

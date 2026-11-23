@@ -73,16 +73,22 @@ export const CreateSubscriptionRequestSchema = z.object({
 });
 export type CreateSubscriptionRequest = z.infer<typeof CreateSubscriptionRequestSchema>;
 
-/** Partial update; `filter: null` clears the filter. At least one field is required. */
+/**
+ * Partial update, validated by the engine with this schema; `filter: null`
+ * clears the filter and `headers: null` the headers. At least one field is
+ * required. `events` takes any event name, including `'*'`. Changing `url` on a
+ * subscription with stored headers also needs `headers` (400
+ * `subscription_headers_required` otherwise).
+ */
 export const UpdateSubscriptionRequestSchema = z.object({
-  events: z.array(SubscribableEventTypeSchema).optional(),
+  events: z.array(z.string()).min(1).optional(),
   filter: SubscriptionFilterSchema.nullable().optional(),
-  url: z.string().optional(),
-  headers: SubscriptionHeadersSchema.optional(),
+  url: z.string().min(1).optional(),
+  headers: SubscriptionHeadersSchema.nullable().optional(),
   secret: z.string().nullable().optional(),
   signature_scheme: SubscriptionSignatureSchemeSchema.optional(),
   is_active: z.boolean().optional(),
-});
+}).refine((value) => Object.keys(value).length > 0, 'at least one field is required');
 export type UpdateSubscriptionRequest = z.infer<typeof UpdateSubscriptionRequestSchema>;
 
 /** One `data.recipients` entry on message webhook payloads (webhooks only). */

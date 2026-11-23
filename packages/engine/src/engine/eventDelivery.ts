@@ -180,18 +180,44 @@ export function subscriptionWantsEvent(
 }
 
 /**
+ * The consumer-side filter. Like {@link matchesFilter}, except that once the
+ * stored list was cut at {@link MAX_STORED_WEBHOOK_RECIPIENTS}, a
+ * `filter.recipients` with no match in it may have matched a cut entry: the
+ * subscription is delivered if its other checks pass, and
+ * {@link payloadForTarget} gives it `recipients: []` with
+ * `recipients_truncated: true`. The send-path pre-check stays strict, on the
+ * full list.
+ */
+function deliveryMatchesFilter(filter: SubscriptionFilter | null, payload: Record<string, unknown>): boolean {
+  if (matchesFilter(filter, payload)) return true;
+  const stored = payload.recipients;
+  const cut = Array.isArray(stored) && stored.length >= MAX_STORED_WEBHOOK_RECIPIENTS
+    && payload.recipients_truncated === true;
+  return cut && !!filter?.recipients && matchesFilter({ ...filter, recipients: undefined }, payload);
+}
+
+/**
  * Bound `recipients` for the outbox row: the first {@link MAX_WEBHOOK_RECIPIENTS},
- * then later entries matched by any `filter.recipients` (`matchers === null`:
+ * then later entries matched by the `filter.recipients` of a subscription that
+ * wants this event (type, channel and mentions included; `matchers === null`:
  * unknown, keep everything) up to {@link MAX_STORED_WEBHOOK_RECIPIENTS}.
  * `recipients_truncated` is set when the full list is longer than the cap.
+ * Filtered subscriptions whose matches were all cut by that bound are still
+ * delivered, with an empty truncated list (see {@link deliveryMatchesFilter}).
  */
 export function withStoredRecipients(
   payload: Record<string, unknown>,
   recipients: WebhookRecipient[],
   matchers: SubscriptionMatcher[] | null,
+  eventType: string,
 ): Record<string, unknown> {
   if (recipients.length <= MAX_WEBHOOK_RECIPIENTS) return { ...payload, recipients };
-  const filters = matchers?.flatMap((m) => (m.filter?.recipients ? [m.filter.recipients] : []));
+  // Only subscriptions that would deliver this event (judged on the full list)
+  // may claim the slots past the first 500.
+  const full = { ...payload, recipients };
+  const filters = matchers
+    ?.filter((m) => m.filter?.recipients && subscriptionWantsEvent(m, eventType, full))
+    .map((m) => m.filter!.recipients!);
   const stored = recipients.slice(0, MAX_WEBHOOK_RECIPIENTS);
   for (const recipient of recipients.slice(MAX_WEBHOOK_RECIPIENTS)) {
     if (stored.length >= MAX_STORED_WEBHOOK_RECIPIENTS) break;
@@ -221,6 +247,37 @@ function payloadForTarget(target: DeliveryTarget, payload: Record<string, unknow
     recipients: matching.slice(0, MAX_WEBHOOK_RECIPIENTS),
     ...(truncated ? { recipients_truncated: true } : {}),
   };
+}
+
+function utf8Bytes(text: string): number {
+  return new TextEncoder().encode(text).byteLength;
+}
+
+/**
+ * Serialize `envelope(data)` with `data.recipients` cut to the longest prefix
+ * that keeps the body within {@link MAX_WEBHOOK_BYTES} (UTF-8, as
+ * `attemptDelivery` measures it), marking a cut list `recipients_truncated`.
+ * Linear: the body is the base (empty list, flag set) plus each entry's JSON
+ * and a separating comma. A body whose base alone is too large is returned
+ * whole and fails as before.
+ */
+function fitRecipientsBody(
+  data: Record<string, unknown>,
+  envelope: (data: Record<string, unknown>) => unknown,
+): string {
+  const whole = JSON.stringify(envelope(data));
+  const entries = data.recipients;
+  if (!Array.isArray(entries) || entries.length === 0 || utf8Bytes(whole) <= MAX_WEBHOOK_BYTES) return whole;
+  let budget = MAX_WEBHOOK_BYTES - utf8Bytes(JSON.stringify(envelope({ ...data, recipients: [], recipients_truncated: true })));
+  if (budget < 0) return whole;
+  let count = 0;
+  for (const entry of entries) {
+    const size = utf8Bytes(JSON.stringify(entry)) + (count > 0 ? 1 : 0);
+    if (size > budget) break;
+    budget -= size;
+    count += 1;
+  }
+  return JSON.stringify(envelope({ ...data, recipients: entries.slice(0, count), recipients_truncated: true }));
 }
 
 async function stableDeliveryId(eventId: string, subscriptionId: string): Promise<string> {
@@ -498,7 +555,7 @@ async function deliverWithoutPersistence(
   fetchImpl: Fetch | undefined,
 ): Promise<EventDeliverySummary> {
   const targets = (await activeTargets(db, workspaceId, eventType))
-    .filter((target) => matchesFilter(target.filter, payload));
+    .filter((target) => deliveryMatchesFilter(target.filter, payload));
   if (targets.length === 0) return emptySummary();
 
   const safeFetch = requireSafeFetch(fetchImpl);
@@ -526,6 +583,11 @@ async function deliverWithoutPersistence(
   };
 }
 
+/**
+ * Delivers one event to the workspace's active subscriptions for its type,
+ * filtered with {@link deliveryMatchesFilter}; message events get a per-target
+ * `data.recipients` ({@link payloadForTarget}) cut to the body size cap.
+ */
 export async function deliverEvent(
   db: Db,
   workspaceId: string,
@@ -549,14 +611,15 @@ export async function deliverEvent(
     timestamp: eventTimestamp,
     data: payload,
   });
-  // `recipients` differs per target, so those bodies (and signatures) do too.
+  // `recipients` differs per target, so those bodies (and signatures) do too,
+  // and each list is cut to fit the body size cap.
   const bodyFor = (target: DeliveryTarget) => Array.isArray(payload.recipients)
-    ? JSON.stringify({
+    ? fitRecipientsBody(payloadForTarget(target, payload), (data) => ({
       type: eventType,
       workspace_id: workspaceId,
       timestamp: eventTimestamp,
-      data: payloadForTarget(target, payload),
-    })
+      data,
+    }))
     : sharedBody;
   const fetchImpl = options.fetch;
 
@@ -565,7 +628,7 @@ export async function deliverEvent(
   }
 
   const targets = (await activeTargets(db, workspaceId, eventType))
-    .filter((target) => matchesFilter(target.filter, payload));
+    .filter((target) => deliveryMatchesFilter(target.filter, payload));
   if (!await initializePersistentDeliveries(db, options.eventId, targets, now)) {
     // `eventId` identifies an outbox row. If that row was already pruned, an
     // at-least-once queue replay is stale; delivering without persistence here

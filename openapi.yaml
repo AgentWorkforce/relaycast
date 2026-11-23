@@ -7512,10 +7512,12 @@ paths:
 
         Webhook payloads of `message.created`, `thread.reply`, `dm.received` and `group_dm.received`
         carry `data.recipients`: one `{ agent_id, agent_name, delivery_id, seq }` entry per delivery
-        record (the sender is not listed; `seq` is that recipient's delivery seq and is absent on a
-        DM sent with an `Idempotency-Key`). At most 500 entries are sent; `data.recipients_truncated`
-        is `true` only when the list was capped. This field is webhook-only: WebSocket, stream and
-        HTTP responses do not include it.
+        record (the sender is not listed; `seq` is that recipient's delivery seq). At most 500
+        entries are sent, and fewer when the full body would exceed 256 KiB;
+        `data.recipients_truncated` is `true` only when entries were dropped. Past 2,000 recipients,
+        a subscription with `filter.recipients` may receive the event with an empty list and
+        `recipients_truncated: true`, since its names may have been among the dropped. This field is
+        webhook-only: WebSocket, stream and HTTP responses do not include it.
       tags:
         - Subscriptions
       security:
@@ -7613,8 +7615,11 @@ paths:
       summary: Update subscription
       description: |
         Partially update an outbound event subscription. Only the fields present change; `filter: null`
-        clears the filter and `headers` replaces the stored headers as a whole (no per-key merge). At
-        least one field is required.
+        clears the filter and `headers` replaces the stored headers as a whole (no per-key merge);
+        `headers: null` or `{}` clears them. At least one field is required.
+        Changing `url` on a subscription with stored headers requires `headers` in the same request,
+        since stored values are redacted on read and would otherwise be sent to the new endpoint;
+        without it the request fails with 400 `subscription_headers_required` and nothing changes.
         The URL and `standard-webhooks` secret rules of create apply, the secret rule checked against
         the resulting subscription. The response has the shape of `GET /subscriptions/{id}` and never
         includes the secret.
@@ -7659,8 +7664,10 @@ paths:
                         minLength: 1
                 url:
                   type: string
+                  minLength: 1
                 headers:
                   type: object
+                  nullable: true
                   additionalProperties:
                     type: string
                 secret:
@@ -7679,11 +7686,15 @@ paths:
               schema:
                 $ref: '#/components/schemas/SuccessResponse'
         '400':
-          description: Invalid body, unsafe URL, or missing `whsec_` secret for `standard-webhooks`
+          description: >-
+            Invalid body, unsafe URL, missing `whsec_` secret for `standard-webhooks`, or a `url`
+            change without `headers` while headers are stored (`subscription_headers_required`)
         '404':
           description: Subscription not found
         '409':
-          description: The signing scheme or secret changed concurrently (`subscription_update_conflict`); retry
+          description: >-
+            The signing scheme, secret, or (for a `url` sent without `headers`) the url or stored
+            headers changed concurrently (`subscription_update_conflict`); retry
     delete:
       summary: Delete subscription
       description: Delete outbound event subscription
