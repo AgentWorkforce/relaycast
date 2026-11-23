@@ -16,7 +16,11 @@ This project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 Packages without a separate changelog are covered by the cross-package notes below.
 
-## [Unreleased]
+## [Unreleased - Patch]
+
+### Changed
+
+- A 1:1 DM send on a D1 database makes fewer database round trips: a repeat send with an `Idempotency-Key` goes from 8 to 4, and a same-key replay from 2 to 1. Results and errors are unchanged.
 
 ## [12.14.0] - 2026-11-23
 

@@ -7,7 +7,11 @@ See the [root changelog](../../CHANGELOG.md) for cross-package release highlight
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [Unreleased - Patch]
+
+### Changed
+
+- `sendDm` on a D1-style database handle (one with `batch()` and no transactions) reads the independent lookups of a 1:1 send together in two read-only batches, and resolves an established 1:1 conversation with one read. A repeat send with an `Idempotency-Key` goes from 8 to 4 engine round trips and a same-key replay from 2 to 1. Decisions run on the same rows in the same order, so results and errors are unchanged; all writes still land in one atomic batch. SQLite and PostgreSQL handles keep the one-at-a-time reads.
 
 ## [12.14.0] - 2026-11-23
 
