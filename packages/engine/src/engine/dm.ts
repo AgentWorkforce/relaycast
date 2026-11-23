@@ -712,12 +712,16 @@ export async function sendDm(
   }
   const senderAddress = formatAgentAddress(fromAgent.name, fromAgent.node);
 
+  // Resolved once: the owner-approval guard below and the dispatch decision
+  // must agree on whether this recipient is an external A2A agent.
+  const a2aTarget = options.skipA2aIntercept
+    ? null
+    : await a2aEngine.getA2aAgentByRelayName(db, workspaceId, toAgent.name);
   // An external A2A agent has no relay node to ask Cloud for an attestation
   // and no by-message proof route, so an approval sent there would be
   // reported as attached while the recipient never learns of it. Refuse it
   // before anything is written.
-  if (data.owner_approval && !options.skipA2aIntercept
-    && await a2aEngine.getA2aAgentByRelayName(db, workspaceId, toAgent.name)) {
+  if (data.owner_approval && a2aTarget) {
     throw codedError('owner_approval cannot be sent to an external A2A agent', 'invalid_owner_approval', 400);
   }
 
@@ -737,10 +741,6 @@ export async function sendDm(
       throw codedError('reply_to_message_id must name a message from the recipient in this conversation', 'invalid_request', 400);
     }
   }
-  const a2aTarget = options.skipA2aIntercept
-    ? null
-    : await a2aEngine.getA2aAgentByRelayName(db, workspaceId, toAgent.name);
-
   const egressId = a2aTarget
     ? `a2ae_${await sha256Hex(JSON.stringify([workspaceId, fromAgentId, options.idempotencyKey ?? generateId()]))}`
     : null;
