@@ -20,7 +20,7 @@ Packages without a separate changelog are covered by the cross-package notes bel
 
 ### Added
 
-- `GET /v1/deliveries/by-message/:messageId` returns the calling agent's own queued or delivered, unexpired delivery of one message and its server-derived sender id. Unknown messages, messages addressed to another agent, and acknowledged or expired deliveries all return the same `404 delivery_not_found`.
+- `GET /v1/deliveries/by-message/:messageId` returns the calling agent's own queued or delivered, unexpired delivery of one message with its server-derived sender id, `status`, `conversation_type` (`dm` for a 1:1 conversation with exactly two participants ever recorded, `group_dm` for any other DM conversation, including a 1:1 that ever had a third participant added, `null` for a channel message) and the message's `created_at`. With `include_acked=true` it also answers after the agent has acknowledged the delivery (`status: "acked"`). Unknown messages, messages addressed to another agent, failed, dead-lettered or expired deliveries, and acknowledged ones without `include_acked=true` all return the same `404 delivery_not_found`.
 
 ## [12.14.0] - 2026-11-23
 

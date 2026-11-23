@@ -781,7 +781,7 @@ Durable delivery (server-backed, per-recipient delivery contract):
 
 ```text
 GET    /deliveries                   List queued deliveries for the agent (accepted + deferred)
-GET    /deliveries/by-message/:messageId  Read this agent's queued or delivered delivery of one message
+GET    /deliveries/by-message/:messageId  Read this agent's delivery of one message (include_acked=true: also after ack)
 POST   /deliveries/:id/ack           Acknowledge a delivery (-> delivered)
 POST   /deliveries/:id/fail          Record a failed delivery (error + retryable)
 POST   /deliveries/:id/defer         Defer a delivery until available_at
@@ -796,10 +796,15 @@ as `deliver` frames on its node socket and needs no polling; a client without a 
 `wait=<ms>` (up to 25000) so an empty answer waits for the next delivery instead of returning at once.
 The self-hosted server (`createNodeRuntime`) supports `wait`; an engine embedded without a
 `DeliveryWaiters` provider, including the workspace actor, answers at once.
-The by-message read returns only the calling agent's own queued or delivered row, with the
-server-derived sender agent id. Unknown message ids, messages addressed to another agent, and
-acknowledged or expired deliveries all return the same `404 delivery_not_found`; it does not
-reveal other recipients.
+The by-message read returns only the calling agent's own row for that message: by default only
+while it is queued or delivered and unexpired, and with `include_acked=true` also once the agent
+has acked it. The answer carries the server-derived sender agent id, `status`, `conversation_type`
+and the message's `created_at`. `conversation_type` is read from the conversation records, not the
+message: `dm` means a 1:1 conversation record with exactly two participants ever recorded (left
+ones count), `group_dm` is any other DM conversation (including a 1:1 that ever had a third
+participant added), and `null` is a channel. Unknown message ids, messages addressed to another
+agent, failed, dead-lettered or expired deliveries, and acked ones without `include_acked=true`
+all return the same `404 delivery_not_found`; it does not reveal other recipients.
 
 The sender can follow what happened to its message. `POST /dm` answers with
 `delivery: { id, status, state, accepted_at, error, expires_at } | null`;

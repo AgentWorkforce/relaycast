@@ -5818,13 +5818,17 @@ paths:
 
   /deliveries/by-message/{messageId}:
     get:
-      summary: Prove one pending delivery for the calling agent
+      summary: Prove one delivery of a message to the calling agent
       description: >
-        Return only the calling agent token's queued or delivered, unexpired
-        delivery for the given message id. The sender agent id, workspace id,
-        channel id, and delivery reason are server-derived. Unknown message
-        ids, messages addressed to another agent, and acknowledged or expired
-        deliveries all return the same `404 delivery_not_found`.
+        Return only the calling agent token's own delivery of the given
+        message id. By default only a queued or delivered, unexpired delivery
+        answers; with `include_acked=true` an acknowledged delivery answers
+        too, whatever its expiry. The sender agent id, workspace id, channel
+        id, delivery reason, status, conversation type and message creation
+        time are server-derived. Unknown message ids, messages addressed to
+        another agent, failed, dead-lettered or expired deliveries, and (by
+        default) acknowledged deliveries all return the same
+        `404 delivery_not_found`.
       tags:
         - Deliveries
       security:
@@ -5835,9 +5839,18 @@ paths:
           required: true
           schema:
             type: string
+        - name: include_acked
+          in: query
+          description: >-
+            `true` also answers for an acknowledged delivery. Absent, blank or
+            `false` keeps the default. Any other value is a 400
+            `invalid_request`.
+          schema:
+            type: boolean
+            default: false
       responses:
         '200':
-          description: Pending delivery for this agent
+          description: This agent's delivery of the message
           content:
             application/json:
               schema:
@@ -5848,7 +5861,7 @@ paths:
                     type: boolean
                   data:
                     type: object
-                    required: [message_id, workspace_id, channel_id]
+                    required: [message_id, workspace_id, channel_id, status, conversation_type, created_at]
                     properties:
                       message_id:
                         type: string
@@ -5862,10 +5875,39 @@ paths:
                       delivery_reason:
                         type: string
                         nullable: true
+                      status:
+                        type: string
+                        enum: [queued, delivered, acked]
+                        description: >-
+                          `acked` only with `include_acked=true`.
+                      conversation_type:
+                        type: string
+                        enum: [dm, group_dm]
+                        nullable: true
+                        description: >-
+                          From the server's conversation records, read when
+                          this answer is served. `dm` guarantees exactly a
+                          1:1 conversation record with exactly two
+                          participants ever recorded (participants who left
+                          still count). `group_dm` is any other DM
+                          conversation, including a 1:1 that ever had a third
+                          participant added, even after that participant
+                          left. `null` is a channel message.
+                      created_at:
+                        type: string
+                        format: date-time
+                        description: The message's server-set creation time.
+        '400':
+          description: '`invalid_request`: `include_acked` is not `true` or `false`'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
         '404':
           description: >-
             `delivery_not_found`: delivery absent, not addressed to this agent,
-            acknowledged, or expired
+            failed, dead-lettered, expired, or (without `include_acked=true`)
+            acknowledged
           content:
             application/json:
               schema:
