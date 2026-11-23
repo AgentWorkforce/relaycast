@@ -16,7 +16,9 @@ export const WORKSPACE_KEY_MAX_GRACE_MS = 3_600_000;
  * and `server_minted_key` that POST /internal/workspaces/:id/api-key may omit
  * `api_key` to have the engine mint the replacement. `expiry` advertises
  * POST /internal/workspaces/:id/expiry (move or clear a live workspace's
- * deadline), which the hosted gateway serves too.
+ * deadline), which the hosted gateway serves too. `owner_approval.redact_quote`
+ * advertises POST /internal/workspaces/:id/messages/:messageId/owner-approval/
+ * redact-quote (Cloud's quote redaction), served by both.
  */
 export const INTERNAL_CAPABILITIES = {
   workspace_key_push: {
@@ -32,5 +34,8 @@ export const INTERNAL_CAPABILITIES = {
     delete: true,
     server_minted_key: true,
     expiry: true,
+  },
+  owner_approval: {
+    redact_quote: true,
   },
 } as const;

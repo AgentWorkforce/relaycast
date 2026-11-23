@@ -1,6 +1,10 @@
-import { sql } from 'drizzle-orm';
+import { and, eq, isNotNull, sql } from 'drizzle-orm';
 import { OwnerApprovalSchema, type OwnerApproval } from '@relaycast/types';
+import type { getDb } from '../db/index.js';
+import * as sqlx from '../db/sqlx.js';
 import { messages } from '../db/tables.js';
+
+type Db = ReturnType<typeof getDb>;
 
 export type { OwnerApproval };
 
@@ -38,4 +42,37 @@ export function messageHasOwnerApproval() {
 /** The recipient-facing flag: `{ has_owner_approval: true }` or nothing. */
 export function ownerApprovalFlag(has: unknown): { has_owner_approval?: true } {
   return has ? { has_owner_approval: true } : {};
+}
+
+/**
+ * Redact a stored approval's quote (§8): set `quote` to `null` and record
+ * `quote_redacted_at`. This is the one change the immutability trigger lets
+ * through, and only as exactly this edit, once. A second call answers with the
+ * first redaction's time. `null` when the message is absent or has no approval.
+ */
+export async function redactOwnerApprovalQuote(
+  db: Db,
+  workspaceId: string,
+  messageId: string,
+  now = new Date(),
+): Promise<{ message_id: string; quote_redacted_at: string; already_redacted: boolean } | null> {
+  const redactedAt = now.toISOString();
+  const target = and(eq(messages.workspaceId, workspaceId), eq(messages.id, messageId), isNotNull(messages.ownerApproval));
+  const redacted = sqlx.jsonSet(
+    db,
+    sqlx.jsonSet(db, messages.ownerApproval, '$.quote', sql`NULL`, 'json'),
+    '$.quote_redacted_at',
+    sql`${redactedAt}`,
+    'text',
+  );
+  const updated = await db.update(messages)
+    .set({ ownerApproval: redacted as unknown as Record<string, unknown> })
+    .where(and(target, sql`${sqlx.jsonType(db, messages.ownerApproval, '$.quote_redacted_at')} IS NULL`))
+    .returning({ id: messages.id });
+  if (updated.length > 0) return { message_id: messageId, quote_redacted_at: redactedAt, already_redacted: false };
+  const [row] = await db.select({ ownerApproval: messages.ownerApproval }).from(messages).where(target);
+  const previous = (row?.ownerApproval as { quote_redacted_at?: unknown } | null | undefined)?.quote_redacted_at;
+  return typeof previous === 'string'
+    ? { message_id: messageId, quote_redacted_at: previous, already_redacted: true }
+    : null;
 }

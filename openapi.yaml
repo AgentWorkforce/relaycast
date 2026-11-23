@@ -904,8 +904,9 @@ components:
                 type: string
                 maxLength: 256
                 description: >-
-                  For `prompt_approval`, `<agent id>:<request ref>` (no
-                  wildcard). For `config_change`, exactly
+                  For `prompt_approval`, `<agent id>:<request ref>:approve` or
+                  `:deny` (no wildcard). For `pr_ops`, `owner/repo#N:<op>` with
+                  a non-empty op without spaces. For `config_change`, exactly
                   `<agent id>:<setting>=<value>` with a non-empty setting and
                   value and no `*` anywhere. Otherwise a target such as
                   `owner/repo#N` or `service:env`.
@@ -914,10 +915,11 @@ components:
                 maxItems: 5
                 description: >-
                   Checked by Cloud at redeem. `ci_green`, `head_sha`,
-                  `reviews_approved` and `mergeable` are valid only on
-                  `owner/repo#N` targets; `prompt_approval` and
-                  `config_change` accept only `not_before`. Unknown types or extra fields are refused
-                  with `400 invalid_owner_approval`.
+                  `reviews_approved` and `mergeable` are valid only on pull
+                  request targets (`owner/repo#N`, or a `pr_ops` target);
+                  `config_change` accepts only `not_before`, and
+                  `prompt_approval` takes no conditions. Unknown types or extra
+                  fields are refused with `400 invalid_owner_approval`.
                 items:
                   $ref: '#/components/schemas/OwnerApprovalCondition'
               note:
@@ -945,6 +947,13 @@ components:
           type: string
           nullable: true
           pattern: '^apv_[A-Za-z0-9]{8,64}$'
+        quote_redacted_at:
+          type: string
+          format: date-time
+          readOnly: true
+          description: >-
+            Set by Relaycast only, when Cloud redacts the quote (`quote` is then
+            `null`). Returned by the by-message route; refused on send.
 
     OwnerApprovalCondition:
       oneOf:

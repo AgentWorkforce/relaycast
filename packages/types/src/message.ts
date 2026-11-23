@@ -89,9 +89,10 @@ export type OwnerApprovalActionClass = z.infer<typeof OwnerApprovalActionClassSc
 
 /**
  * A condition Cloud checks at redeem. `ci_green`, `head_sha`,
- * `reviews_approved` and `mergeable` apply only to `owner/repo#N` targets;
- * `not_before` applies to any target and is the only one on `prompt_approval`
- * and `config_change`.
+ * `reviews_approved` and `mergeable` apply only to pull request targets
+ * (`owner/repo#N`, or a `pr_ops` target `owner/repo#N:<op>`); `not_before`
+ * applies to any target except `prompt_approval`, which takes no conditions,
+ * and is the only one on `config_change`.
  */
 export const OwnerApprovalConditionSchema = z.discriminatedUnion('type', [
   z.object({ type: z.literal('ci_green') }).strict(),
@@ -111,17 +112,25 @@ const approvalText = (max: number, min = 0) => z.string().min(min).max(max)
   .refine((value) => !value.includes('\u0000'), 'must not contain U+0000');
 
 /** An `owner/repo#N` pull request or issue target. */
-const PULL_REQUEST_TARGET = /^[^\s/#]+\/[^\s/#]+#[1-9]\d*$/;
-/** A `prompt_approval` target in an approval: `<agent id>:<request ref>`, no wildcard. */
-const PROMPT_APPROVAL_TARGET = /^[^\s:*]+:[^\s*]+$/;
+const PULL_REQUEST_TARGET = /^[^\s/#:]+\/[^\s/#:]+#[1-9]\d*$/;
+/**
+ * A `pr_ops` target in an approval: `owner/repo#N:<op>`, `<op>` a non-empty
+ * token without spaces. Exact: wildcards belong to grants, not approvals.
+ */
+const PR_OPS_TARGET = /^[^\s/#:*]+\/[^\s/#:*]+#[1-9]\d*:\S+$/;
+/**
+ * A `prompt_approval` target in an approval: `<agent id>:<request ref>:approve`
+ * or `:deny`, no wildcard.
+ */
+const PROMPT_APPROVAL_TARGET = /^[^\s:*]+:[^\s*]+:(?:approve|deny)$/;
 /**
  * A `config_change` target: `<agent id>:<setting>=<value>`, exact. Non-empty
  * agent id and setting (the setting is everything before the first `=`), a
  * non-empty value, and no `*` anywhere.
  */
 const CONFIG_CHANGE_TARGET = /^[^\s:*]+:[^\s=*]+=[^*]+$/;
-/** Classes whose targets are not repository targets: only `not_before` applies. */
-const NOT_BEFORE_ONLY_CLASSES: ReadonlySet<string> = new Set(['prompt_approval', 'config_change']);
+/** Classes whose targets are not pull requests: only `not_before` applies. */
+const NOT_BEFORE_ONLY_CLASSES: ReadonlySet<string> = new Set(['config_change']);
 const PULL_REQUEST_CONDITIONS: ReadonlySet<string> = new Set(['ci_green', 'head_sha', 'reviews_approved', 'mergeable']);
 
 export const OwnerApprovalActionSchema = z.object({
@@ -130,14 +139,24 @@ export const OwnerApprovalActionSchema = z.object({
   conditions: z.array(OwnerApprovalConditionSchema).max(5).optional(),
   note: approvalText(280).optional(),
 }).strict().superRefine((action, ctx) => {
-  if (action.class === 'prompt_approval' && !PROMPT_APPROVAL_TARGET.test(action.target)) {
-    ctx.addIssue({ code: 'custom', path: ['target'], message: 'prompt_approval target must be <agent id>:<request ref>' });
+  if (action.class === 'prompt_approval') {
+    if (!PROMPT_APPROVAL_TARGET.test(action.target)) {
+      ctx.addIssue({ code: 'custom', path: ['target'], message: 'prompt_approval target must be <agent id>:<request ref>:approve or :deny' });
+    }
+    if (action.conditions !== undefined) {
+      ctx.addIssue({ code: 'custom', path: ['conditions'], message: 'prompt_approval takes no conditions' });
+    }
+    return;
+  }
+  if (action.class === 'pr_ops' && !PR_OPS_TARGET.test(action.target)) {
+    ctx.addIssue({ code: 'custom', path: ['target'], message: 'pr_ops target must be owner/repo#N:<op>' });
   }
   if (action.class === 'config_change' && !CONFIG_CHANGE_TARGET.test(action.target)) {
     ctx.addIssue({ code: 'custom', path: ['target'], message: 'config_change target must be <agent id>:<setting>=<value> with no *' });
   }
   const notBeforeOnly = NOT_BEFORE_ONLY_CLASSES.has(action.class);
-  const pullRequest = !notBeforeOnly && PULL_REQUEST_TARGET.test(action.target);
+  const pullRequest = !notBeforeOnly
+    && (action.class === 'pr_ops' ? PR_OPS_TARGET : PULL_REQUEST_TARGET).test(action.target);
   action.conditions?.forEach((condition, index) => {
     if (PULL_REQUEST_CONDITIONS.has(condition.type) && !pullRequest) {
       ctx.addIssue({
@@ -169,6 +188,16 @@ export const OwnerApprovalSchema = z.object({
   approval_ref: z.string().regex(/^apv_[A-Za-z0-9]{8,64}$/).nullable().optional(),
 }).strict();
 export type OwnerApproval = z.infer<typeof OwnerApprovalSchema>;
+
+/**
+ * An approval as Relaycast stores and returns it (by-message proof route). The
+ * one change after send is a quote redaction: `quote` becomes `null` and
+ * `quote_redacted_at` records when. Never accepted on send.
+ */
+export const StoredOwnerApprovalSchema = OwnerApprovalSchema.extend({
+  quote_redacted_at: z.iso.datetime({ offset: true }).optional(),
+});
+export type StoredOwnerApproval = z.infer<typeof StoredOwnerApprovalSchema>;
 
 export const CoreMessagePayloadSchema = z.object({
   id: z.string(),

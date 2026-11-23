@@ -805,16 +805,19 @@ A trusted delegate can attach an owner approval to a channel post or DM with `ow
 (`{ v: 1, owner_id, actions: [{ class, target, conditions?, note? }], quote?, quoted_at?,
 quote_source?, expires_at?, approval_ref? }`; classes `merge`, `pr_ops`, `deploy`, `release`,
 `secret_change`, `destructive`, `spend`, `external_comms`, `prompt_approval`, `config_change`). A
-`prompt_approval` target is `<agent id>:<request ref>`; a `config_change` target is exactly
-`<agent id>:<setting>=<value>` (non-empty setting and value, no `*`). Each action takes up to 5 conditions for Cloud to check at
+`prompt_approval` target is `<agent id>:<request ref>:approve` or `:deny` and takes no conditions;
+a `pr_ops` target is `owner/repo#N:<op>` (a non-empty op without spaces); a `config_change`
+target is exactly `<agent id>:<setting>=<value>` (non-empty setting and value, no `*`). Each action takes up to 5 conditions for Cloud to check at
 redeem: `ci_green`, `head_sha` (`sha`: 40 lowercase hex), `reviews_approved` (`min`: 1-10) and
-`mergeable` on `owner/repo#N` targets only, and `not_before` (`at`: RFC 3339) on any target;
-`prompt_approval` and `config_change` accept only `not_before`. Approval strings may not contain
+`mergeable` on pull request targets only (`owner/repo#N`, or a `pr_ops` target), and
+`not_before` (`at`: RFC 3339) on any other target; `config_change` accepts only `not_before`. Approval strings may not contain
 U+0000. Any other shape is `400 invalid_owner_approval`, as is an approval on a DM or group DM
 channel posted through `POST /channels/:name/messages` (use `POST /dm`) or on a DM to an external
 A2A agent, which has no node to have it attested. A node token may attach one only for a `from`
 agent hosted on that node (`403 owner_approval_not_allowed` otherwise).
-Relaycast stores it immutably in its own column (SQLite and Postgres), never in `metadata`.
+Relaycast stores it immutably in its own column (SQLite and Postgres), never in `metadata`; the
+one allowed change is Cloud's quote redaction (`quote` becomes `null`, `quote_redacted_at` is
+recorded) through the internal route below.
 Recipients see only `has_owner_approval: true` on websocket events, `deliver` frames and
 `GET /deliveries`; the content is returned only as `owner_approval` by the recipient's by-message
 read, for the recipient node to have Cloud attest it. Relaycast never treats it as an approval
@@ -1490,6 +1493,7 @@ accepted; a wrong secret is `401`).
 | `POST /internal/workspaces` | `{ name, metadata? }` → `201` with `workspace_id`, `api_key` (shown once), `api_key_generation: 0` |
 | `DELETE /internal/workspaces/:id` | Idempotently delete by ID with the internal secret (`204`, including when already gone) |
 | `POST /internal/workspaces/:id/api-key` | Push a control-plane-minted key (`{ api_key, key_generation?, grace_ms? }`, upserts a missing workspace with `201`) or omit `api_key` to have the engine mint and return one. Generation-fenced: stale pushes are `409 stale_key_generation`, generationless key changes on a fenced workspace are `409 key_generation_required`, and a key that is live in another workspace (current, or previous within its grace window) is `409 api_key_conflict`. After an internal delete claims this ID, same-process pushes are `410 workspace_deleted`; deleted IDs are not reusable without restarting the engine. |
+| `POST /internal/workspaces/:id/messages/:messageId/owner-approval/redact-quote` | Cloud's quote redaction: sets the stored `owner_approval.quote` to `null` and records `quote_redacted_at`, the only change the immutability trigger allows → `{ message_id, quote_redacted_at, already_redacted }`. Idempotent (a repeat returns the first redaction); no approval or unknown ID is `404 owner_approval_not_found`. Served by the hosted gateway too. |
 | `POST /internal/workspaces/:id/expiry` | Move a live workspace's deadline (`{ expires_in_seconds: 60..7776000 }`, counted from now) or clear it (`{ expires_in_seconds: null }`) → `{ workspace_id, expires_at }`. A workspace already past its deadline, or being deleted, is never revived (`409 workspace_expired`); unknown IDs are `404`. Served by the hosted gateway too. |
 
 Workspace IDs match `^[A-Za-z0-9_-]{1,128}$`. A deployment that mints `ar_` credentials

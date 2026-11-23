@@ -11,7 +11,7 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Added
 
-- `OwnerApprovalSchema` / `OwnerApproval` (and `OwnerApprovalAction`, `OwnerApprovalConditionSchema` / `OwnerApprovalCondition`, `OWNER_APPROVAL_ACTION_CLASSES` with `prompt_approval` and `config_change`; approval strings refuse U+0000): the v1 delegate owner approval. `PostMessageRequest` and `SendDmRequest` accept `owner_approval`; `CoreMessagePayload`, `MessageWithMeta` and `DeliveryMessage` expose `has_owner_approval?: true`.
+- `OwnerApprovalSchema` / `OwnerApproval` (and `OwnerApprovalAction`, `OwnerApprovalConditionSchema` / `OwnerApprovalCondition`, `OWNER_APPROVAL_ACTION_CLASSES` with `prompt_approval` and `config_change`; approval strings refuse U+0000; `prompt_approval` targets end in `:approve` or `:deny` and take no conditions; `pr_ops` targets are `owner/repo#N:<op>`; `StoredOwnerApprovalSchema` adds the read-only `quote_redacted_at`): the v1 delegate owner approval. `PostMessageRequest` and `SendDmRequest` accept `owner_approval`; `CoreMessagePayload`, `MessageWithMeta` and `DeliveryMessage` expose `has_owner_approval?: true`.
 
 ## [12.14.0] - 2026-11-23
 

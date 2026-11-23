@@ -195,6 +195,7 @@ describe("loadBundledPostgresMigrations", () => {
       "0007_workspace_leaders.sql",
       "0008_message_owner_approval.sql",
       "0009_message_owner_approval_immutable.sql",
+      "0010_owner_approval_quote_redaction.sql",
     ]);
     expect(bundled.every((m) => m.statements.length > 0)).toBe(true);
   });

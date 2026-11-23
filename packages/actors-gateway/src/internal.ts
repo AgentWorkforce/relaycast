@@ -21,7 +21,7 @@ import { BOOTSTRAP_PROOF_HEADER, IDEMPOTENCY_KEY_HEADER, chooseWorkspaceId, isWo
 export { INTERNAL_CAPABILITIES };
 
 const WORKSPACE_ID_PATTERN = /^[A-Za-z0-9_-]{1,128}$/;
-const WORKSPACE_ROUTE = /^\/internal\/workspaces\/([^/]+)(\/api-key|\/expiry)?$/;
+const WORKSPACE_ROUTE = /^\/internal\/workspaces\/([^/]+)(\/api-key|\/expiry|\/messages\/[^/]+\/owner-approval\/redact-quote)?$/;
 const IMPORT_ROUTE = /^\/internal\/workspaces\/([^/]+)\/import$/;
 /** Admin bodies are small; this is not the upload cap. */
 const MAX_INTERNAL_BODY_BYTES = 64 * 1024;
@@ -150,7 +150,9 @@ export async function handleInternal(ctx: GatewayContext, { req, res, url, reque
     const isDelete = req.method === 'DELETE' && match[2] === undefined;
     const isKeyPush = req.method === 'POST' && match[2] === '/api-key';
     const isExpiry = req.method === 'POST' && match[2] === '/expiry';
-    if (isDelete || isKeyPush || isExpiry) {
+    // Cloud's owner-approval quote redaction; the actor validates the message id.
+    const isRedaction = req.method === 'POST' && match[2]?.startsWith('/messages/') === true;
+    if (isDelete || isKeyPush || isExpiry || isRedaction) {
       const workspaceId = decodePathSegment(match[1]);
       if (workspaceId === undefined || !WORKSPACE_ID_PATTERN.test(workspaceId)) return sendError(res, 400, 'invalid_request', 'Invalid workspace id');
       // A workspace actor's id is a 64-bit snowflake (the engine refuses any

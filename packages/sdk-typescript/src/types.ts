@@ -736,6 +736,8 @@ export type OwnerApprovalAction = Camelize<Raw.OwnerApprovalAction>;
 export type OwnerApprovalActionClass = Raw.OwnerApprovalActionClass;
 export type OwnerApprovalCondition = Camelize<Raw.OwnerApprovalCondition>;
 export type OwnerApprovalConditionType = Raw.OwnerApprovalConditionType;
+/** An approval as Relaycast stores it: may carry `quoteRedactedAt` after Cloud redacts the quote. */
+export type StoredOwnerApproval = Camelize<Raw.StoredOwnerApproval>;
 export type AddedReaction = Camelize<Raw.AddedReaction>;
 export type ReactionGroup = Camelize<Raw.ReactionGroup>;
 export type ReadReceipt = Camelize<Raw.ReadReceipt>;

@@ -71,6 +71,13 @@
       "when": 1795447068529,
       "tag": "0009_message_owner_approval_immutable",
       "breakpoints": true
+    },
+    {
+      "idx": 10,
+      "version": "7",
+      "when": 1795454040456,
+      "tag": "0010_owner_approval_quote_redaction",
+      "breakpoints": true
     }
   ]
 }

@@ -118,7 +118,7 @@ describe('owner_approval on messages', () => {
     ['missing actions', (({ actions: _a, ...rest }) => rest)(approval())],
     ['no actions', { ...approval(), actions: [] }],
     ['21 actions', { ...approval(), actions: Array.from({ length: 21 }, (_, i) => ({ class: 'merge', target: `o/r#${i}` })) }],
-    ['an unknown class', { ...approval(), actions: [{ class: 'prompt_approval', target: 'x' }] }],
+    ['an unknown class', { ...approval(), actions: [{ class: 'approve_everything', target: 'x' }] }],
     ['a target over 256', { ...approval(), actions: [{ class: 'merge', target: long(257) }] }],
     ['a note over 280', { ...approval(), actions: [{ class: 'merge', target: 'o/r', note: long(281) }] }],
     ['an extra action key', { ...approval(), actions: [{ class: 'merge', target: 'o/r', scope: 'all' }] }],
@@ -130,15 +130,30 @@ describe('owner_approval on messages', () => {
     ['an approval_ref without prefix', { ...approval(), approval_ref: 'grt_abcdefgh12' }],
     ['an extra top-level key', { ...approval(), tier: 'O' }],
     // prompt_approval targets and conditions (§16.1).
-    ['a prompt_approval target without a request ref', { ...approval(), actions: [{ class: 'prompt_approval', target: 'agent_123' }] }],
-    ['a prompt_approval wildcard target', { ...approval(), actions: [{ class: 'prompt_approval', target: 'agent_123:*' }] }],
-    ['a prompt_approval target over 256', { ...approval(), actions: [{ class: 'prompt_approval', target: `a:${long(255)}` }] }],
+    ['a prompt_approval target without a request ref', { ...approval(), actions: [{ class: 'prompt_approval', target: 'agent_123:approve' }] }],
+    ['a prompt_approval target without :approve or :deny', { ...approval(), actions: [{ class: 'prompt_approval', target: 'agent_123:req_1' }] }],
+    ['a prompt_approval target ending in another verb', { ...approval(), actions: [{ class: 'prompt_approval', target: 'agent_123:req_1:allow' }] }],
+    ['a prompt_approval wildcard target', { ...approval(), actions: [{ class: 'prompt_approval', target: 'agent_123:*:approve' }] }],
+    ['a prompt_approval target over 256', { ...approval(), actions: [{ class: 'prompt_approval', target: `a:${long(247)}:approve` }] }],
+    ['not_before on prompt_approval', { ...approval(), actions: [{ class: 'prompt_approval', target: 'agent_1:req_1:approve', conditions: [{ type: 'not_before', at: '2026-11-23T09:00:00Z' }] }] }],
+    ['an empty conditions list on prompt_approval', { ...approval(), actions: [{ class: 'prompt_approval', target: 'agent_1:req_1:deny', conditions: [] }] }],
+    // pr_ops targets are `owner/repo#N:<op>` (§16.1).
+    ...([
+      ['without an op', 'o/r#1'],
+      ['with an empty op', 'o/r#1:'],
+      ['with a space in the op', 'o/r#1:label x'],
+      ['without #N', 'o/r:open'],
+      ['with a wildcard repo', 'o/*#1:open'],
+      ['with #0', 'o/r#0:open'],
+    ] as const).map(([label, target]): [string, unknown] => [
+      `a pr_ops target ${label}`, { ...approval(), actions: [{ class: 'pr_ops', target }] },
+    ]),
     ...(['ci_green', 'mergeable'] as const).map((type): [string, unknown] => [
       `${type} on prompt_approval`,
-      { ...approval(), actions: [{ class: 'prompt_approval', target: 'agent_1:req_1', conditions: [{ type }] }] },
+      { ...approval(), actions: [{ class: 'prompt_approval', target: 'agent_1:req_1:approve', conditions: [{ type }] }] },
     ]),
-    ['head_sha on prompt_approval', { ...approval(), actions: [{ class: 'prompt_approval', target: 'agent_1:req_1', conditions: [{ type: 'head_sha', sha: 'a'.repeat(40) }] }] }],
-    ['reviews_approved on prompt_approval', { ...approval(), actions: [{ class: 'prompt_approval', target: 'agent_1:req_1', conditions: [{ type: 'reviews_approved', min: 1 }] }] }],
+    ['head_sha on prompt_approval', { ...approval(), actions: [{ class: 'prompt_approval', target: 'agent_1:req_1:approve', conditions: [{ type: 'head_sha', sha: 'a'.repeat(40) }] }] }],
+    ['reviews_approved on prompt_approval', { ...approval(), actions: [{ class: 'prompt_approval', target: 'agent_1:req_1:approve', conditions: [{ type: 'reviews_approved', min: 1 }] }] }],
     ['ci_green on a repo target without #N', { ...approval(), actions: [{ class: 'merge', target: 'AgentWorkforce/relay', conditions: [{ type: 'ci_green' }] }] }],
     ['mergeable on a wildcard target', { ...approval(), actions: [{ class: 'merge', target: 'AgentWorkforce/*', conditions: [{ type: 'mergeable' }] }] }],
     ['head_sha on a deploy target', { ...approval(), actions: [{ class: 'deploy', target: 'api:staging', conditions: [{ type: 'head_sha', sha: 'a'.repeat(40) }] }] }],
@@ -212,7 +227,7 @@ describe('owner_approval on messages', () => {
       owner_id: long(128),
       actions: Array.from({ length: 20 }, (_, i) => ({
         class: (['merge', 'pr_ops', 'deploy', 'release', 'secret_change', 'destructive', 'spend', 'external_comms'] as const)[i % 8],
-        target: i === 0 ? long(256) : `AgentWorkforce/*#${i}`,
+        target: i === 0 ? long(256) : i % 8 === 1 ? `AgentWorkforce/relay#${i}:label=ready` : `AgentWorkforce/*#${i}`,
         ...(i === 1 ? { note: long(280) } : {}),
       })),
       quote: long(2000),
@@ -227,7 +242,7 @@ describe('owner_approval on messages', () => {
     expect((await storedApproval(fullId)).ownerApproval).toEqual(atLimits);
 
     const minimal = await dm(alice.token, { to: 'bob', text: 'minimal', owner_approval: {
-      v: 1, owner_id: 'hum_k', actions: [{ class: 'pr_ops', target: 'o/r#1' }],
+      v: 1, owner_id: 'hum_k', actions: [{ class: 'pr_ops', target: 'o/r#1:rerun_ci' }],
     } });
     expect(minimal.status).toBe(201);
 
@@ -257,8 +272,10 @@ describe('owner_approval on messages', () => {
           note: 'when green',
         },
         { class: 'deploy', target: 'api:staging', conditions: [{ type: 'not_before', at: '2026-11-23T10:00:00Z' }] },
-        { class: 'prompt_approval', target: 'agent_250624318991675392:req_7Q2', conditions: [{ type: 'not_before', at: '2026-11-23T08:00:00Z' }] },
-        { class: 'prompt_approval', target: 'agent_1:req_2' },
+        { class: 'prompt_approval', target: 'agent_250624318991675392:req_7Q2:approve' },
+        { class: 'prompt_approval', target: 'agent_1:req:2:deny' },
+        { class: 'pr_ops', target: 'AgentWorkforce/relay#2250:request_review=octocat', conditions: [{ type: 'ci_green' }, { type: 'head_sha', sha: 'a'.repeat(40) }] },
+        { class: 'pr_ops', target: 'AgentWorkforce/relay#2250:close' },
       ],
     };
     for (const send of [
@@ -416,6 +433,100 @@ describe('owner_approval on messages', () => {
       body: JSON.stringify({ text: 'plain', from: 'alice' }),
     });
     expect(plain.status).toBe(201);
+  });
+
+  describe('quote redaction (Cloud only)', () => {
+    const SECRET = 'internal-secret-for-owner-approval-tests';
+    const redact = (messageId: string, token = SECRET, workspaceId?: string) => stack.app.request(
+      `/internal/workspaces/${workspaceId}/messages/${encodeURIComponent(messageId)}/owner-approval/redact-quote`,
+      { method: 'POST', headers: { authorization: `Bearer ${token}` } },
+    );
+    beforeEach(async () => {
+      await stack.close();
+      stack = makeNodeStack({ ttlMs: 60_000, internalSecret: SECRET });
+    });
+
+    it('nulls the quote once, records quote_redacted_at, and leaves everything else unchanged', async () => {
+      const { ws, alice, bob } = await seed();
+      const sent = await dm(alice.token, { to: 'bob', text: 'please merge', owner_approval: approval() });
+      const messageId = ((await sent.json()) as { data: { id: string } }).data.id;
+
+      // Only the internal (Cloud) secret may redact: agent tokens and the workspace key are refused.
+      for (const token of [alice.token, bob.token, ws.workspaceKey, 'wrong-secret']) {
+        expect((await redact(messageId, token, ws.workspaceId)).status).toBe(401);
+      }
+      expect((await storedApproval(messageId)).ownerApproval).toEqual(approval());
+
+      const first = await redact(messageId, SECRET, ws.workspaceId);
+      expect(first.status).toBe(200);
+      const firstData = ((await first.json()) as { data: { message_id: string; quote_redacted_at: string; already_redacted: boolean } }).data;
+      expect(firstData).toMatchObject({ message_id: messageId, already_redacted: false });
+      expect(Number.isNaN(Date.parse(firstData.quote_redacted_at))).toBe(false);
+
+      const expected = { ...approval(), quote: null, quote_redacted_at: firstData.quote_redacted_at };
+      expect((await storedApproval(messageId)).ownerApproval).toEqual(expected);
+      const proof = await byMessage(bob.token, messageId);
+      const proofApproval = ((await proof.json()) as { data: { owner_approval: Record<string, unknown> } }).data.owner_approval;
+      expect(proofApproval).toEqual(expected);
+      expect(JSON.stringify(proofApproval)).not.toContain(QUOTE);
+
+      // A repeat answers with the first redaction and changes nothing.
+      const again = await redact(messageId, SECRET, ws.workspaceId);
+      expect(again.status).toBe(200);
+      expect(((await again.json()) as { data: unknown }).data).toEqual({ ...firstData, already_redacted: true });
+      expect((await storedApproval(messageId)).ownerApproval).toEqual(expected);
+
+      // After redaction the approval is immutable again: no restoring the quote or moving the time.
+      expect(await refusal(stack.runtime.deps.db.update(messages)
+        .set({ ownerApproval: { ...expected, quote: QUOTE } }).where(eq(messages.id, messageId)))).toMatch(/owner_approval is immutable/);
+      expect(await refusal(stack.runtime.deps.db.update(messages)
+        .set({ ownerApproval: { ...expected, quote_redacted_at: '2030-01-01T00:00:00.000Z' } }).where(eq(messages.id, messageId)))).toMatch(/owner_approval is immutable/);
+    });
+
+    it('refuses any other change dressed as a redaction', async () => {
+      const { alice } = await seed();
+      const sent = await post(alice.token, { text: 'channel merge', owner_approval: approval() });
+      const messageId = ((await sent.json()) as { data: { id: string } }).data.id;
+      const at = '2026-11-23T10:00:00.000Z';
+      for (const forged of [
+        // Widens the actions while redacting.
+        { ...approval(), quote: null, quote_redacted_at: at, actions: [{ class: 'deploy', target: 'api:prod' }] },
+        // Replaces the quote instead of nulling it.
+        { ...approval(), quote: 'something else', quote_redacted_at: at },
+        // Records a redaction time but keeps the quote.
+        { ...approval(), quote_redacted_at: at },
+        // Nulls the quote without recording when.
+        { ...approval(), quote: null },
+        // A non-string redaction time.
+        { ...approval(), quote: null, quote_redacted_at: 1 },
+      ]) {
+        expect(await refusal(stack.runtime.deps.db.update(messages)
+          .set({ ownerApproval: forged }).where(eq(messages.id, messageId)))).toMatch(/owner_approval is immutable/);
+      }
+      expect((await storedApproval(messageId)).ownerApproval).toEqual(approval());
+    });
+
+    it('answers 404 owner_approval_not_found for a message without an approval or an unknown id', async () => {
+      const { ws, alice } = await seed();
+      const plain = await dm(alice.token, { to: 'bob', text: 'no approval' });
+      const plainId = ((await plain.json()) as { data: { id: string } }).data.id;
+      for (const id of [plainId, '999999999999']) {
+        const res = await redact(id, SECRET, ws.workspaceId);
+        expect(res.status).toBe(404);
+        expect(((await res.json()) as { error: { code: string } }).error.code).toBe('owner_approval_not_found');
+      }
+      expect((await storedApproval(plainId)).ownerApproval).toBeNull();
+    });
+
+    it('cannot redact a message in another workspace', async () => {
+      const { alice } = await seed();
+      const sent = await dm(alice.token, { to: 'bob', text: 'merge', owner_approval: approval() });
+      const messageId = ((await sent.json()) as { data: { id: string } }).data.id;
+      const other = await createWorkspace(stack.app, 'owner-approval-other-ws');
+      const res = await redact(messageId, SECRET, other.workspaceId);
+      expect(res.status).toBe(404);
+      expect((await storedApproval(messageId)).ownerApproval).toEqual(approval());
+    });
   });
 
   it('stores the approval in its own column, never in caller metadata', async () => {
