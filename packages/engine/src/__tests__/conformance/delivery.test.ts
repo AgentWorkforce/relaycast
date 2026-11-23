@@ -11,7 +11,7 @@ import {
   contextUpdatesOfType,
   type TestStack,
 } from './harness.js';
-import { agents, deliveries, messages, nodeProviders } from '../../db/tables.js';
+import { agents, deliveries, dmConversations, dmParticipants, messages, nodeProviders } from '../../db/tables.js';
 import * as messageEngine from '../../engine/message.js';
 import * as deliveryEngine from '../../engine/delivery.js';
 import { ensureDirectNodeForAgent } from '../../engine/node.js';
@@ -82,10 +82,49 @@ describe('durable delivery api', () => {
     return ((await res.json()) as { data: Array<Record<string, unknown>> }).data;
   }
 
-  async function pendingByMessage(token: string, messageId: string) {
-    return stack.app.request(`/v1/deliveries/by-message/${encodeURIComponent(messageId)}`, {
+  async function pendingByMessage(token: string, messageId: string, query = '') {
+    return stack.app.request(`/v1/deliveries/by-message/${encodeURIComponent(messageId)}${query}`, {
       headers: { authorization: `Bearer ${token}` },
     });
+  }
+
+  async function proofData(token: string, messageId: string, query = '') {
+    const res = await pendingByMessage(token, messageId, query);
+    expect(res.status).toBe(200);
+    return ((await res.json()) as { data: Record<string, unknown> }).data;
+  }
+
+  async function expectNoProof(token: string, messageId: string, query = '') {
+    const res = await pendingByMessage(token, messageId, query);
+    expect(res.status).toBe(404);
+    expect((await res.json()).error).toMatchObject({ code: 'delivery_not_found', message: 'Delivery not found' });
+  }
+
+  async function messageCreatedAt(token: string, messageId: string) {
+    const res = await stack.app.request(`/v1/messages/${encodeURIComponent(messageId)}`, {
+      headers: { authorization: `Bearer ${token}` },
+    });
+    expect(res.status).toBe(200);
+    return ((await res.json()) as { data: { created_at: string } }).data.created_at;
+  }
+
+  async function ackByMessage(token: string, messageId: string) {
+    const [item] = (await listDeliveries(token)).filter((row) => row.message_id === messageId);
+    const res = await stack.app.request(`/v1/deliveries/${item!.id}/ack`, {
+      method: 'POST', headers: { authorization: `Bearer ${token}` },
+    });
+    expect(res.status).toBe(200);
+    return item!.id as string;
+  }
+
+  async function postJson(token: string, path: string, body: unknown) {
+    const res = await stack.app.request(path, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', authorization: `Bearer ${token}` },
+      body: JSON.stringify(body),
+    });
+    expect(res.status).toBeLessThan(300);
+    return ((await res.json()) as { data: { id: string } }).data.id;
   }
 
   it('proves only the recipient token has a pending delivery for a message', async () => {
@@ -126,6 +165,171 @@ describe('durable delivery api', () => {
     const expired = await pendingByMessage(bob.token, messageId);
     expect(expired.status).toBe(404);
     expect((await expired.json()).error.code).toBe('delivery_not_found');
+  });
+
+  it('answers for an acked delivery only with include_acked=true', async () => {
+    const { ws, alice, bob, messageId } = await seed();
+    const carol = await registerAgent(stack.app, ws.workspaceKey, 'carol');
+    const other = await createWorkspace(stack.app, 'other-acked-ws');
+    const remote = await registerAgent(stack.app, other.workspaceKey, 'remote');
+    const createdAt = await messageCreatedAt(bob.token, messageId);
+
+    for (const query of ['', '?include_acked=false', '?include_acked=true']) {
+      const before = await proofData(bob.token, messageId, query);
+      expect(['queued', 'delivered']).toContain(before.status);
+      expect(before).toMatchObject({ message_id: messageId, sender_agent_id: alice.agentId,
+        workspace_id: ws.workspaceId, conversation_type: null, created_at: createdAt });
+    }
+
+    await ackByMessage(bob.token, messageId);
+    await expectNoProof(bob.token, messageId);
+    await expectNoProof(bob.token, messageId, '?include_acked=false');
+    expect(await proofData(bob.token, messageId, '?include_acked=true')).toMatchObject({
+      message_id: messageId, sender_agent_id: alice.agentId, workspace_id: ws.workspaceId,
+      status: 'acked', conversation_type: null, created_at: createdAt,
+    });
+
+    // Opting in widens only the caller's own row: the sender, another agent,
+    // another workspace and an unknown id still get the one 404.
+    await expectNoProof(alice.token, messageId, '?include_acked=true');
+    await expectNoProof(carol.token, messageId, '?include_acked=true');
+    await expectNoProof(remote.token, messageId, '?include_acked=true');
+    await expectNoProof(bob.token, 'unknown-message', '?include_acked=true');
+  });
+
+  it('keeps failed, dead-lettered and expired pending deliveries hidden with include_acked=true', async () => {
+    const { ws, bob, messageId } = await seed();
+    const ownRow = and(eq(deliveries.workspaceId, ws.workspaceId), eq(deliveries.messageId, messageId),
+      eq(deliveries.agentId, bob.agentId));
+    const [item] = await listDeliveries(bob.token);
+    const failed = await stack.app.request(`/v1/deliveries/${item!.id}/fail`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', authorization: `Bearer ${bob.token}` },
+      body: JSON.stringify({ error: 'boom', retryable: false }),
+    });
+    expect(failed.status).toBe(200);
+    expect(((await failed.json()) as { data: { status: string } }).data.status).toBe('failed');
+    await expectNoProof(bob.token, messageId);
+    await expectNoProof(bob.token, messageId, '?include_acked=true');
+
+    await stack.runtime.deps.db.update(deliveries).set({ status: 'dead_lettered' }).where(ownRow);
+    await expectNoProof(bob.token, messageId);
+    await expectNoProof(bob.token, messageId, '?include_acked=true');
+
+    await stack.runtime.deps.db.update(deliveries).set({ status: 'queued', expiresAt: new Date(1) }).where(ownRow);
+    await expectNoProof(bob.token, messageId);
+    await expectNoProof(bob.token, messageId, '?include_acked=true');
+
+    // Expiry bounds an unconsumed delivery; an acked row was consumed.
+    await stack.runtime.deps.db.update(deliveries).set({ status: 'acked' }).where(ownRow);
+    await expectNoProof(bob.token, messageId);
+    expect((await proofData(bob.token, messageId, '?include_acked=true')).status).toBe('acked');
+  });
+
+  it('derives conversation_type from the conversation record, not from sender data', async () => {
+    const { ws, alice, bob } = await seed();
+    await registerAgent(stack.app, ws.workspaceKey, 'carol');
+
+    const dmId = await postJson(alice.token, '/v1/dm',
+      { to: 'bob', text: 'approve?', data: { conversation_type: 'group_dm' } });
+    const dmCreatedAt = await messageCreatedAt(bob.token, dmId);
+    for (const query of ['', '?include_acked=true']) {
+      expect(await proofData(bob.token, dmId, query)).toMatchObject({
+        message_id: dmId, sender_agent_id: alice.agentId, conversation_type: 'dm', created_at: dmCreatedAt,
+      });
+    }
+
+    const conversationId = await postJson(alice.token, '/v1/dm/group', { participants: ['bob', 'carol'] });
+    const groupId = await postJson(alice.token, `/v1/dm/${conversationId}/messages`,
+      { text: 'approve?', data: { conversation_type: 'dm' } });
+    expect(await proofData(bob.token, groupId)).toMatchObject({
+      message_id: groupId, sender_agent_id: alice.agentId, conversation_type: 'group_dm',
+      created_at: await messageCreatedAt(bob.token, groupId),
+    });
+
+    // After the ack the opt-in answer keeps the same classification.
+    await ackByMessage(bob.token, dmId);
+    await ackByMessage(bob.token, groupId);
+    expect((await proofData(bob.token, dmId, '?include_acked=true')).conversation_type).toBe('dm');
+    expect((await proofData(bob.token, groupId, '?include_acked=true')).conversation_type).toBe('group_dm');
+
+    // A dm_type the engine does not know is never reported as a 1:1 DM.
+    const [dmMessage] = await stack.runtime.deps.db.select({ channelId: messages.channelId })
+      .from(messages).where(eq(messages.id, dmId));
+    await stack.runtime.deps.db.update(dmConversations).set({ dmType: 'broadcast' })
+      .where(eq(dmConversations.channelId, dmMessage!.channelId));
+    expect((await proofData(bob.token, dmId, '?include_acked=true')).conversation_type).toBe('group_dm');
+  });
+
+  it('reports a 1:1 DM as group_dm once a third participant was ever recorded', async () => {
+    const { ws, alice, bob } = await seed();
+    const carol = await registerAgent(stack.app, ws.workspaceKey, 'carol');
+    const asAgent = (token: string) => ({ authorization: `Bearer ${token}` });
+    const both = ['', '?include_acked=true'];
+
+    const pairId = await postJson(alice.token, '/v1/dm', { to: 'bob', text: 'just us?' });
+    const listRes = await stack.app.request('/v1/dm/conversations', { headers: asAgent(alice.token) });
+    expect(listRes.status).toBe(200);
+    const [conversation] = ((await listRes.json()) as { data: Array<{ id: string; type: string }> }).data;
+    expect(conversation).toMatchObject({ type: '1:1' });
+    for (const query of both) {
+      expect((await proofData(bob.token, pairId, query)).conversation_type).toBe('dm');
+    }
+
+    // The add-participant route accepts a 1:1 conversation, and the newcomer
+    // can read its earlier history and post into it. The conversation and
+    // channel records still say 1:1.
+    const add = await stack.app.request(`/v1/dm/${conversation!.id}/participants`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', ...asAgent(alice.token) },
+      body: JSON.stringify({ agent_name: 'carol' }),
+    });
+    expect(add.status).toBe(200);
+    expect((await add.json()).data).toMatchObject({ conversation_id: conversation!.id, already_member: false });
+    const carolRead = await stack.app.request(`/v1/dm/${conversation!.id}/messages`, { headers: asAgent(carol.token) });
+    expect(carolRead.status).toBe(200);
+    expect(((await carolRead.json()) as { data: Array<{ id: string }> }).data.map((m) => m.id)).toContain(pairId);
+    const carolPostId = await postJson(carol.token, `/v1/dm/${conversation!.id}/messages`, { text: 'i can read this' });
+    const [record] = await stack.runtime.deps.db.select({ dmType: dmConversations.dmType })
+      .from(dmConversations).where(eq(dmConversations.id, conversation!.id));
+    expect(record!.dmType).toBe('1:1');
+
+    for (const query of both) {
+      expect((await proofData(bob.token, pairId, query)).conversation_type).toBe('group_dm');
+      expect((await proofData(bob.token, carolPostId, query)).conversation_type).toBe('group_dm');
+    }
+
+    // Leaving only stamps left_at on the leaver's row; the conversation had
+    // three readers, so it stays group_dm.
+    const leave = await stack.app.request(`/v1/dm/${conversation!.id}/participants/carol`, {
+      method: 'DELETE', headers: asAgent(carol.token),
+    });
+    expect(leave.status).toBe(204);
+    const rows = await stack.runtime.deps.db.select({ agentId: dmParticipants.agentId, leftAt: dmParticipants.leftAt })
+      .from(dmParticipants).where(eq(dmParticipants.conversationId, conversation!.id));
+    expect(rows).toHaveLength(3);
+    expect(rows.find((r) => r.agentId === carol.agentId)!.leftAt).toBeInstanceOf(Date);
+    const carolAfter = await stack.app.request(`/v1/dm/${conversation!.id}/messages`, { headers: asAgent(carol.token) });
+    expect(carolAfter.status).toBe(403);
+
+    const afterLeaveId = await postJson(alice.token, '/v1/dm', { to: 'bob', text: 'just us again?' });
+    for (const query of both) {
+      expect((await proofData(bob.token, pairId, query)).conversation_type).toBe('group_dm');
+      expect((await proofData(bob.token, afterLeaveId, query)).conversation_type).toBe('group_dm');
+    }
+    await ackByMessage(bob.token, pairId);
+    expect((await proofData(bob.token, pairId, '?include_acked=true')).conversation_type).toBe('group_dm');
+  });
+
+  it('rejects a malformed include_acked value and treats a blank one as absent', async () => {
+    const { bob, messageId } = await seed();
+    for (const value of ['1', 'yes', 'TRUE']) {
+      const res = await pendingByMessage(bob.token, messageId, `?include_acked=${value}`);
+      expect(res.status, value).toBe(400);
+      expect((await res.json()).error.code).toBe('invalid_request');
+    }
+    await ackByMessage(bob.token, messageId);
+    await expectNoProof(bob.token, messageId, '?include_acked=');
   });
 
   it('finds a pending message beyond the first 200 queue entries', async () => {

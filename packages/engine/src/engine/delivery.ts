@@ -1,8 +1,8 @@
 import { nodeLivenessAuthority } from './nodeLiveness.js';
 import { parseMessageMentions } from './mentions.js';
-import { eq, and, asc, exists, isNull, isNotNull, inArray, lt, ne, not, notInArray, lte, gt, sql, getTableColumns, type AnyColumn, type SQL } from 'drizzle-orm';
+import { eq, and, asc, exists, isNull, isNotNull, inArray, lt, ne, not, notInArray, lte, gt, or, sql, getTableColumns, type AnyColumn, type SQL } from 'drizzle-orm';
 import type { getDb } from '../db/index.js';
-import { deliveries, messages, agents, nodes, readReceipts, channelMembers, channels, dmConversations } from '../db/tables.js';
+import { deliveries, messages, agents, nodes, readReceipts, channelMembers, channels, dmConversations, dmParticipants } from '../db/tables.js';
 import type { DeliveryState, DeliveryStatus } from '@relaycast/types';
 import { runAtomicWrites, type AtomicWrite } from '../ports/database.js';
 import type { EngineUpdateSet } from '../ports/engineDb.js';
@@ -28,6 +28,7 @@ import { notifySenderDeliveryReceipts } from './deliveryReceipts.js';
 import type { EventDispatchEngine } from './eventDispatch.js';
 import * as sqlx from '../db/sqlx.js';
 import { deliveryStateOf } from './deliveryState.js';
+import { isDmBackedChannelType } from './dmAccess.js';
 export { deliveryStateOf } from './deliveryState.js';
 
 type Db = ReturnType<typeof getDb>;
@@ -218,26 +219,115 @@ async function listDeliveriesUnlabeled(
   });
 }
 
-/** Read only a still-pending message delivered to this exact agent token.
- * This avoids a queue-page limit and never reveals another agent's messages.
+/** Delivery status a {@link deliveryProofForMessage} answer can carry. */
+export type DeliveryProofStatus = 'queued' | 'delivered' | 'acked';
+
+/**
+ * Server-derived kind of the conversation the message was posted in, read
+ * when the proof is served: `dm` means a 1:1 conversation record with exactly
+ * two participants ever recorded; `group_dm` is any other DM-backed
+ * conversation; `null` is channel traffic.
  */
-export async function pendingDeliveryForMessage(
-  db: Db, workspaceId: string, recipientAgentId: string, messageId: string,
-): Promise<{ message_id: string; sender_agent_id: string | null; workspace_id: string; channel_id: string; delivery_reason: string | null } | null> {
+export type DeliveryProofConversationType = 'dm' | 'group_dm' | null;
+
+/** One delivery of one message to the calling agent. */
+export interface DeliveryProof {
+  message_id: string;
+  sender_agent_id: string | null;
+  workspace_id: string;
+  channel_id: string;
+  delivery_reason: string | null;
+  status: DeliveryProofStatus;
+  conversation_type: DeliveryProofConversationType;
+  /** The message's server-set creation time (ISO 8601). */
+  created_at: string;
+}
+
+/**
+ * Classify a message's channel from the authoritative conversation records:
+ * `channels.channel_type` (what DM access checks use), the `dm_conversations`
+ * row(s) behind the channel (what DM fanout uses) and, when both say 1:1, its
+ * `dm_participants` rows. `dm` therefore guarantees exactly this: one 1:1
+ * conversation record, and exactly two participant rows ever recorded,
+ * counting rows whose `left_at` is set. A participant added to a 1:1 (the
+ * add-participant route does not check `dm_type`) turns it into `group_dm`
+ * for good, even after that participant leaves. Any other DM signal (a
+ * `group` row, an unknown `dm_type`, several rows, or a DM-backed channel
+ * without its row) is `group_dm` too.
+ */
+function classifyConversation(
+  channelType: number | null,
+  dmTypes: string[],
+  participantRowCount: number | null,
+): DeliveryProofConversationType {
+  if (!isDmBackedChannelType(channelType) && dmTypes.length === 0) return null;
+  if (isOneToOneRecord(channelType, dmTypes) && participantRowCount === 2) return 'dm';
+  return 'group_dm';
+}
+
+function isOneToOneRecord(channelType: number | null, dmTypes: string[]): boolean {
+  return channelType === 1 && dmTypes.length === 1 && dmTypes[0] === '1:1';
+}
+
+/**
+ * Read the calling agent's own delivery of one message. By default only a
+ * still-pending (`queued` / `delivered`, unexpired) row answers; with
+ * `includeAcked` an `acked` row answers too, whatever its `expires_at`
+ * (expiry bounds an unconsumed delivery; an acked one was consumed). `failed`
+ * and `dead_lettered` rows never answer. This avoids a queue-page limit and
+ * never reveals another agent's messages.
+ *
+ * `deliveries_message_agent_unique (message_id, agent_id)` allows at most one
+ * row per agent and message, so the lookup has no ambiguity to resolve.
+ */
+export async function deliveryProofForMessage(
+  db: Db,
+  workspaceId: string,
+  recipientAgentId: string,
+  messageId: string,
+  opts: { includeAcked?: boolean } = {},
+): Promise<DeliveryProof | null> {
+  const pending = and(
+    sql`${deliveries.status} IN ('queued', 'delivered')`,
+    sql`(${deliveries.expiresAt} IS NULL OR ${deliveries.expiresAt} > ${Math.floor(Date.now() / 1000)})`,
+  );
   const [row] = await db.select({ messageId: deliveries.messageId, senderAgentId: messages.agentId,
-    workspaceId: deliveries.workspaceId, channelId: messages.channelId, reason: deliveries.reason })
+    workspaceId: deliveries.workspaceId, channelId: messages.channelId, reason: deliveries.reason,
+    status: deliveries.status, createdAt: messages.createdAt, channelType: channels.channelType })
     .from(deliveries)
     .innerJoin(messages, and(eq(messages.id, deliveries.messageId), eq(messages.workspaceId, deliveries.workspaceId)))
+    .leftJoin(channels, eq(channels.id, messages.channelId))
     .where(and(
       eq(deliveries.workspaceId, workspaceId),
       eq(deliveries.agentId, recipientAgentId),
       eq(deliveries.messageId, messageId),
-      sql`${deliveries.status} IN ('queued', 'delivered')`,
-      sql`(${deliveries.expiresAt} IS NULL OR ${deliveries.expiresAt} > ${Math.floor(Date.now() / 1000)})`,
+      opts.includeAcked ? or(pending, eq(deliveries.status, TERMINAL_SUCCESS_STATUS)) : pending,
     ))
     .limit(1);
-  return row ? { message_id: row.messageId, sender_agent_id: row.senderAgentId,
-    workspace_id: row.workspaceId, channel_id: row.channelId, delivery_reason: row.reason } : null;
+  if (!row) return null;
+  // `dm_conversations.channel_id` is indexed but not unique; read up to two
+  // rows so a duplicate is seen (and classified as not-1:1) instead of hidden.
+  const conversations = await db.select({ id: dmConversations.id, dmType: dmConversations.dmType })
+    .from(dmConversations)
+    .where(and(eq(dmConversations.channelId, row.channelId), eq(dmConversations.workspaceId, workspaceId)))
+    .limit(2);
+  const dmTypes = conversations.map((c) => c.dmType);
+  // Only a would-be `dm` pays for the participant read: a prefix seek on the
+  // (conversation_id, agent_id) primary key, every row including left ones,
+  // capped at three because only "exactly two" matters.
+  let participantRowCount: number | null = null;
+  if (isOneToOneRecord(row.channelType, dmTypes)) {
+    const participants = await db.select({ agentId: dmParticipants.agentId })
+      .from(dmParticipants)
+      .where(eq(dmParticipants.conversationId, conversations[0]!.id))
+      .limit(3);
+    participantRowCount = participants.length;
+  }
+  return { message_id: row.messageId, sender_agent_id: row.senderAgentId,
+    workspace_id: row.workspaceId, channel_id: row.channelId, delivery_reason: row.reason,
+    status: row.status as DeliveryProofStatus,
+    conversation_type: classifyConversation(row.channelType, dmTypes, participantRowCount),
+    created_at: row.createdAt.toISOString() };
 }
 
 /**

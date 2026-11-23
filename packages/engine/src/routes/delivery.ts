@@ -1,4 +1,5 @@
 import { Hono } from 'hono';
+import { z } from 'zod';
 import type { AppEnv } from '../env.js';
 import { requireAgentToken, requireWorkspaceRead } from '../middleware/auth.js';
 import { rateLimit } from '../middleware/rateLimit.js';
@@ -66,16 +67,35 @@ deliveryRoutes.get(
   },
 );
 
-// GET /v1/deliveries/by-message/:messageId - pending delivery proof for this
-// exact recipient. An acked, expired, foreign, or absent message is the same 404.
+// Like the positive-int query params, a blank value means absent; anything
+// other than `true` / `false` is a 400 rather than a silent default.
+const DeliveryByMessageQuerySchema = z.object({
+  include_acked: z.preprocess(
+    (value) => (typeof value === 'string' && value.trim() === '' ? undefined : value),
+    z.enum(['true', 'false']).optional(),
+  ),
+});
+
+// GET /v1/deliveries/by-message/:messageId - delivery proof for this exact
+// recipient: status, server-derived sender, conversation type (`dm`,
+// `group_dm`, or `null` for a channel) and the message's `created_at`. By
+// default only a pending (queued / delivered, unexpired) delivery answers;
+// `include_acked=true` also answers for an acked one. A failed, dead-lettered,
+// expired, foreign, or absent delivery (and, by default, an acked one) is the
+// same 404.
 deliveryRoutes.get(
   '/deliveries/by-message/:messageId',
   requireAgentToken,
   rateLimit,
   async (c) => {
     try {
-      const result = await deliveryEngine.pendingDeliveryForMessage(
+      const parsed = parseQueryParams(c, DeliveryByMessageQuerySchema, 'include_acked must be true or false');
+      if (!parsed.ok) {
+        return parsed.response;
+      }
+      const result = await deliveryEngine.deliveryProofForMessage(
         c.get('db'), c.get('workspace').id, c.get('agent')!.id, c.req.param('messageId'),
+        { includeAcked: parsed.data.include_acked === 'true' },
       );
       return result ? jsonOk(c, result) : jsonNotFound(c, 'delivery_not_found', 'Delivery not found');
     } catch (err: unknown) {
