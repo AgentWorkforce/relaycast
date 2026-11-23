@@ -6,7 +6,12 @@ import { codedError } from '../lib/httpError.js';
 import { isSafeExternalUrl } from '../lib/ssrf.js';
 import { signStandardWebhook } from '../lib/standardWebhook.js';
 import { runAtomicWrites } from '../ports/database.js';
-import { getActiveSubscriptions } from './eventSubscription.js';
+import {
+  getActiveSubscriptions,
+  subscribesToEventType,
+  type SubscriptionFilter,
+  type SubscriptionMatcher,
+} from './eventSubscription.js';
 import { isInboundWebhookMessage } from './messageMetadata.js';
 
 type Db = ReturnType<typeof getDb>;
@@ -36,7 +41,7 @@ interface DeliveryTarget {
   secret: string | null;
   signatureScheme: 'legacy' | 'standard-webhooks';
   headers: Record<string, string> | null;
-  filter: { channel?: string; mentions?: string } | null;
+  filter: SubscriptionFilter | null;
 }
 
 interface AttemptDeliveryResult {
@@ -103,8 +108,35 @@ function requireSafeFetch(fetchImpl: Fetch | undefined): Fetch {
   );
 }
 
+/** One `data.recipients` entry on a webhook payload: a delivery record of the event. */
+export interface WebhookRecipient {
+  agent_id: string;
+  agent_name: string;
+  delivery_id?: string;
+  seq?: number;
+}
+
+/** Most `data.recipients` entries a single webhook body carries. */
+export const MAX_WEBHOOK_RECIPIENTS = 500;
+/**
+ * Most entries stored on the outbox row: the first {@link MAX_WEBHOOK_RECIPIENTS}
+ * plus later ones some `filter.recipients` matches, so that filter is evaluated
+ * against more than the delivered cap. Bounds the `pending_events` row size:
+ * 2,000 entries with snowflake ids, `del_` ids and 7-digit seqs measure about
+ * 275 KB of JSON with 32-character agent names (about 340 KB with 64), on top
+ * of the event body. Settled rows are pruned 24 h after completion
+ * (`cleanupOldEvents`).
+ */
+export const MAX_STORED_WEBHOOK_RECIPIENTS = 2_000;
+
+function recipientMatches(names: readonly string[], recipient: unknown): boolean {
+  if (!recipient || typeof recipient !== 'object') return false;
+  const { agent_id: agentId, agent_name: agentName } = recipient as Partial<WebhookRecipient>;
+  return names.some((name) => name === agentName || name === agentId);
+}
+
 export function matchesFilter(
-  filter: { channel?: string; mentions?: string } | null,
+  filter: SubscriptionFilter | null,
   payload: Record<string, unknown>,
 ): boolean {
   if (!filter) return true;
@@ -124,7 +156,71 @@ export function matchesFilter(
     if (!mentionPattern.test(text)) return false;
   }
 
+  if (filter.recipients) {
+    // An event without a recipient list (any non-message event) never matches.
+    const names = filter.recipients;
+    if (!Array.isArray(payload.recipients)) return false;
+    if (!payload.recipients.some((recipient) => recipientMatches(names, recipient))) return false;
+  }
+
   return true;
+}
+
+/**
+ * Whether a subscription would deliver this event. Shared by the send-path
+ * pre-filter and the queue consumer so both agree, `'*'` included.
+ */
+export function subscriptionWantsEvent(
+  subscription: SubscriptionMatcher,
+  eventType: string,
+  payload: Record<string, unknown>,
+): boolean {
+  return subscribesToEventType(subscription.events, eventType)
+    && matchesFilter(subscription.filter, payload);
+}
+
+/**
+ * Bound `recipients` for the outbox row: the first {@link MAX_WEBHOOK_RECIPIENTS},
+ * then later entries matched by any `filter.recipients` (`matchers === null`:
+ * unknown, keep everything) up to {@link MAX_STORED_WEBHOOK_RECIPIENTS}.
+ * `recipients_truncated` is set when the full list is longer than the cap.
+ */
+export function withStoredRecipients(
+  payload: Record<string, unknown>,
+  recipients: WebhookRecipient[],
+  matchers: SubscriptionMatcher[] | null,
+): Record<string, unknown> {
+  if (recipients.length <= MAX_WEBHOOK_RECIPIENTS) return { ...payload, recipients };
+  const filters = matchers?.flatMap((m) => (m.filter?.recipients ? [m.filter.recipients] : []));
+  const stored = recipients.slice(0, MAX_WEBHOOK_RECIPIENTS);
+  for (const recipient of recipients.slice(MAX_WEBHOOK_RECIPIENTS)) {
+    if (stored.length >= MAX_STORED_WEBHOOK_RECIPIENTS) break;
+    if (!filters || filters.some((names) => recipientMatches(names, recipient))) stored.push(recipient);
+  }
+  return { ...payload, recipients: stored, recipients_truncated: true };
+}
+
+/**
+ * The `data` one target receives: `recipients` narrowed to the target's
+ * `filter.recipients` matches (after matching ran on the full stored list),
+ * then capped at {@link MAX_WEBHOOK_RECIPIENTS}.
+ */
+function payloadForTarget(target: DeliveryTarget, payload: Record<string, unknown>): Record<string, unknown> {
+  const stored = payload.recipients;
+  if (!Array.isArray(stored)) return payload;
+  const { recipients_truncated: storedTruncated, ...rest } = payload;
+  const names = target.filter?.recipients;
+  const matching = names ? stored.filter((recipient) => recipientMatches(names, recipient)) : stored;
+  const truncated = matching.length > MAX_WEBHOOK_RECIPIENTS || (storedTruncated === true && (
+    // Unfiltered: the stored list is already short of the full one. Filtered:
+    // only when the stored bound may have dropped later matches.
+    !names || stored.length >= MAX_STORED_WEBHOOK_RECIPIENTS
+  ));
+  return {
+    ...rest,
+    recipients: matching.slice(0, MAX_WEBHOOK_RECIPIENTS),
+    ...(truncated ? { recipients_truncated: true } : {}),
+  };
 }
 
 async function stableDeliveryId(eventId: string, subscriptionId: string): Promise<string> {
@@ -239,7 +335,7 @@ async function activeTargets(
     secret: row.secret,
     signatureScheme: row.signatureScheme,
     headers: (row.headers as Record<string, string> | null) ?? null,
-    filter: row.filter as { channel?: string; mentions?: string } | null,
+    filter: row.filter as SubscriptionFilter | null,
   }));
 }
 
@@ -397,7 +493,7 @@ async function deliverWithoutPersistence(
   workspaceId: string,
   eventType: string,
   payload: Record<string, unknown>,
-  eventBody: string,
+  bodyFor: (target: DeliveryTarget) => string,
   now: Date,
   fetchImpl: Fetch | undefined,
 ): Promise<EventDeliverySummary> {
@@ -409,7 +505,7 @@ async function deliverWithoutPersistence(
 
   const results = await Promise.all(targets.map(async (target) => {
     const id = `whd_${globalThis.crypto.randomUUID()}`;
-    return attemptDelivery(safeFetch, target, eventType, id, eventBody, now);
+    return attemptDelivery(safeFetch, target, eventType, id, bodyFor(target), now);
   }));
   const retryableFailures = results.filter((result) => !result.ok && result.retryable).length;
   if (retryableFailures > 0) {
@@ -447,16 +543,25 @@ export async function deliverEvent(
     timestampSource = parent?.createdAt;
   }
   const eventTimestamp = new Date(timestampSource ?? now).toISOString();
-  const body = JSON.stringify({
+  const sharedBody = JSON.stringify({
     type: eventType,
     workspace_id: workspaceId,
     timestamp: eventTimestamp,
     data: payload,
   });
+  // `recipients` differs per target, so those bodies (and signatures) do too.
+  const bodyFor = (target: DeliveryTarget) => Array.isArray(payload.recipients)
+    ? JSON.stringify({
+      type: eventType,
+      workspace_id: workspaceId,
+      timestamp: eventTimestamp,
+      data: payloadForTarget(target, payload),
+    })
+    : sharedBody;
   const fetchImpl = options.fetch;
 
   if (!options.eventId) {
-    return deliverWithoutPersistence(db, workspaceId, eventType, payload, body, now, fetchImpl);
+    return deliverWithoutPersistence(db, workspaceId, eventType, payload, bodyFor, now, fetchImpl);
   }
 
   const targets = (await activeTargets(db, workspaceId, eventType))
@@ -492,7 +597,7 @@ export async function deliverEvent(
     if (!target) return;
     const claimed = await claimDelivery(db, row.id, now);
     if (!claimed) return;
-    const result = await attemptDelivery(safeFetch!, target, eventType, claimed.id, body, now);
+    const result = await attemptDelivery(safeFetch!, target, eventType, claimed.id, bodyFor(target), now);
     await settleDelivery(db, claimed, result, now);
   }));
 

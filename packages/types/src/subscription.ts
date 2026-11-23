@@ -40,6 +40,8 @@ export type SubscribableEventType = z.infer<typeof SubscribableEventTypeSchema>;
 export const SubscriptionFilterSchema = z.object({
   channel: z.string().optional(),
   mentions: z.string().optional(),
+  /** Matches message events with a recipient whose agent name or id is listed. */
+  recipients: z.array(z.string().min(1)).min(1).max(500).optional(),
 });
 export type SubscriptionFilter = z.infer<typeof SubscriptionFilterSchema>;
 
@@ -70,6 +72,27 @@ export const CreateSubscriptionRequestSchema = z.object({
   signature_scheme: SubscriptionSignatureSchemeSchema.optional(),
 });
 export type CreateSubscriptionRequest = z.infer<typeof CreateSubscriptionRequestSchema>;
+
+/** Partial update; `filter: null` clears the filter. At least one field is required. */
+export const UpdateSubscriptionRequestSchema = z.object({
+  events: z.array(SubscribableEventTypeSchema).optional(),
+  filter: SubscriptionFilterSchema.nullable().optional(),
+  url: z.string().optional(),
+  headers: SubscriptionHeadersSchema.optional(),
+  secret: z.string().nullable().optional(),
+  signature_scheme: SubscriptionSignatureSchemeSchema.optional(),
+  is_active: z.boolean().optional(),
+});
+export type UpdateSubscriptionRequest = z.infer<typeof UpdateSubscriptionRequestSchema>;
+
+/** One `data.recipients` entry on message webhook payloads (webhooks only). */
+export const WebhookRecipientSchema = z.object({
+  agent_id: z.string(),
+  agent_name: z.string(),
+  delivery_id: z.string().optional(),
+  seq: z.number().int().optional(),
+});
+export type WebhookRecipient = z.infer<typeof WebhookRecipientSchema>;
 
 export const CreateSubscriptionResponseSchema = z.object({
   id: z.string(),

@@ -1,4 +1,4 @@
-import { Hono } from 'hono';
+import { Hono, type Context } from 'hono';
 import { z } from 'zod';
 import type { AppEnv } from '../env.js';
 import { requireAuth } from '../middleware/auth.js';
@@ -15,6 +15,7 @@ import { isSafeExternalUrl } from '../lib/ssrf.js';
 import {
   jsonCreated,
   jsonError,
+  jsonInvalidRequest,
   jsonNoContent,
   jsonNotFound,
   jsonOk,
@@ -26,28 +27,44 @@ export const eventSubscriptionRoutes = new Hono<AppEnv>();
 const headerNameSchema = z.string().regex(/^[!#$%&'*+.^_`|~0-9A-Za-z-]+$/);
 const headerValueSchema = z.string().refine((value) => !/[\r\n]/.test(value), 'header values cannot contain CR/LF');
 
-const createSubscriptionSchema = z.object({
+const subscriptionFieldsSchema = z.object({
   events: z.array(z.string()).min(1),
   filter: z.object({
     channel: z.string().optional(),
     mentions: z.string().optional(),
+    recipients: z.array(z.string().min(1)).min(1).max(500).optional(),
   }).nullable().optional(),
   url: z.string().min(1),
   headers: z.record(headerNameSchema, headerValueSchema).optional(),
   secret: z.string().nullable().optional(),
   signature_scheme: z.enum(['legacy', 'standard-webhooks']).default('legacy'),
-}).superRefine((value, ctx) => {
-  if (
-    value.signature_scheme === 'standard-webhooks'
-    && (!value.secret || !isValidStandardWebhookSecret(value.secret))
-  ) {
-    ctx.addIssue({
-      code: 'custom',
-      path: ['secret'],
-      message: 'standard-webhooks requires a whsec_ secret that decodes to 24-64 bytes',
-    });
+});
+
+/** standard-webhooks needs a whsec_ secret; checked against the resulting row. */
+function hasValidSignatureSecret(scheme: string, secret: string | null | undefined): boolean {
+  return scheme !== 'standard-webhooks' || (!!secret && isValidStandardWebhookSecret(secret));
+}
+
+const SIGNATURE_SECRET_MESSAGE = 'standard-webhooks requires a whsec_ secret that decodes to 24-64 bytes';
+
+const createSubscriptionSchema = subscriptionFieldsSchema.superRefine((value, ctx) => {
+  if (!hasValidSignatureSecret(value.signature_scheme, value.secret)) {
+    ctx.addIssue({ code: 'custom', path: ['secret'], message: SIGNATURE_SECRET_MESSAGE });
   }
 });
+
+const updateSubscriptionSchema = subscriptionFieldsSchema
+  .extend({
+    signature_scheme: z.enum(['legacy', 'standard-webhooks']),
+    is_active: z.boolean(),
+  })
+  .partial()
+  .refine((value) => Object.keys(value).length > 0, 'at least one field is required');
+
+function isSafeSubscriptionUrl(c: Context<AppEnv>, url: string): boolean {
+  const strict = c.get('engine').config?.environment !== 'test';
+  return isSafeExternalUrl(url, { strict, requireHttps: strict });
+}
 
 // POST /v1/subscriptions - create an outbound event subscription
 eventSubscriptionRoutes.post('/subscriptions', requireAuth, rateLimit, async (c) => {
@@ -68,8 +85,7 @@ eventSubscriptionRoutes.post('/subscriptions', requireAuth, rateLimit, async (c)
       return parsed.response;
     }
     const { events, filter, url, headers, secret, signature_scheme } = parsed.data;
-    const strict = c.get('engine').config?.environment !== 'test';
-    if (!isSafeExternalUrl(url, { strict, requireHttps: strict })) {
+    if (!isSafeSubscriptionUrl(c, url)) {
       return jsonError(c, 'unsafe_subscription_url', 'Subscription URL must use HTTPS and resolve publicly', 400);
     }
 
@@ -110,6 +126,53 @@ eventSubscriptionRoutes.get('/subscriptions/:id', requireAuth, rateLimit, async 
       workspace.id,
       c.req.param('id'),
     );
+    if (!result) {
+      return jsonNotFound(c, 'subscription_not_found', 'Subscription not found');
+    }
+    return jsonOk(c, result);
+  } catch (err: unknown) {
+    return errorResponse(c, err);
+  }
+});
+
+// PATCH /v1/subscriptions/:id - partially update a subscription
+eventSubscriptionRoutes.patch('/subscriptions/:id', requireAuth, rateLimit, async (c) => {
+  try {
+    const db = c.get('db');
+    const workspace = c.get('workspace');
+    const parsed = await parseJsonBody(c, updateSubscriptionSchema, (failure) => {
+      const issues = failure.error.issues;
+      return issues.some((issue) => issue.path.length === 0 && issue.code === 'custom')
+        ? 'at least one field is required'
+        : 'invalid subscription body';
+    });
+    if (!parsed.ok) {
+      return parsed.response;
+    }
+    const update = parsed.data;
+    if (update.url !== undefined && !isSafeSubscriptionUrl(c, update.url)) {
+      return jsonError(c, 'unsafe_subscription_url', 'Subscription URL must use HTTPS and resolve publicly', 400);
+    }
+
+    const current = await eventSubscriptionEngine.getSubscriptionRow(db, workspace.id, c.req.param('id'));
+    if (!current) {
+      return jsonNotFound(c, 'subscription_not_found', 'Subscription not found');
+    }
+    const scheme = update.signature_scheme ?? current.signatureScheme;
+    const secret = update.secret !== undefined ? update.secret : current.secret;
+    if (!hasValidSignatureSecret(scheme, secret)) {
+      return jsonInvalidRequest(c, SIGNATURE_SECRET_MESSAGE);
+    }
+
+    const result = await eventSubscriptionEngine.updateSubscription(db, workspace.id, current.id, {
+      events: update.events,
+      filter: update.filter,
+      url: update.url,
+      headers: update.headers,
+      secret: update.secret,
+      signatureScheme: update.signature_scheme,
+      isActive: update.is_active,
+    }, { signatureScheme: current.signatureScheme, secret: current.secret });
     if (!result) {
       return jsonNotFound(c, 'subscription_not_found', 'Subscription not found');
     }
