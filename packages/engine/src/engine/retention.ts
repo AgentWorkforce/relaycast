@@ -159,11 +159,6 @@ export function afterSnowflake(column: Column, cursor: string, source?: sqlx.Dia
   return sql`(length(${column}), ${snowflakeText(column, source)}) > (${cursor.length}, ${cursor})`;
 }
 
-/** Numeric `column < cursor` for decimal TEXT snowflake ids. */
-export function beforeSnowflake(column: Column, cursor: string, source?: sqlx.DialectSource): SQL {
-  return sql`(length(${column}), ${snowflakeText(column, source)}) < (${cursor.length}, ${cursor})`;
-}
-
 /** Newest-first (numeric descending) ORDER BY terms for decimal TEXT snowflake ids. */
 export function snowflakeDesc(column: Column, source?: sqlx.DialectSource): SQL {
   return sql`length(${column}) DESC, ${snowflakeText(column, source)} DESC`;

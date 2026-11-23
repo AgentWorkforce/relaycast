@@ -52,6 +52,10 @@ describe('message history across the snowflake width change', () => {
     expect(await q(`limit=1&before=${WIDE[2]}`)).toEqual([WIDE[1]]);
     expect(await q(`limit=100&before=${NARROW[2]}`)).toEqual([NARROW[1], NARROW[0]]);
     expect(await q(`limit=100&after=${WIDE[0]}`)).toEqual([...newest, WIDE[2], WIDE[1]]);
+    // Polling after the newest seeded id, and cursors that leave no interval.
+    expect(await q(`limit=100&after=${WIDE[2]}`)).toEqual(newest);
+    expect(await q(`limit=100&after=${WIDE[0]}&before=${NARROW[2]}`)).toEqual([]);
+    expect(await q(`limit=100&after=${WIDE[1]}&before=${WIDE[1]}`)).toEqual([]);
 
     // Walking `before` pages visits every message exactly once, in order.
     const walked: string[] = [];
@@ -78,19 +82,36 @@ describe('message history across the snowflake width change', () => {
     await expectNumericPaging(agent.token, '/v1/channels/history/messages', []);
 
     if (conformancePgDb()) return;
-    // Both page shapes seek the channel index without a sort.
+    // Every statement each cursor shape runs is an index range read
+    // newest-first: never a scan of the whole channel, never a sort. An empty
+    // poll after the newest id is the common case to keep cheap.
     const sqlite = stack.runtime.handle.sqlite;
-    const plan = (where: string, order: string) => (sqlite.prepare(`
-      EXPLAIN QUERY PLAN SELECT messages.id FROM messages INDEXED BY idx_messages_channel_length_id
-      WHERE messages.channel_id = ? AND messages.workspace_id = ? AND messages.thread_id IS NULL AND ${where}
-      ORDER BY ${order} LIMIT 50
-    `).all(channelId, ws.workspaceId) as Array<{ detail: string }>).map((s) => s.detail).join('\n');
-    const sameWidth = plan(`length(messages.id) = 18 AND messages.id < '${WIDE[1]}'`, 'messages.id DESC');
-    expect(sameWidth).toContain('idx_messages_channel_length_id (channel_id=? AND <expr>=? AND id<?)');
-    expect(sameWidth).not.toContain('TEMP B-TREE');
-    const narrower = plan('length(messages.id) < 18', 'length(messages.id) DESC, messages.id DESC');
-    expect(narrower).toContain('idx_messages_channel_length_id (channel_id=? AND <expr><?)');
-    expect(narrower).not.toContain('TEMP B-TREE');
+    const prepare = sqlite.prepare.bind(sqlite);
+    const plans = async (params: string) => {
+      const seen: string[] = [];
+      sqlite.prepare = ((source: string) => {
+        if (/from "messages"/i.test(source) && source.includes('length(')) seen.push(source);
+        return prepare(source);
+      }) as typeof sqlite.prepare;
+      try {
+        await get(agent.token, `/v1/channels/history/messages?${params}`);
+      } finally {
+        sqlite.prepare = prepare;
+      }
+      expect(seen.length).toBeGreaterThan(0);
+      return seen.map((source) => {
+        const nulls = Array.from(source.matchAll(/\?/g), () => null);
+        return (prepare(`EXPLAIN QUERY PLAN ${source}`).all(...nulls) as Array<{ detail: string }>)
+          .map((step) => step.detail).join('\n');
+      });
+    };
+    for (const params of [`after=${WIDE[2]}`, `before=${WIDE[1]}`, `after=${NARROW[0]}&before=${WIDE[1]}`, 'limit=2']) {
+      for (const plan of await plans(`limit=50&${params}`)) {
+        expect(plan, params).not.toContain('TEMP B-TREE');
+        if (params === 'limit=2') expect(plan).toContain('idx_messages_channel_length_id (channel_id=?)');
+        else expect(plan, params).toMatch(/idx_messages_channel_length_id \(channel_id=\? AND <expr>[<>=]/);
+      }
+    }
   });
 
   it('pages DM history numerically on the agent and workspace-key routes', async () => {

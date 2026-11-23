@@ -19,7 +19,7 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Fixed
 
-- `getMessages`, `getDmMessages` and `getDmMessagesForWorkspace` order and compare message ids numerically, by `(length(id), id)`, instead of as text. Snowflake ids are decimal TEXT that widened from 17 to 18 digits in October 2025, so history spanning that change was misordered and `before`/`after` cursors skipped messages across it. A `before` page is read in at most two index seeks. The new `idx_messages_channel_length_id` index `(channel_id, length(id), id)` replaces `idx_messages_channel_time` (SQLite migration 0090, Postgres 0014, where the id is indexed `COLLATE "C"`).
+- `getMessages`, `getDmMessages` and `getDmMessagesForWorkspace` order and compare message ids numerically, by `(length(id), id)`, instead of as text. Snowflake ids are decimal TEXT that widened from 17 to 18 digits in October 2025, so history spanning that change was misordered and `before`/`after` cursors skipped messages across it. Each page is read as at most three index range reads, one per id width, so an empty poll after the newest id stays an index seek. The new `idx_messages_channel_length_id` index `(channel_id, length(id), id)` replaces `idx_messages_channel_time` (SQLite migration 0090, Postgres 0014, where the id is indexed `COLLATE "C"`).
 
 ### Security
 

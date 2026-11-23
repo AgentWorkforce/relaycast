@@ -1,6 +1,6 @@
 import { and, sql, type Column, type SQL } from 'drizzle-orm';
 import * as sqlx from '../db/sqlx.js';
-import { afterSnowflake, snowflakeDesc } from './retention.js';
+import { snowflakeDesc } from './retention.js';
 
 /** One page query: `where` is the cursor bound (combine with the caller's filters). */
 export type SnowflakePageQuery<T> = (where: SQL | undefined, orderBy: SQL, limit: number) => PromiseLike<T[]>;
@@ -11,12 +11,19 @@ export type SnowflakePageQuery<T> = (where: SQL | undefined, orderBy: SQL, limit
  * `after` cursors.
  *
  * Ids widen over time (17 digits until 2025-10, 18 after), so text order is
- * not numeric order. A `before` page is read in at most two index seeks over a
- * `(…, length(id), id)` index: first the cursor's own width (`length(id) = L
- * AND id < before`, an index range), then, only if that page is short, the
- * narrower widths. A single `(length(id), id) < (L, before)` row-value bound
- * cannot seek in SQLite's expression index, so it would read every newer row
- * of the same width before reaching the page.
+ * not numeric order. SQLite cannot seek a row-value bound such as
+ * `(length(id), id) > (L, after)` through a `(…, length(id), id)` expression
+ * index: it would walk the whole history newest-first and filter, so an empty
+ * poll after the newest id reads every row. Instead the interval is split by
+ * width into at most three bands, each an index range read newest-first, and
+ * later bands run only while the page is short:
+ *
+ * 1. the `before` cursor's width: `length(id) = B AND id < before`;
+ * 2. the widths strictly between the cursors: `length(id) < B AND length(id) > A`;
+ * 3. the `after` cursor's width: `length(id) = A AND id > after`.
+ *
+ * When both cursors have the same width, band 1 carries both bounds and is the
+ * only band.
  */
 export async function newestSnowflakePage<T>(
   source: sqlx.DialectSource,
@@ -24,19 +31,28 @@ export async function newestSnowflakePage<T>(
   opts: { before?: string; after?: string; limit: number },
   query: SnowflakePageQuery<T>,
 ): Promise<T[]> {
-  const after = opts.after ? afterSnowflake(column, opts.after, source) : undefined;
+  const { before, after, limit } = opts;
   const desc = snowflakeDesc(column, source);
-  if (!opts.before) return query(after, desc, opts.limit);
+  if (!before && !after) return query(undefined, desc, limit);
 
-  const width = opts.before.length;
   const id = sqlx.binaryText(source, column);
-  const rows = await query(
-    and(sql`length(${column}) = ${width}`, sql`${id} < ${opts.before}`, after),
-    sql`${id} DESC`,
-    opts.limit,
-  );
-  // Narrower ids are all older; none can follow an `after` cursor this wide.
-  if (rows.length >= opts.limit || (opts.after && opts.after.length >= width)) return rows;
-  const older = await query(and(sql`length(${column}) < ${width}`, after), desc, opts.limit - rows.length);
-  return [...rows, ...older];
+  const width = sql`length(${column})`;
+  const bands: Array<[SQL | undefined, SQL]> = [];
+  if (before && after && before.length === after.length) {
+    bands.push([and(sql`${width} = ${before.length}`, sql`${id} < ${before}`, sql`${id} > ${after}`), sql`${id} DESC`]);
+  } else if (!before || !after || before.length > after.length) {
+    if (before) bands.push([and(sql`${width} = ${before.length}`, sql`${id} < ${before}`), sql`${id} DESC`]);
+    bands.push([
+      and(before ? sql`${width} < ${before.length}` : undefined, after ? sql`${width} > ${after.length}` : undefined),
+      desc,
+    ]);
+    if (after) bands.push([and(sql`${width} = ${after.length}`, sql`${id} > ${after}`), sql`${id} DESC`]);
+  }
+
+  const rows: T[] = [];
+  for (const [where, orderBy] of bands) {
+    if (rows.length >= limit) break;
+    rows.push(...await query(where, orderBy, limit - rows.length));
+  }
+  return rows;
 }
