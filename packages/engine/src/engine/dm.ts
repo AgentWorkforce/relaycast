@@ -1,6 +1,6 @@
 import * as sqlx from '../db/sqlx.js';
 import { z } from 'zod';
-import { eq, and, sql, lt, lte, gt, isNull, inArray, desc } from 'drizzle-orm';
+import { eq, and, sql, lt, lte, gt, isNull, inArray, desc, exists } from 'drizzle-orm';
 import type { DmMessage } from '@relaycast/types';
 import type { getDb } from '../db/index.js';
 import {
@@ -233,6 +233,70 @@ async function resolveOrReserveConversation(
   }
 }
 
+/**
+ * Read-only fast path for an established 1:1: one SELECT that proves every
+ * write in `resolveConversation` would be a no-op, so a repeat send skips them.
+ *
+ * It returns a row only when ALL of these hold:
+ *   - the reservation for `conversationId` exists with this exact
+ *     (workspace, sorted pair) tuple, so the reservation upsert would return
+ *     it without error. Neither collision in `resolveOrReserveConversation`
+ *     can satisfy this: (1) a different pair under this id fails the tuple
+ *     match, and (2) this pair under a different id cannot also own this id
+ *     because of `pair_unique`. Both fall through to the write path and its 409;
+ *   - the derived channel row exists, so its insert-or-ignore would no-op;
+ *   - the conversation row exists in this workspace, so its insert-or-ignore
+ *     would no-op and the closing select would return this same row;
+ *   - both roster rows exist with `left_at` NULL, so the rejoin upserts would
+ *     change nothing. A departed participant falls through and is rejoined.
+ *
+ * Anything else returns undefined and the caller runs the write path
+ * unchanged. Those writes were never one transaction, so answering from a
+ * single read that sees them all as no-ops is the same outcome.
+ */
+async function readSteadyConversation(
+  db: Db,
+  conversationId: string,
+  channelId: string,
+  workspaceId: string,
+  sortedPair: readonly [string, string],
+): Promise<{ id: string; channelId: string } | undefined> {
+  const [participantOneId, participantTwoId] = sortedPair;
+  const activeParticipant = (agentId: string) => exists(
+    db
+      .select({ agentId: dmParticipants.agentId })
+      .from(dmParticipants)
+      .where(and(
+        eq(dmParticipants.conversationId, conversationId),
+        eq(dmParticipants.agentId, agentId),
+        isNull(dmParticipants.leftAt),
+      )),
+  );
+
+  const [conv] = await db
+    .select({ id: dmConversations.id, channelId: dmConversations.channelId })
+    .from(dmConversationReservations)
+    .innerJoin(dmConversations, and(
+      eq(dmConversations.id, dmConversationReservations.conversationId),
+      eq(dmConversations.workspaceId, workspaceId),
+    ))
+    .innerJoin(channels, and(
+      eq(channels.id, channelId),
+      eq(channels.workspaceId, workspaceId),
+    ))
+    .where(and(
+      eq(dmConversationReservations.conversationId, conversationId),
+      eq(dmConversationReservations.workspaceId, workspaceId),
+      eq(dmConversationReservations.participantOneId, participantOneId),
+      eq(dmConversationReservations.participantTwoId, participantTwoId),
+      activeParticipant(participantOneId),
+      activeParticipant(participantTwoId),
+    ))
+    .limit(1);
+
+  return conv;
+}
+
 async function resolveConversation(
   db: Db,
   workspaceId: string,
@@ -243,6 +307,9 @@ async function resolveConversation(
   const pairKey = await deriveDmPairKey(workspaceId, sortedPair[0], sortedPair[1]);
   const conversationId = `dm_${pairKey}`;
   const channelId = `dmch_${pairKey}`;
+
+  const steady = await readSteadyConversation(db, conversationId, channelId, workspaceId, sortedPair);
+  if (steady) return steady;
 
   // This is the mandatory resolution seam. It must happen before any metadata
   // creation so exactly one tuple can win a digest collision.
