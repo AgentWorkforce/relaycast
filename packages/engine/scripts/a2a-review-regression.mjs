@@ -17,6 +17,10 @@ import { sweepDueNodeDeliveries } from '../dist/routes/deliveryRouting.js';
 
 const results = [];
 const hash = x => createHash('sha256').update(x).digest('hex');
+// On D1, sendDm groups independent SELECTs into read-only batch() calls before admission.
+// Race and boundary proxies below hook only the write (admission) batch, as before.
+const readOnlyBatch = statements => Array.isArray(statements) && statements.length > 0
+  && statements.every(statement => /^\s*select\b/i.test(statement?.toSQL?.().sql ?? ''));
 // These fixtures drive recovery explicitly. Keep earlier Node runtimes from
 // asynchronously sending their pending rows into a later case's fetch stub.
 // Production's automatic recovery/non-overlap has its own a2a-recovery unit test.
@@ -447,6 +451,7 @@ try {
       const atomicMethod=adapter==='workerd-d1'?'batch':'withTransaction';
       const changedDb=new Proxy(db,{get(target,key){
         if(key===atomicMethod)return async(...args)=>{
+          if(readOnlyBatch(args[0]))return target[key](...args);
           boundaries++;
           if(boundaries===1){
             if(mutation==='remove')await run('DELETE FROM a2a_agents WHERE id=?',original.id);
@@ -600,7 +605,7 @@ try {
         let arrivals=0,release;const gate=new Promise(r=>release=r);
         const atomicMethod=adapter==='workerd-d1'?'batch':'withTransaction';
         const racingDb=new Proxy(db,{get(target,key){
-          if(key===atomicMethod)return async(...args)=>{arrivals++;if(arrivals===2)release();if(arrivals<=2)await gate;return target[key](...args);};
+          if(key===atomicMethod)return async(...args)=>{if(readOnlyBatch(args[0]))return target[key](...args);arrivals++;if(arrivals===2)release();if(arrivals<=2)await gate;return target[key](...args);};
           const value=Reflect.get(target,key);return typeof value==='function'?value.bind(target):value;
         }});
         let completionFailures=0;
@@ -787,7 +792,7 @@ try {
     let arrivals=0,release;const gate=new Promise(r=>release=r);
     const atomicMethod=adapter==='workerd-d1'?'batch':'withTransaction';
     const racingDb=new Proxy(db,{get(target,key){
-      if(key===atomicMethod)return async(...args)=>{arrivals++;if(arrivals===2)release();if(arrivals<=2)await gate;return target[key](...args);};
+      if(key===atomicMethod)return async(...args)=>{if(readOnlyBatch(args[0]))return target[key](...args);arrivals++;if(arrivals===2)release();if(arrivals<=2)await gate;return target[key](...args);};
       const value=Reflect.get(target,key);return typeof value==='function'?value.bind(target):value;
     }});
     const racingApp=createEngine({...deps,db:racingDb,kv:undefined});
