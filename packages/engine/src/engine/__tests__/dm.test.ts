@@ -17,6 +17,7 @@ import {
   a2aAgents,
   a2aEgress,
   agents,
+  channels,
   directDmIdempotency,
   dmConversationReservations,
   dmConversations,
@@ -53,6 +54,7 @@ let seq = 0;
 
 interface Fixture {
   db: Db;
+  sqlite: SqliteDbHandle['sqlite'];
   ws: string;
   alice: string;
   bob: string;
@@ -72,7 +74,7 @@ function seed(): Fixture {
   handle.db.insert(agents).values({ id: alice, workspaceId: ws, name: 'alice', tokenHash: `tok_a_${n}` }).run();
   handle.db.insert(agents).values({ id: bob, workspaceId: ws, name: 'bob', tokenHash: `tok_b_${n}` }).run();
 
-  return { db: handle.db, ws, alice, bob };
+  return { db: handle.db, sqlite: handle.sqlite, ws, alice, bob };
 }
 
 /** Mirrors the derivation helper — kept independent so an algorithm change fails here. */
@@ -700,5 +702,136 @@ describe('invariant DM-1: a 1:1 conversation never has a departed participant', 
       .from(dmParticipants)
       .where(eq(dmParticipants.conversationId, conversationId));
     expect(roster.map((r) => r.agentId).sort()).toEqual([alice, bob].sort());
+  });
+});
+
+describe('1:1 DM resolution fast path', () => {
+  const RESOLUTION_TABLES = ['dm_conversation_reservations', 'channels', 'dm_conversations', 'dm_participants'];
+
+  /** Record every SQL statement the connection prepares while `run` executes. */
+  async function captureStatements(sqlite: Fixture['sqlite'], run: () => Promise<unknown>): Promise<string[]> {
+    const statements: string[] = [];
+    const original = sqlite.prepare.bind(sqlite);
+    const spy = vi.spyOn(sqlite, 'prepare').mockImplementation(((source: string) => {
+      statements.push(source);
+      return original(source);
+    }) as typeof sqlite.prepare);
+    try {
+      await run();
+    } finally {
+      spy.mockRestore();
+    }
+    return statements;
+  }
+
+  /** INSERT/UPDATE statements whose target is one of the resolution tables. */
+  function resolutionWrites(statements: string[]): string[] {
+    return statements.filter((statement) => {
+      const match = /^\s*(?:insert\s+into|update)\s+"?([a-z_]+)"?/i.exec(statement);
+      return match !== null && RESOLUTION_TABLES.includes(match[1]);
+    });
+  }
+
+  it('resolves a repeat send without writing reservation, channel, conversation or roster rows', async () => {
+    const { db, sqlite, ws, alice } = seed();
+    const first = await sendDm(db, ws, alice, { to: 'bob', text: 'one' });
+
+    let second: Awaited<ReturnType<typeof sendDm>> | undefined;
+    const statements = await captureStatements(sqlite, async () => {
+      second = await sendDm(db, ws, alice, { to: 'bob', text: 'two' });
+    });
+
+    expect(second?.conversation_id).toBe(first.conversation_id);
+    expect(resolutionWrites(statements)).toEqual([]);
+    // The message itself is still written.
+    expect(statements.some((statement) => /^\s*insert\s+into\s+"messages"/i.test(statement))).toBe(true);
+  });
+
+  it('takes the fast path from either direction and for a self-DM', async () => {
+    const { db, sqlite, ws, alice, bob } = seed();
+    await sendDm(db, ws, alice, { to: 'bob', text: 'one' });
+    await sendDm(db, ws, alice, { to: '@self', text: 'note' });
+
+    const fromBob = await captureStatements(sqlite, () => sendDm(db, ws, bob, { to: 'alice', text: 'reply' }));
+    const self = await captureStatements(sqlite, () => sendDm(db, ws, alice, { to: '@self', text: 'note 2' }));
+
+    expect(resolutionWrites(fromBob)).toEqual([]);
+    expect(resolutionWrites(self)).toEqual([]);
+  });
+
+  it('creates every resolution row on the first send between a new pair', async () => {
+    const { db, sqlite, ws, alice, bob } = seed();
+
+    let sent: Awaited<ReturnType<typeof sendDm>> | undefined;
+    const statements = await captureStatements(sqlite, async () => {
+      sent = await sendDm(db, ws, alice, { to: 'bob', text: 'hello' });
+    });
+
+    const writtenTables = new Set(resolutionWrites(statements).map((s) => /"([a-z_]+)"/.exec(s)![1]));
+    expect([...writtenTables].sort()).toEqual([...RESOLUTION_TABLES].sort());
+
+    const conversationId = sent!.conversation_id;
+    expect(db.select().from(dmConversationReservations).all()).toHaveLength(1);
+    const [conv] = db.select().from(dmConversations).where(eq(dmConversations.id, conversationId)).all();
+    expect(conv).toBeDefined();
+    expect(db.select().from(channels).where(eq(channels.id, conv.channelId)).all()).toHaveLength(1);
+    const roster = db.select().from(dmParticipants).where(eq(dmParticipants.conversationId, conversationId)).all();
+    expect(roster.map((r) => r.agentId).sort()).toEqual([alice, bob].sort());
+  });
+
+  it('falls back to the write path and rejoins a departed participant', async () => {
+    const { db, sqlite, ws, alice, bob } = seed();
+    const first = await sendDm(db, ws, alice, { to: 'bob', text: 'hello' });
+    await db
+      .update(dmParticipants)
+      .set({ leftAt: new Date() })
+      .where(and(eq(dmParticipants.conversationId, first.conversation_id), eq(dmParticipants.agentId, bob)));
+
+    const statements = await captureStatements(sqlite, () => sendDm(db, ws, alice, { to: 'bob', text: 'again' }));
+
+    expect(resolutionWrites(statements).some((s) => /"dm_participants"/.test(s))).toBe(true);
+    const departed = db
+      .select()
+      .from(dmParticipants)
+      .where(and(eq(dmParticipants.conversationId, first.conversation_id), isNotNull(dmParticipants.leftAt)))
+      .all();
+    expect(departed).toEqual([]);
+
+    // Once healed, the next send is back on the fast path.
+    const healed = await captureStatements(sqlite, () => sendDm(db, ws, alice, { to: 'bob', text: 'third' }));
+    expect(resolutionWrites(healed)).toEqual([]);
+  });
+
+  it('falls back to the write path and recreates a missing channel row', async () => {
+    const { db, sqlite, ws, alice } = seed();
+    const first = await sendDm(db, ws, alice, { to: 'bob', text: 'hello' });
+    const [conv] = db.select().from(dmConversations).where(eq(dmConversations.id, first.conversation_id)).all();
+    // Model a lost channel row without cascading away the conversation.
+    sqlite.pragma('foreign_keys = OFF');
+    db.delete(channels).where(eq(channels.id, conv.channelId)).run();
+    sqlite.pragma('foreign_keys = ON');
+
+    const statements = await captureStatements(sqlite, () => sendDm(db, ws, alice, { to: 'bob', text: 'again' }));
+
+    expect(resolutionWrites(statements).some((s) => /"channels"/.test(s))).toBe(true);
+    expect(db.select().from(channels).where(eq(channels.id, conv.channelId)).all()).toHaveLength(1);
+  });
+
+  it('does not let a reservation for a different pair under the derived id reach the fast path', async () => {
+    const { db, ws, alice } = seed();
+    const first = await sendDm(db, ws, alice, { to: 'bob', text: 'hello' });
+
+    // Rewrite the reservation to a different pair while every other row stays,
+    // so only the reservation tuple check stands between the send and a stale hit.
+    const [one, two] = [alice, `ag_zz_other_${ws}`].sort();
+    db.update(dmConversationReservations)
+      .set({ participantOneId: one, participantTwoId: two })
+      .where(eq(dmConversationReservations.conversationId, first.conversation_id))
+      .run();
+
+    await expect(sendDm(db, ws, alice, { to: 'bob', text: 'again' })).rejects.toMatchObject({
+      code: 'dm_conversation_id_collision',
+      status: 409,
+    });
   });
 });
