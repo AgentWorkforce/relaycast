@@ -103,6 +103,13 @@ export const OwnerApprovalConditionSchema = z.discriminatedUnion('type', [
 export type OwnerApprovalCondition = z.infer<typeof OwnerApprovalConditionSchema>;
 export type OwnerApprovalConditionType = OwnerApprovalCondition['type'];
 
+/**
+ * Free text in an approval. U+0000 is refused: Postgres `jsonb` cannot store
+ * it, so allowing it would make SQLite and Postgres disagree on one payload.
+ */
+const approvalText = (max: number, min = 0) => z.string().min(min).max(max)
+  .refine((value) => !value.includes('\u0000'), 'must not contain U+0000');
+
 /** An `owner/repo#N` pull request or issue target. */
 const PULL_REQUEST_TARGET = /^[^\s/#]+\/[^\s/#]+#[1-9]\d*$/;
 /** A `prompt_approval` target in an approval: `<agent id>:<request ref>`, no wildcard. */
@@ -119,9 +126,9 @@ const PULL_REQUEST_CONDITIONS: ReadonlySet<string> = new Set(['ci_green', 'head_
 
 export const OwnerApprovalActionSchema = z.object({
   class: OwnerApprovalActionClassSchema,
-  target: z.string().max(256),
+  target: approvalText(256),
   conditions: z.array(OwnerApprovalConditionSchema).max(5).optional(),
-  note: z.string().max(280).optional(),
+  note: approvalText(280).optional(),
 }).strict().superRefine((action, ctx) => {
   if (action.class === 'prompt_approval' && !PROMPT_APPROVAL_TARGET.test(action.target)) {
     ctx.addIssue({ code: 'custom', path: ['target'], message: 'prompt_approval target must be <agent id>:<request ref>' });
@@ -153,11 +160,11 @@ export type OwnerApprovalAction = z.infer<typeof OwnerApprovalActionSchema>;
  */
 export const OwnerApprovalSchema = z.object({
   v: z.literal(1),
-  owner_id: z.string().min(1).max(128),
+  owner_id: approvalText(128, 1),
   actions: z.array(OwnerApprovalActionSchema).min(1).max(20),
-  quote: z.string().max(2000).nullable().optional(),
+  quote: approvalText(2000).nullable().optional(),
   quoted_at: z.iso.datetime({ offset: true }).nullable().optional(),
-  quote_source: z.string().max(64).nullable().optional(),
+  quote_source: approvalText(64).nullable().optional(),
   expires_at: z.iso.datetime({ offset: true }).nullable().optional(),
   approval_ref: z.string().regex(/^apv_[A-Za-z0-9]{8,64}$/).nullable().optional(),
 }).strict();
@@ -205,6 +212,8 @@ export const MessageWithMetaSchema = z.object({
   read_by_count: z.number(),
   mentions: z.array(z.string()).optional(),
   injection_mode: z.enum(['wait', 'steer']).optional(),
+  /** `true` on a send response or event when the sender attached an owner approval. Never the approval itself. */
+  has_owner_approval: z.literal(true).optional(),
 });
 export type MessageWithMeta = z.infer<typeof MessageWithMetaSchema>;
 

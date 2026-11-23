@@ -712,6 +712,15 @@ export async function sendDm(
   }
   const senderAddress = formatAgentAddress(fromAgent.name, fromAgent.node);
 
+  // An external A2A agent has no relay node to ask Cloud for an attestation
+  // and no by-message proof route, so an approval sent there would be
+  // reported as attached while the recipient never learns of it. Refuse it
+  // before anything is written.
+  if (data.owner_approval && !options.skipA2aIntercept
+    && await a2aEngine.getA2aAgentByRelayName(db, workspaceId, toAgent.name)) {
+    throw codedError('owner_approval cannot be sent to an external A2A agent', 'invalid_owner_approval', 400);
+  }
+
   // Resolve attachments first so invalid attachments fail before any DM
   // metadata (channel/conversation/participant rows) is created.
   const attachments = await resolveSendAttachments(db, workspaceId, data.attachments);

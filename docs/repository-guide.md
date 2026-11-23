@@ -809,7 +809,11 @@ quote_source?, expires_at?, approval_ref? }`; classes `merge`, `pr_ops`, `deploy
 `<agent id>:<setting>=<value>` (non-empty setting and value, no `*`). Each action takes up to 5 conditions for Cloud to check at
 redeem: `ci_green`, `head_sha` (`sha`: 40 lowercase hex), `reviews_approved` (`min`: 1-10) and
 `mergeable` on `owner/repo#N` targets only, and `not_before` (`at`: RFC 3339) on any target;
-`prompt_approval` and `config_change` accept only `not_before`. Any other shape is `400 invalid_owner_approval`.
+`prompt_approval` and `config_change` accept only `not_before`. Approval strings may not contain
+U+0000. Any other shape is `400 invalid_owner_approval`, as is an approval on a DM or group DM
+channel posted through `POST /channels/:name/messages` (use `POST /dm`) or on a DM to an external
+A2A agent, which has no node to have it attested. A node token may attach one only for a `from`
+agent hosted on that node (`403 owner_approval_not_allowed` otherwise).
 Relaycast stores it immutably in its own column (SQLite and Postgres), never in `metadata`.
 Recipients see only `has_owner_approval: true` on websocket events, `deliver` frames and
 `GET /deliveries`; the content is returned only as `owner_approval` by the recipient's by-message

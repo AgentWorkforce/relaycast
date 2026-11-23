@@ -135,13 +135,24 @@ messageRoutes.post(
           return jsonError(c, 'from_required', 'A node token must set "from" (an agent name in the node workspace)', 400);
         }
         const [fromAgent] = await db
-          .select({ id: agents.id, name: agents.name, type: agents.type, metadata: agents.metadata })
+          .select({
+            id: agents.id, name: agents.name, type: agents.type, metadata: agents.metadata,
+            locationNodeId: agents.locationNodeId,
+          })
           .from(agents)
           .where(and(eq(agents.workspaceId, workspace.id), eq(agents.name, from)));
         if (!fromAgent) {
           return jsonNotFound(c, 'agent_not_found', `Agent "${from}" not found in this workspace`);
         }
-        sender = fromAgent;
+        // The by-message proof names this agent as the sender, and Cloud trusts
+        // that id for the delegation check. A node may attach an approval only
+        // for an agent it hosts, never for any agent name in the workspace.
+        if (owner_approval && fromAgent.locationNodeId !== node.id) {
+          return jsonError(c, 'owner_approval_not_allowed',
+            'A node token may attach owner_approval only for an agent hosted on that node', 403);
+        }
+        const { locationNodeId: _locationNodeId, ...fromIdentity } = fromAgent;
+        sender = fromIdentity;
       } else {
         return jsonError(c, 'agent_token_required', 'Agent or node token required to post messages', 403);
       }
@@ -149,8 +160,15 @@ messageRoutes.post(
       // A DM lives on an ordinary channel row; only its participants may post
       // to it by channel name. Checked on the resolved sender so a node token
       // posting as `from` is held to the same rule.
-      if ((await agentDmAccessForChannelName(db, workspace.id, senderAgentId, channelName)) === 'outsider') {
+      const dmAccess = await agentDmAccessForChannelName(db, workspace.id, senderAgentId, channelName);
+      if (dmAccess === 'outsider') {
         return jsonNotFound(c, 'channel_not_found', `Channel "${channelName}" not found`);
+      }
+      // Owner approvals ride on channel posts and `POST /v1/dm` only; a DM or
+      // group DM's backing channel never stores one through this route.
+      if (owner_approval && dmAccess !== 'not_dm') {
+        return jsonError(c, INVALID_OWNER_APPROVAL,
+          'owner_approval is accepted on channel posts and POST /v1/dm only, not on a DM channel', 400);
       }
       const senderAgentName = sender.name;
 

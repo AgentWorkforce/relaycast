@@ -4554,10 +4554,12 @@ paths:
                     replay never parks. Hosts without a delivery waiter answer
                     at once.
                 owner_approval:
-                  allOf:
-                    - $ref: '#/components/schemas/OwnerApproval'
-                  nullable: true
                   description: Optional delegate owner approval claim; `null` is the same as omitting it.
+                  oneOf:
+                    - $ref: '#/components/schemas/OwnerApproval'
+                    - type: object
+                      nullable: true
+                      enum: [null]
       responses:
         '201':
           description: Message posted
@@ -4587,7 +4589,17 @@ paths:
         '400':
           description: >-
             Invalid body; `invalid_owner_approval` when `owner_approval` is
-            present and does not match the v1 shape.
+            present and does not match the v1 shape, or is sent to a DM or
+            group DM channel through this route (use `POST /dm`).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '403':
+          description: >-
+            `owner_approval_not_allowed`: a node token attached
+            `owner_approval` for a `from` agent that is not hosted on that
+            node.
           content:
             application/json:
               schema:
@@ -5027,10 +5039,12 @@ paths:
                     replay never parks. Hosts without a delivery waiter (the
                     workspace actor) answer at once.
                 owner_approval:
-                  allOf:
-                    - $ref: '#/components/schemas/OwnerApproval'
-                  nullable: true
                   description: Optional delegate owner approval claim; `null` is the same as omitting it.
+                  oneOf:
+                    - $ref: '#/components/schemas/OwnerApproval'
+                    - type: object
+                      nullable: true
+                      enum: [null]
       responses:
         '201':
           description: DM sent
@@ -5047,7 +5061,8 @@ paths:
           description: |
             Invalid body (neither or both of `to`/`address`, missing `text`);
             `invalid_owner_approval` — `owner_approval` does not match the v1
-            shape;
+            shape, or the recipient is an external A2A agent (which cannot
+            have the approval attested);
             `invalid_address` — `address` has no `agent@machine` reading;
             `ambiguous_address` — more than one reading names an agent on
             that machine.
@@ -6029,10 +6044,12 @@ paths:
                         type: string
                         nullable: true
                       owner_approval:
-                        allOf:
-                          - $ref: '#/components/schemas/OwnerApproval'
-                        nullable: true
                         description: The approval stored at send, or `null` when the message has none.
+                        oneOf:
+                          - $ref: '#/components/schemas/OwnerApproval'
+                          - type: object
+                            nullable: true
+                            enum: [null]
         '404':
           description: >-
             `delivery_not_found`: delivery absent, not addressed to this agent,

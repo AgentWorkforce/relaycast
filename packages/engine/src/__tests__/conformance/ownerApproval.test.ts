@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { eq } from 'drizzle-orm';
+import { eq, inArray } from 'drizzle-orm';
 import {
   makeNodeStack,
   createWorkspace,
@@ -9,7 +9,7 @@ import {
   FakeSocket,
   type TestStack,
 } from './harness.js';
-import { messages } from '../../db/tables.js';
+import { channels, messages } from '../../db/tables.js';
 
 /**
  * Owner-named trusted delegates (wire contract v1, Relaycast part): a send may
@@ -183,6 +183,12 @@ describe('owner_approval on messages', () => {
     ['reviews_approved on config_change', { ...approval(), actions: [{ class: 'config_change', target: 'agent_1:model=opus', conditions: [{ type: 'reviews_approved', min: 1 }] }] }],
     // A config_change target that also parses as owner/repo#N still takes only not_before.
     ['ci_green on a repo-shaped config_change target', { ...approval(), actions: [{ class: 'config_change', target: 'agent_1:a/b=c#1', conditions: [{ type: 'ci_green' }] }] }],
+    // Postgres jsonb cannot store U+0000; both databases refuse it alike.
+    ...(['owner_id', 'quote', 'quote_source'] as const).map((field): [string, unknown] => [
+      `U+0000 in ${field}`, { ...approval(), [field]: 'a\u0000b' },
+    ]),
+    ['U+0000 in a target', { ...approval(), actions: [{ class: 'merge', target: 'o/r#1\u0000' }] }],
+    ['U+0000 in a note', { ...approval(), actions: [{ class: 'merge', target: 'o/r#1', note: '\u0000' }] }],
     ['conditions that are not an array', { ...approval(), actions: [{ class: 'merge', target: 'o/r#1', conditions: { type: 'ci_green' } }] }],
   ];
 
@@ -298,6 +304,118 @@ describe('owner_approval on messages', () => {
       expect(((await proof.json()) as { data: Record<string, unknown> }).data.owner_approval).toEqual(config);
     }
     expect(JSON.stringify(await deliveries(bob.token))).not.toContain('sandbox=off');
+  });
+
+  it('refuses an approval on a DM channel posted through the channel route', async () => {
+    const { alice } = await seed();
+    const opened = await dm(alice.token, { to: 'bob', text: 'open the dm' });
+    expect(opened.status).toBe(201);
+    const [{ channelId }] = await stack.runtime.deps.db.select({ channelId: messages.channelId })
+      .from(messages).where(eq(messages.id, ((await opened.json()) as { data: { id: string } }).data.id));
+    const [{ name: dmChannel }] = await stack.runtime.deps.db.select({ name: channels.name })
+      .from(channels).where(eq(channels.id, channelId));
+    const group = await stack.app.request('/v1/dm/group', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', authorization: `Bearer ${alice.token}` },
+      body: JSON.stringify({ participants: ['bob', 'carol'], name: 'trio' }),
+    });
+    expect(group.status).toBeLessThan(300);
+    const groupChannelId = ((await group.json()) as { data: { channel_id: string } }).data.channel_id;
+    const [{ name: groupChannel }] = await stack.runtime.deps.db.select({ name: channels.name })
+      .from(channels).where(eq(channels.id, groupChannelId));
+
+    for (const name of [dmChannel, groupChannel]) {
+      const refused = await stack.app.request(`/v1/channels/${encodeURIComponent(name)}/messages`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', authorization: `Bearer ${alice.token}` },
+        body: JSON.stringify({ text: 'merge via channel route', owner_approval: approval() }),
+      });
+      expect(refused.status).toBe(400);
+      expect(((await refused.json()) as { error: { code: string } }).error.code).toBe('invalid_owner_approval');
+      // Without an approval the same post is accepted, as before.
+      const plain = await stack.app.request(`/v1/channels/${encodeURIComponent(name)}/messages`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', authorization: `Bearer ${alice.token}` },
+        body: JSON.stringify({ text: 'plain via channel route' }),
+      });
+      expect(plain.status).toBe(201);
+    }
+    const stored = await stack.runtime.deps.db.select({ ownerApproval: messages.ownerApproval })
+      .from(messages).where(inArray(messages.channelId, [channelId, groupChannelId]));
+    expect(stored.every((row) => row.ownerApproval === null)).toBe(true);
+  });
+
+  it('refuses an approval on a DM to an external A2A agent, storing nothing', async () => {
+    const { ws, alice } = await seed();
+    const registered = await stack.app.request('/v1/a2a/register', {
+      method: 'POST',
+      headers: { authorization: `Bearer ${ws.workspaceKey}`, 'content-type': 'application/json' },
+      body: JSON.stringify({
+        agent_card: { name: 'remote', url: 'https://remote.example/a2a/rpc', version: '1.0.0', skills: [{ id: 'lead', name: 'lead' }] },
+        target_agent: 'lead',
+      }),
+    });
+    expect(registered.status).toBe(201);
+    const relayName = ((await registered.json()) as { data: { relay_name: string } }).data.relay_name;
+    const before = await stack.runtime.deps.db.select({ id: messages.id }).from(messages);
+
+    const refused = await dm(alice.token, { to: relayName, text: 'merge it', owner_approval: approval() });
+    expect(refused.status).toBe(400);
+    const body = (await refused.json()) as { error: { code: string; message: string } };
+    expect(body.error.code).toBe('invalid_owner_approval');
+    expect(body.error.message).toContain('A2A');
+    expect(await stack.runtime.deps.db.select({ id: messages.id }).from(messages)).toHaveLength(before.length);
+  });
+
+  it('lets a node attach an approval only for an agent it hosts', async () => {
+    const { ws } = await seed();
+    const enroll = async (id: string) => {
+      const created = await stack.app.request('/v1/nodes', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', authorization: `Bearer ${ws.workspaceKey}` },
+        body: JSON.stringify({ node_id: id, name: id, capabilities: ['spawn:claude'], max_agents: 4, tags: ['oa-test'], version: 'test-node' }),
+      });
+      expect(created.status).toBe(201);
+      const token = ((await created.json()) as { data: { token: string } }).data.token;
+      const sock = new FakeSocket();
+      const handle = stack.runtime.realtime.attachNodeSocket(ws.workspaceId, id, sock);
+      await handle.handleMessage(JSON.stringify({
+        v: 1, type: 'node.register', name: id, node_id: id, capabilities: [{ name: 'spawn:claude', kind: 'capacity' }],
+        max_agents: 4, tags: ['oa-test'], version: 'test-node', resume_cursor: null,
+      }));
+      return { token, sock, handle };
+    };
+    const home = await enroll('node_home');
+    const other = await enroll('node_other');
+    await home.handle.handleMessage(JSON.stringify({ v: 1, type: 'agent.register', name: 'delegate', resumable: true, session_ref: 'sess-delegate' }));
+    const reply = home.sock.ofType('reply').at(-1) as { ok: boolean; data: { token: string } };
+    expect(reply.ok).toBe(true);
+    const joined = await stack.app.request('/v1/channels/ops/join', { method: 'POST', headers: { authorization: `Bearer ${reply.data.token}` } });
+    expect(joined.status).toBeLessThan(300);
+
+    const postAs = (token: string, from: string) => stack.app.request('/v1/channels/ops/messages', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', authorization: `Bearer ${token}` },
+      body: JSON.stringify({ text: 'merge it', from, owner_approval: approval() }),
+    });
+    // Another node cannot attach an approval as this agent, nor as one it does not host at all.
+    for (const [token, from] of [[other.token, 'delegate'], [home.token, 'alice']] as const) {
+      const refused = await postAs(token, from);
+      expect(refused.status).toBe(403);
+      expect(((await refused.json()) as { error: { code: string } }).error.code).toBe('owner_approval_not_allowed');
+    }
+    // The hosting node can.
+    const accepted = await postAs(home.token, 'delegate');
+    expect(accepted.status).toBe(201);
+    const messageId = ((await accepted.json()) as { data: { id: string } }).data.id;
+    expect((await storedApproval(messageId)).ownerApproval).toEqual(approval());
+    // A plain node post as any workspace agent is unchanged.
+    const plain = await stack.app.request('/v1/channels/ops/messages', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', authorization: `Bearer ${other.token}` },
+      body: JSON.stringify({ text: 'plain', from: 'alice' }),
+    });
+    expect(plain.status).toBe(201);
   });
 
   it('stores the approval in its own column, never in caller metadata', async () => {
