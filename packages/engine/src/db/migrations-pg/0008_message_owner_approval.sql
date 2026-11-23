@@ -1,0 +1,1 @@
+ALTER TABLE "messages" ADD COLUMN "owner_approval" jsonb;

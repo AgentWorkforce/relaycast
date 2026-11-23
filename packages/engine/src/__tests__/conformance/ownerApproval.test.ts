@@ -9,7 +9,7 @@ import {
   FakeSocket,
   type TestStack,
 } from './harness.js';
-import { messages } from '../../db/schema.js';
+import { messages } from '../../db/tables.js';
 
 /**
  * Owner-named trusted delegates (wire contract v1, Relaycast part): a send may
@@ -31,11 +31,11 @@ describe('owner_approval on messages', () => {
   const QUOTE = 'yes merge 2250 when green ZQX-QUOTE-MARKER';
   const approval = () => ({
     v: 1,
-    owner_id: 'hum_khaliq',
+    owner_id: 'hum_owner1',
     actions: [{ class: 'merge', target: 'AgentWorkforce/relay#2250' }],
     quote: QUOTE,
     quoted_at: '2026-11-23T07:49:00Z',
-    quote_source: 'grok:dm',
+    quote_source: 'chat:dm',
     expires_at: '2026-11-23T08:49:00Z',
     approval_ref: null,
   });
@@ -93,6 +93,17 @@ describe('owner_approval on messages', () => {
       .select({ ownerApproval: messages.ownerApproval, metadata: messages.metadata })
       .from(messages).where(eq(messages.id, messageId));
     return row;
+  }
+
+  /** The database's refusal text: SQLite's message, or Postgres' via drizzle's `cause`. */
+  async function refusal(write: PromiseLike<unknown>): Promise<string> {
+    try {
+      await write;
+    } catch (err) {
+      const error = err as { message?: string; cause?: { message?: string } };
+      return `${error.message ?? ''} ${error.cause?.message ?? ''}`;
+    }
+    return 'no error';
   }
 
   const long = (n: number) => 'x'.repeat(n);
@@ -283,15 +294,15 @@ describe('owner_approval on messages', () => {
 
     // ...and the database refuses any write that changes or clears it.
     const widened = { ...approval(), actions: [{ class: 'deploy', target: '*' }] };
-    await expect(stack.runtime.deps.db.update(messages).set({ ownerApproval: widened })
-      .where(eq(messages.id, messageId))).rejects.toThrow(/owner_approval is immutable/);
-    await expect(stack.runtime.deps.db.update(messages).set({ ownerApproval: null })
-      .where(eq(messages.id, messageId))).rejects.toThrow(/owner_approval is immutable/);
+    expect(await refusal(stack.runtime.deps.db.update(messages).set({ ownerApproval: widened })
+      .where(eq(messages.id, messageId)))).toMatch(/owner_approval is immutable/);
+    expect(await refusal(stack.runtime.deps.db.update(messages).set({ ownerApproval: null })
+      .where(eq(messages.id, messageId)))).toMatch(/owner_approval is immutable/);
     // Nor can one be added to a message sent without it.
     const plain = await post(alice.token, { text: 'no approval' });
     const plainId = ((await plain.json()) as { data: { id: string } }).data.id;
-    await expect(stack.runtime.deps.db.update(messages).set({ ownerApproval: approval() })
-      .where(eq(messages.id, plainId))).rejects.toThrow(/owner_approval is immutable/);
+    expect(await refusal(stack.runtime.deps.db.update(messages).set({ ownerApproval: approval() })
+      .where(eq(messages.id, plainId)))).toMatch(/owner_approval is immutable/);
     expect((await storedApproval(messageId)).ownerApproval).toEqual(approval());
   });
 
@@ -373,7 +384,7 @@ describe('owner_approval on messages', () => {
       const text = JSON.stringify(payload);
       expect(text).not.toContain(QUOTE);
       expect(text).not.toContain('"owner_approval"');
-      expect(text).not.toContain('hum_khaliq');
+      expect(text).not.toContain('hum_owner1');
     }
   });
 

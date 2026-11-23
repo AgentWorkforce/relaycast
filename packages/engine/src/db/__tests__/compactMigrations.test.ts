@@ -67,11 +67,6 @@ function snapshot(handle: SqliteDbHandle) {
         } = row as Record<string, unknown>;
         return JSON.stringify(existing);
       }
-      // 0087 adds the nullable, immutable owner approval column.
-      if (name === 'messages') {
-        const { owner_approval: _ownerApproval, ...existing } = row as Record<string, unknown>;
-        return JSON.stringify(existing);
-      }
       if (name === 'agents') {
         const {
           status_updated_at: _statusUpdatedAt,
@@ -86,9 +81,14 @@ function snapshot(handle: SqliteDbHandle) {
       // pre-existing value while the explicit schema assertions below cover
       // the new columns.
       // 0081 adds the receiver-acceptance and reply confirmation columns,
-      // nullable and never backfilled.
+      // nullable and never backfilled; 0087 adds the nullable, immutable
+      // owner approval.
       if (name === 'messages') {
-        const { reply_to_message_id: _replyToMessageId, ...existing } = row as Record<string, unknown>;
+        const {
+          reply_to_message_id: _replyToMessageId,
+          owner_approval: _ownerApproval,
+          ...existing
+        } = row as Record<string, unknown>;
         return JSON.stringify(existing);
       }
       if (name === 'deliveries') {
@@ -216,9 +216,13 @@ function expectConstraintsPreserved(before: ReturnType<typeof constraints>, afte
       if (table.name === 'dm_participants') {
         table = { ...table, sql: table.sql.replace(', last_read_id TEXT', '') };
       }
-      // 0081 appends nullable confirmation columns. Remove only that additive DDL.
+      // 0081 appends nullable confirmation columns and 0087 the owner
+      // approval. Remove only that additive DDL.
       if (table.name === 'messages') {
-        table = { ...table, sql: table.sql.replace(', reply_to_message_id TEXT', '') };
+        table = {
+          ...table,
+          sql: table.sql.replace(', reply_to_message_id TEXT', '').replace(', owner_approval TEXT', ''),
+        };
       }
       if (table.name === 'deliveries') {
         table = {
@@ -239,10 +243,6 @@ function expectConstraintsPreserved(before: ReturnType<typeof constraints>, afte
             .replace(', rotation_request_digest TEXT DEFAULT NULL', '')
             .replace(', liveness_revision INTEGER NOT NULL DEFAULT 0', ''),
         };
-      }
-      // 0087 appends the owner approval column. Remove only that additive column.
-      if (table.name === 'messages') {
-        table = { ...table, sql: table.sql.replace(', owner_approval TEXT', '') };
       }
       if (table.name === 'node_providers') {
         table = {

@@ -57,6 +57,20 @@
       "when": 1794904190079,
       "tag": "0007_workspace_leaders",
       "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "7",
+      "when": 1795447059257,
+      "tag": "0008_message_owner_approval",
+      "breakpoints": true
+    },
+    {
+      "idx": 9,
+      "version": "7",
+      "when": 1795447068529,
+      "tag": "0009_message_owner_approval_immutable",
+      "breakpoints": true
     }
   ]
 }

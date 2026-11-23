@@ -78,7 +78,7 @@ describe('AgentClient', () => {
         actions: [{ class: 'merge' as const, target: 'AgentWorkforce/relay#2250' }],
         quote: 'yes merge 2250 when green',
         quotedAt: '2026-11-23T07:49:00Z',
-        quoteSource: 'grok:dm',
+        quoteSource: 'chat:dm',
         expiresAt: '2026-11-23T08:49:00Z',
         approvalRef: null,
       };
@@ -88,7 +88,7 @@ describe('AgentClient', () => {
         actions: [{ class: 'merge', target: 'AgentWorkforce/relay#2250' }],
         quote: 'yes merge 2250 when green',
         quoted_at: '2026-11-23T07:49:00Z',
-        quote_source: 'grok:dm',
+        quote_source: 'chat:dm',
         expires_at: '2026-11-23T08:49:00Z',
         approval_ref: null,
       };

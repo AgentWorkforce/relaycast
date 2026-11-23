@@ -186,7 +186,7 @@ async function listDeliveriesUnlabeled(
       replyToMessageId: messages.replyToMessageId,
       createdAt: messages.createdAt,
       hasAttachments: messages.hasAttachments,
-      hasOwnerApproval: messageHasOwnerApproval,
+      hasOwnerApproval: messageHasOwnerApproval(),
     })
     .from(messages)
     .leftJoin(agents, eq(messages.agentId, agents.id))
@@ -1451,7 +1451,7 @@ export async function fetchDueNodeDeliveryEvents(
       senderAgentName: sql<string | null>`(
         SELECT a.name FROM agents a WHERE a.id = ${messages.agentId}
       )`,
-      hasOwnerApproval: messageHasOwnerApproval,
+      hasOwnerApproval: messageHasOwnerApproval(),
     })
     .from(sql`${deliveries} ${sqlx.indexedBy(db, 'idx_deliveries_id_lookup')}`)
     .innerJoin(agents, eq(deliveries.agentId, agents.id))
@@ -1589,7 +1589,7 @@ export async function fetchQueuedWsBacklogEvents(
       senderAgentName: sql<string | null>`(
         SELECT a.name FROM agents a WHERE a.id = ${messages.agentId}
       )`,
-      hasOwnerApproval: messageHasOwnerApproval,
+      hasOwnerApproval: messageHasOwnerApproval(),
     })
     .from(deliveries)
     .innerJoin(agents, eq(deliveries.agentId, agents.id))
@@ -1796,7 +1796,7 @@ async function replayPendingToNode(
         senderAgentName: sql<string | null>`(
           SELECT a.name FROM agents a WHERE a.id = ${messages.agentId}
         )`,
-        hasOwnerApproval: messageHasOwnerApproval,
+        hasOwnerApproval: messageHasOwnerApproval(),
       }).from(sql`${deliveries} ${sqlx.indexedBy(db, 'idx_deliveries_id_lookup')}`)
         .innerJoin(agents, eq(deliveries.agentId, agents.id))
         .innerJoin(messages, eq(deliveries.messageId, messages.id))

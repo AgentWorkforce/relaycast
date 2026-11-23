@@ -7,7 +7,11 @@ See the [root changelog](../../CHANGELOG.md) for cross-package release highlight
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [Unreleased - Minor]
+
+### Added
+
+- `OwnerApprovalSchema` / `OwnerApproval` (and `OwnerApprovalAction`, `OwnerApprovalConditionSchema` / `OwnerApprovalCondition`, `OWNER_APPROVAL_ACTION_CLASSES` with `prompt_approval`): the v1 delegate owner approval. `PostMessageRequest` and `SendDmRequest` accept `owner_approval`; `CoreMessagePayload` and `DeliveryMessage` expose `has_owner_approval?: true`.
 
 ## [12.14.0] - 2026-11-23
 
@@ -57,7 +61,6 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Added
 
-- `OwnerApprovalSchema` / `OwnerApproval` (and `OwnerApprovalAction`, `OwnerApprovalConditionSchema` / `OwnerApprovalCondition`, `OWNER_APPROVAL_ACTION_CLASSES` with `prompt_approval`): the v1 delegate owner approval. `PostMessageRequest` and `SendDmRequest` accept `owner_approval`; `CoreMessagePayload` and `DeliveryMessage` expose `has_owner_approval?: true`.
 - `DeliveryAckedEventSchema` (`delivery.acked`: `delivery_id`, `message_id`, recipient `agent_id` / `agent_name`, `status: 'acked'`, `at`), in `ServerEventSchema`, `WsClientEventSchema` and `SubscribableEventTypeSchema`. `DeliveryDeliveredEventSchema` gains optional sender-side `agent_id`, `agent_name`, `status`, `at`.
 - `SentDeliverySchema`, `MessageDeliveryReceiptSchema`, `MessageDeliveriesResponseSchema`; `SendDmResponseSchema.delivery` (`{ id, status, expires_at } | null`).
 

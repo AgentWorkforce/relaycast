@@ -193,6 +193,8 @@ describe("loadBundledPostgresMigrations", () => {
       "0005_delivery_confirmation.sql",
       "0006_action_invocation_requester.sql",
       "0007_workspace_leaders.sql",
+      "0008_message_owner_approval.sql",
+      "0009_message_owner_approval_immutable.sql",
     ]);
     expect(bundled.every((m) => m.statements.length > 0)).toBe(true);
   });

@@ -1,6 +1,6 @@
 import { sql } from 'drizzle-orm';
 import { OwnerApprovalSchema, type OwnerApproval } from '@relaycast/types';
-import { messages } from '../db/schema.js';
+import { messages } from '../db/tables.js';
 
 export type { OwnerApproval };
 
@@ -27,10 +27,13 @@ export function parseOwnerApproval(
 /**
  * Whether a message row carries an owner approval, without reading its
  * content. Recipient payloads use this; only the by-message proof route
- * returns the stored object.
+ * returns the stored object. A function, not a constant: tables are bound to
+ * the dialect at runtime (db/tables.ts). Postgres yields a boolean and SQLite
+ * 0/1, so the value is normalised to a number.
  */
-export const messageHasOwnerApproval = sql<number>`(${messages.ownerApproval} IS NOT NULL)`
-  .mapWith(Number);
+export function messageHasOwnerApproval() {
+  return sql<number>`(${messages.ownerApproval} IS NOT NULL)`.mapWith((value: unknown) => (value === true || Number(value) === 1 ? 1 : 0));
+}
 
 /** The recipient-facing flag: `{ has_owner_approval: true }` or nothing. */
 export function ownerApprovalFlag(has: unknown): { has_owner_approval?: true } {

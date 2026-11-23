@@ -869,6 +869,132 @@ components:
           type: string
           format: date-time
 
+    OwnerApproval:
+      type: object
+      description: >-
+        A delegate's claim that a person approved the named actions
+        (owner-named trusted delegates, v1). Stored immutably with the message
+        in its own column, never in `metadata`, and unchangeable after send.
+        Recipients see only `has_owner_approval`; the content is returned only
+        by `GET /deliveries/by-message/{messageId}` to a pending recipient.
+        Any other shape is refused with `400 invalid_owner_approval`.
+      additionalProperties: false
+      required: [v, owner_id, actions]
+      properties:
+        v:
+          type: integer
+          enum: [1]
+        owner_id:
+          type: string
+          minLength: 1
+          maxLength: 128
+        actions:
+          type: array
+          minItems: 1
+          maxItems: 20
+          items:
+            type: object
+            additionalProperties: false
+            required: [class, target]
+            properties:
+              class:
+                type: string
+                enum: [merge, pr_ops, deploy, release, secret_change, destructive, spend, external_comms, prompt_approval]
+              target:
+                type: string
+                maxLength: 256
+                description: >-
+                  For `prompt_approval`, `<agent id>:<request ref>` (no
+                  wildcard). Otherwise a target such as `owner/repo#N` or
+                  `service:env`.
+              conditions:
+                type: array
+                maxItems: 5
+                description: >-
+                  Checked by Cloud at redeem. `ci_green`, `head_sha`,
+                  `reviews_approved` and `mergeable` are valid only on
+                  `owner/repo#N` targets; `prompt_approval` accepts only
+                  `not_before`. Unknown types or extra fields are refused
+                  with `400 invalid_owner_approval`.
+                items:
+                  $ref: '#/components/schemas/OwnerApprovalCondition'
+              note:
+                type: string
+                maxLength: 280
+        quote:
+          type: string
+          nullable: true
+          maxLength: 2000
+        quoted_at:
+          type: string
+          format: date-time
+          nullable: true
+          description: RFC 3339 with `Z` or a numeric offset.
+        quote_source:
+          type: string
+          nullable: true
+          maxLength: 64
+        expires_at:
+          type: string
+          format: date-time
+          nullable: true
+          description: RFC 3339 with `Z` or a numeric offset.
+        approval_ref:
+          type: string
+          nullable: true
+          pattern: '^apv_[A-Za-z0-9]{8,64}$'
+
+    OwnerApprovalCondition:
+      oneOf:
+        - type: object
+          additionalProperties: false
+          required: [type]
+          properties:
+            type:
+              type: string
+              enum: [ci_green]
+        - type: object
+          additionalProperties: false
+          required: [type, sha]
+          properties:
+            type:
+              type: string
+              enum: [head_sha]
+            sha:
+              type: string
+              pattern: '^[0-9a-f]{40}$'
+        - type: object
+          additionalProperties: false
+          required: [type, min]
+          properties:
+            type:
+              type: string
+              enum: [reviews_approved]
+            min:
+              type: integer
+              minimum: 1
+              maximum: 10
+        - type: object
+          additionalProperties: false
+          required: [type]
+          properties:
+            type:
+              type: string
+              enum: [mergeable]
+        - type: object
+          additionalProperties: false
+          required: [type, at]
+          properties:
+            type:
+              type: string
+              enum: [not_before]
+            at:
+              type: string
+              format: date-time
+              description: RFC 3339 with `Z` or a numeric offset.
+      discriminator:
+        propertyName: type
+
     Message:
       type: object
       properties:
@@ -912,6 +1038,10 @@ components:
           description: User message metadata. Internal `__relaycast_*` keys are stripped from public responses and caller metadata cannot override `agent_name`.
         has_attachments:
           type: boolean
+        has_owner_approval:
+          type: boolean
+          enum: [true]
+          description: '`true` when the sender attached an `owner_approval`; omitted otherwise. Never the approval itself: ask Cloud to attest it. Present on send responses and message events.'
         injection_mode:
           type: string
           enum: [wait, steer]
@@ -1134,6 +1264,10 @@ components:
           type: object
           additionalProperties: true
           description: Public message metadata, including A2A extension payloads
+        has_owner_approval:
+          type: boolean
+          enum: [true]
+          description: '`true` when the sender attached an `owner_approval`; omitted otherwise. Never the approval itself: ask Cloud to attest it.'
 
     DmSendResponse:
       type: object
@@ -1166,6 +1300,10 @@ components:
           type: object
           additionalProperties: true
           description: Public message metadata, including A2A extension payloads
+        has_owner_approval:
+          type: boolean
+          enum: [true]
+          description: '`true` when the sender attached an `owner_approval`; omitted otherwise. Never the approval itself: ask Cloud to attest it.'
         delivery:
           nullable: true
           description: >-
@@ -1562,6 +1700,10 @@ components:
                 created_at:
                   type: string
                   format: date-time
+                has_owner_approval:
+                  type: boolean
+                  enum: [true]
+                  description: '`true` when the sender attached an `owner_approval`; omitted otherwise. Never the approval itself: ask Cloud to attest it.'
 
     SearchResult:
       type: object
@@ -4409,6 +4551,11 @@ paths:
                     current `state`. Not part of the idempotency fingerprint; a
                     replay never parks. Hosts without a delivery waiter answer
                     at once.
+                owner_approval:
+                  allOf:
+                    - $ref: '#/components/schemas/OwnerApproval'
+                  nullable: true
+                  description: Optional delegate owner approval claim; `null` is the same as omitting it.
       responses:
         '201':
           description: Message posted
@@ -4435,6 +4582,14 @@ paths:
                           deliveries_truncated:
                             type: boolean
                             description: True when more than 50 rows were created and `deliveries` holds only the first 50.
+        '400':
+          description: >-
+            Invalid body; `invalid_owner_approval` when `owner_approval` is
+            present and does not match the v1 shape.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
 
     get:
       summary: List messages
@@ -4869,6 +5024,11 @@ paths:
                     null`) while delivery continues. Not part of the idempotency fingerprint; a
                     replay never parks. Hosts without a delivery waiter (the
                     workspace actor) answer at once.
+                owner_approval:
+                  allOf:
+                    - $ref: '#/components/schemas/OwnerApproval'
+                  nullable: true
+                  description: Optional delegate owner approval claim; `null` is the same as omitting it.
       responses:
         '201':
           description: DM sent
@@ -4884,6 +5044,8 @@ paths:
         '400':
           description: |
             Invalid body (neither or both of `to`/`address`, missing `text`);
+            `invalid_owner_approval` — `owner_approval` does not match the v1
+            shape;
             `invalid_address` — `address` has no `agent@machine` reading;
             `ambiguous_address` — more than one reading names an agent on
             that machine.
@@ -5822,9 +5984,11 @@ paths:
       description: >
         Return only the calling agent token's queued or delivered, unexpired
         delivery for the given message id. The sender agent id, workspace id,
-        channel id, and delivery reason are server-derived. Unknown message
-        ids, messages addressed to another agent, and acknowledged or expired
-        deliveries all return the same `404 delivery_not_found`.
+        channel id, and delivery reason are server-derived, and
+        `owner_approval` is the stored object from the message's own column
+        (or `null`). Unknown message ids, messages addressed to another
+        agent, and acknowledged or expired deliveries all return the same
+        `404 delivery_not_found`.
       tags:
         - Deliveries
       security:
@@ -5862,6 +6026,11 @@ paths:
                       delivery_reason:
                         type: string
                         nullable: true
+                      owner_approval:
+                        allOf:
+                          - $ref: '#/components/schemas/OwnerApproval'
+                        nullable: true
+                        description: The approval stored at send, or `null` when the message has none.
         '404':
           description: >-
             `delivery_not_found`: delivery absent, not addressed to this agent,
