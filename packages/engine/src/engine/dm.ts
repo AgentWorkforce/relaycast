@@ -55,6 +55,7 @@ import {
 import { buildMessageSessionWrite, requireSessionRefFromMetadata } from './sessionMessages.js';
 import { fetchAttachmentsBatch, resolveSendAttachments, type AttachmentRow } from './attachments.js';
 import { canonicalJson, canonicalUserMessageMetadata, publicMessageMetadata, sanitizeUserMessageMetadata } from './messageMetadata.js';
+import { ownerApprovalFlag, type OwnerApproval } from './ownerApproval.js';
 import { queryInChunks } from '../lib/queryChunks.js';
 
 type Db = ReturnType<typeof getDb>;
@@ -328,6 +329,7 @@ function buildDmMessageWrites(
     mode?: 'wait' | 'steer';
     data?: Record<string, unknown> | null;
     reply_to_message_id?: string;
+    owner_approval?: OwnerApproval | null;
   },
   attachments: AttachmentRow[],
   messageId: string,
@@ -374,6 +376,7 @@ function buildDmMessageWrites(
         hasAttachments,
         metadata,
         sessionRef,
+        ownerApproval: data.owner_approval ?? null,
         createdAt,
       })
       .returning(),
@@ -400,11 +403,13 @@ function buildDmMessageWrites(
 }
 
 function buildDmResult(
-  message: Pick<typeof messages.$inferSelect, 'id' | 'agentId' | 'body' | 'metadata' | 'createdAt'>,
+  message: Pick<typeof messages.$inferSelect, 'id' | 'agentId' | 'body' | 'metadata' | 'createdAt'>
+    & Partial<Pick<typeof messages.$inferSelect, 'ownerApproval'>>,
   conv: { id: string }, fromAgent: { name: string }, data: { to: string; mode?: 'wait' | 'steer'; reply_to_message_id?: string },
   attachments: AttachmentRow[],
 ) {
   const injectionMode = data.mode ?? 'wait';
+  const approvalFlag = ownerApprovalFlag(message.ownerApproval);
   return {
     // Canonical converged shape (new)
     conversation_id: conv.id,
@@ -418,6 +423,7 @@ function buildDmResult(
       attachments,
       metadata: publicMessageMetadata(message.metadata),
       reply_to_message_id: data.reply_to_message_id ?? null,
+      ...approvalFlag,
     },
     created_at: message.createdAt.toISOString(),
 
@@ -429,6 +435,7 @@ function buildDmResult(
     injection_mode: injectionMode,
     attachments,
     metadata: publicMessageMetadata(message.metadata),
+    ...approvalFlag,
   };
 }
 
@@ -544,6 +551,7 @@ export async function sendDm(
     data?: Record<string, unknown> | null;
     /** The recipient's message this DM answers; must be theirs, in this conversation. */
     reply_to_message_id?: string;
+    owner_approval?: OwnerApproval | null;
   },
   options: SendDmOptions = {},
 ): Promise<SendDmResult> {
@@ -772,6 +780,7 @@ export async function sendDm(
   const publicResult = buildDmResult({
     id: messageId, agentId: fromAgentId, body: data.text, createdAt,
     metadata: dmMessageMetadata(data, senderAddress),
+    ownerApproval: data.owner_approval ?? null,
   }, conv, fromAgent, options.address !== undefined ? { ...data, to: toAgent.name } : data, attachments);
   const eventData = buildDmReceivedEventData(publicResult, { fromName: fromAgent.name });
   const workspacePayload = transformForClient({

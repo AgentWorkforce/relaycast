@@ -71,6 +71,45 @@ export type Message = z.infer<typeof MessageSchema>;
 export const MessageInjectionModeSchema = z.enum(['wait', 'steer']);
 export type MessageInjectionMode = z.infer<typeof MessageInjectionModeSchema>;
 
+/** Action classes an owner approval can name (owner-named trusted delegates, v1). */
+export const OWNER_APPROVAL_ACTION_CLASSES = [
+  'merge',
+  'pr_ops',
+  'deploy',
+  'release',
+  'secret_change',
+  'destructive',
+  'spend',
+  'external_comms',
+] as const;
+export const OwnerApprovalActionClassSchema = z.enum(OWNER_APPROVAL_ACTION_CLASSES);
+export type OwnerApprovalActionClass = z.infer<typeof OwnerApprovalActionClassSchema>;
+
+export const OwnerApprovalActionSchema = z.object({
+  class: OwnerApprovalActionClassSchema,
+  target: z.string().max(256),
+  note: z.string().max(280).optional(),
+}).strict();
+export type OwnerApprovalAction = z.infer<typeof OwnerApprovalActionSchema>;
+
+/**
+ * A delegate's claim that a person approved the named actions, sent as
+ * `owner_approval` on a channel message or DM. Relaycast validates and stores
+ * it immutably; recipients see only `has_owner_approval`, and only Cloud's
+ * attestation (via the by-message proof route) turns it into an approval.
+ */
+export const OwnerApprovalSchema = z.object({
+  v: z.literal(1),
+  owner_id: z.string().min(1).max(128),
+  actions: z.array(OwnerApprovalActionSchema).min(1).max(20),
+  quote: z.string().max(2000).nullable().optional(),
+  quoted_at: z.iso.datetime({ offset: true }).nullable().optional(),
+  quote_source: z.string().max(64).nullable().optional(),
+  expires_at: z.iso.datetime({ offset: true }).nullable().optional(),
+  approval_ref: z.string().regex(/^apv_[A-Za-z0-9]{8,64}$/).nullable().optional(),
+}).strict();
+export type OwnerApproval = z.infer<typeof OwnerApprovalSchema>;
+
 export const CoreMessagePayloadSchema = z.object({
   id: z.string(),
   agent_id: z.string(),
@@ -86,6 +125,8 @@ export const CoreMessagePayloadSchema = z.object({
   metadata: z.record(z.string(), z.unknown()).optional(),
   /** The recipient's message this DM explicitly answers (`reply_to_message_id` on send). */
   reply_to_message_id: z.string().nullable().optional(),
+  /** `true` when the sender attached an owner approval. Never the approval itself. */
+  has_owner_approval: z.literal(true).optional(),
 });
 export type CoreMessagePayload = z.infer<typeof CoreMessagePayloadSchema>;
 
@@ -123,6 +164,7 @@ export const PostMessageRequestSchema = z.object({
   mode: MessageInjectionModeSchema.default('wait'),
   /** Confirmation budget in ms (0–2000; 1000 recommended): the response parks for the recipients' acceptance. */
   wait_ms: z.number().int().min(0).max(2000).optional(),
+  owner_approval: OwnerApprovalSchema.nullable().optional(),
 });
 export type PostMessageRequest = z.infer<typeof PostMessageRequestSchema>;
 

@@ -27,6 +27,7 @@ import {
   observerAllowsMessage,
 } from '../engine/observerToken.js';
 import { runInBackground } from './background.js';
+import { INVALID_OWNER_APPROVAL, parseOwnerApproval } from '../engine/ownerApproval.js';
 import { sendWebhookEvent } from './webhookOutbox.js';
 import { emitServerEvent, type TelemetryActor } from '../lib/serverTelemetry.js';
 import { errorResponse } from '../lib/httpError.js';
@@ -59,6 +60,8 @@ const postMessageSchema = z.object({
   // Confirmation budget (ms, 0–2000): park for the recipients' acceptance.
   // Not part of the idempotency fingerprint: a retry may wait differently.
   wait_ms: sendWaitMsSchema.optional(),
+  // Validated separately so a bad approval is `invalid_owner_approval`.
+  owner_approval: z.unknown().optional(),
 });
 
 const sessionMessagesQuerySchema = z.object({
@@ -99,6 +102,11 @@ messageRoutes.post(
       const { text, blocks, attachments, data, content_type, mode, from } = parsed.data;
       const wait = resolveSendWaitMs(c, parsed.data.wait_ms);
       if (!wait.ok) return wait.response;
+      const ownerApproval = parseOwnerApproval(parsed.data.owner_approval);
+      if (!ownerApproval.ok) {
+        return jsonError(c, INVALID_OWNER_APPROVAL, ownerApproval.message, 400);
+      }
+      const owner_approval = ownerApproval.value ?? undefined;
 
       const { key: idempotencyKey, error: idempotencyError } = parseIdempotencyKey(c.req.header('Idempotency-Key'));
       if (idempotencyError) {
@@ -160,7 +168,7 @@ messageRoutes.post(
         scope: `channel-message:${channel.id}`,
         key: idempotencyKey,
         status: 201,
-        fingerprint: JSON.stringify({ channelId: channel.id, text, blocks, attachments, data, content_type, mode, from }),
+        fingerprint: JSON.stringify({ channelId: channel.id, text, blocks, attachments, data, content_type, mode, from, owner_approval }),
         kv: c.get('engine').kv,
         operation: () => {
           assertMessageAdmitted(c);
@@ -169,7 +177,7 @@ messageRoutes.post(
             workspace.id,
             channel.id,
             senderAgentId,
-            { text, blocks, attachments, data, content_type, mode },
+            { text, blocks, attachments, data, content_type, mode, owner_approval },
             { mailbox, workspaceDeliveryPolicy },
           );
         },

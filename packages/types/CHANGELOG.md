@@ -57,6 +57,7 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Added
 
+- `OwnerApprovalSchema` / `OwnerApproval` (and `OwnerApprovalAction`, `OWNER_APPROVAL_ACTION_CLASSES`): the v1 delegate owner approval. `PostMessageRequest` and `SendDmRequest` accept `owner_approval`; `CoreMessagePayload` and `DeliveryMessage` expose `has_owner_approval?: true`.
 - `DeliveryAckedEventSchema` (`delivery.acked`: `delivery_id`, `message_id`, recipient `agent_id` / `agent_name`, `status: 'acked'`, `at`), in `ServerEventSchema`, `WsClientEventSchema` and `SubscribableEventTypeSchema`. `DeliveryDeliveredEventSchema` gains optional sender-side `agent_id`, `agent_name`, `status`, `at`.
 - `SentDeliverySchema`, `MessageDeliveryReceiptSchema`, `MessageDeliveriesResponseSchema`; `SendDmResponseSchema.delivery` (`{ id, status, expires_at } | null`).
 

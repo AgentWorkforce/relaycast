@@ -70,6 +70,36 @@ describe('AgentClient', () => {
       expect(init.body).toBe(JSON.stringify({ text: 'hello', mode: 'wait' }));
     });
 
+    it('sends ownerApproval as snake_case owner_approval on channel posts and DMs', async () => {
+      mockFetch.mockImplementation(() => mockResponse({ id: 'm_1', has_owner_approval: true }));
+      const ownerApproval = {
+        v: 1 as const,
+        ownerId: 'hum_k',
+        actions: [{ class: 'merge' as const, target: 'AgentWorkforce/relay#2250' }],
+        quote: 'yes merge 2250 when green',
+        quotedAt: '2026-11-23T07:49:00Z',
+        quoteSource: 'grok:dm',
+        expiresAt: '2026-11-23T08:49:00Z',
+        approvalRef: null,
+      };
+      const wire = {
+        v: 1,
+        owner_id: 'hum_k',
+        actions: [{ class: 'merge', target: 'AgentWorkforce/relay#2250' }],
+        quote: 'yes merge 2250 when green',
+        quoted_at: '2026-11-23T07:49:00Z',
+        quote_source: 'grok:dm',
+        expires_at: '2026-11-23T08:49:00Z',
+        approval_ref: null,
+      };
+
+      await me.send('#general', 'merge it', { ownerApproval });
+      await me.dm('bob', 'merge it', { ownerApproval });
+
+      expect(JSON.parse(mockFetch.mock.calls[0]![1].body)).toEqual({ text: 'merge it', owner_approval: wire, mode: 'wait' });
+      expect(JSON.parse(mockFetch.mock.calls[1]![1].body)).toEqual({ to: 'bob', text: 'merge it', owner_approval: wire, mode: 'wait' });
+    });
+
     it('forwards steer mode when requested', async () => {
       mockFetch.mockImplementation(() => mockResponse({ id: 'm_1' }));
 

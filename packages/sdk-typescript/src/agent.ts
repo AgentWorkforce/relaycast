@@ -1,5 +1,6 @@
 import type {
   PostMessageRequest,
+  OwnerApproval,
   MessageListQuery,
   MessageWithMeta,
   SearchMessageResult,
@@ -114,6 +115,8 @@ export interface SendDmOptions extends IdempotencyOption, DeliveryConfirmationOp
    * conversation). Marks that message's delivery `replied` for its sender.
    */
   replyTo?: string;
+  /** Attach a delegate's owner approval claim; stored immutably, attested by Cloud. */
+  ownerApproval?: OwnerApproval;
 }
 
 export interface SendMessageOptions extends IdempotencyOption, DeliveryConfirmationOption {
@@ -121,6 +124,8 @@ export interface SendMessageOptions extends IdempotencyOption, DeliveryConfirmat
   blocks?: MessageBlock[];
   data?: Record<string, unknown> | null;
   mode?: 'wait' | 'steer';
+  /** Attach a delegate's owner approval claim; stored immutably, attested by Cloud. */
+  ownerApproval?: OwnerApproval;
 }
 
 interface ChannelListOptions {
@@ -612,6 +617,7 @@ export class AgentClient {
       ...(opts?.attachments ? { attachments: opts.attachments } : {}),
       ...(opts?.blocks ? { blocks: opts.blocks } : {}),
       ...(opts?.data !== undefined ? { data: opts.data } : {}),
+      ...(opts?.ownerApproval ? { ownerApproval: opts.ownerApproval } : {}),
       mode: opts?.mode ?? 'wait',
       ...(opts?.waitMs != null ? { waitMs: opts.waitMs } : {}),
     };
@@ -702,6 +708,7 @@ export class AgentClient {
       text,
       ...(opts?.attachments ? { attachments: opts.attachments } : {}),
       ...(opts?.data !== undefined ? { data: opts.data } : {}),
+      ...(opts?.ownerApproval ? { ownerApproval: opts.ownerApproval } : {}),
       mode: opts?.mode ?? 'wait',
       ...(opts?.replyTo ? { replyToMessageId: opts.replyTo } : {}),
       ...(opts?.waitMs != null ? { waitMs: opts.waitMs } : {}),
@@ -720,6 +727,7 @@ export class AgentClient {
       text,
       ...(opts?.attachments ? { attachments: opts.attachments } : {}),
       ...(opts?.data !== undefined ? { data: opts.data } : {}),
+      ...(opts?.ownerApproval ? { ownerApproval: opts.ownerApproval } : {}),
       mode: opts?.mode ?? 'wait',
       ...(opts?.replyTo ? { replyToMessageId: opts.replyTo } : {}),
       ...(opts?.waitMs != null ? { waitMs: opts.waitMs } : {}),

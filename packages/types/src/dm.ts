@@ -1,7 +1,7 @@
 import { z } from 'zod';
 import { SentDeliverySchema } from './delivery.js';
 import { AgentTypeSchema } from './agent.js';
-import { CoreMessagePayloadSchema, MessageInjectionModeSchema } from './message.js';
+import { CoreMessagePayloadSchema, MessageInjectionModeSchema, OwnerApprovalSchema } from './message.js';
 
 export const DmTypeSchema = z.enum(['1:1', 'group']);
 export type DmType = z.infer<typeof DmTypeSchema>;
@@ -38,6 +38,7 @@ export const SendDmRequestSchema = z.object({
   reply_to_message_id: z.string().optional(),
   /** Confirmation budget in ms (0–2000; 1000 recommended): the response parks for the recipient's acceptance. */
   wait_ms: z.number().int().min(0).max(2000).optional(),
+  owner_approval: OwnerApprovalSchema.nullable().optional(),
 });
 export type SendDmRequest = z.infer<typeof SendDmRequestSchema>;
 

@@ -730,6 +730,10 @@ export type MessageUpdatedEvent = Camelize<Raw.MessageUpdatedEvent>;
 export type MessageWithMeta = Camelize<Raw.MessageWithMeta>;
 export type SessionMessagesResult = Camelize<Raw.SessionMessagesResult>;
 export type PostMessageRequest = Camelize<Raw.PostMessageRequest>;
+/** A delegate's owner approval claim (`owner_approval` on the wire). */
+export type OwnerApproval = Camelize<Raw.OwnerApproval>;
+export type OwnerApprovalAction = Camelize<Raw.OwnerApprovalAction>;
+export type OwnerApprovalActionClass = Raw.OwnerApprovalActionClass;
 export type AddedReaction = Camelize<Raw.AddedReaction>;
 export type ReactionGroup = Camelize<Raw.ReactionGroup>;
 export type ReadReceipt = Camelize<Raw.ReadReceipt>;

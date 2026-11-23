@@ -40,6 +40,8 @@ export function transformForClient(event: WsEvent): Record<string, unknown> {
           // The same document `GET .../messages` returns; a live feed that
           // drops it cannot render structured messages until a refetch.
           ...(isRecord(d.metadata) ? { metadata: d.metadata } : {}),
+          // A flag only: the recipient's node asks Cloud to attest the approval.
+          ...(d.has_owner_approval === true ? { has_owner_approval: true } : {}),
         },
       };
 
@@ -111,6 +113,7 @@ export function transformForClient(event: WsEvent): Record<string, unknown> {
             : {}),
           ...(injectionMode ? { injection_mode: injectionMode } : {}),
           ...(attachments.length ? { attachments } : {}),
+          ...((msg.has_owner_approval ?? d.has_owner_approval) === true ? { has_owner_approval: true } : {}),
         },
       };
     }

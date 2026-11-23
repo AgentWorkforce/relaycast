@@ -880,6 +880,13 @@ export const ACTOR_MIGRATIONS: readonly (readonly [string, readonly string[]])[]
     [
       "ALTER TABLE workspaces\n  ADD COLUMN leaders text"
     ]
+  ],
+  [
+    "0087_message_owner_approval.sql",
+    [
+      "ALTER TABLE messages ADD COLUMN owner_approval TEXT",
+      "CREATE TRIGGER IF NOT EXISTS messages_owner_approval_immutable\nBEFORE UPDATE OF owner_approval ON messages\nWHEN OLD.owner_approval IS NOT NEW.owner_approval\nBEGIN\n  SELECT RAISE(ABORT, 'owner_approval is immutable');\nEND"
+    ]
   ]
 ];
 

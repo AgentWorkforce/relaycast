@@ -10,6 +10,7 @@ import type { NodeConnectionRegistry } from '../ports/realtime.js';
 import { isProviderAgentDeliveryReady } from '../ports/realtime.js';
 import { buildDeliverFrame, buildDeliverPayload, buildMessageCreatedEventData, buildThreadReplyEventData, buildDmReceivedEventData, buildGroupDmReceivedEventData } from './deliveryWire.js';
 import { displayAgentName, publicMessageMetadata } from './messageMetadata.js';
+import { messageHasOwnerApproval, ownerApprovalFlag } from './ownerApproval.js';
 import { senderAddressField } from './address.js';
 import { toIso } from '../lib/serialize.js';
 import { readNodeRedriveCandidates } from './nodeRedriveCandidates.js';
@@ -68,6 +69,8 @@ type PendingDeliveryRow = {
   dmType: string | null;
   senderAgentId: string | null;
   senderAgentName: string | null;
+  /** 1 when the message carries an owner approval; its content is never read here. */
+  hasOwnerApproval: number;
 };
 
 export interface RoutableDeliveryEvent {
@@ -183,6 +186,7 @@ async function listDeliveriesUnlabeled(
       replyToMessageId: messages.replyToMessageId,
       createdAt: messages.createdAt,
       hasAttachments: messages.hasAttachments,
+      hasOwnerApproval: messageHasOwnerApproval,
     })
     .from(messages)
     .leftJoin(agents, eq(messages.agentId, agents.id))
@@ -212,6 +216,7 @@ async function listDeliveriesUnlabeled(
           thread_id: msg.threadId ?? null,
           created_at: msg.createdAt.toISOString(),
           attachments: attachmentsByMessageId.get(msg.id) ?? [],
+          ...ownerApprovalFlag(msg.hasOwnerApproval),
         }
         : null,
     };
@@ -223,9 +228,13 @@ async function listDeliveriesUnlabeled(
  */
 export async function pendingDeliveryForMessage(
   db: Db, workspaceId: string, recipientAgentId: string, messageId: string,
-): Promise<{ message_id: string; sender_agent_id: string | null; workspace_id: string; channel_id: string; delivery_reason: string | null } | null> {
+): Promise<{
+  message_id: string; sender_agent_id: string | null; workspace_id: string; channel_id: string;
+  delivery_reason: string | null; owner_approval: Record<string, unknown> | null;
+} | null> {
   const [row] = await db.select({ messageId: deliveries.messageId, senderAgentId: messages.agentId,
-    workspaceId: deliveries.workspaceId, channelId: messages.channelId, reason: deliveries.reason })
+    workspaceId: deliveries.workspaceId, channelId: messages.channelId, reason: deliveries.reason,
+    ownerApproval: messages.ownerApproval })
     .from(deliveries)
     .innerJoin(messages, and(eq(messages.id, deliveries.messageId), eq(messages.workspaceId, deliveries.workspaceId)))
     .where(and(
@@ -237,7 +246,9 @@ export async function pendingDeliveryForMessage(
     ))
     .limit(1);
   return row ? { message_id: row.messageId, sender_agent_id: row.senderAgentId,
-    workspace_id: row.workspaceId, channel_id: row.channelId, delivery_reason: row.reason } : null;
+    workspace_id: row.workspaceId, channel_id: row.channelId, delivery_reason: row.reason,
+    // The stored server-side object, read from this column only (never metadata).
+    owner_approval: row.ownerApproval ?? null } : null;
 }
 
 /**
@@ -1264,6 +1275,7 @@ function buildRoutableDeliveryEvent(
 ): { eventType: string; eventData: Record<string, unknown> } {
   const senderName = displayAgentName(row.metadata as Record<string, unknown> | null, row.senderAgentName);
   const injectionMode = row.delivery.mode === 'next-tool-call' ? 'steer' : 'wait';
+  const approvalFlag = ownerApprovalFlag(row.hasOwnerApproval);
   // Thread replies route as `thread.reply` in the live path even inside a DM /
   // group DM (see routes/thread.ts fanout), so a missed thread reply must
   // replay with the same event type/shape. Check `threadId` before `dmType`.
@@ -1288,6 +1300,7 @@ function buildRoutableDeliveryEvent(
           attachments,
           metadata: publicMessageMetadata(row.metadata as Record<string, unknown> | null),
           reply_to_message_id: row.replyToMessageId,
+          ...approvalFlag,
         },
         created_at: row.createdAt.toISOString(),
         id: row.delivery.messageId,
@@ -1297,6 +1310,7 @@ function buildRoutableDeliveryEvent(
         injection_mode: injectionMode,
         attachments,
         metadata: publicMessageMetadata(row.metadata as Record<string, unknown> | null),
+        ...approvalFlag,
       }, { fromName: senderName }),
     };
   }
@@ -1365,6 +1379,7 @@ function buildRoutableDeliveryEvent(
       mentions,
       attachments,
       injection_mode: injectionMode,
+      ...approvalFlag,
     }, { channelName: row.channelName, fromName: senderName, mode: injectionMode }),
   };
 }
@@ -1436,6 +1451,7 @@ export async function fetchDueNodeDeliveryEvents(
       senderAgentName: sql<string | null>`(
         SELECT a.name FROM agents a WHERE a.id = ${messages.agentId}
       )`,
+      hasOwnerApproval: messageHasOwnerApproval,
     })
     .from(sql`${deliveries} ${sqlx.indexedBy(db, 'idx_deliveries_id_lookup')}`)
     .innerJoin(agents, eq(deliveries.agentId, agents.id))
@@ -1573,6 +1589,7 @@ export async function fetchQueuedWsBacklogEvents(
       senderAgentName: sql<string | null>`(
         SELECT a.name FROM agents a WHERE a.id = ${messages.agentId}
       )`,
+      hasOwnerApproval: messageHasOwnerApproval,
     })
     .from(deliveries)
     .innerJoin(agents, eq(deliveries.agentId, agents.id))
@@ -1779,6 +1796,7 @@ async function replayPendingToNode(
         senderAgentName: sql<string | null>`(
           SELECT a.name FROM agents a WHERE a.id = ${messages.agentId}
         )`,
+        hasOwnerApproval: messageHasOwnerApproval,
       }).from(sql`${deliveries} ${sqlx.indexedBy(db, 'idx_deliveries_id_lookup')}`)
         .innerJoin(agents, eq(deliveries.agentId, agents.id))
         .innerJoin(messages, eq(deliveries.messageId, messages.id))
