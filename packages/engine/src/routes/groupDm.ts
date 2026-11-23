@@ -182,7 +182,7 @@ groupDmRoutes.post(
             type: 'group_dm.received',
             workspaceId: workspace.id,
             data: toGroupDmReceivedEventData(data),
-          });
+          }, data._deliveries);
         },
       });
 

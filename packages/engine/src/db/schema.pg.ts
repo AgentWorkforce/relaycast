@@ -1275,7 +1275,7 @@ export const eventSubscriptions = pgTable(
       .notNull()
       .references(() => workspaces.id, { onDelete: 'cascade' }),
     events: jsonb('events').notNull().$type<string[]>(),
-    filter: jsonb('filter').$type<{ channel?: string; mentions?: string }>(),
+    filter: jsonb('filter').$type<{ channel?: string; mentions?: string; recipients?: string[] }>(),
     url: text('url').notNull(),
     headers: jsonb('headers').$type<Record<string, string>>(),
     secret: text('secret'),
