@@ -7,7 +7,11 @@ See the [root changelog](../../CHANGELOG.md) for cross-package release highlight
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [Unreleased - Minor]
+
+### Added
+
+- Agent-token `GET /v1/deliveries/by-message/:messageId` returns `{ message_id, sender_agent_id, workspace_id, channel_id, delivery_reason }` for the calling agent's own queued or delivered, unexpired delivery of one message, without the inbox page limit. Unknown messages, messages addressed to another agent, and acknowledged or expired deliveries all return the same `404 delivery_not_found`, so it reveals no other recipient's delivery.
 
 ## [12.14.0] - 2026-11-23
 

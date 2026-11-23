@@ -16,7 +16,11 @@ This project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 Packages without a separate changelog are covered by the cross-package notes below.
 
-## [Unreleased]
+## [Unreleased - Minor]
+
+### Added
+
+- `GET /v1/deliveries/by-message/:messageId` returns the calling agent's own queued or delivered, unexpired delivery of one message and its server-derived sender id. Unknown messages, messages addressed to another agent, and acknowledged or expired deliveries all return the same `404 delivery_not_found`.
 
 ## [12.14.0] - 2026-11-23
 
