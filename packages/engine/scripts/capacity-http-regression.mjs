@@ -100,20 +100,33 @@ try {
   }
   const send=(ws,text,key,data)=>request(ws,'/v1/channels/general/messages',{text,...(data?{data}:{})},{key});
   const record=(test,details={})=>{results.push({adapter,test,...details});console.log('PASS',adapter,test,JSON.stringify(details));};
-  for(const negative of [false,true]){
-    const ws=await seed('background-observer-control-'+negative,1,{cap:100});
+  // The a2a inbound path writes the dm.received outbox row and queues it only
+  // when an active subscription wants the event, so the positive and negative
+  // controls get a matching one. The third case pins the skip: no
+  // subscription, a throwing queue that must never be called, no outbox row.
+  for(const [negative,subscribed] of [[false,true],[true,true],[true,false]]){
+    const ws=await seed('background-observer-control-'+negative+(subscribed?'':'-unsubscribed'),1,{cap:100});
     await run('INSERT INTO a2a_agents(id,workspace_id,relay_agent_id,external_url,agent_card) VALUES(?,?,?,?,?)',ws+'peer',ws,ws+'sender','https://peer.example/a2a','{}');
+    if(subscribed)await run('INSERT INTO event_subscriptions(id,workspace_id,events,filter,url) VALUES(?,?,?,?,?)',ws+'sub',ws,'["dm.received"]','{"recipients":["recipient-1"]}','https://hooks.example/dm');
     const expected='positive background observer control '+ws;
     const unexpected='negative webhook queue control '+ws;
+    let queueSends=0;
     const observerProbe=createEngine({...deps,
       realtime:{...deps.realtime,publishToWorkspaceStream:async()=>{throw Error(expected);}},
-      ...(negative?{webhookQueue:{send:async()=>{throw Error(unexpected);}}}:{}),
+      ...(negative?{webhookQueue:{send:async()=>{queueSends++;throw Error(unexpected);}}}:{}),
     });
     const before=backgroundErrors.length;
     const payload={jsonrpc:'2.0',id:'observer-control',method:'message/send',params:{target_agent:'recipient-1',message:{message_id:'observer-control',role:'agent',parts:[{kind:'text',text:'probe'}]}}};
     expectStatus(await request(ws,'/a2a/rpc',payload,{engineApp:observerProbe}),200);
     await Promise.allSettled(background.splice(0));
-    if(negative){
+    const outboxRows=await scalar("SELECT count(*) FROM pending_events WHERE workspace_id=? AND event_type='dm.received'",ws);
+    if(!subscribed){
+      assert.equal(queueSends,0,'no matching subscription: a2a inbound must not send to the webhook queue');
+      assert.equal(outboxRows,0,'no matching subscription: a2a inbound must not write a pending_events row');
+      consumeExpectedBackgroundError(backgroundErrors,before,expected);
+    }else if(negative){
+      assert.equal(queueSends,1);
+      assert.equal(outboxRows,1);
       assert.throws(()=>consumeExpectedBackgroundError(backgroundErrors,before,expected),/unexpected background task failure retained/);
       const retained=backgroundErrors.slice(before);
       assert.equal(retained.length,1,'only the deliberate negative queue failure may remain');
@@ -124,7 +137,8 @@ try {
       backgroundErrors.splice(backgroundErrors.indexOf(retained[0]),1);
     }else consumeExpectedBackgroundError(backgroundErrors,before,expected);
     await run('DELETE FROM workspaces WHERE id=?',ws);
-    record(negative?'unexpected webhook queue rejection fails observer guard and remains recorded':'positive rejected waitUntil task consumes only the expected error');
+    record(!subscribed?'a2a inbound dm with no matching subscription writes no outbox row and sends nothing to the queue'
+      :negative?'unexpected webhook queue rejection fails observer guard and remains recorded':'positive rejected waitUntil task consumes only the expected error');
   }
   if(process.env.CAPACITY_CASE==='background-observer')continue;
   {
