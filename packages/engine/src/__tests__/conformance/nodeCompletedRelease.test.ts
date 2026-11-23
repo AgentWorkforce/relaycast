@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { and, eq } from 'drizzle-orm';
-import { attachDirectNodeSocket, createWorkspace, makeNodeStack, registerAgent, type TestStack } from './harness.js';
+import { attachDirectNodeSocket, createWorkspace, makeNodeStack, registerAgent, sqliteOnly, type TestStack } from './harness.js';
 import { actionInvocations, agentNodeBindings, agents, deliveries, messages, nodes } from '../../db/tables.js';
 import { sha256Hex } from '../../lib/crypto.js';
 
@@ -284,7 +284,9 @@ describe('node-completed release preserves attributed history', () => {
     expect(binding.status).toBe('active');
   });
 
-  it('persists immutable identity mismatch when node completion loses the target row', async () => {
+  // Rewrites agents.id under foreign_keys = OFF; PostgreSQL agents FKs are not
+  // deferrable and the test roles cannot disable them (needs superuser).
+  sqliteOnly('persists immutable identity mismatch when node completion loses the target row', async () => {
     const ws = await createWorkspace(stack.app, 'node-release-identity-mismatch');
     const target = await registerAgent(stack.app, ws.workspaceKey, 'node-identity-mismatch');
     const { handle } = await attachDirectNodeSocket(stack, ws.workspaceId, target);

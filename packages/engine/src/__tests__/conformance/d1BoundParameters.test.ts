@@ -6,6 +6,8 @@ import {
   enforceD1ParameterLimit,
   FakeSocket,
   makeNodeStack,
+  rawGet,
+  rawRun,
   registerAgent,
   type TestStack,
 } from './harness.js';
@@ -59,24 +61,20 @@ describe('D1 bound-parameter cap on bulk writes', () => {
     const node = await bringNodeOnline(ws, 'node_bulk');
     const keepId = await registerAgentViaNode(node, 'keep');
 
-    const sqlite = stack.runtime.handle.sqlite;
-    const insertAgent = sqlite.prepare(`
+    const seedDb = stack.runtime.deps.db;
+    const droppedIds: string[] = [];
+    for (let index = 0; index < BULK_COUNT; index += 1) {
+      const id = `agent_drop_${String(index).padStart(3, '0')}`;
+      droppedIds.push(id);
+      await rawRun(seedDb, `
       INSERT INTO agents (id, workspace_id, name, token_hash, status, location_type, location_node_id)
       VALUES (?, ?, ?, ?, 'online', 'via_node', ?)
-    `);
-    const insertBinding = sqlite.prepare(`
+    `, [id, ws.workspaceId, `drop-${index}`, `token-drop-${index}`, 'node_bulk']);
+      await rawRun(seedDb, `
       INSERT INTO agent_node_bindings (id, workspace_id, agent_id, node_id, status)
       VALUES (?, ?, ?, ?, 'active')
-    `);
-    const droppedIds: string[] = [];
-    sqlite.transaction(() => {
-      for (let index = 0; index < BULK_COUNT; index += 1) {
-        const id = `agent_drop_${String(index).padStart(3, '0')}`;
-        droppedIds.push(id);
-        insertAgent.run(id, ws.workspaceId, `drop-${index}`, `token-drop-${index}`, 'node_bulk');
-        insertBinding.run(`anb_drop_${index}`, ws.workspaceId, id, 'node_bulk');
-      }
-    })();
+    `, [`anb_drop_${index}`, ws.workspaceId, id, 'node_bulk']);
+    }
 
     const guard = enforceD1ParameterLimit(stack);
     try {
@@ -108,26 +106,23 @@ describe('D1 bound-parameter cap on bulk writes', () => {
     const node = await bringNodeOnline(ws, 'node_ack');
     const bobId = await registerAgentViaNode(node, 'bob');
 
-    const sqlite = stack.runtime.handle.sqlite;
-    const { id: channelId } = sqlite.prepare(
+    const seedDb = stack.runtime.deps.db;
+    const { id: channelId } = (await rawGet<{ id: string }>(seedDb,
       `SELECT id FROM channels WHERE workspace_id = ? AND name = 'general'`,
-    ).get(ws.workspaceId) as { id: string };
-    const insertMessage = sqlite.prepare(`
+      [ws.workspaceId]))!;
+    for (let seq = 1; seq <= BULK_COUNT; seq += 1) {
+      // Snowflake-shaped (numeric) like real message ids: the read cursor compares them numerically.
+      const messageId = String(1_000_000_000 + seq);
+      await rawRun(seedDb, `
       INSERT INTO messages (id, workspace_id, channel_id, agent_id, body)
       VALUES (?, ?, ?, ?, ?)
-    `);
-    const insertDelivery = sqlite.prepare(`
+    `, [messageId, ws.workspaceId, channelId, alice.agentId, `bulk ${seq}`]);
+      await rawRun(seedDb, `
       INSERT INTO deliveries (id, workspace_id, message_id, agent_id, status, seq, location_type, location_node_id)
       VALUES (?, ?, ?, ?, 'delivered', ?, 'via_node', ?)
-    `);
-    sqlite.transaction(() => {
-      for (let seq = 1; seq <= BULK_COUNT; seq += 1) {
-        const messageId = `msg_bulk_${String(seq).padStart(3, '0')}`;
-        insertMessage.run(messageId, ws.workspaceId, channelId, alice.agentId, `bulk ${seq}`);
-        insertDelivery.run(`del_bulk_${seq}`, ws.workspaceId, messageId, bobId, seq, 'node_ack');
-      }
-      sqlite.prepare('UPDATE agents SET delivery_seq = ? WHERE id = ?').run(BULK_COUNT, bobId);
-    })();
+    `, [`del_bulk_${seq}`, ws.workspaceId, messageId, bobId, seq, 'node_ack']);
+    }
+    await rawRun(seedDb, 'UPDATE agents SET delivery_seq = ? WHERE id = ?', [BULK_COUNT, bobId]);
 
     const guard = enforceD1ParameterLimit(stack);
     try {

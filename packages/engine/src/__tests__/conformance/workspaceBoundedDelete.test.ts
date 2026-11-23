@@ -11,7 +11,9 @@ import {
   exceedsAtomicDeleteSize,
   WORKSPACE_ATOMIC_DELETE_MAX_ROWS,
 } from '../../engine/workspaceDrain.js';
-import { createWorkspace, FakeSocket, makeNodeStack, registerAgent, type TestStack } from './harness.js';
+import {
+  beforeRawQuery, createWorkspace, FakeSocket, makeNodeStack, pgMode, rawAll, rawGet, rawInsertRows, rawRun, registerAgent, type TestStack,
+} from './harness.js';
 
 describe('bounded workspace deletion', () => {
   let stack: TestStack;
@@ -27,38 +29,35 @@ describe('bounded workspace deletion', () => {
     await stack.close();
   });
 
+  /** 1..n */
+  const range = (n: number) => Array.from({ length: n }, (_, index) => index + 1);
+  const pad9 = (i: number) => String(i).padStart(9, '0');
+  const generalChannelId = async (workspaceId: string) => (await rawGet<{ id: string }>(stack.runtime.deps.db,
+    "SELECT id FROM channels WHERE workspace_id = ? AND name = 'general'", [workspaceId]))!.id;
+  const readReceiptCount = async () => (await rawGet<{ n: number }>(stack.runtime.deps.db, 'SELECT count(*) AS n FROM read_receipts'))!.n;
+
   /** A workspace above the atomic threshold: events, plus root messages that each have a reply. */
   async function seedLargeWorkspace(name: string, { events = WORKSPACE_ATOMIC_DELETE_MAX_ROWS + 500, threads = 450 } = {}) {
     const ws = await createWorkspace(stack.app, name);
     const agent = await registerAgent(stack.app, ws.workspaceKey, `${name}-agent`);
-    const sqlite = stack.runtime.handle.sqlite;
-    const channel = sqlite.prepare("SELECT id FROM channels WHERE workspace_id = ? AND name = 'general'")
-      .get(ws.workspaceId) as { id: string };
-    sqlite.prepare(`
-      WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < ?)
-      INSERT INTO workspace_events (workspace_id, seq, type, payload, created_at)
-      SELECT ?, 1000 + i, 'test.event', '{}', unixepoch() FROM n
-    `).run(events, ws.workspaceId);
+    const db = stack.runtime.deps.db;
+    const channelId = await generalChannelId(ws.workspaceId);
+    const now = Math.floor(Date.now() / 1_000);
+    await rawInsertRows(db, 'workspace_events', ['workspace_id', 'seq', 'type', 'payload', 'created_at'],
+      range(events).map(i => [ws.workspaceId, 1000 + i, 'test.event', '{}', now]));
     // Roots get ids 10…, replies 20… (always newer), so a newest-first drain must
     // never delete a root before its reply — messages.thread_id is NO ACTION.
-    sqlite.prepare(`
-      WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < ?)
-      INSERT INTO messages (id, workspace_id, channel_id, agent_id, body, has_attachments, created_at)
-      SELECT '1' || printf('%09d', i), ?, ?, ?, 'root', 0, unixepoch() FROM n
-    `).run(threads, ws.workspaceId, channel.id, agent.agentId);
-    sqlite.prepare(`
-      WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < ?)
-      INSERT INTO messages (id, workspace_id, channel_id, agent_id, thread_id, body, has_attachments, created_at)
-      SELECT '2' || printf('%09d', i), ?, ?, ?, '1' || printf('%09d', i), 'reply', 0, unixepoch() FROM n
-    `).run(threads, ws.workspaceId, channel.id, agent.agentId);
+    await rawInsertRows(db, 'messages', ['id', 'workspace_id', 'channel_id', 'agent_id', 'body', 'created_at'],
+      range(threads).map(i => [`1${pad9(i)}`, ws.workspaceId, channelId, agent.agentId, 'root', now]));
+    await rawInsertRows(db, 'messages', ['id', 'workspace_id', 'channel_id', 'agent_id', 'thread_id', 'body', 'created_at'],
+      range(threads).map(i => [`2${pad9(i)}`, ws.workspaceId, channelId, agent.agentId, `1${pad9(i)}`, 'reply', now]));
     return { ws, agent };
   }
 
-  const count = (table: string, workspaceId: string) =>
-    (stack.runtime.handle.sqlite.prepare(`SELECT count(*) AS n FROM ${table} WHERE workspace_id = ?`)
-      .get(workspaceId) as { n: number }).n;
+  const count = async (table: string, workspaceId: string) =>
+    (await rawGet<{ n: number }>(stack.runtime.deps.db, `SELECT count(*) AS n FROM ${table} WHERE workspace_id = ?`, [workspaceId]))!.n;
 
-  it('drains every table that grows with a workspace, leaving only bounded ones to the final cascade', () => {
+  it('drains every table that grows with a workspace, leaving only bounded ones to the final cascade', async () => {
     // Per-workspace or per-agent configuration: a handful of rows each, so the
     // final cascade over them stays small. Anything that accumulates history
     // must be drained instead — add new tables to DRAIN_STEPS, not here.
@@ -68,17 +67,30 @@ describe('bounded workspace deletion', () => {
       'directory_ratings', 'routing_configs', 'certifications', 'dm_conversation_reservations',
       'webhooks', 'event_subscriptions', 'actions', 'triggers', 'credential_upgrades',
     ]);
+    const tables = pgMode
+      ? (await rawAll<{ name: string }>(stack.runtime.deps.db, `
+          SELECT c.table_name AS name FROM information_schema.columns c
+          JOIN information_schema.tables t ON t.table_schema = c.table_schema AND t.table_name = c.table_name
+          WHERE c.table_schema = current_schema() AND t.table_type = 'BASE TABLE' AND c.column_name = 'workspace_id'
+        `)).map(row => row.name)
+          // pg's mention index is a plain table kept in step by triggers on
+          // messages, like the SQLite FTS virtual table excluded below.
+          .filter(name => name !== 'messages_mention_fts')
+      : sqliteWorkspaceTables();
+    const drained = new Set(drainedWorkspaceTables());
+    expect(tables.filter(name => !drained.has(name) && !bounded.has(name))).toEqual([]);
+  });
+
+  function sqliteWorkspaceTables(): string[] {
     const sqlite = stack.runtime.handle.sqlite;
     // Virtual (FTS) tables are maintained by triggers on the tables they index.
-    const tables = (sqlite.prepare(
+    return (sqlite.prepare(
       "SELECT name FROM sqlite_master WHERE type = 'table' AND sql NOT LIKE 'CREATE VIRTUAL TABLE%'",
     ).all() as { name: string }[])
       .map(row => row.name)
       .filter(name => (sqlite.prepare(`SELECT name FROM pragma_table_info('${name}')`).all() as { name: string }[])
         .some(column => column.name === 'workspace_id'));
-    const drained = new Set(drainedWorkspaceTables());
-    expect(tables.filter(name => !drained.has(name) && !bounded.has(name))).toEqual([]);
-  });
+  }
 
   it('makes progress even when its budget is spent before the first non-empty table', async () => {
     // Only messages hold rows; every earlier step is an empty probe.
@@ -94,7 +106,7 @@ describe('bounded workspace deletion', () => {
       calls++;
     }
     expect(result.complete).toBe(true);
-    expect(count('messages', ws.workspaceId)).toBe(0);
+    expect(await count('messages', ws.workspaceId)).toBe(0);
   });
 
   it('rejects registration and new work from a node socket opened before the workspace was deleted', async () => {
@@ -122,21 +134,21 @@ describe('bounded workspace deletion', () => {
     expect(socket.ofType('reply').at(-1)).toMatchObject({ id: 'register', ok: true });
 
     // The deferred delete tombstones the workspace; the socket stays open.
-    stack.runtime.handle.sqlite.prepare('UPDATE workspaces SET expires_at = unixepoch() - 1 WHERE id = ?')
-      .run(ws.workspaceId);
+    await rawRun(stack.runtime.deps.db, 'UPDATE workspaces SET expires_at = ? WHERE id = ?',
+      [Math.floor(Date.now() / 1_000) - 1, ws.workspaceId]);
     await send({ v: 1, id: 'agent', type: 'agent.register', name: 'late-agent', session_ref: 'pty://late', resumable: true });
 
     expect(socket.ofType('error').at(-1)).toMatchObject({ id: 'agent', code: 'workspace_expired' });
-    expect(stack.runtime.handle.sqlite.prepare("SELECT count(*) AS n FROM agents WHERE workspace_id = ? AND name = 'late-agent'")
-      .get(ws.workspaceId)).toEqual({ n: 0 });
+    expect(await rawGet(stack.runtime.deps.db, "SELECT count(*) AS n FROM agents WHERE workspace_id = ? AND name = 'late-agent'",
+      [ws.workspaceId])).toEqual({ n: 0 });
 
     // Nor start new work there, or revive an agent the drain is removing.
     await send({ v: 1, id: 'spawn', type: 'node.spawn', input: { cli: 'claude', name: 'late-worker' } });
     expect(socket.ofType('error').at(-1)).toMatchObject({ id: 'spawn', code: 'workspace_expired' });
     await send({ v: 1, id: 'recover', type: 'agent.recover', name: 'late-agent', expected_agent_id: 'agent_gone' });
     expect(socket.ofType('error').at(-1)).toMatchObject({ id: 'recover', code: 'workspace_expired' });
-    expect(stack.runtime.handle.sqlite.prepare('SELECT count(*) AS n FROM action_invocations WHERE workspace_id = ?')
-      .get(ws.workspaceId)).toEqual({ n: 0 });
+    expect(await rawGet(stack.runtime.deps.db, 'SELECT count(*) AS n FROM action_invocations WHERE workspace_id = ?',
+      [ws.workspaceId])).toEqual({ n: 0 });
     // Heartbeats and inventory writes are refused as well.
     await send({ v: 1, id: 'beat', type: 'node.heartbeat', load: 0, active_agents: 0, handlers_live: true });
     expect(socket.ofType('error').at(-1)).toMatchObject({ id: 'beat', code: 'workspace_expired' });
@@ -169,8 +181,8 @@ describe('bounded workspace deletion', () => {
     await expect(after.json()).resolves.toMatchObject({ error: { code: 'workspace_expired' } });
 
     await stack.settle();
-    expect(count('workspace_events', ws.workspaceId)).toBe(0);
-    expect(count('messages', ws.workspaceId)).toBe(0);
+    expect(await count('workspace_events', ws.workspaceId)).toBe(0);
+    expect(await count('messages', ws.workspaceId)).toBe(0);
     expect(await stack.runtime.handle.db.select().from(workspaces).where(eq(workspaces.id, ws.workspaceId))).toHaveLength(0);
     // Every drained statement stayed within its page size.
     const batches = progress.filter(sample => sample.phase === 'batch');
@@ -182,19 +194,15 @@ describe('bounded workspace deletion', () => {
   it('stops at its wall-clock budget and resumes where it left off', async () => {
     const { ws } = await seedLargeWorkspace('bounded-budget');
     // Beyond the seeded rows: the workspace's own channels, agents, files and nodes.
-    const members = (stack.runtime.handle.sqlite.prepare(
+    const members = (await rawGet<{ n: number }>(stack.runtime.deps.db,
       'SELECT count(*) AS n FROM channel_members cm JOIN channels c ON c.id = cm.channel_id WHERE c.workspace_id = ?',
-    ).get(ws.workspaceId) as { n: number }).n;
-    const ownRows = members
-      + ['channels', 'agents', 'files', 'nodes'].reduce((sum, table) => sum + count(table, ws.workspaceId), 0);
+      [ws.workspaceId]))!.n;
+    let ownRows = members;
+    for (const table of ['channels', 'agents', 'files', 'nodes']) ownRows += await count(table, ws.workspaceId);
     let clock = 0;
     // Each statement "takes" 100ms; the 50% duty cycle idles as long again.
     const db = stack.runtime.handle.db;
-    const all = db.all.bind(db);
-    (db as { all: typeof db.all }).all = (async (...args: Parameters<typeof db.all>) => {
-      clock += 100;
-      return all(...args);
-    }) as typeof db.all;
+    const restoreClock = beforeRawQuery(db, () => { clock += 100; });
     const sleeps: number[] = [];
     const first = await drainWorkspaceRows(db, ws.workspaceId, {
       maxDurationMs: 1_000,
@@ -206,7 +214,7 @@ describe('bounded workspace deletion', () => {
     expect(sleeps.every(ms => ms === 100)).toBe(true);
     // Every page that deleted rows is paced, including a table's last, short page.
     expect(sleeps.length).toBe(progress.filter(sample => sample.phase === 'batch').length);
-    (db as { all: typeof db.all }).all = all;
+    restoreClock();
 
     const rest = await drainWorkspaceRows(db, ws.workspaceId, { maxDurationMs: 60_000, sleep: async () => {} });
     expect(rest.complete).toBe(true);
@@ -217,23 +225,19 @@ describe('bounded workspace deletion', () => {
     const { ws } = await seedLargeWorkspace('bounded-slow-probe');
     await stack.runtime.handle.db.update(workspaces).set({ expiresAt: new Date(Date.now() - 1_000) })
       .where(eq(workspaces.id, ws.workspaceId));
-    const before = count('workspace_events', ws.workspaceId) + count('messages', ws.workspaceId);
+    const before = await count('workspace_events', ws.workspaceId) + await count('messages', ws.workspaceId);
     let clock = 0;
     // Every raw statement "takes" a full budget, so the size probe overruns it.
     const db = stack.runtime.handle.db;
-    const all = db.all.bind(db);
-    (db as { all: typeof db.all }).all = (async (...args: Parameters<typeof db.all>) => {
-      clock += 1_000;
-      return all(...args);
-    }) as typeof db.all;
+    const restoreClock = beforeRawQuery(db, () => { clock += 1_000; });
     try {
       await reapExpiredWorkspaces(db, stack.runtime.deps.files, {
         maxDurationMs: 1_000, clock: () => clock, sleep: async () => {},
       });
     } finally {
-      (db as { all: typeof db.all }).all = all;
+      restoreClock();
     }
-    expect(count('workspace_events', ws.workspaceId) + count('messages', ws.workspaceId)).toBeLessThan(before);
+    expect(await count('workspace_events', ws.workspaceId) + await count('messages', ws.workspaceId)).toBeLessThan(before);
   });
 
   it('lets the reaper finish a large expired workspace across several calls', async () => {
@@ -268,33 +272,30 @@ describe('bounded workspace deletion', () => {
   });
   it('counts and drains a workspace dominated by channels, not just messages and events', async () => {
     const ws = await createWorkspace(stack.app, 'bounded-channels');
-    stack.runtime.handle.sqlite.prepare(`
-      WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < ?)
-      INSERT INTO channels (id, workspace_id, name, channel_type, created_at, is_archived)
-      SELECT 'ch_bulk_' || i, ?, 'bulk-' || i, 0, unixepoch(), 0 FROM n
-    `).run(WORKSPACE_ATOMIC_DELETE_MAX_ROWS + 100, ws.workspaceId);
+    await rawInsertRows(stack.runtime.deps.db, 'channels', ['id', 'workspace_id', 'name', 'channel_type', 'created_at'],
+      range(WORKSPACE_ATOMIC_DELETE_MAX_ROWS + 100).map(i => [`ch_bulk_${i}`, ws.workspaceId, `bulk-${i}`, 0, Math.floor(Date.now() / 1_000)]));
     expect(await exceedsAtomicDeleteSize(stack.runtime.deps.db, ws.workspaceId)).toBe(true);
     const response = await stack.app.request(`/v1/workspaces/${ws.workspaceId}`, {
       method: 'DELETE', headers: { authorization: `Bearer ${ws.workspaceKey}` },
     });
     expect(response.status).toBe(204);
     await stack.settle();
-    expect(count('channels', ws.workspaceId)).toBe(0);
-    expect(count('agents', ws.workspaceId)).toBe(0);
+    expect(await count('channels', ws.workspaceId)).toBe(0);
+    expect(await count('agents', ws.workspaceId)).toBe(0);
     expect(progress.filter(sample => sample.table === 'channels').length).toBeGreaterThan(1);
   });
 
   it('terminalizes create idempotency when a large delete is deferred', async () => {
     const { ws } = await seedLargeWorkspace('bounded-idempotency');
-    stack.runtime.handle.sqlite.prepare(`
+    await rawRun(stack.runtime.deps.db, `
       INSERT INTO workspace_create_idempotency (owner_scope_hash, idempotency_key_hash, request_digest, workspace_id)
       VALUES ('owner', 'key', 'digest', ?)
-    `).run(ws.workspaceId);
+    `, [ws.workspaceId]);
     const { deleteWorkspace } = await import('../../engine/workspace.js');
     await expect(deleteWorkspace(stack.runtime.deps.db, stack.runtime.deps.files, ws.workspaceId))
       .resolves.toEqual({ deferred: true });
     // Rows are still there, but a replay must not get this workspace's key back.
-    expect(count('messages', ws.workspaceId)).toBeGreaterThan(0);
+    expect(await count('messages', ws.workspaceId)).toBeGreaterThan(0);
     expect(await stack.runtime.handle.db.select().from(workspaceCreateIdempotency)
       .where(eq(workspaceCreateIdempotency.workspaceId, ws.workspaceId)))
       .toMatchObject([{ status: 'terminalized' }]);
@@ -303,6 +304,10 @@ describe('bounded workspace deletion', () => {
   it('never lets an older large expired workspace starve a smaller one behind it', async () => {
     const { ws: large } = await seedLargeWorkspace('bounded-starve-large');
     const small = await createWorkspace(stack.app, 'bounded-starve-small');
+    // Workspace creation runs its own background reap; let it finish before
+    // anything expires, or it drains the large one alongside this call and
+    // every statement it issues advances the fake clock below.
+    await stack.settle();
     await stack.runtime.handle.db.update(workspaces).set({ expiresAt: new Date(Date.now() - 60_000) })
       .where(eq(workspaces.id, large.workspaceId));
     await stack.runtime.handle.db.update(workspaces).set({ expiresAt: new Date(Date.now() - 1_000) })
@@ -311,26 +316,25 @@ describe('bounded workspace deletion', () => {
     // statement "takes" 10ms on a fake clock, so a slow runner cannot change it.
     let clock = 0;
     const db = stack.runtime.handle.db;
-    const all = db.all.bind(db);
-    (db as { all: typeof db.all }).all = (async (...args: Parameters<typeof db.all>) => { clock += 10; return all(...args); }) as typeof db.all;
+    const restoreClock = beforeRawQuery(db, () => { clock += 10; });
     let reaped: string[];
     try {
       reaped = await reapExpiredWorkspaces(db, stack.runtime.deps.files, {
         maxDurationMs: 100, clock: () => clock, sleep: async () => {},
       });
     } finally {
-      (db as { all: typeof db.all }).all = all;
+      restoreClock();
     }
     expect(reaped).toContain(small.workspaceId);
     expect(reaped).not.toContain(large.workspaceId);
   });
   it('drains per-message fan-out before the messages, so no page cascades unbounded children', async () => {
     const { ws, agent } = await seedLargeWorkspace('bounded-fanout');
-    stack.runtime.handle.sqlite.prepare(`
+    await rawRun(stack.runtime.deps.db, `
       INSERT INTO read_receipts (message_id, agent_id)
       SELECT id, ? FROM messages WHERE workspace_id = ?
-    `).run(agent.agentId, ws.workspaceId);
-    const seeded = (stack.runtime.handle.sqlite.prepare('SELECT count(*) AS n FROM read_receipts').get() as { n: number }).n;
+    `, [agent.agentId, ws.workspaceId]);
+    const seeded = await readReceiptCount();
     const result = await drainWorkspaceRows(stack.runtime.deps.db, ws.workspaceId, { maxDurationMs: 60_000, sleep: async () => {} });
     expect(result.complete).toBe(true);
     // Every receipt went in an explicit, page-bounded batch: none were removed
@@ -339,7 +343,7 @@ describe('bounded workspace deletion', () => {
       .filter(sample => sample.phase === 'batch' && sample.table === 'read_receipts')
       .reduce((sum, sample) => sum + (sample.rows ?? 0), 0);
     expect(receiptRows).toBe(seeded);
-    expect(stack.runtime.handle.sqlite.prepare('SELECT count(*) AS n FROM read_receipts').get()).toEqual({ n: 0 });
+    expect(await readReceiptCount()).toBe(0);
   });
 
   it('stops accepting inbound webhooks the moment a large delete is deferred', async () => {
@@ -352,23 +356,23 @@ describe('bounded workspace deletion', () => {
     const { deleteWorkspace } = await import('../../engine/workspace.js');
     await expect(deleteWorkspace(stack.runtime.deps.db, stack.runtime.deps.files, ws.workspaceId))
       .resolves.toEqual({ deferred: true });
-    const before = count('messages', ws.workspaceId);
+    const before = await count('messages', ws.workspaceId);
     const response = await stack.app.request(`/v1/hooks/${hook.webhook_id}`, { method: 'POST',
       headers: { 'content-type': 'application/json', authorization: `Bearer ${hook.token}` },
       body: JSON.stringify({ text: 'after delete' }) });
     expect(response.status).toBe(404);
-    expect(count('messages', ws.workspaceId)).toBe(before);
+    expect(await count('messages', ws.workspaceId)).toBe(before);
   });
 
   it('refuses to drain at all when storage cannot delete objects', async () => {
     const { ws } = await seedLargeWorkspace('bounded-no-storage-delete');
-    const before = count('messages', ws.workspaceId);
+    const before = await count('messages', ws.workspaceId);
     const { reapWorkspace } = await import('../../engine/workspace.js');
     const storage = { ...stack.runtime.deps.files, deleteObjects: undefined };
     await expect(reapWorkspace(stack.runtime.deps.db, storage, ws.workspaceId))
       .rejects.toMatchObject({ code: 'file_storage_delete_unsupported', status: 503 });
-    expect(count('messages', ws.workspaceId)).toBe(before);
-    expect(count('workspace_events', ws.workspaceId)).toBeGreaterThan(0);
+    expect(await count('messages', ws.workspaceId)).toBe(before);
+    expect(await count('workspace_events', ws.workspaceId)).toBeGreaterThan(0);
   });
 
   it('reserves half the reaper budget for draining, however many candidates need probing', async () => {
@@ -389,30 +393,26 @@ describe('bounded workspace deletion', () => {
     // would eat the whole budget.
     let clock = 0;
     const db = stack.runtime.handle.db;
-    const all = db.all.bind(db);
-    (db as { all: typeof db.all }).all = (async (...args: Parameters<typeof db.all>) => { clock += 50; return all(...args); }) as typeof db.all;
+    const restoreClock = beforeRawQuery(db, () => { clock += 50; });
     try {
       await reapExpiredWorkspaces(db, stack.runtime.deps.files, { maxDurationMs: 2_000, clock: () => clock, sleep: async () => {} });
     } finally {
-      (db as { all: typeof db.all }).all = all;
+      restoreClock();
     }
     expect(progress.some(sample => sample.phase === 'batch' && sample.workspaceId === large.workspaceId)).toBe(true);
   });
   /** One root message with `replies` replies, every message read once by `agentId`. */
-  function seedThread(ws: { workspaceId: string }, agentId: string, replies: number) {
-    const sqlite = stack.runtime.handle.sqlite;
-    const channel = sqlite.prepare("SELECT id FROM channels WHERE workspace_id = ? AND name = 'general'")
-      .get(ws.workspaceId) as { id: string };
-    sqlite.prepare(`INSERT INTO messages (id, workspace_id, channel_id, agent_id, body, has_attachments, created_at)
-      VALUES ('3000000000', ?, ?, ?, 'root', 0, unixepoch())`).run(ws.workspaceId, channel.id, agentId);
-    sqlite.prepare(`
-      WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < ?)
-      INSERT INTO messages (id, workspace_id, channel_id, agent_id, thread_id, body, has_attachments, created_at)
-      SELECT '4' || printf('%09d', i), ?, ?, ?, '3000000000', 'reply', 0, unixepoch() FROM n
-    `).run(replies, ws.workspaceId, channel.id, agentId);
-    sqlite.prepare('INSERT INTO read_receipts (message_id, agent_id) SELECT id, ? FROM messages WHERE workspace_id = ?')
-      .run(agentId, ws.workspaceId);
-    return (sqlite.prepare('SELECT count(*) AS n FROM read_receipts').get() as { n: number }).n;
+  async function seedThread(ws: { workspaceId: string }, agentId: string, replies: number) {
+    const db = stack.runtime.deps.db;
+    const channelId = await generalChannelId(ws.workspaceId);
+    const now = Math.floor(Date.now() / 1_000);
+    await rawInsertRows(db, 'messages', ['id', 'workspace_id', 'channel_id', 'agent_id', 'body', 'created_at'],
+      [['3000000000', ws.workspaceId, channelId, agentId, 'root', now]]);
+    await rawInsertRows(db, 'messages', ['id', 'workspace_id', 'channel_id', 'agent_id', 'thread_id', 'body', 'created_at'],
+      range(replies).map(i => [`4${pad9(i)}`, ws.workspaceId, channelId, agentId, '3000000000', 'reply', now]));
+    await rawRun(db, 'INSERT INTO read_receipts (message_id, agent_id) SELECT id, ? FROM messages WHERE workspace_id = ?',
+      [agentId, ws.workspaceId]);
+    return readReceiptCount();
   }
   const receiptBatchRows = () => progress
     .filter(sample => sample.phase === 'batch' && sample.table === 'read_receipts')
@@ -421,23 +421,23 @@ describe('bounded workspace deletion', () => {
   it('keeps draining past a short page until the root behind its replies is gone too', async () => {
     const ws = await createWorkspace(stack.app, 'bounded-thread-root');
     const agent = await registerAgent(stack.app, ws.workspaceKey, 'thread-root-agent');
-    const seeded = seedThread(ws, agent.agentId, 150);
+    const seeded = await seedThread(ws, agent.agentId, 150);
     const result = await drainWorkspaceRows(stack.runtime.deps.db, ws.workspaceId, { maxDurationMs: 60_000, sleep: async () => {} });
     expect(result.complete).toBe(true);
-    expect(count('messages', ws.workspaceId)).toBe(0);
+    expect(await count('messages', ws.workspaceId)).toBe(0);
     // The root's receipts went in a batch, not in the final cascade.
     expect(receiptBatchRows()).toBe(seeded);
   });
 
   it('never lets overlapping drains skip a page of children', async () => {
     const { ws, agent } = await seedLargeWorkspace('bounded-overlap');
-    const seeded = seedThread(ws, agent.agentId, 10);
+    const seeded = await seedThread(ws, agent.agentId, 10);
     const drain = () => drainWorkspaceRows(stack.runtime.deps.db, ws.workspaceId, {
       maxDurationMs: 60_000, sleep: () => new Promise(resolve => setImmediate(resolve)),
     });
     const [a, b] = await Promise.all([drain(), drain()]);
     expect(a.complete && b.complete).toBe(true);
-    expect(count('messages', ws.workspaceId)).toBe(0);
+    expect(await count('messages', ws.workspaceId)).toBe(0);
     // Every receipt was removed by an explicit batch of one drain or the other.
     expect(receiptBatchRows()).toBe(seeded);
   });

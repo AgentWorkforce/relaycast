@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { agentNodeBindings, agents, nodes } from '../../db/tables.js';
-import { makeNodeStack, createWorkspace, registerAgent, type TestStack } from './harness.js';
+import { makeNodeStack, createWorkspace, interceptStatements, pgMode, registerAgent, type TestStack } from './harness.js';
 
 /**
  * Regression for #422: `GET /v1/nodes` read every historical row in a
@@ -84,6 +84,8 @@ describe('bounded node list with thousands of historical rows (#422)', () => {
 
     // The SQL plan for the live path must seek the (workspace_id, status,
     // last_heartbeat_at) index, not scan every historical row.
+    // SQLite planner check (EXPLAIN QUERY PLAN); no PostgreSQL counterpart.
+    if (pgMode) return;
     const plan = JSON.stringify(
       stack.runtime.handle.sqlite
         .prepare(
@@ -236,8 +238,6 @@ describe('observer-authorized node history pagination (#422 follow-up)', () => {
     const { authorizedNames, hiddenNames } = await seedInterleavedNodes(ws, 20, allowed.agentId, hidden.agentId);
     const observerToken = await createObserverToken(ws.workspaceKey, [allowed.agentId]);
 
-    const sqlite = stack.runtime.handle.sqlite;
-    const originalPrepare = sqlite.prepare.bind(sqlite);
 
     const seenIds = new Set<string>();
     const seenNames: string[] = [];
@@ -251,17 +251,14 @@ describe('observer-authorized node history pagination (#422 follow-up)', () => {
       if (cursor) url.searchParams.set('cursor', cursor);
 
       let queryCount = 0;
-      sqlite.prepare = ((sqlText: string) => {
-        queryCount++;
-        return originalPrepare(sqlText);
-      }) as typeof sqlite.prepare;
+      const restore = interceptStatements(stack, () => { queryCount++; });
       let res: Response;
       try {
         res = await stack.app.request(url.pathname + '?' + url.searchParams.toString(), {
           headers: { authorization: `Bearer ${observerToken}` },
         });
       } finally {
-        sqlite.prepare = originalPrepare;
+        restore();
       }
       maxQueriesPerPage = Math.max(maxQueriesPerPage, queryCount);
 
@@ -332,8 +329,6 @@ describe('observer-authorized node history pagination (#422 follow-up)', () => {
       allowedAgents.map((agent) => agent.agentId),
     );
 
-    const sqlite = stack.runtime.handle.sqlite;
-    const originalPrepare = sqlite.prepare.bind(sqlite);
     const seenNames: string[] = [];
     const seenIds = new Set<string>();
     let cursor: string | null = null;
@@ -346,17 +341,14 @@ describe('observer-authorized node history pagination (#422 follow-up)', () => {
       if (cursor) url.searchParams.set('cursor', cursor);
 
       let queryCount = 0;
-      sqlite.prepare = ((sqlText: string) => {
-        queryCount++;
-        return originalPrepare(sqlText);
-      }) as typeof sqlite.prepare;
+      const restore = interceptStatements(stack, () => { queryCount++; });
       let res: Response;
       try {
         res = await stack.app.request(url.pathname + '?' + url.searchParams.toString(), {
           headers: { authorization: `Bearer ${observerToken}` },
         });
       } finally {
-        sqlite.prepare = originalPrepare;
+        restore();
       }
       maxQueriesPerPage = Math.max(maxQueriesPerPage, queryCount);
 
@@ -396,19 +388,16 @@ describe('observer-authorized node history pagination (#422 follow-up)', () => {
     const { authorizedNames } = await seedInterleavedNodes(ws, NODE_COUNT, allowed.agentId, hidden.agentId);
     const observerToken = await createObserverToken(ws.workspaceKey, [allowed.agentId]);
 
-    const sqlite = stack.runtime.handle.sqlite;
-    const originalPrepare = sqlite.prepare.bind(sqlite);
     let maxBindParams = 0;
     let queryCount = 0;
-    sqlite.prepare = ((sqlText: string) => {
+    const restore = interceptStatements(stack, (sqlText) => {
       queryCount++;
       // Bound JSON-array params never expand into per-element `?` markers,
       // so every statement's placeholder count stays well under D1's 100
       // parameter ceiling regardless of NODE_COUNT.
       const paramCount = (sqlText.match(/\?/g) ?? []).length;
       maxBindParams = Math.max(maxBindParams, paramCount);
-      return originalPrepare(sqlText);
-    }) as typeof sqlite.prepare;
+    });
 
     let res: Response;
     try {
@@ -416,7 +405,7 @@ describe('observer-authorized node history pagination (#422 follow-up)', () => {
         headers: { authorization: `Bearer ${observerToken}` },
       });
     } finally {
-      sqlite.prepare = originalPrepare;
+      restore();
     }
 
     expect(res.status).toBe(200);
@@ -482,14 +471,11 @@ describe('observer-authorized node history pagination (#422 follow-up)', () => {
 
     const observerToken = await createObserverToken(ws.workspaceKey, allowedAgentIds);
 
-    const sqlite = stack.runtime.handle.sqlite;
-    const originalPrepare = sqlite.prepare.bind(sqlite);
     let maxBindParams = 0;
-    sqlite.prepare = ((sqlText: string) => {
+    const restore = interceptStatements(stack, (sqlText) => {
       const paramCount = (sqlText.match(/\?/g) ?? []).length;
       maxBindParams = Math.max(maxBindParams, paramCount);
-      return originalPrepare(sqlText);
-    }) as typeof sqlite.prepare;
+    });
 
     let res: Response;
     try {
@@ -497,7 +483,7 @@ describe('observer-authorized node history pagination (#422 follow-up)', () => {
         headers: { authorization: `Bearer ${observerToken}` },
       });
     } finally {
-      sqlite.prepare = originalPrepare;
+      restore();
     }
 
     expect(res.status).toBe(200);
