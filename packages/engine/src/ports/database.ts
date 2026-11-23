@@ -106,6 +106,38 @@ export interface BatchCapability {
   batch(statements: readonly [AtomicWrite, ...AtomicWrite[]]): Promise<unknown[]>;
 }
 
+/**
+ * True when independent reads can share one round trip: a D1-style handle
+ * with `batch()` and no `withTransaction`. Transaction-capable handles
+ * (better-sqlite3, PostgreSQL, actor sqlite-proxy, whose `batch` has no
+ * callback configured) answer false, so callers keep their sequential reads.
+ */
+export function supportsReadBatch(db: object): boolean {
+  // Capability probe: the cast only adds optional capability members.
+  const handle = db as Partial<TransactionCapability> & Partial<BatchCapability>;
+  return typeof handle.batch === 'function' && typeof handle.withTransaction !== 'function';
+}
+
+/**
+ * Run independent, side-effect-free SELECT builders in one D1 `batch()` round
+ * trip; results come back in order. Without {@link supportsReadBatch} they
+ * are awaited one at a time, in order. No read may depend on another's result.
+ * Drizzle maps D1 batch rows by output column name, so every selected column
+ * needs a distinct name (alias joined columns such as a second `name`).
+ */
+export async function runIndependentReads<const T extends readonly AtomicWrite[]>(
+  db: object,
+  statements: T,
+): Promise<{ -readonly [K in keyof T]: Awaited<T[K]> }> {
+  type Results = { -readonly [K in keyof T]: Awaited<T[K]> };
+  if (statements.length === 0) return [] as unknown as Results;
+  if (supportsReadBatch(db)) {
+    const { batch } = db as BatchCapability;
+    return await batch.call(db, statements as unknown as [AtomicWrite, ...AtomicWrite[]]) as Results;
+  }
+  return await runSequentially(statements) as Results;
+}
+
 /** A transaction handle carries the bindings of the handle it was opened from. */
 function inheritHandleBindings(tx: EngineDb, db: EngineDb): void {
   configureNodeLiveness(tx, nodeLivenessAuthority(db));

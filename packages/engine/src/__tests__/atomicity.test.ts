@@ -459,11 +459,15 @@ describe('atomic write paths', () => {
 
       const sent = await sendDm(db, ws.workspaceId, alice.agentId, { to: 'bob', text: 'psst' });
 
-      expect(batches).toHaveLength(1);
-      expect(batches[0]).toHaveLength(3);
-      expectStatementOn(batches[0], 'insert', 'messages');
-      expectStatementOn(batches[0], 'insert', 'deliveries');
-      expectStatementOn(batches[0], 'insert', 'message_logs');
+      // The independent lookups before admission share read-only batches;
+      // every write still lands in one atomic batch.
+      const writeBatches = batches.filter((batch) => !batch.every((sql) => sql.startsWith('select ')));
+      expect(batches.slice(0, -1).flat().every((sql) => sql.startsWith('select '))).toBe(true);
+      expect(writeBatches).toHaveLength(1);
+      expect(writeBatches[0]).toHaveLength(3);
+      expectStatementOn(writeBatches[0], 'insert', 'messages');
+      expectStatementOn(writeBatches[0], 'insert', 'deliveries');
+      expectStatementOn(writeBatches[0], 'insert', 'message_logs');
 
       expect(sent.message.id).toBeTruthy();
       const dmMessages = await db.select().from(messages);
