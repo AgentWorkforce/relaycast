@@ -90,10 +90,13 @@ describe('durable delivery api', () => {
 
   it('proves only the recipient token has a pending delivery for a message', async () => {
     const { ws, alice, bob, messageId } = await seed();
+    const [seedMessage] = await stack.runtime.deps.db.select({ channelId: messages.channelId })
+      .from(messages).where(eq(messages.id, messageId));
     const own = await pendingByMessage(bob.token, messageId);
     expect(own.status).toBe(200);
     expect((await own.json()).data).toMatchObject({ message_id: messageId,
-      sender_agent_id: alice.agentId, workspace_id: ws.workspaceId });
+      sender_agent_id: alice.agentId, workspace_id: ws.workspaceId,
+      channel_id: seedMessage.channelId });
     for (const [token, id] of [[alice.token, messageId], [bob.token, 'unknown-message']]) {
       const denied = await pendingByMessage(token, id);
       expect(denied.status).toBe(404);
@@ -129,8 +132,10 @@ describe('durable delivery api', () => {
     const { ws, alice, bob, messageId } = await seed();
     const [seedMessage] = await stack.runtime.deps.db.select({ channelId: messages.channelId })
       .from(messages).where(eq(messages.id, messageId));
-    // Insert in small chunks to keep SQLite/D1 parameter counts bounded. The
-    // route is what this test exercises; posting 201 times would hit send rate limits.
+    // Seed the backlog straight into the tables: the route is what this test
+    // exercises, and posting 201 times would hit send rate limits. This harness
+    // runs on better-sqlite3 or Postgres, never D1, so the 40-row batches are
+    // not a D1 parameter bound; the route's own read is one single-row lookup.
     for (let start = 0; start < 201; start += 40) {
       const indexes = Array.from({ length: Math.min(40, 201 - start) }, (_, offset) => start + offset);
       await stack.runtime.deps.db.insert(messages).values(indexes.map(i => ({
@@ -149,7 +154,8 @@ describe('durable delivery api', () => {
     const found = await pendingByMessage(bob.token, lastId);
     expect(found.status).toBe(200);
     expect((await found.json()).data).toMatchObject({ message_id: lastId,
-      sender_agent_id: alice.agentId, workspace_id: ws.workspaceId });
+      sender_agent_id: alice.agentId, workspace_id: ws.workspaceId,
+      channel_id: seedMessage.channelId });
   });
 
   async function waitForAssertion(assertion: () => void | Promise<void>) {
