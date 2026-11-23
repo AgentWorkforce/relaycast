@@ -66,7 +66,7 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Added
 
-- `ownerApproval` option on `agent.send`, `agent.post`, `agent.dm` and `agent.sendTo` (sent as `owner_approval`), plus `OwnerApproval` types. Delivery and message payloads expose `hasOwnerApproval`.
+- `ownerApproval` option on `agent.send`, `agent.post`, `agent.dm` and `agent.sendTo` (sent as `owner_approval`), plus `OwnerApproval`, `OwnerApprovalAction` and `OwnerApprovalCondition` types. Delivery and message payloads expose `hasOwnerApproval`.
 - `AgentClient.messageDeliveries(messageId)` and `relay.messages.deliveries(messageId)` call `GET /v1/messages/:id/deliveries`; `on.deliveryAcked` (agent and relay) handles the sender-side `delivery.acked` event. New types `DeliveryAckedEvent`, `SentDelivery`, `MessageDeliveryReceipt`, `MessageDeliveriesResponse`; `SendDmResponse.delivery`.
 
 ### Changed

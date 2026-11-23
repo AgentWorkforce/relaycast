@@ -118,6 +118,36 @@ describe('owner_approval on messages', () => {
     ['a bad approval_ref', { ...approval(), approval_ref: 'apv_short' }],
     ['an approval_ref without prefix', { ...approval(), approval_ref: 'grt_abcdefgh12' }],
     ['an extra top-level key', { ...approval(), tier: 'O' }],
+    // prompt_approval targets and conditions (§16.1).
+    ['a prompt_approval target without a request ref', { ...approval(), actions: [{ class: 'prompt_approval', target: 'agent_123' }] }],
+    ['a prompt_approval wildcard target', { ...approval(), actions: [{ class: 'prompt_approval', target: 'agent_123:*' }] }],
+    ['a prompt_approval target over 256', { ...approval(), actions: [{ class: 'prompt_approval', target: `a:${long(255)}` }] }],
+    ...(['ci_green', 'mergeable'] as const).map((type): [string, unknown] => [
+      `${type} on prompt_approval`,
+      { ...approval(), actions: [{ class: 'prompt_approval', target: 'agent_1:req_1', conditions: [{ type }] }] },
+    ]),
+    ['head_sha on prompt_approval', { ...approval(), actions: [{ class: 'prompt_approval', target: 'agent_1:req_1', conditions: [{ type: 'head_sha', sha: 'a'.repeat(40) }] }] }],
+    ['reviews_approved on prompt_approval', { ...approval(), actions: [{ class: 'prompt_approval', target: 'agent_1:req_1', conditions: [{ type: 'reviews_approved', min: 1 }] }] }],
+    ['ci_green on a repo target without #N', { ...approval(), actions: [{ class: 'merge', target: 'AgentWorkforce/relay', conditions: [{ type: 'ci_green' }] }] }],
+    ['mergeable on a wildcard target', { ...approval(), actions: [{ class: 'merge', target: 'AgentWorkforce/*', conditions: [{ type: 'mergeable' }] }] }],
+    ['head_sha on a deploy target', { ...approval(), actions: [{ class: 'deploy', target: 'api:staging', conditions: [{ type: 'head_sha', sha: 'a'.repeat(40) }] }] }],
+    ['an unknown condition type', { ...approval(), actions: [{ class: 'merge', target: 'o/r#1', conditions: [{ type: 'ci_passed' }] }] }],
+    ['a condition without type', { ...approval(), actions: [{ class: 'merge', target: 'o/r#1', conditions: [{ min: 1 }] }] }],
+    ['a field on ci_green', { ...approval(), actions: [{ class: 'merge', target: 'o/r#1', conditions: [{ type: 'ci_green', required: true }] }] }],
+    ['a field on mergeable', { ...approval(), actions: [{ class: 'merge', target: 'o/r#1', conditions: [{ type: 'mergeable', strict: true }] }] }],
+    ['an extra field on head_sha', { ...approval(), actions: [{ class: 'merge', target: 'o/r#1', conditions: [{ type: 'head_sha', sha: 'a'.repeat(40), ref: 'main' }] }] }],
+    ['a short head_sha', { ...approval(), actions: [{ class: 'merge', target: 'o/r#1', conditions: [{ type: 'head_sha', sha: 'a'.repeat(39) }] }] }],
+    ['an uppercase head_sha', { ...approval(), actions: [{ class: 'merge', target: 'o/r#1', conditions: [{ type: 'head_sha', sha: 'A'.repeat(40) }] }] }],
+    ['head_sha without sha', { ...approval(), actions: [{ class: 'merge', target: 'o/r#1', conditions: [{ type: 'head_sha' }] }] }],
+    ['reviews_approved min 0', { ...approval(), actions: [{ class: 'merge', target: 'o/r#1', conditions: [{ type: 'reviews_approved', min: 0 }] }] }],
+    ['reviews_approved min 11', { ...approval(), actions: [{ class: 'merge', target: 'o/r#1', conditions: [{ type: 'reviews_approved', min: 11 }] }] }],
+    ['a fractional reviews_approved min', { ...approval(), actions: [{ class: 'merge', target: 'o/r#1', conditions: [{ type: 'reviews_approved', min: 1.5 }] }] }],
+    ['a string reviews_approved min', { ...approval(), actions: [{ class: 'merge', target: 'o/r#1', conditions: [{ type: 'reviews_approved', min: '2' }] }] }],
+    ['not_before without at', { ...approval(), actions: [{ class: 'merge', target: 'o/r#1', conditions: [{ type: 'not_before' }] }] }],
+    ['a non-RFC 3339 not_before', { ...approval(), actions: [{ class: 'merge', target: 'o/r#1', conditions: [{ type: 'not_before', at: 'tomorrow 9am' }] }] }],
+    ['an extra field on not_before', { ...approval(), actions: [{ class: 'merge', target: 'o/r#1', conditions: [{ type: 'not_before', at: '2026-11-23T09:00:00Z', tz: 'UTC' }] }] }],
+    ['six conditions', { ...approval(), actions: [{ class: 'merge', target: 'o/r#1', conditions: Array.from({ length: 6 }, () => ({ type: 'ci_green' })) }] }],
+    ['conditions that are not an array', { ...approval(), actions: [{ class: 'merge', target: 'o/r#1', conditions: { type: 'ci_green' } }] }],
   ];
 
   it.each(invalid)('refuses %s with 400 invalid_owner_approval on DM and channel sends', async (_label, ownerApproval) => {
@@ -165,6 +195,46 @@ describe('owner_approval on messages', () => {
     expect(noneData).not.toHaveProperty('has_owner_approval');
     expect((await storedApproval(noneData.id as string)).ownerApproval).toBeNull();
     expect(await deliveries(bob.token)).toHaveLength(3);
+  });
+
+  it('round-trips structured conditions and prompt_approval through by-message', async () => {
+    const { alice, bob } = await seed();
+    const conditioned = {
+      ...approval(),
+      actions: [
+        {
+          class: 'merge',
+          target: 'AgentWorkforce/relay#2250',
+          conditions: [
+            { type: 'ci_green' },
+            { type: 'head_sha', sha: '0123456789abcdef0123456789abcdef01234567' },
+            { type: 'reviews_approved', min: 10 },
+            { type: 'mergeable' },
+            { type: 'not_before', at: '2026-11-23T09:00:00+01:00' },
+          ],
+          note: 'when green',
+        },
+        { class: 'deploy', target: 'api:staging', conditions: [{ type: 'not_before', at: '2026-11-23T10:00:00Z' }] },
+        { class: 'prompt_approval', target: 'agent_250624318991675392:req_7Q2', conditions: [{ type: 'not_before', at: '2026-11-23T08:00:00Z' }] },
+        { class: 'prompt_approval', target: 'agent_1:req_2' },
+      ],
+    };
+    for (const send of [
+      () => dm(alice.token, { to: 'bob', text: 'conditioned', owner_approval: conditioned }),
+      () => post(alice.token, { text: 'conditioned', owner_approval: conditioned }),
+    ]) {
+      const sent = await send();
+      expect(sent.status).toBe(201);
+      const messageId = ((await sent.json()) as { data: { id: string } }).data.id;
+      expect((await storedApproval(messageId)).ownerApproval).toEqual(conditioned);
+      const proof = await byMessage(bob.token, messageId);
+      expect(proof.status).toBe(200);
+      expect(((await proof.json()) as { data: Record<string, unknown> }).data.owner_approval).toEqual(conditioned);
+    }
+    // The conditions never reach the recipient's payloads either.
+    const text = JSON.stringify(await deliveries(bob.token));
+    expect(text).not.toContain('0123456789abcdef0123456789abcdef01234567');
+    expect(text).not.toContain('reviews_approved');
   });
 
   it('stores the approval in its own column, never in caller metadata', async () => {

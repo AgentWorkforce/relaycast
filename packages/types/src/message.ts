@@ -81,15 +81,54 @@ export const OWNER_APPROVAL_ACTION_CLASSES = [
   'destructive',
   'spend',
   'external_comms',
+  'prompt_approval',
 ] as const;
 export const OwnerApprovalActionClassSchema = z.enum(OWNER_APPROVAL_ACTION_CLASSES);
 export type OwnerApprovalActionClass = z.infer<typeof OwnerApprovalActionClassSchema>;
 
+/**
+ * A condition Cloud checks at redeem. `ci_green`, `head_sha`,
+ * `reviews_approved` and `mergeable` apply only to `owner/repo#N` targets;
+ * `not_before` applies to any target and is the only one on `prompt_approval`.
+ */
+export const OwnerApprovalConditionSchema = z.discriminatedUnion('type', [
+  z.object({ type: z.literal('ci_green') }).strict(),
+  z.object({ type: z.literal('head_sha'), sha: z.string().regex(/^[0-9a-f]{40}$/) }).strict(),
+  z.object({ type: z.literal('reviews_approved'), min: z.number().int().min(1).max(10) }).strict(),
+  z.object({ type: z.literal('mergeable') }).strict(),
+  z.object({ type: z.literal('not_before'), at: z.iso.datetime({ offset: true }) }).strict(),
+]);
+export type OwnerApprovalCondition = z.infer<typeof OwnerApprovalConditionSchema>;
+export type OwnerApprovalConditionType = OwnerApprovalCondition['type'];
+
+/** An `owner/repo#N` pull request or issue target. */
+const PULL_REQUEST_TARGET = /^[^\s/#]+\/[^\s/#]+#[1-9]\d*$/;
+/** A `prompt_approval` target in an approval: `<agent id>:<request ref>`, no wildcard. */
+const PROMPT_APPROVAL_TARGET = /^[^\s:*]+:[^\s*]+$/;
+const PULL_REQUEST_CONDITIONS: ReadonlySet<string> = new Set(['ci_green', 'head_sha', 'reviews_approved', 'mergeable']);
+
 export const OwnerApprovalActionSchema = z.object({
   class: OwnerApprovalActionClassSchema,
   target: z.string().max(256),
+  conditions: z.array(OwnerApprovalConditionSchema).max(5).optional(),
   note: z.string().max(280).optional(),
-}).strict();
+}).strict().superRefine((action, ctx) => {
+  if (action.class === 'prompt_approval' && !PROMPT_APPROVAL_TARGET.test(action.target)) {
+    ctx.addIssue({ code: 'custom', path: ['target'], message: 'prompt_approval target must be <agent id>:<request ref>' });
+  }
+  const pullRequest = action.class !== 'prompt_approval' && PULL_REQUEST_TARGET.test(action.target);
+  action.conditions?.forEach((condition, index) => {
+    if (PULL_REQUEST_CONDITIONS.has(condition.type) && !pullRequest) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['conditions', index, 'type'],
+        message: action.class === 'prompt_approval'
+          ? 'only not_before is valid on prompt_approval'
+          : `${condition.type} is valid only on owner/repo#N targets`,
+      });
+    }
+  });
+});
 export type OwnerApprovalAction = z.infer<typeof OwnerApprovalActionSchema>;
 
 /**
