@@ -221,7 +221,7 @@ inboundWebhookRoutes.post('/hooks/:webhookId', async (c) => {
           from_name: result.author,
           metadata: inboundWebhookEventMetadata(result.metadata),
         },
-      });
+      }, _deliveries);
     }
     runInBackground(
       c,

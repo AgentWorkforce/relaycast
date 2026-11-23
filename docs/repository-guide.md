@@ -1332,6 +1332,10 @@ Inspect delivery health with `GET /subscriptions/:id/deliveries`; settled histor
 for 24 hours from completion. Replay a failed or dead-lettered attempt with
 `POST /subscriptions/:id/deliveries/:delivery_id/replay`.
 Stored custom header values are redacted from subscription create/list/get responses.
+`PATCH /subscriptions/:id` updates only the fields sent (`headers: null` or `{}` clears the
+headers). Changing `url` on a subscription with stored headers requires `headers` in the same
+request; otherwise it fails with 400 `subscription_headers_required`, so headers meant for the old
+endpoint are never sent to the new one.
 
 Realtime-first usage with the TypeScript SDK — react to delivery events live, and replay the
 durable queue on reconnect instead of polling:

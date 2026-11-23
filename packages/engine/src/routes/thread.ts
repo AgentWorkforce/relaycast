@@ -93,7 +93,7 @@ threadRoutes.post(
             type: 'thread.reply',
             workspaceId: workspace.id,
             data: toThreadReplyEventData(data),
-          });
+          }, data._deliveries);
         },
       });
 

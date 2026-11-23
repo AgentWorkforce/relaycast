@@ -16,7 +16,17 @@ This project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 Packages without a separate changelog are covered by the cross-package notes below.
 
-## [Unreleased]
+## [Unreleased - Minor]
+
+### Added
+
+- Webhook payloads of `message.created`, `thread.reply`, `dm.received` and `group_dm.received` carry `data.recipients`: one `{ agent_id, agent_name, delivery_id, seq }` entry per delivery record (the sender is not listed), at most 500 per delivery, with `data.recipients_truncated: true` when the list was capped. The list is also cut, with the same flag, to keep the body within the 256 KiB webhook limit. Webhooks only: WebSocket, stream and HTTP responses are unchanged.
+- Event subscriptions accept `filter.recipients` (1 to 500 agent names or ids): the subscription receives only message events with a listed recipient, and its `data.recipients` holds only the matching entries. An event with more than 2,000 recipients is delivered with `data.recipients: []` and `data.recipients_truncated: true` when the stored list cannot show a match.
+- `PATCH /v1/subscriptions/:id` partially updates a subscription (`events`, `filter`, `url`, `headers`, `secret`, `signature_scheme`, `is_active`); `filter: null` clears the filter. A concurrent change to the signing scheme or secret returns 409 `subscription_update_conflict`. Changing `url` on a subscription with stored `headers` requires `headers` in the same request (a new map, or `{}` or `null` to clear them) and otherwise returns 400 `subscription_headers_required`.
+
+### Fixed
+
+- On PostgreSQL, a DM sent with an `Idempotency-Key` (or to an A2A agent) that the recipient's mailbox rejected no longer fails with a 500.
 
 ## [12.13.1] - 2026-11-20
 
