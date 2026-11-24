@@ -396,36 +396,42 @@ async function activeTargets(
   }));
 }
 
-/** Snapshot matching subscribers once, making new rows due at the delivery pass's clock. */
+/**
+ * Snapshot matching subscribers once (the caller has read the parent row and
+ * found it not yet initialized), making new rows due at the delivery pass's
+ * clock. Returns the stable delivery id of each target, in target order.
+ */
 async function initializePersistentDeliveries(
   db: Db,
   eventId: string,
   targets: DeliveryTarget[],
   now: Date,
-): Promise<boolean> {
-  const [parent] = await db
-    .select({ initialized: pendingEvents.webhookInitialized })
-    .from(pendingEvents)
+): Promise<string[]> {
+  const ids = await Promise.all(targets.map((target) => stableDeliveryId(eventId, target.id)));
+  const markInitialized = (handle: Db) => handle
+    .update(pendingEvents)
+    .set({ webhookInitialized: true })
     .where(eq(pendingEvents.id, eventId));
-  if (!parent) return false;
-  if (parent.initialized) return true;
-
-  if (targets.length > 0) {
-    const values = await Promise.all(targets.map(async (target) => ({
-      id: await stableDeliveryId(eventId, target.id),
+  if (targets.length === 0) {
+    await markInitialized(db);
+    return ids;
+  }
+  // One atomic unit (a single D1 batch round trip; one transaction on Node
+  // and PostgreSQL), so no pass can see the flag set without the rows, nor
+  // the rows without the flag. The parent is written first, as in
+  // replayWebhookDelivery, so both writers lock the two tables in one order.
+  await runAtomicWrites(db, (tx) => [
+    markInitialized(tx),
+    tx.insert(webhookDeliveries).values(targets.map((target, index) => ({
+      id: ids[index],
       eventId,
       subscriptionId: target.id,
       // Use this pass's clock so an insert crossing a second boundary is
       // still due when compared with the time captured by deliverEvent.
       nextAttemptAt: now,
-    })));
-    await db.insert(webhookDeliveries).values(values).onConflictDoNothing();
-  }
-  await db
-    .update(pendingEvents)
-    .set({ webhookInitialized: true })
-    .where(eq(pendingEvents.id, eventId));
-  return true;
+    }))).onConflictDoNothing(),
+  ]);
+  return ids;
 }
 
 async function claimDelivery(db: Db, id: string, now: Date) {
@@ -596,14 +602,23 @@ export async function deliverEvent(
   options: DeliverEventOptions = {},
 ): Promise<EventDeliverySummary> {
   const now = options.now ?? new Date();
-  let timestampSource = options.eventTimestamp;
-  if (!timestampSource && options.eventId) {
-    const [parent] = await db
-      .select({ createdAt: pendingEvents.createdAt })
-      .from(pendingEvents)
-      .where(eq(pendingEvents.id, options.eventId));
-    timestampSource = parent?.createdAt;
+  const { eventId } = options;
+  // The outbox row is read once, alongside the subscriptions: its creation
+  // time stamps the body (unless the caller supplied one) and its
+  // `webhookInitialized` flag picks the first-pass path below.
+  let parent: { createdAt: Date; initialized: boolean } | undefined;
+  let subscribed: DeliveryTarget[] = [];
+  if (eventId) {
+    [[parent], subscribed] = await Promise.all([
+      db
+        .select({ createdAt: pendingEvents.createdAt, initialized: pendingEvents.webhookInitialized })
+        .from(pendingEvents)
+        .where(eq(pendingEvents.id, eventId)),
+      activeTargets(db, workspaceId, eventType),
+    ]);
   }
+  let timestampSource = options.eventTimestamp;
+  if (!timestampSource && eventId) timestampSource = parent?.createdAt;
   const eventTimestamp = new Date(timestampSource ?? now).toISOString();
   const sharedBody = JSON.stringify({
     type: eventType,
@@ -623,51 +638,86 @@ export async function deliverEvent(
     : sharedBody;
   const fetchImpl = options.fetch;
 
-  if (!options.eventId) {
+  if (!eventId) {
     return deliverWithoutPersistence(db, workspaceId, eventType, payload, bodyFor, now, fetchImpl);
   }
-
-  const targets = (await activeTargets(db, workspaceId, eventType))
-    .filter((target) => deliveryMatchesFilter(target.filter, payload));
-  if (!await initializePersistentDeliveries(db, options.eventId, targets, now)) {
+  if (!parent) {
     // `eventId` identifies an outbox row. If that row was already pruned, an
     // at-least-once queue replay is stale; delivering without persistence here
     // would create new delivery ids and fan the event out a second time.
     return emptySummary();
   }
 
-  const targetById = new Map(targets.map((target) => [target.id, target]));
-  await deadLetterExpiredFinalAttempts(db, options.eventId, now);
-  const rows = await db
-    .select()
-    .from(webhookDeliveries)
-    .where(eq(webhookDeliveries.eventId, options.eventId));
-  if (rows.length === 0) return emptySummary();
-
-  const dueRows = rows.filter(
-    (row) => row.status === 'pending' && row.nextAttemptAt.getTime() <= now.getTime(),
-  );
-  await Promise.all(dueRows
-    .filter((row) => !targetById.has(row.subscriptionId))
-    .map((row) => failUnavailableDelivery(db, row.id, now)));
-  const safeFetch = dueRows.some((row) => targetById.has(row.subscriptionId))
-    ? requireSafeFetch(fetchImpl)
-    : undefined;
-
-  await Promise.all(rows.map(async (row) => {
-    if (row.status !== 'pending' || row.nextAttemptAt.getTime() > now.getTime()) return;
-    const target = targetById.get(row.subscriptionId);
-    if (!target) return;
-    const claimed = await claimDelivery(db, row.id, now);
+  const targets = subscribed.filter((target) => deliveryMatchesFilter(target.filter, payload));
+  const deliver = async (target: DeliveryTarget, deliveryId: string, safeFetch: Fetch) => {
+    const claimed = await claimDelivery(db, deliveryId, now);
     if (!claimed) return;
-    const result = await attemptDelivery(safeFetch!, target, eventType, claimed.id, bodyFor(target), now);
+    const result = await attemptDelivery(safeFetch, target, eventType, claimed.id, bodyFor(target), now);
     await settleDelivery(db, claimed, result, now);
-  }));
+  };
 
-  const settled = await db
+  const targetById = new Map(targets.map((target) => [target.id, target]));
+  const selectRows = () => db
     .select()
     .from(webhookDeliveries)
-    .where(eq(webhookDeliveries.eventId, options.eventId));
+    .where(eq(webhookDeliveries.eventId, eventId));
+  const deliveryIds = parent.initialized
+    ? null
+    : await initializePersistentDeliveries(db, eventId, targets, now);
+  const fastPath = deliveryIds !== null && targets.length > 0 && fetchImpl !== undefined;
+  if (fastPath) {
+    // First pass with matching targets: claim each target's stable row
+    // directly instead of re-reading the rows just written. The claim's
+    // guards (pending, due, attempts below the cap) leave alone any row a
+    // crashed earlier pass or a concurrent consumer already took. The few
+    // rows this skips the full path's pre-delivery cleanup for (a stale row
+    // of a subscription that no longer matches, an expired final attempt)
+    // are still pending and due afterwards, and are settled below, in this
+    // pass. Without a fetch the full path keeps today's order of failing
+    // stale rows before refusing to deliver.
+    await Promise.all(targets.map((target, index) => deliver(target, deliveryIds[index], fetchImpl)));
+  } else {
+    await deadLetterExpiredFinalAttempts(db, eventId, now);
+    const rows = await selectRows();
+    if (rows.length === 0) return emptySummary();
+
+    const dueRows = rows.filter(
+      (row) => row.status === 'pending' && row.nextAttemptAt.getTime() <= now.getTime(),
+    );
+    await Promise.all(dueRows
+      .filter((row) => !targetById.has(row.subscriptionId))
+      .map((row) => failUnavailableDelivery(db, row.id, now)));
+    const safeFetch = dueRows.some((row) => targetById.has(row.subscriptionId))
+      ? requireSafeFetch(fetchImpl)
+      : undefined;
+
+    await Promise.all(rows.map(async (row) => {
+      if (row.status !== 'pending' || row.nextAttemptAt.getTime() > now.getTime()) return;
+      const target = targetById.get(row.subscriptionId);
+      if (!target) return;
+      await deliver(target, row.id, safeFetch!);
+    }));
+  }
+
+  let settled = await selectRows();
+  if (fastPath) {
+    // Every row this pass claimed is settled or leased into the future now,
+    // so a row still pending and due is one the claims skipped: a stale row
+    // of a subscription that no longer matches, or an expired final attempt.
+    // Settle those as the full path would have before delivering (in its
+    // order: dead-letter first), then re-read. Common case: nothing is due
+    // and no statement is added.
+    const due = settled.filter(
+      (row) => row.status === 'pending' && row.nextAttemptAt.getTime() <= now.getTime(),
+    );
+    if (due.length > 0) {
+      await deadLetterExpiredFinalAttempts(db, eventId, now);
+      await Promise.all(due
+        .filter((row) => !targetById.has(row.subscriptionId))
+        .map((row) => failUnavailableDelivery(db, row.id, now)));
+      settled = await selectRows();
+    }
+  }
   const pending = settled.filter((row) => row.status === 'pending');
   const deadLettered = settled.filter((row) => row.status === 'dead_letter').length;
   const failed = settled.filter((row) => row.status === 'failed' || row.status === 'dead_letter').length;
