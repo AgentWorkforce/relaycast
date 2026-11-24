@@ -6,6 +6,7 @@ import {
   dmParticipants,
   messages,
   agents,
+  channels,
 } from '../db/tables.js';
 import { codedError } from '../lib/httpError.js';
 import { D1_SAFE_IN_QUERY_CHUNK_SIZE, queryInChunks } from '../lib/queryChunks.js';
@@ -36,6 +37,23 @@ const DM_COUNT_AGENT_CHUNK_SIZE = Math.floor(D1_SAFE_IN_QUERY_CHUNK_SIZE / 2);
 
 export function dmFilteredCountConversationChunkSize(agentFilterCount: number): number {
   return Math.max(1, D1_SAFE_IN_QUERY_CHUNK_SIZE - Math.min(agentFilterCount, DM_COUNT_AGENT_CHUNK_SIZE));
+}
+
+/**
+ * Newest message id per channel (null when a channel has none). A reverse
+ * seek on idx_messages_channel_time per channel: `max(id) ... GROUP BY` over an
+ * IN list read every index entry of every listed channel.
+ */
+export function latestMessageIdsByChannel(db: Db, channelIds: readonly string[]) {
+  return queryInChunks(channelIds, (chunk) => db
+    .select({
+      channelId: channels.id,
+      // Qualified outer column: drizzle renders single-table columns bare,
+      // which inside the subquery would bind to messages.id.
+      lastId: sql<string | null>`(SELECT m.id FROM ${messages} AS m WHERE m.channel_id = ${channels}.${sql.identifier('id')} ORDER BY m.id DESC LIMIT 1)`,
+    })
+    .from(channels)
+    .where(inArray(channels.id, chunk)));
 }
 
 export async function listAllDmConversations(
@@ -138,13 +156,9 @@ async function enrichDmConversations(
     .where(inArray(messages.channelId, chunk))
     .groupBy(messages.channelId));
 
-  const latestMessageIds = await queryInChunks(channelIds, (chunk) => db
-    .select({ channelId: messages.channelId, lastId: sql<string>`max(${messages.id})` })
-    .from(messages)
-    .where(inArray(messages.channelId, chunk))
-    .groupBy(messages.channelId));
+  const latestMessageIds = await latestMessageIdsByChannel(db, channelIds);
 
-  const lastIds = latestMessageIds.map((row) => row.lastId).filter(Boolean);
+  const lastIds = latestMessageIds.map((row) => row.lastId).filter((id): id is string => id !== null);
   const latestMessages = await queryInChunks(lastIds, (chunk) => db
     .select({
       id: messages.id,
