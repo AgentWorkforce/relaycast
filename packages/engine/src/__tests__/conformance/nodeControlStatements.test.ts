@@ -215,9 +215,10 @@ describe('node control D1 statements per frame', () => {
           "update "pending_events"",
           "update "pending_events"",
           "select from "event_subscriptions"",
-          "select from "agents"",
           "select from "pending_events"",
+          "select from "agents"",
           "update "pending_events"",
+          "update "webhook_deliveries"",
         ],
         "unchangedBeat": [
           "select from "nodes"",
