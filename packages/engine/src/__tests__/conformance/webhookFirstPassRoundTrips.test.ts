@@ -3,10 +3,10 @@ import { eq } from 'drizzle-orm';
 import { eventSubscriptions, pendingEvents, webhookDeliveries } from '../../db/tables.js';
 import { deliverEvent } from '../../engine/eventDelivery.js';
 import { sha256Hex } from '../../lib/crypto.js';
-import type { EngineDb } from '../../ports/database.js';
+import type { EngineDb, TransactionCapability } from '../../ports/database.js';
 import { configureNodeLiveness, nodeLivenessAuthority } from '../../ports/nodeLiveness.js';
 import { inheritCredentials } from '../../auth/credentials.js';
-import { createWorkspace, makeNodeStack, type TestStack } from './harness.js';
+import { createWorkspace, makeNodeStack, stripTransactionCapability, type TestStack } from './harness.js';
 
 /**
  * The first delivery pass of a persistent event reads the outbox row once,
@@ -19,6 +19,7 @@ import { createWorkspace, makeNodeStack, type TestStack } from './harness.js';
 const EVENT = 'evt_first_pass';
 const SUB = 'sub_first_pass';
 const OTHER = 'sub_first_pass_other';
+const LATE = 'sub_first_pass_late';
 
 const label = (sql: string) => sql.replace(/\s+/g, ' ').match(/^(select .*? from "\w+"|update "\w+"|insert into "\w+"|delete from "\w+")/)?.[1]
   .replace(/^select .*? from/, 'select from') ?? sql.slice(0, 40);
@@ -29,6 +30,10 @@ async function deliveryId(eventId: string, subscriptionId: string): Promise<stri
 }
 
 type Recorded = { label: string; step: boolean; inner?: string[] };
+type Hooks = {
+  before?: (statement: string) => Promise<void> | undefined;
+  after?: (statement: string) => void;
+};
 
 /**
  * Records each statement the handle executes, as the existing settlement test
@@ -38,9 +43,11 @@ type Recorded = { label: string; step: boolean; inner?: string[] };
  * An atomic write group (`withTransaction`, which `runAtomicWrites` prefers on
  * this backend; a single `batch` round trip on D1) is recorded as one entry
  * listing its statements. Builders run against their own `this`, so drizzle
- * internals never see the wrapper.
+ * internals never see the wrapper. `hooks.before` may hold a statement back
+ * (it starts once the returned promise settles) and `hooks.after` runs when
+ * one resolves, to stage an interleaving deterministically.
  */
-function instrument(db: EngineDb) {
+function instrument(db: EngineDb, hooks: Hooks = {}) {
   const statements: Recorded[] = [];
   let inFlight = 0;
   const builderLike = (value: unknown): value is object => !!value && typeof value === 'object'
@@ -51,18 +58,28 @@ function instrument(db: EngineDb) {
       if (typeof value !== 'function') return value;
       if (prop === 'then') {
         return (onFulfilled?: (v: unknown) => unknown, onRejected?: (e: unknown) => unknown) => {
-          const sql = (obj as { toSQL?: () => { sql: string } }).toSQL?.().sql ?? '?';
+          // A raw statement (PostgreSQL's insert-select) has getQuery, not toSQL.
+          const statement = obj as { toSQL?: () => { sql: string }; getQuery?: () => { sql: string } };
+          const sql = statement.toSQL?.().sql ?? statement.getQuery?.().sql ?? '?';
           if (group) {
             group.push(label(sql));
             return (value as (f: unknown, r: unknown) => unknown).call(obj, onFulfilled, onRejected);
           }
-          statements.push({ label: label(sql), step: inFlight === 0 });
-          inFlight += 1;
-          return (value as (f: unknown, r: unknown) => unknown).call(
-            obj,
-            (result: unknown) => { inFlight -= 1; return onFulfilled ? onFulfilled(result) : result; },
-            (error: unknown) => { inFlight -= 1; if (onRejected) return onRejected(error); throw error; },
-          );
+          const run = () => {
+            statements.push({ label: label(sql), step: inFlight === 0 });
+            inFlight += 1;
+            return (value as (f: unknown, r: unknown) => unknown).call(
+              obj,
+              (result: unknown) => {
+                inFlight -= 1;
+                hooks.after?.(label(sql));
+                return onFulfilled ? onFulfilled(result) : result;
+              },
+              (error: unknown) => { inFlight -= 1; if (onRejected) return onRejected(error); throw error; },
+            );
+          };
+          const held = hooks.before?.(label(sql));
+          return held ? held.then(run) : run();
         };
       }
       if (prop === 'withTransaction' && !group) {
@@ -148,7 +165,7 @@ describe('webhook first delivery pass', () => {
     expect(beforePost![1].step).toBe(false);
     expect(shape.slice(2)).toEqual([
       // One atomic unit, parent first: one D1 batch round trip.
-      'atomic[update "pending_events", insert into "webhook_deliveries"]',
+      'atomic[update "pending_events", insert into "webhook_deliveries", update "pending_events"]',
       'update "webhook_deliveries"',
     ]);
     const steps = beforePost!.filter((entry) => entry.step).length;
@@ -219,6 +236,94 @@ describe('webhook first delivery pass', () => {
       [SUB, 'succeeded', 1],
       [OTHER, 'succeeded', 1],
     ].sort());
+  });
+
+  /**
+   * A queue redelivery can run a second first pass that reads the outbox row
+   * (still uninitialized) before the winner commits, and the subscriptions
+   * only after `meanwhile` has run: the winner committing and a subscription
+   * being created. The two reads share no snapshot.
+   */
+  function passReadingFlagBefore(meanwhile: () => Promise<void>) {
+    let flagRead!: () => void;
+    const flagReadDone = new Promise<void>((resolve) => { flagRead = resolve; });
+    return instrument(db, {
+      after: (statement) => { if (statement === 'select from "pending_events"') flagRead(); },
+      before: (statement) => statement === 'select from "event_subscriptions"'
+        ? flagReadDone.then(meanwhile)
+        : undefined,
+    }).db;
+  }
+
+  it('keeps a subscription created after the winning pass committed out of the event', async () => {
+    await subscribe(SUB, 'https://example.com/a');
+    await outbox();
+    const fetch = okFetch();
+    const late = passReadingFlagBefore(async () => {
+      await expect(deliver(db, fetch)).resolves.toMatchObject({ attempted: 1, succeeded: 1 });
+      await subscribe(LATE, 'https://example.com/late');
+    });
+
+    // The late pass inserts nothing and finds the winner's row settled.
+    await expect(deliver(late, fetch)).resolves.toEqual({
+      attempted: 1, succeeded: 1, failed: 0, retryableFailures: 0, deadLettered: 0, nextRetryAt: null,
+    });
+    expect(fetch.mock.calls.map(([url]) => String(url))).toEqual(['https://example.com/a']);
+    expect((await rows()).map((row) => [row.subscriptionId, row.status])).toEqual([[SUB, 'succeeded']]);
+  });
+
+  it('keeps a late subscription out when the winning pass had no target', async () => {
+    await outbox();
+    const fetch = okFetch();
+    const late = passReadingFlagBefore(async () => {
+      // No subscription yet: the winner marks the event initialized, no rows.
+      await expect(deliver(db, fetch)).resolves.toMatchObject({ attempted: 0 });
+      await subscribe(LATE, 'https://example.com/late');
+    });
+
+    await expect(deliver(late, fetch)).resolves.toEqual({
+      attempted: 0, succeeded: 0, failed: 0, retryableFailures: 0, deadLettered: 0, nextRetryAt: null,
+    });
+    expect(fetch).not.toHaveBeenCalled();
+    expect(await rows()).toEqual([]);
+  });
+
+  it('leaves the event uninitialized when a delivery row insert fails on a handle without rollback', async () => {
+    await subscribe(SUB, 'https://example.com/a');
+    await subscribe(OTHER, 'https://example.com/b');
+    await outbox();
+    // Neither withTransaction nor batch: the writes run one by one. In
+    // PostgreSQL mode this handle is shared by every test, so put the
+    // capability back before anything else can run on it.
+    const capability = (db as Partial<TransactionCapability>).withTransaction;
+    stripTransactionCapability(db);
+    const fetch = okFetch();
+    // OTHER is deleted after this pass read it, as its first write starts, so
+    // inserting OTHER's row fails (foreign key).
+    let deleted = false;
+    const failing = instrument(db, {
+      before: (statement) => {
+        if (deleted || statement !== 'update "pending_events"') return undefined;
+        deleted = true;
+        return db.delete(eventSubscriptions).where(eq(eventSubscriptions.id, OTHER)).then(() => undefined);
+      },
+    }).db;
+
+    try {
+      await expect(deliver(failing, fetch)).rejects.toThrow();
+    } finally {
+      (db as Partial<TransactionCapability>).withTransaction = capability;
+    }
+    expect(fetch).not.toHaveBeenCalled();
+    const [parent] = await db.select().from(pendingEvents).where(eq(pendingEvents.id, EVENT));
+    expect(parent.webhookInitialized).toBe(false);
+
+    // The next pass initializes again and delivers instead of finding the
+    // event initialized with rows missing.
+    await expect(deliver(db, fetch)).resolves.toMatchObject({ attempted: 1, succeeded: 1, failed: 0 });
+    expect(fetch.mock.calls.map(([url]) => String(url))).toEqual(['https://example.com/a']);
+    const [after] = await db.select().from(pendingEvents).where(eq(pendingEvents.id, EVENT));
+    expect(after.webhookInitialized).toBe(true);
   });
 
   it('fails a stale row of a no-longer-matching subscription in the same pass', async () => {

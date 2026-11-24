@@ -1,5 +1,6 @@
 import { and, desc, eq, exists, gte, inArray, lt, lte, sql } from 'drizzle-orm';
 import type { getDb } from '../db/index.js';
+import * as sqlx from '../db/sqlx.js';
 import { eventSubscriptions, pendingEvents, webhookDeliveries } from '../db/tables.js';
 import { hmacSha256Hex, sha256Hex } from '../lib/crypto.js';
 import { codedError } from '../lib/httpError.js';
@@ -424,19 +425,49 @@ async function initializePersistentDeliveries(
     return ids;
   }
   // One atomic unit (a single D1 batch round trip; one transaction on Node
-  // and PostgreSQL), so no pass can see the flag set without the rows, nor
-  // the rows without the flag. The parent is written first, as in
-  // replayWebhookDelivery, so both writers lock the two tables in one order.
+  // and PostgreSQL), so no pass can see the flag set without the rows.
+  //
+  // The caller read the flag in parallel with the subscriptions, not in one
+  // snapshot, so a racing pass may have read it unset before another pass
+  // committed and the subscriptions after. Each row is therefore inserted
+  // only while the flag is still unset when this unit runs: a pass that lost
+  // the race inserts nothing (and claims only the rows the winner stored),
+  // so a subscription created after the winner committed never joins the
+  // event. The first statement, a no-op update of the parent, makes that
+  // check exact on PostgreSQL: it waits for the winner's row lock, and under
+  // READ COMMITTED the inserts after it then see the winner's commit. It
+  // also locks the parent before webhook_deliveries, as in
+  // replayWebhookDelivery. SQLite and D1 run the unit serialized anyway.
+  //
+  // The rows go in before the flag, so on a handle that can neither roll
+  // back nor batch a failed insert leaves the flag unset and the next pass
+  // initializes again, as before this unit existed. One statement per row
+  // keeps each statement's bound parameters fixed (D1 allows 100).
+  const nextAttemptAt = Math.floor(now.getTime() / 1000);
   await runAtomicWrites(db, (tx) => [
+    tx
+      .update(pendingEvents)
+      .set({ webhookInitialized: sql`${pendingEvents.webhookInitialized}` })
+      .where(eq(pendingEvents.id, eventId)),
+    ...targets.map((target, index) => sqlx.insertSelect(tx, webhookDeliveries, (qb) => qb
+      .select({
+        id: sql<string>`${ids[index]}`.as('id'),
+        eventId: pendingEvents.id,
+        subscriptionId: sql<string>`${target.id}`.as('subscription_id'),
+        status: sql<string>`${'pending'}`.as('status'),
+        attempts: sql<number>`0`.as('attempts'),
+        // Use this pass's clock so an insert crossing a second boundary is
+        // still due when compared with the time captured by deliverEvent.
+        nextAttemptAt: sql<Date>`${sqlx.numericParam(tx, nextAttemptAt)}`.as('next_attempt_at'),
+        lastError: sqlx.nullFor(tx, webhookDeliveries.lastError),
+        lastStatus: sqlx.nullFor(tx, webhookDeliveries.lastStatus),
+        createdAt: sql<Date>`${sqlx.now(tx)}`.as('created_at'),
+        completedAt: sqlx.nullFor(tx, webhookDeliveries.completedAt),
+      })
+      .from(pendingEvents)
+      .where(and(eq(pendingEvents.id, eventId), eq(pendingEvents.webhookInitialized, false))),
+    { onConflictDoNothing: true })),
     markInitialized(tx),
-    tx.insert(webhookDeliveries).values(targets.map((target, index) => ({
-      id: ids[index],
-      eventId,
-      subscriptionId: target.id,
-      // Use this pass's clock so an insert crossing a second boundary is
-      // still due when compared with the time captured by deliverEvent.
-      nextAttemptAt: now,
-    }))).onConflictDoNothing(),
   ]);
   return ids;
 }

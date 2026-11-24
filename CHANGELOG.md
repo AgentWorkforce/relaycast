@@ -23,6 +23,14 @@ Packages without a separate changelog are covered by the cross-package notes bel
 - `GET /v1/deliveries/by-message/:messageId` returns the calling agent's own queued or delivered, unexpired delivery of one message and its server-derived sender id. Unknown messages, messages addressed to another agent, and acknowledged or expired deliveries all return the same `404 delivery_not_found`.
 - Owner-named trusted delegates: `POST /v1/channels/:name/messages` and `POST /v1/dm` accept an optional `owner_approval` (`v: 1`, `owner_id`, 1–20 `actions` of `{ class, target, conditions?, note? }` including `prompt_approval` (`<agent id>:<request ref>:approve` or `:deny`, no conditions), `pr_ops` (`owner/repo#N:<op>`) and `config_change` (exact `<agent id>:<setting>=<value>`, no `*`), and up to 5 conditions per action (`ci_green`, `head_sha`, `reviews_approved`, `mergeable` on pull request targets; `not_before` on any other, and the only one on `config_change`), optional `quote`, `quoted_at`, `quote_source`, `expires_at`, `approval_ref`; no U+0000 in its strings); any other shape is `400 invalid_owner_approval`, as is an approval on a DM channel through the channel route or on a DM to an external A2A agent. A node token may attach one only for an agent hosted on that node (`403 owner_approval_not_allowed`). The one later change is Cloud's quote redaction, `POST /internal/workspaces/:id/messages/:messageId/owner-approval/redact-quote` (internal secret; also on the hosted gateway), which sets `quote` to `null` and records `quote_redacted_at`. It is stored immutably in its own column on SQLite and Postgres, never in `metadata`, and returned only by the recipient's `GET /v1/deliveries/by-message/:messageId` (`owner_approval`, or `null`). Recipient websocket events, node `deliver` frames and `GET /v1/deliveries` items carry `has_owner_approval: true`, never the content. TypeScript SDK: `ownerApproval` on `send`, `post`, `dm` and `sendTo`.
 
+### Changed
+
+- The first webhook delivery pass of an event issues three sequential database steps before its first POST instead of eight, which matters on hosts where every statement is a network round trip. Delivery results are unchanged.
+
+### Fixed
+
+- A webhook subscriber that keeps its response body open no longer holds the delivery after its status has arrived.
+
 ## [12.14.0] - 2026-11-23
 
 ### Added
