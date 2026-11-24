@@ -353,7 +353,14 @@ async function attemptDelivery(
       redirect: 'manual',
       signal: AbortSignal.timeout(10_000),
     });
-    await response.body?.cancel().catch(() => {});
+    // The status is known once the headers arrive. Release the body without
+    // waiting for it: a subscriber that keeps its response open must not hold
+    // the delivery (and the queue behind it).
+    try {
+      void response.body?.cancel().catch(() => {});
+    } catch {
+      // A locked or already-closed body: nothing to release.
+    }
     if (response.ok) return { ok: true, retryable: false, status: response.status, error: null };
     if (response.status >= 300 && response.status < 400) {
       return { ok: false, retryable: false, status: response.status, error: `HTTP ${response.status}` };
