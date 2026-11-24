@@ -9,6 +9,10 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ## [Unreleased]
 
+### Added
+
+- `redactOwnerApprovalQuote` and the `OwnerApprovalQuoteRedaction` type are exported from the package entry, so the hosted gateway can serve the redact-quote internal route by calling the same function.
+
 ## [12.15.0] - 2026-11-24
 
 ### Added

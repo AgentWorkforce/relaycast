@@ -55,6 +55,10 @@ export type {
 // must apply it per socket — the Cloudflare stream lives outside this package.
 export { observerAllowsEvent, type ObserverToken } from './engine/observerToken.js';
 
+// The hosted gateway serves the redact-quote internal route by calling this
+// directly, so the 0088 trigger contract stays in one place.
+export { redactOwnerApprovalQuote, type OwnerApprovalQuoteRedaction } from './engine/ownerApproval.js';
+
 // Registration admission a host wires into its own node-control transport so
 // `agent.register` frames are admitted like the HTTP registration routes.
 export {
