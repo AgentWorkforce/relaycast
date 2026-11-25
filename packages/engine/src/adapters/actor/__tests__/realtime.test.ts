@@ -708,6 +708,25 @@ describe('workspace actor realtime', () => {
       expect(status()).toEqual(['acked', 'acked']);
     });
 
+    it('never lets an invalid frame change a held ack', async () => {
+      const { actor, socket, delivered, status } = await settling();
+      await actor.message(socket, { v: 1, type: 'delivery.ack', agent: 'alice', up_to_seq: delivered[0].seq });
+      // Same key, unsupported version and a higher seq: it goes to the handler as is and is refused there.
+      await actor.message(socket, { v: 2, type: 'delivery.ack', agent: 'alice', up_to_seq: delivered[1].seq });
+      await actor.maintain();
+      expect(status()).toEqual(['acked', 'delivered']);
+    });
+
+    it('keeps the maintenance deadline a settle alarm moved', async () => {
+      const { actor, socket, delivered } = await settling();
+      const deadline = actor.alarm.at;
+      expect(deadline).not.toBeNull();
+      await actor.message(socket, { v: 1, type: 'delivery.ack', agent: 'alice', up_to_seq: delivered[0].seq });
+      expect(actor.alarm.at!).toBeLessThan(deadline!);
+      await actor.maintain();
+      expect(actor.alarm.at).toBe(deadline);
+    });
+
     it('is off by default: an ack applies in its own call', async () => {
       const { actor, socket, delivered, status } = await settling(0);
       await actor.message(socket, { v: 1, type: 'delivery.ack', agent: 'alice', up_to_seq: delivered[0].seq });

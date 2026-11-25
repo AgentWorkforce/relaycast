@@ -276,7 +276,8 @@ export function createActorRuntime(options: ActorRuntimeOptions): ActorRuntime {
    */
   let maintenanceDueAt: number | null = null;
   const requestMaintenance = (atMs: number = Date.now()): void => {
-    maintenanceDueAt = maintenanceDueAt === null ? atMs : Math.min(maintenanceDueAt, atMs);
+    // A past value is an alarm that already fired (as armAlarm reads it): replace it.
+    maintenanceDueAt = maintenanceDueAt === null || maintenanceDueAt <= Date.now() ? atMs : Math.min(maintenanceDueAt, atMs);
     armAlarm(atMs);
   };
   /** Whether the pending alarm was armed (moved earlier) only to apply held settle frames. */
@@ -459,9 +460,13 @@ export function createActorRuntime(options: ActorRuntimeOptions): ActorRuntime {
   };
 
   const finish = async <T>(work: () => Promise<T>): Promise<T> => {
+    let succeeded = false;
     try {
-      return await work();
+      const result = await work();
+      succeeded = true;
+      return result;
     } finally {
+      realtime.settleCallEnded(succeeded);
       await settleBackground();
       const next = nextMaintenanceAt(sql);
       if (next !== null) requestMaintenance(next);
@@ -576,7 +581,11 @@ export function createActorRuntime(options: ActorRuntimeOptions): ActorRuntime {
         // An alarm armed only for held settle frames: rehydrate applied them.
         const settleOnly = settleAlarmArmed && maintenanceDueAt !== null && maintenanceDueAt > Date.now();
         settleAlarmArmed = false;
-        if (settleOnly) return;
+        if (settleOnly) {
+          // Keep the maintenance deadline the settle alarm displaced.
+          options.alarm.set(maintenanceDueAt!);
+          return;
+        }
         maintenanceDueAt = null;
         maintaining = true;
         blobDeadline = Date.now() + blobDeleteBudgetMs;

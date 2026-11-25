@@ -31,7 +31,7 @@ import type {
 import type { PresenceTracker } from '../../ports/presence.js';
 import type { EngineDb } from '../../ports/database.js';
 import type { InvocationCompletionDeps } from '../../engine/invocationCompletion.js';
-import type { FleetRelaycastToBrokerMessage } from '@relaycast/types';
+import { parseFleetBrokerToRelaycastMessage, type FleetRelaycastToBrokerMessage } from '@relaycast/types';
 import { InProcessRealtime, loadActiveObserverToken, type EngineSocket, type SocketHandle } from '../node/realtime.js';
 import { getNodeById } from '../../engine/node.js';
 import { hasObserverScope } from '../../engine/observerToken.js';
@@ -148,11 +148,20 @@ interface PendingSettle {
 
 const COALESCED_SETTLE_FRAMES = new Set(['delivery.ack', 'delivery.accepted']);
 
-/** A frame settle coalescing may hold: an ack or accept that asks for no reply. */
+/**
+ * A frame settle coalescing may hold: a valid ack or accept (by the wire
+ * schema) that asks for no reply. Anything else, invalid frames included,
+ * takes the normal path, so it can never change a held frame.
+ */
 function coalescableSettle(message: unknown): Record<string, unknown> | undefined {
   if (typeof message !== 'object' || message === null || Array.isArray(message)) return undefined;
   const frame = message as Record<string, unknown>;
   if (typeof frame.type !== 'string' || !COALESCED_SETTLE_FRAMES.has(frame.type) || frame.id !== undefined) return undefined;
+  try {
+    parseFleetBrokerToRelaycastMessage(frame);
+  } catch {
+    return undefined;
+  }
   return frame;
 }
 
@@ -192,6 +201,8 @@ export class ActorRealtime implements RealtimeBus, ConnectionRegistry, NodeConne
   private readonly usedNonces = new Map<string, number>();
   /** Settle frames held by settle coalescing, in arrival order; lost with the actor's memory. */
   private pendingSettles: PendingSettle[] = [];
+  /** Held frames the running call applied; back to `pendingSettles` if that call fails. */
+  private appliedSettles: PendingSettle[] = [];
 
   constructor(private readonly db: EngineDb, private readonly options: ActorRealtimeOptions) {
     this.inner = new InProcessRealtime(db);
@@ -638,22 +649,30 @@ export class ActorRealtime implements RealtimeBus, ConnectionRegistry, NodeConne
 
   /**
    * Hold a settle frame for the next flush. A cumulative frame raises the
-   * `up_to_seq` of the socket's last held frame when it has the same type,
-   * agent and provider: it settles every row the earlier one would have.
+   * `up_to_seq` of the newest held frame when that one is from the same socket
+   * with the same type, agent and provider: it settles every row the earlier
+   * one would have, and no other frame moves relative to it.
    */
   private holdSettle(socketId: string, frame: Record<string, unknown>): void {
     const key = cumulativeKey(frame);
-    let last: PendingSettle | undefined;
-    for (let i = this.pendingSettles.length - 1; i >= 0 && !last; i--) {
-      if (this.pendingSettles[i].socketId === socketId) last = this.pendingSettles[i];
-    }
-    if (key !== undefined && last?.key === key) {
+    const last = this.pendingSettles.at(-1);
+    if (key !== undefined && last?.socketId === socketId && last.key === key) {
       last.message = { ...frame, up_to_seq: Math.max(Number(last.message.up_to_seq), Number(frame.up_to_seq)) };
     } else {
       this.pendingSettles.push({ socketId, key, message: frame });
     }
     const coalescing = this.options.settleCoalescing!;
     coalescing.requestFlush(Date.now() + coalescing.flushMs);
+  }
+
+  /**
+   * The running call ended. On success its applied settles are durable with
+   * it; on failure they rolled back with it and are held again, ahead of any
+   * held since.
+   */
+  settleCallEnded(succeeded: boolean): void {
+    if (!succeeded && this.appliedSettles.length > 0) this.pendingSettles.unshift(...this.appliedSettles);
+    this.appliedSettles = [];
   }
 
   /** Whether settle frames are held for a flush. */
@@ -672,6 +691,7 @@ export class ActorRealtime implements RealtimeBus, ConnectionRegistry, NodeConne
     const flushing = only ? this.pendingSettles.filter((pending) => only(pending.socketId)) : this.pendingSettles;
     if (flushing.length === 0) return;
     this.pendingSettles = only ? this.pendingSettles.filter((pending) => !only(pending.socketId)) : [];
+    this.appliedSettles.push(...flushing);
     const touched = new Set<string>();
     for (const pending of flushing) {
       const conn = this.attached.get(pending.socketId) ?? this.superseded.get(pending.socketId);
