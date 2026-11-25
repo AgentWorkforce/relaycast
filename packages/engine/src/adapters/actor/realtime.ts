@@ -86,6 +86,12 @@ export interface ActorRealtimeOptions {
    * when the sockets are still writable.
    */
   background: (promise: Promise<unknown>) => void;
+  /**
+   * Settle coalescing (off when absent): node `delivery.ack` / `delivery.accepted`
+   * frames are held in memory and applied together, in arrival order, by the
+   * next call, which `requestFlush` schedules no later than `flushMs` away.
+   */
+  settleCoalescing?: { flushMs: number; requestFlush: (atMs: number) => void };
 }
 
 /**
@@ -132,6 +138,30 @@ interface Attached {
   readonly handle: SocketHandle;
 }
 
+/** A settle frame received but not yet applied. */
+interface PendingSettle {
+  readonly socketId: string;
+  /** Set for a cumulative frame (no `delivery_id`): a later one with the same key raises its `up_to_seq`. */
+  readonly key: string | undefined;
+  message: Record<string, unknown>;
+}
+
+const COALESCED_SETTLE_FRAMES = new Set(['delivery.ack', 'delivery.accepted']);
+
+/** A frame settle coalescing may hold: an ack or accept that asks for no reply. */
+function coalescableSettle(message: unknown): Record<string, unknown> | undefined {
+  if (typeof message !== 'object' || message === null || Array.isArray(message)) return undefined;
+  const frame = message as Record<string, unknown>;
+  if (typeof frame.type !== 'string' || !COALESCED_SETTLE_FRAMES.has(frame.type) || frame.id !== undefined) return undefined;
+  return frame;
+}
+
+function cumulativeKey(frame: Record<string, unknown>): string | undefined {
+  if (frame.delivery_id !== undefined || typeof frame.up_to_seq !== 'number') return undefined;
+  const provider = (frame.provider as { name?: unknown } | undefined)?.name;
+  return JSON.stringify([frame.type, frame.agent ?? null, typeof provider === 'string' ? provider : null]);
+}
+
 export class ActorRealtime implements RealtimeBus, ConnectionRegistry, NodeConnectionRegistry {
   private readonly inner: InProcessRealtime;
   /** The durable copy of the registry: one row per attached socket. */
@@ -160,6 +190,8 @@ export class ActorRealtime implements RealtimeBus, ConnectionRegistry, NodeConne
    * grant's age instead.
    */
   private readonly usedNonces = new Map<string, number>();
+  /** Settle frames held by settle coalescing, in arrival order; lost with the actor's memory. */
+  private pendingSettles: PendingSettle[] = [];
 
   constructor(private readonly db: EngineDb, private readonly options: ActorRealtimeOptions) {
     this.inner = new InProcessRealtime(db);
@@ -391,12 +423,19 @@ export class ActorRealtime implements RealtimeBus, ConnectionRegistry, NodeConne
    * handles itself: a connecting socket is attached after this, a
    * disconnecting one torn down after this.
    */
-  async rehydrate(event?: { socket: ActorSocketLike; phase: 'connect' | 'disconnect' }): Promise<void> {
+  async rehydrate(
+    event?: { socket: ActorSocketLike; phase: 'connect' | 'disconnect' },
+    options: { holdSettles?: boolean } = {},
+  ): Promise<void> {
     const connections = await this.options.sockets.getConnections();
     const live = new Map<string, ActorSocketLike>();
     for (const socket of connections) live.set(socket.id, socket);
     if (event) live.set(event.socket.id, event.socket);
     this.live = live;
+    // Held settles apply before anything else this call does, so every other
+    // frame and request sees them; a frame for a socket the reconciliation
+    // below would tear down is applied even while held.
+    await this.flushSettles(options.holdSettles ? (id) => !live.has(id) : undefined);
 
     if (!this.replayed) {
       this.replayed = true;
@@ -576,12 +615,17 @@ export class ActorRealtime implements RealtimeBus, ConnectionRegistry, NodeConne
 
   /** A JSON frame from the client; the registry reads it as the text the client sent. */
   async onMessage(socket: ActorSocketLike, message: unknown): Promise<void> {
-    await this.rehydrate();
+    const settle = this.options.settleCoalescing ? coalescableSettle(message) : undefined;
+    await this.rehydrate(undefined, { holdSettles: settle !== undefined });
     // A superseded socket's frame still reaches the registry, which refuses
     // all but the ones settling work dispatched to it.
     const conn = this.attached.get(socket.id) ?? this.superseded.get(socket.id);
     // Not attached: rehydrate closed it (nothing accounts for it) or it was rejected.
     if (!conn) return;
+    if (settle && conn.principal.kind === 'node' && this.attached.has(socket.id)) {
+      this.holdSettle(socket.id, settle);
+      return;
+    }
     await conn.handle.handleMessage(JSON.stringify(message));
     // The frame may have bound a provider (superseding another socket's
     // binding) or negotiated readiness, and refreshed the liveness timestamp
@@ -590,6 +634,52 @@ export class ActorRealtime implements RealtimeBus, ConnectionRegistry, NodeConne
       this.forgetDropped();
       this.syncRow(socket.id);
     }
+  }
+
+  /**
+   * Hold a settle frame for the next flush. A cumulative frame raises the
+   * `up_to_seq` of the socket's last held frame when it has the same type,
+   * agent and provider: it settles every row the earlier one would have.
+   */
+  private holdSettle(socketId: string, frame: Record<string, unknown>): void {
+    const key = cumulativeKey(frame);
+    let last: PendingSettle | undefined;
+    for (let i = this.pendingSettles.length - 1; i >= 0 && !last; i--) {
+      if (this.pendingSettles[i].socketId === socketId) last = this.pendingSettles[i];
+    }
+    if (key !== undefined && last?.key === key) {
+      last.message = { ...frame, up_to_seq: Math.max(Number(last.message.up_to_seq), Number(frame.up_to_seq)) };
+    } else {
+      this.pendingSettles.push({ socketId, key, message: frame });
+    }
+    const coalescing = this.options.settleCoalescing!;
+    coalescing.requestFlush(Date.now() + coalescing.flushMs);
+  }
+
+  /** Whether settle frames are held for a flush. */
+  hasHeldSettles(): boolean {
+    return this.pendingSettles.length > 0;
+  }
+
+  /**
+   * Apply the held settle frames (those `only` selects), in arrival order, as
+   * their sockets would have. A frame whose connection is gone is dropped:
+   * its rows stay delivered and the node's reconnect replays them, as for an
+   * ack lost in flight.
+   */
+  private async flushSettles(only?: (socketId: string) => boolean): Promise<void> {
+    if (this.pendingSettles.length === 0) return;
+    const flushing = only ? this.pendingSettles.filter((pending) => only(pending.socketId)) : this.pendingSettles;
+    if (flushing.length === 0) return;
+    this.pendingSettles = only ? this.pendingSettles.filter((pending) => !only(pending.socketId)) : [];
+    const touched = new Set<string>();
+    for (const pending of flushing) {
+      const conn = this.attached.get(pending.socketId) ?? this.superseded.get(pending.socketId);
+      if (!conn) continue;
+      await conn.handle.handleMessage(JSON.stringify(pending.message));
+      touched.add(pending.socketId);
+    }
+    this.syncRows([...touched]);
   }
 
   async onDisconnect(socket: ActorSocketLike): Promise<void> {

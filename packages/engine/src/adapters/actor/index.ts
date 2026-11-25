@@ -120,6 +120,14 @@ export interface ActorRuntimeOptions {
    */
   blobDeleteBudgetMs?: number;
   /**
+   * Settle coalescing: a node's `delivery.ack` / `delivery.accepted` frames
+   * are applied together by a call at most this many milliseconds later
+   * instead of each committing as its own call. Unset or 0: off. A frame
+   * held when the actor's memory is lost is dropped, as an ack lost in flight
+   * is (the node's reconnect replays its rows).
+   */
+  settleFlushMs?: number;
+  /**
    * Engine config. The runtime sets `workspaceId` (the actor id),
    * `credentialFormat: 'ar'` with the tag the gateway handed {@link
    * ActorRuntime.create} (a gateway routes by credential), and the outbound
@@ -255,12 +263,32 @@ export function createActorRuntime(options: ActorRuntimeOptions): ActorRuntime {
     onGroupFailure: (error) => { if (maintaining) stepFailures.push({ index: stepGroups - 1, error }); },
   });
 
-  const requestMaintenance = (atMs: number = Date.now()): void => {
+  const armAlarm = (atMs: number): void => {
     const current = options.alarm.get();
     // A past timestamp is an alarm that already fired (or is firing now).
     if (current !== null && current > Date.now() && current <= atMs) return;
     options.alarm.set(atMs);
   };
+  /**
+   * When maintenance itself is next due, as this activation last computed it
+   * (`null`: unknown, so an alarm runs the full pass). An alarm armed earlier
+   * only to apply held settle frames runs no maintenance steps.
+   */
+  let maintenanceDueAt: number | null = null;
+  const requestMaintenance = (atMs: number = Date.now()): void => {
+    maintenanceDueAt = maintenanceDueAt === null ? atMs : Math.min(maintenanceDueAt, atMs);
+    armAlarm(atMs);
+  };
+  /** Whether the pending alarm was armed (moved earlier) only to apply held settle frames. */
+  let settleAlarmArmed = false;
+  const requestSettleFlush = (atMs: number): void => {
+    const current = options.alarm.get();
+    if (current !== null && current > Date.now() && current <= atMs) return;
+    options.alarm.set(atMs);
+    settleAlarmArmed = true;
+  };
+  const settleFlushMs = options.settleFlushMs ?? 0;
+  if (!Number.isFinite(settleFlushMs) || settleFlushMs < 0) throw new Error('settleFlushMs must be a finite number of milliseconds, at least 0');
 
   // Outbound HTTP holds the actor's mailbox for its whole duration, so it runs
   // only from maintenance. In a request it fails fast; durable work (webhook
@@ -299,6 +327,7 @@ export function createActorRuntime(options: ActorRuntimeOptions): ActorRuntime {
     sockets: options.sockets ?? NO_SOCKETS,
     sql,
     background: schedule,
+    ...(settleFlushMs > 0 ? { settleCoalescing: { flushMs: settleFlushMs, requestFlush: requestSettleFlush } } : {}),
   });
   const presence = new InProcessPresence(realtime, { db, sweepIntervalMs: 0 });
   realtime.setPresenceTracker(presence);
@@ -544,6 +573,11 @@ export function createActorRuntime(options: ActorRuntimeOptions): ActorRuntime {
       ensureSchema();
       if (importer.importing()) return Promise.resolve();
       return call(async () => {
+        // An alarm armed only for held settle frames: rehydrate applied them.
+        const settleOnly = settleAlarmArmed && maintenanceDueAt !== null && maintenanceDueAt > Date.now();
+        settleAlarmArmed = false;
+        if (settleOnly) return;
+        maintenanceDueAt = null;
         maintaining = true;
         blobDeadline = Date.now() + blobDeleteBudgetMs;
         try {

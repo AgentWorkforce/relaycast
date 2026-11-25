@@ -28,6 +28,7 @@ makes the actor fail at construction instead of serving with defaults.
 | `RELAYCAST_MAILBOX_DEPTH_CAP` | engine default | Most undelivered items a mailbox holds (positive integer) |
 | `RELAYCAST_RATE_LIMIT_PER_MINUTE` | engine default | Per-credential request limit (positive integer) |
 | `RELAYCAST_ENV` | `production` | Environment label |
+| `RELAYCAST_ACTOR_SETTLE_FLUSH_MS` | `0` (off) | Settle coalescing (experimental): node `delivery.ack` / `delivery.accepted` frames are applied together at most this many ms later (integer 0–5000) instead of each committing its own state write. A held ack lost with the actor's memory is replayed like one lost in flight |
 
 On a hosted control plane these come from Kubernetes Secrets named in the
 deployment's `secretRefs` (below); under `durable-actors dev` the actor

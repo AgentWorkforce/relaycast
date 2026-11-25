@@ -642,4 +642,76 @@ describe('workspace actor realtime', () => {
     }
     expect(actor.sockets.violations).toEqual([]);
   });
+  describe('settle coalescing', () => {
+    async function settling(flushMs = 200) {
+      const actor = new FakeWorkspaceActor(WORKSPACE_ID, { settleFlushMs: flushMs });
+      const { alice, bob } = await workspaceWithAgents(actor);
+      const node = await nodeGrant(actor, alice);
+      const socket = await actor.connect(node.principal);
+      await actor.message(socket, nodeRegister(node));
+      for (const text of ['one', 'two']) {
+        expect((await call(actor, 'POST', '/v1/dm', { to: 'alice', text }, bob)).status).toBe(201);
+      }
+      const delivered = socket.ofType('deliver');
+      expect(delivered).toHaveLength(2);
+      const status = () => rows(actor, 'SELECT status FROM deliveries ORDER BY seq').map((row) => row.status);
+      return { actor, bob, socket, delivered, status };
+    }
+
+    it('holds acks, coalesces cumulative ones and applies them from an alarm due within the flush delay', async () => {
+      const { actor, socket, delivered, status } = await settling();
+      actor.alarm.at = null;
+      const before = Date.now();
+      await actor.message(socket, { v: 1, type: 'delivery.ack', agent: 'alice', up_to_seq: delivered[0].seq });
+      await actor.message(socket, { v: 1, type: 'delivery.ack', agent: 'alice', up_to_seq: delivered[1].seq });
+      expect(status()).toEqual(['delivered', 'delivered']);
+      expect(actor.alarm.at).not.toBeNull();
+      expect(actor.alarm.at!).toBeLessThanOrEqual(before + 200 + 50);
+
+      await actor.maintain();
+      expect(status()).toEqual(['acked', 'acked']);
+      // The settle-only alarm ran no maintenance: maintenance is re-armed for later.
+      expect(actor.alarm.at === null || actor.alarm.at > Date.now() + 1000).toBe(true);
+      expect(actor.sockets.violations).toEqual([]);
+    });
+
+    it('applies held acks before any other call or frame, in arrival order', async () => {
+      const { actor, bob, socket, delivered, status } = await settling();
+      await actor.message(socket, { v: 1, type: 'delivery.ack', agent: 'alice', up_to_seq: delivered[0].seq });
+      expect(status()).toEqual(['delivered', 'delivered']);
+      expect((await call(actor, 'GET', '/v1/dm/conversations', undefined, bob)).status).toBeLessThan(500);
+      expect(status()).toEqual(['acked', 'delivered']);
+
+      await actor.message(socket, { v: 1, type: 'delivery.ack', agent: 'alice', up_to_seq: delivered[1].seq });
+      await actor.message(socket, { v: 1, type: 'node.heartbeat', active_agents: 1, handlers_live: true });
+      expect(status()).toEqual(['acked', 'acked']);
+    });
+
+    it('applies held acks when their socket disconnects', async () => {
+      const { actor, socket, delivered, status } = await settling();
+      await actor.message(socket, { v: 1, type: 'delivery.ack', agent: 'alice', up_to_seq: delivered[1].seq });
+      await actor.disconnect(socket);
+      expect(status()).toEqual(['acked', 'acked']);
+    });
+
+    it('drops held acks with the actor memory without sending anything again on the same socket', async () => {
+      const { actor, socket, delivered, status } = await settling();
+      await actor.message(socket, { v: 1, type: 'delivery.ack', agent: 'alice', up_to_seq: delivered[1].seq });
+      const woken = actor.restart();
+      await woken.maintain();
+      expect(status()).toEqual(['delivered', 'delivered']);
+      expect(socket.ofType('deliver')).toHaveLength(2);
+      // The next ack settles every row up to its seq, the lost one's included.
+      await woken.message(socket, { v: 1, type: 'node.heartbeat', active_agents: 1, handlers_live: true });
+      await woken.message(socket, { v: 1, type: 'delivery.ack', agent: 'alice', up_to_seq: delivered[1].seq });
+      await woken.maintain();
+      expect(status()).toEqual(['acked', 'acked']);
+    });
+
+    it('is off by default: an ack applies in its own call', async () => {
+      const { actor, socket, delivered, status } = await settling(0);
+      await actor.message(socket, { v: 1, type: 'delivery.ack', agent: 'alice', up_to_seq: delivered[0].seq });
+      expect(status()).toEqual(['acked', 'delivered']);
+    });
+  });
 });
