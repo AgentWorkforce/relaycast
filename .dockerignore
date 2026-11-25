@@ -35,6 +35,11 @@
 !packages/actors-workspace/src/**
 !packages/actors-workspace/deploy/
 !packages/actors-workspace/deploy/**
+!packages/sqlite-host/
+!packages/sqlite-host/package.json
+!packages/sqlite-host/tsconfig.json
+!packages/sqlite-host/src/
+!packages/sqlite-host/src/**
 # Never part of a build context, whatever the allowlist above re-includes.
 **/node_modules
 **/.turbo

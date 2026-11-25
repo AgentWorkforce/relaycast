@@ -16,7 +16,9 @@ This project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 Packages without a separate changelog are covered by the cross-package notes below.
 
-## [Unreleased]
+## [Unreleased - Minor]
+
+- Prototype `@relaycast/sqlite-host`: single-writer SQLite workspaces with a synchronous S3 (Express) commit log behind a router that speaks the durable-actors control-plane protocol, for the storage benchmark. Not a supported install path.
 
 ## [12.15.0] - 2026-11-24
 
