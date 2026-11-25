@@ -11,7 +11,8 @@
  * Sequence numbers are zero-padded so keys sort, though S3 Express directory
  * buckets list unsorted and callers sort anyway.
  */
-import { mkdir, readFile, readdir, writeFile } from 'node:fs/promises';
+import { randomUUID } from 'node:crypto';
+import { link, mkdir, open, readFile, readdir, rename, unlink } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import {
   GetObjectCommand,
@@ -87,22 +88,38 @@ export class S3LogStore implements LogStore {
 export class FileLogStore implements LogStore {
   constructor(private readonly root: string) {}
 
+  /** Published with link(2) from a synced temporary file: whole or absent, and never replaced. */
   async create(key: string, body: Buffer): Promise<boolean> {
     const path = join(this.root, key);
-    await mkdir(dirname(path), { recursive: true });
+    const temporary = await this.staged(path, body);
     try {
-      await writeFile(path, body, { flag: 'wx' });
+      await link(temporary, path);
       return true;
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code === 'EEXIST') return false;
       throw error;
+    } finally {
+      await unlink(temporary).catch(() => undefined);
     }
   }
 
   async put(key: string, body: Buffer): Promise<void> {
     const path = join(this.root, key);
-    await mkdir(dirname(path), { recursive: true });
-    await writeFile(path, body);
+    await rename(await this.staged(path, body), path);
+  }
+
+  private async staged(path: string, body: Buffer): Promise<string> {
+    const directory = join(dirname(path), '.staging');
+    await mkdir(directory, { recursive: true });
+    const temporary = join(directory, randomUUID());
+    const file = await open(temporary, 'wx');
+    try {
+      await file.writeFile(body);
+      await file.sync();
+    } finally {
+      await file.close();
+    }
+    return temporary;
   }
 
   async get(key: string): Promise<Buffer | null> {
@@ -117,7 +134,7 @@ export class FileLogStore implements LogStore {
   async list(prefix: string): Promise<string[]> {
     const directory = join(this.root, prefix);
     try {
-      return (await readdir(directory)).map((name) => `${prefix}${name}`);
+      return (await readdir(directory)).filter((name) => name !== '.staging').map((name) => `${prefix}${name}`);
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code === 'ENOENT') return [];
       throw error;

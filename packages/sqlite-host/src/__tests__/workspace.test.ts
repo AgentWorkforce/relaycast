@@ -160,4 +160,28 @@ describe('a SQLite workspace on a commit log', () => {
     const reloaded = await LoadedWorkspace.load(options(store));
     expect(await messages(reloaded, alice)).toEqual([]);
   });
+  it('does not treat its own write, published while a fence probe was pending, as another writer', async () => {
+    const backing = new FileLogStore(scratch());
+    let release: (() => void) | undefined;
+    let delayProbe = false;
+    const store: LogStore = {
+      create: (key, body) => backing.create(key, body),
+      put: (key, body) => backing.put(key, body),
+      get: async (key) => {
+        if (delayProbe) {
+          delayProbe = false;
+          await new Promise<void>((resolve) => { release = resolve; });
+        }
+        return backing.get(key);
+      },
+      list: (prefix) => backing.list(prefix),
+    };
+    const { workspace, alice } = await seeded(store);
+    delayProbe = true;
+    const probe = workspace.superseded();
+    expect((await call(workspace, 'POST', '/v1/channels/general/messages', { text: 'mine' }, alice)).status).toBe(201);
+    release!();
+    expect(await probe).toBe(false);
+    expect(workspace.evicted).toBe(false);
+  });
 });

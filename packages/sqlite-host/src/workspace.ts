@@ -205,9 +205,13 @@ export class LoadedWorkspace {
 
   async connect(metadata: unknown, client: ClientConnection): Promise<string> {
     const socket = new HostSocket(`s_${randomUUID()}`, metadata, client, this);
-    this.sockets.set(socket.id, socket);
     try {
-      await this.call('onConnect', () => this.runtime.onConnect(socket));
+      // Visible to the runtime only from its own onConnect on: an earlier
+      // call would see an unknown socket and close it.
+      await this.call('onConnect', () => {
+        this.sockets.set(socket.id, socket);
+        return this.runtime.onConnect(socket);
+      });
     } catch (error) {
       this.sockets.delete(socket.id);
       socket.drop(1011, 'connect failed');
@@ -230,10 +234,16 @@ export class LoadedWorkspace {
     return this.call('onDisconnect', () => this.runtime.onDisconnect(socket)) as Promise<void>;
   }
 
-  /** Whether another host has written past this copy (checked between calls by the host's fence watch). */
+  /**
+   * Whether another host has written the slot this copy would write next. A
+   * probe that raced this copy's own write of that slot (it claimed the slot
+   * while the read was pending) proves nothing and reports `false`.
+   */
   async superseded(): Promise<boolean> {
     if (this.evicted) return false;
-    return (await this.options.store.get(this.slotKey(this.nextSeq))) !== null;
+    const slot = this.nextSeq;
+    const written = (await this.options.store.get(this.slotKey(slot))) !== null;
+    return written && !this.evicted && this.nextSeq === slot;
   }
 
   /** A socket write from the running call, applied once its commit is durable. */
