@@ -301,6 +301,9 @@ describe.skipIf(!enabled)(
           EXIT_IDENTITY,
         );
         expect(io.lines.join("\n")).toMatch(/FAIL session_user/);
+        expect(io.lines.join("\n")).toMatch(
+          /^AR_DB_LOGIN: logged in as ".+" but relaycast runtime expects login ".+"/m,
+        );
         expect(io.lines.join("\n")).not.toContain(new URL(OWNER_URL!).password);
       });
 
@@ -310,6 +313,7 @@ describe.skipIf(!enabled)(
           EXIT_IDENTITY,
         );
         expect(io.lines.join("\n")).toMatch(/FAIL owns_schema/);
+        expect(io.lines.join("\n")).toMatch(/^AR_DB_LOGIN: .*relaycast owner/m);
       });
 
       describe("a real LOGIN role that can SET ROLE to a privileged role", () => {

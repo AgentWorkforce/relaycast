@@ -28,6 +28,11 @@ export {
   type VerifyIdentityOptions,
 } from "./identity.js";
 export {
+  DB_LOGIN_DOCS_URL,
+  DB_LOGIN_ERROR_CODE,
+  summarizeIdentityFailure,
+} from "./identitySummary.js";
+export {
   LEDGER_TABLE,
   bundleMigrations,
   loadBundledPostgresMigrations,

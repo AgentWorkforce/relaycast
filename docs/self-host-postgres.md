@@ -128,8 +128,24 @@ RELAYCAST_DATABASE_CA_FILE=/etc/relaycast/db-ca.pem \
 | --- | --- |
 | 0 | Success. |
 | 64 | Configuration refused (bad or missing URL, CA, schema, roles, limits). No connection is attempted. |
-| 65 | Connected, but the identity is wrong. Every check is printed and each failing one is named (for example `FAIL not_superuser`). |
+| 65 | Connected, but the identity is wrong. A one-line `AR_DB_LOGIN` summary comes first, then every check is printed and each failing one is named (for example `FAIL not_superuser`). |
 | 1 | Connection failure, migration failure, or a database that is not migrated for this image. |
+
+When the identity is wrong, the first line names the root cause, before the
+per-check list and the final `refusing: ...` line. For the most common mistake,
+running `migrate` with the RDS master login, it reads:
+
+```text
+AR_DB_LOGIN: login "postgres" is the database master/superuser (has CREATEROLE, CREATEDB; can reach rds_superuser); relaycast needs a dedicated owner login (relaycast_owner). Run scripts/selfhost/configure-rds.sh (AgentWorkforce/infra), or see https://agentrelay.com/docs/self-hosting/troubleshooting#database-logins
+```
+
+A login that is not the expected one, but is not master-shaped, reads
+`AR_DB_LOGIN: logged in as "<login>" but relaycast <mode> expects login "<role>" (failed: ...)`;
+any other failure reads
+`AR_DB_LOGIN: login "<login>" is not a correctly scoped relaycast <mode> identity (failed: ...)`.
+The server's `PostgresIdentityError` message starts with the same line.
+`summarizeIdentityFailure(result, mode, expectedRole)`, exported from
+`@relaycast/engine/adapters/postgres`, builds it from a `verifyIdentity` result.
 
 ### Identity checks
 

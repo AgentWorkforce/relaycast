@@ -9,6 +9,10 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ## [Unreleased]
 
+### Added
+
+- `summarizeIdentityFailure(result, mode, expectedRole?)`, `DB_LOGIN_ERROR_CODE` (`AR_DB_LOGIN`) and `DB_LOGIN_DOCS_URL` from `@relaycast/engine/adapters/postgres`: a pure one-line summary of a failed `verifyIdentity` result. A master/superuser-shaped login (any of `not_superuser`, `not_createrole`, `not_createdb`, `not_replication`, `not_bypassrls`, `no_privileged_memberships` failed, or a reachable `rds_superuser`/`azure_pg_admin`/`cloudsqlsuperuser`/`alloydbsuperuser`) is named as such with the reason and the `configure-rds.sh` fix; a login other than the expected role names both; anything else lists the failed checks. `migrate`, `verify-db` and the other verified commands print it on stderr before the identity check list, and `PostgresIdentityError` (new optional `expectedRole` argument and `summary` property) leads its message with it. `verifyIdentity`, its checks and SQL, the check list, the `refusing: ...` line and exit code `65` are unchanged.
+
 ## [12.15.0] - 2026-11-24
 
 ### Added

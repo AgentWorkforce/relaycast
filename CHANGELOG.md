@@ -16,7 +16,11 @@ This project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 Packages without a separate changelog are covered by the cross-package notes below.
 
-## [Unreleased]
+## [Unreleased - Minor]
+
+### Added
+
+- Self-hosted Postgres: when `relaycast-engine migrate`, `verify-db` or server startup refuses the database login, a one-line `AR_DB_LOGIN` summary now comes first and names the root cause, for example `AR_DB_LOGIN: login "postgres" is the database master/superuser (has CREATEROLE, CREATEDB; can reach rds_superuser); relaycast needs a dedicated owner login (relaycast_owner). ...`, with the fix and https://agentrelay.com/docs/self-hosting/troubleshooting#database-logins. The per-check list, the final `refusing: ...` line and exit code `65` are unchanged.
 
 ## [12.15.0] - 2026-11-24
 
