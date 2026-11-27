@@ -1,6 +1,6 @@
 {
   "name": "@relaycast/engine",
-  "version": "12.15.0",
+  "version": "12.16.0",
   "license": "FSL-1.1-ALv2",
   "type": "module",
   "engines": {
@@ -82,8 +82,8 @@
   },
   "dependencies": {
     "@hono/node-server": "^1.13.7",
-    "@relaycast/a2a": "12.15.0",
-    "@relaycast/types": "12.15.0",
+    "@relaycast/a2a": "12.16.0",
+    "@relaycast/types": "12.16.0",
     "better-sqlite3": "^13.2.0",
     "drizzle-orm": "^0.45.1",
     "hono": "^4.11.9",
