@@ -563,8 +563,9 @@ agentRoutes.post(
  * sweeps the others it holds whose device is gone (expired). Each socket is
  * judged by the token that opened it, never by the node row's current
  * binding; the person's other devices and unbound sockets stay. A host with
- * no per-socket binding falls back to the row (whole node). Best-effort: node
- * auth already refuses those tokens.
+ * no per-socket binding cannot tell which socket belonged to the revoked
+ * device, so any device-invalidating mutation (or a dead row binding) closes
+ * the whole direct node. Best-effort: node auth already refuses those tokens.
  */
 async function disconnectIfBindingDead(
   c: Context<AppEnv>,
@@ -576,7 +577,7 @@ async function disconnectIfBindingDead(
     const nodeId = nodeEngine.directNodeIdForAgent(agentId);
     const registry = c.get('engine').nodeConnections;
     if (!registry.disconnectNodeDeviceSockets) {
-      if (await agentDeviceEngine.nodeBindingDead(c.get('db'), workspaceId, nodeId)) {
+      if (killed.length > 0 || await agentDeviceEngine.nodeBindingDead(c.get('db'), workspaceId, nodeId)) {
         await registry.disconnectNode(workspaceId, nodeId);
       }
       return;

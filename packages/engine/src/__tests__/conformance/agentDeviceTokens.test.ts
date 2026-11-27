@@ -493,6 +493,30 @@ describe('agent device tokens', () => {
       expect(bSocket.sock.closed).toBe(false);
     });
 
+    it('disconnects the whole direct node on a fallback registry without per-socket tracking even when the node row moved to another live device', async () => {
+      const { ws, ada } = await seedWithChannel();
+      const aToken = await mintToken(ws, ada.agentId, laptop);
+      const aNode = await mintNodeToken(aToken);
+      const bToken = await mintToken(ws, ada.agentId, buildBox);
+      await mintNodeToken(bToken); // row now bound to live device B
+
+      const disconnected: Array<{ workspaceId: string; nodeId: string }> = [];
+      const fallbackRegistry = stack.runtime.deps.nodeConnections as unknown as Record<string, unknown>;
+      const origSelective = fallbackRegistry.disconnectNodeDeviceSockets;
+      const origDisconnect = fallbackRegistry.disconnectNode;
+      fallbackRegistry.disconnectNodeDeviceSockets = undefined;
+      fallbackRegistry.disconnectNode = async (workspaceId: string, nodeId: string) => {
+        disconnected.push({ workspaceId, nodeId });
+      };
+      try {
+        await request('DELETE', `/v1/agents/ada/device-tokens/${laptop.id}`, ws.workspaceKey);
+      } finally {
+        fallbackRegistry.disconnectNodeDeviceSockets = origSelective;
+        fallbackRegistry.disconnectNode = origDisconnect;
+      }
+      expect(disconnected).toEqual([{ workspaceId: ws.workspaceId, nodeId: aNode.node_id }]);
+    });
+
     it('never lets a bound socket register an agent whose token would outlive the device', async () => {
       const { ws, ada } = await seedWithChannel();
       const laptopToken = await mintToken(ws, ada.agentId, laptop);
