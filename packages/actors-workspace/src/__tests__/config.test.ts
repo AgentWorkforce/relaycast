@@ -12,8 +12,17 @@ describe("workspaceConfigFromEnv", () => {
         expect(workspaceConfigFromEnv(BASE)).toEqual({
             publicUrl: "https://relay.example.com",
             fileSigningSecret: "file-secret-of-at-least-32-characters",
+            settleFlushMs: 0,
             engine: { environment: "production", maxUploadBytes: 64 * 1024 * 1024, retention: { messageTtlDays: null } },
         })
+    })
+
+    it("reads the settle flush delay: unset or blank is off, at most 5 s", () => {
+        expect(workspaceConfigFromEnv({ ...BASE, RELAYCAST_ACTOR_SETTLE_FLUSH_MS: " " }).settleFlushMs).toBe(0)
+        expect(workspaceConfigFromEnv({ ...BASE, RELAYCAST_ACTOR_SETTLE_FLUSH_MS: "200" }).settleFlushMs).toBe(200)
+        for (const bad of ["-1", "1.5", "5001", "soon"]) {
+            expect(() => workspaceConfigFromEnv({ ...BASE, RELAYCAST_ACTOR_SETTLE_FLUSH_MS: bad }), bad).toThrow(/RELAYCAST_ACTOR_SETTLE_FLUSH_MS/)
+        }
     })
 
     it("takes the public URL as an http(s) origin and a signing secret of at least 32 characters", () => {

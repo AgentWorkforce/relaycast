@@ -16,7 +16,9 @@ This project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 Packages without a separate changelog are covered by the cross-package notes below.
 
-## [Unreleased]
+## [Unreleased - Minor]
+
+- Workspace actor: experimental settle coalescing (`RELAYCAST_ACTOR_SETTLE_FLUSH_MS`, off by default). Node ack and accept frames are applied together, at most that many ms later, instead of each committing its own actor state write.
 
 ## [12.16.0] - 2026-11-27
 

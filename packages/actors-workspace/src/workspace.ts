@@ -14,12 +14,15 @@ export interface WorkspaceEnvConfig {
     publicUrl: string
     /** HMAC secret shared with the gateway that serves `/_relayfiles`. */
     fileSigningSecret: string
+    /** `RELAYCAST_ACTOR_SETTLE_FLUSH_MS`: settle coalescing's flush delay; unset or 0 is off. */
+    settleFlushMs: number
     engine: ActorEngineConfig
 }
 
 /**
  * The actor's configuration from `env`: `RELAYCAST_PUBLIC_URL` and
- * `RELAYCAST_FILE_SIGNING_SECRET` are required; the engine variables
+ * `RELAYCAST_FILE_SIGNING_SECRET` are required, `RELAYCAST_ACTOR_SETTLE_FLUSH_MS`
+ * optional (settle coalescing, off by default); the engine variables
  * (`RELAYCAST_MAX_UPLOAD_BYTES`, `RELAYCAST_MESSAGE_TTL_DAYS`,
  * `RELAYCAST_MAILBOX_*`, `RELAYCAST_RATE_LIMIT_PER_MINUTE`,
  * `RELAYCAST_INTERNAL_SECRET`, `RELAYCAST_WORKSPACE_BOOTSTRAP_SECRET` (or
@@ -31,8 +34,17 @@ export function workspaceConfigFromEnv(env: Record<string, string | undefined>):
     return {
         publicUrl: httpOrigin("RELAYCAST_PUBLIC_URL", requiredEnv(env, "RELAYCAST_PUBLIC_URL")),
         fileSigningSecret: requiredEnv(env, "RELAYCAST_FILE_SIGNING_SECRET", MIN_FILE_SIGNING_SECRET_LENGTH),
+        settleFlushMs: settleFlushMs(env.RELAYCAST_ACTOR_SETTLE_FLUSH_MS),
         engine: actorConfigFromEnv(env),
     }
+}
+
+/** At most 5 s: a held ack delays its sender's receipt by up to this long. */
+function settleFlushMs(value: string | undefined): number {
+    if (value === undefined || value.trim() === "") return 0
+    const ms = Number(value)
+    if (!Number.isInteger(ms) || ms < 0 || ms > 5000) throw new Error("RELAYCAST_ACTOR_SETTLE_FLUSH_MS must be an integer from 0 to 5000")
+    return ms
 }
 
 /** The floor the gateway enforces on the same secret (`openssl rand -hex 32` gives 64). */
@@ -98,6 +110,7 @@ export class Workspace extends Actor {
             fileSigningSecret: config.fileSigningSecret,
             outboundFetch: (input, init) => globalThis.fetch(input, init),
             alarm: this.alarm,
+            settleFlushMs: config.settleFlushMs,
             // Bound here: the runtime uses them only inside the calls below.
             sockets: {
                 getConnections: (tag) => this.getConnections(tag),
