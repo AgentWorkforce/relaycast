@@ -199,6 +199,7 @@ describe("loadBundledPostgresMigrations", () => {
       "0011_agent_canonical_name.sql",
       "0012_agent_canonical_name_backfill.sql",
       "0013_agent_canonical_name_unique.sql",
+      "0014_messages_channel_length_id.sql",
     ]);
     expect(bundled.every((m) => m.statements.length > 0)).toBe(true);
   });

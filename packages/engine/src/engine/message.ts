@@ -1,10 +1,12 @@
 import { prepareAuthorityFanout } from './deliveryWrites.js';
 import { parseMessageMentions } from './mentions.js';
-import { eq, and, sql, isNull, lt, gt, inArray } from 'drizzle-orm';
+import { eq, and, sql, isNull, inArray } from 'drizzle-orm';
 import type { getDb } from '../db/index.js';
 import { messages, agents, reactions, readReceipts, messageAttachments } from '../db/tables.js';
 import { runAtomicWrites, type AtomicWrite } from '../ports/database.js';
+import * as sqlx from '../db/sqlx.js';
 import { generateId } from './snowflake.js';
+import { newestSnowflakePage } from './snowflakePage.js';
 import { buildMessageLogWrite } from './console.js';
 import {
   buildChannelDeliveryWrite,
@@ -182,34 +184,31 @@ export async function getMessages(
     isNull(messages.threadId),
   ];
 
-  if (opts.before) {
-    conditions.push(lt(messages.id, opts.before));
-  }
-  if (opts.after) {
-    conditions.push(gt(messages.id, opts.after));
-  }
-
-  const rows = await db
-    .select({
-      id: messages.id,
-      workspaceId: messages.workspaceId,
-      channelId: messages.channelId,
-      agentId: messages.agentId,
-      agentName: agents.name,
-      threadId: messages.threadId,
-      replyToMessageId: messages.replyToMessageId,
-      body: messages.body,
-      blocks: messages.blocks,
-      metadata: messages.metadata,
-      hasAttachments: messages.hasAttachments,
-      createdAt: messages.createdAt,
-      updatedAt: messages.updatedAt,
-    })
-    .from(messages)
-    .leftJoin(agents, eq(messages.agentId, agents.id))
-    .where(and(...conditions))
-    .orderBy(sql`${messages.id} DESC`)
-    .limit(limit);
+  // Snowflake ids are variable-width decimal TEXT: page numerically. Pin the
+  // channel index so SQLite cannot pick the workspace index and sort the whole
+  // workspace history.
+  const rows = await newestSnowflakePage(db, messages.id, { ...opts, limit }, (cursor, orderBy, pageLimit) =>
+    db
+      .select({
+        id: sql`${messages.id}`.mapWith(messages.id),
+        workspaceId: sql`${messages.workspaceId}`.mapWith(messages.workspaceId),
+        channelId: sql`${messages.channelId}`.mapWith(messages.channelId),
+        agentId: sql`${messages.agentId}`.mapWith(messages.agentId),
+        agentName: agents.name,
+        threadId: sql`${messages.threadId}`.mapWith(messages.threadId),
+        replyToMessageId: sql`${messages.replyToMessageId}`.mapWith(messages.replyToMessageId),
+        body: sql`${messages.body}`.mapWith(messages.body),
+        blocks: sql`${messages.blocks}`.mapWith(messages.blocks),
+        metadata: sql`${messages.metadata}`.mapWith(messages.metadata),
+        hasAttachments: sql`${messages.hasAttachments}`.mapWith(messages.hasAttachments),
+        createdAt: sql`${messages.createdAt}`.mapWith(messages.createdAt),
+        updatedAt: sql`${messages.updatedAt}`.mapWith(messages.updatedAt),
+      })
+      .from(sql`${messages} ${sqlx.indexedBy(db, 'idx_messages_channel_length_id')}`)
+      .leftJoin(agents, eq(messages.agentId, agents.id))
+      .where(and(...conditions, cursor))
+      .orderBy(orderBy)
+      .limit(pageLimit));
 
   if (rows.length === 0) return [];
 

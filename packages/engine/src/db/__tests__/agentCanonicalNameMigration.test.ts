@@ -35,7 +35,10 @@ describe('0089_agent_canonical_name migration', () => {
       `);
 
       // Migration 0089 succeeds despite the pre-existing case duplicates.
-      expect(runMigrations(handle).applied).toEqual(['0089_agent_canonical_name.sql']);
+      expect(runMigrations(handle).applied).toEqual([
+        '0089_agent_canonical_name.sql',
+        '0090_messages_channel_length_id_index.sql',
+      ]);
 
       const rows = handle.sqlite
         .prepare('SELECT id, name, canonical_name, status FROM agents ORDER BY id')

@@ -561,6 +561,18 @@ export function indexedBy(source: DialectSource, index: string): SQL {
   });
 }
 
+/**
+ * `expr` compared as binary text: bare on SQLite (TEXT already compares
+ * bytewise), `expr COLLATE "C"` on PostgreSQL so comparisons and orderings
+ * match the `COLLATE "C"` index expressions in schema.pg.ts.
+ */
+export function binaryText<T = string>(source: DialectSource, expr: Fragment): SQL<T> {
+  return pick(source, {
+    sqlite: () => sql<T>`${expr}`,
+    pg: () => sql<T>`${expr} COLLATE "C"`,
+  });
+}
+
 /** `NOT INDEXED` planner hint; empty on PostgreSQL. */
 export function notIndexed(source: DialectSource): SQL {
   return pick(source, {
