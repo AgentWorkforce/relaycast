@@ -5,7 +5,7 @@ import { and, eq } from 'drizzle-orm';
 import { z } from 'zod';
 import type { AppEnv } from '../env.js';
 import { a2aAgents, a2aInbound, agents, messages, workspaces } from '../db/tables.js';
-import { requireAuth, hashToken } from '../middleware/auth.js';
+import { requireAuth, hashToken, refuseAgentDeviceToken } from '../middleware/auth.js';
 import {
   authenticateUnexpired,
   isWorkspaceExpired,
@@ -253,6 +253,9 @@ async function findWebhookAgentByName(db: AppEnv['Variables']['db'], relayName: 
 // POST /v1/a2a/register
 a2aRoutes.post('/v1/a2a/register', requireAuth, rateLimit, async (c) => {
   try {
+    // Registration hands back a relay agent token that would outlive the device.
+    const deviceRefusal = refuseAgentDeviceToken(c);
+    if (deviceRefusal) return deviceRefusal;
     const db = c.get('db');
     const workspace = c.get('workspace');
     const parsed = await parseJsonBody(c, registerA2aSchema, 'agent_card_url or agent_card is required');

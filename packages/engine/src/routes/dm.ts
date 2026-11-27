@@ -163,6 +163,7 @@ dmRoutes.post(
             reply_to_message_id: replyToMessageId,
             ...(owner_approval ? { owner_approval } : {}),
           }, { mailbox, resolveWorkspaceDeliveryPolicy: () => resolveWorkspaceDeliveryPolicyFor(c.get('engine').config, workspace), idempotencyKey, address,
+            senderDevice: c.get('agentDevice'),
             hasWebhookSubscriptions,
             afterAdmission: (data, event) => {
               runInBackground(c, c.get('engine').realtime.publishToWorkspaceStream({

@@ -50,6 +50,7 @@ describe('registered invocation handler snapshot backfill', () => {
         '0088_owner_approval_quote_redaction.sql',
         '0089_agent_canonical_name.sql',
         '0090_messages_channel_length_id_index.sql',
+        '0091_agent_device_tokens.sql',
       ]);
       expect(handle.sqlite.prepare(`
         SELECT id, handler_agent_id, handler_node_id, spawn_dispatch_generation

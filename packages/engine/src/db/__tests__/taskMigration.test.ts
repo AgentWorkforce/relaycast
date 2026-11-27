@@ -54,6 +54,7 @@ it('upgrades existing actions and results additively, preserving rows and every 
       '0088_owner_approval_quote_redaction.sql',
       '0089_agent_canonical_name.sql',
       '0090_messages_channel_length_id_index.sql',
+      '0091_agent_device_tokens.sql',
     ]);
     for (const table of before) {
       const columns = db.pragma(`table_info(${table.name})`) as { name: string }[];

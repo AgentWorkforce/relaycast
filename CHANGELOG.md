@@ -21,10 +21,12 @@ Packages without a separate changelog are covered by the cross-package notes bel
 ### Added
 
 - Self-hosted Postgres: when `relaycast-engine migrate`, `verify-db` or server startup refuses the database login, a one-line `AR_DB_LOGIN` summary now comes first and names the root cause, for example `AR_DB_LOGIN: login "postgres" is the database master/superuser (has CREATEROLE, CREATEDB; can reach rds_superuser); relaycast needs a dedicated owner login (relaycast_owner). ...`, with the fix and https://agentrelay.com/docs/self-hosting/troubleshooting#database-logins. The per-check list, the final `refusing: ...` line and exit code `65` are unchanged.
+- Per-device person tokens: the workspace key mints (`POST /v1/agents/:name/device-tokens`) and revokes (`DELETE /v1/agents/:name/device-tokens/:device_id`) a token per device for a person (`type: human`) agent. What a device token sends carries the server-stamped `agent_device` (`{ id, name, kind }`) next to `agent_address` on DMs, group DMs, channel posts, thread replies, deliveries and events, so receivers see which device a person spoke from. A caller cannot set it. A node token minted with a device token dies with that device.
 
 ### Changed
 
 - Upgraded `@relaycast/engine`'s `better-sqlite3` dependency to `^13.2.0` (Node-API) for Node.js `>=22.14.0` (including Node 24 and 26) compatibility.
+- A person agent's `agent_address` on what it sends is now `<person>@<device id>`, or `<person>@direct` for its shared token, instead of the machine id of whichever device last registered the person's direct node. Any machine part in an address to a person still reaches the person.
 
 ### Fixed
 

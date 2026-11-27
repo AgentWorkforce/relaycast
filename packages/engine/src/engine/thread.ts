@@ -18,10 +18,10 @@ import { codedError } from '../lib/httpError.js';
 import { buildMessageSessionWrite, requireSessionRefFromMetadata } from './sessionMessages.js';
 import {
   addressNodeSelection,
-  formatAgentAddress,
-  SENDER_ADDRESS_METADATA_KEY,
-  senderAddressField,
+  senderFields,
+  senderStampMetadata,
 } from './address.js';
+import type { AgentDeviceStamp } from '../ports/auth.js';
 import * as sqlx from '../db/sqlx.js';
 import { buildReplyLinkWrite, repliedByReplyLinkWrite } from './delivery.js';
 
@@ -33,7 +33,7 @@ export async function postReply(
   parentId: string,
   agentId: string,
   data: { text: string; blocks?: unknown[] | null; data?: Record<string, unknown> | null },
-  options: { mailbox?: MailboxConfig; workspaceDeliveryPolicy?: WorkspaceDeliveryPolicy } = {},
+  options: { mailbox?: MailboxConfig; workspaceDeliveryPolicy?: WorkspaceDeliveryPolicy; senderDevice?: AgentDeviceStamp | null } = {},
 ) {
   // Get the parent message
   const [parent] = await db
@@ -55,16 +55,16 @@ export async function postReply(
     .where(eq(dmConversations.channelId, parent.channelId));
 
   const [agent] = await db
-    .select({ name: agents.name, node: addressNodeSelection() })
+    .select({ name: agents.name, type: agents.type, node: addressNodeSelection() })
     .from(agents)
     .leftJoin(nodes, eq(nodes.id, agents.locationNodeId))
     .where(and(eq(agents.workspaceId, workspaceId), eq(agents.id, agentId)));
-  const senderAddress = agent?.name ? formatAgentAddress(agent.name, agent.node) : null;
 
   const replyId = generateId();
+  // Server-owned sender keys after the caller's sanitized metadata.
   const metadata = {
     ...sanitizeUserMessageMetadata(data.data),
-    ...(senderAddress ? { [SENDER_ADDRESS_METADATA_KEY]: senderAddress } : {}),
+    ...(agent?.name ? senderStampMetadata(agent, options.senderDevice) : {}),
   };
   const sessionRef = requireSessionRefFromMetadata(metadata);
   const createdAt = new Date();
@@ -183,7 +183,7 @@ export async function postReply(
     ...(dmConversation ? { conversation_id: dmConversation.id } : {}),
     agent_id: reply.agentId,
     agent_name: agent?.name || 'unknown',
-    ...senderAddressField(reply.metadata),
+    ...senderFields(reply.metadata),
     thread_id: reply.threadId,
     reply_to_message_id: reply.replyToMessageId,
     text: reply.body,
@@ -277,7 +277,7 @@ export async function getThread(
       channel_id: parent.channelId,
       agent_id: parent.agentId,
       agent_name: displayAgentName(parent.metadata, parent.agentName),
-      ...senderAddressField(parent.metadata),
+      ...senderFields(parent.metadata),
       text: parent.body,
       blocks: (parent.blocks as unknown[] | null) || null,
       metadata: publicMessageMetadata(parent.metadata),
@@ -292,7 +292,7 @@ export async function getThread(
       channel_id: r.channelId,
       agent_id: r.agentId,
       agent_name: displayAgentName(r.metadata, r.agentName),
-      ...senderAddressField(r.metadata),
+      ...senderFields(r.metadata),
       thread_id: r.threadId,
       reply_to_message_id: r.replyToMessageId,
       text: r.body,

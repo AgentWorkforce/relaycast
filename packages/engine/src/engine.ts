@@ -215,6 +215,7 @@ export function createEngine(deps: EngineDeps): Hono<AppEnv> {
       workspaceId: authResult.node.workspaceId,
       nodeId: authResult.node.id,
       nodeName: authResult.node.name,
+      deviceTokenHash: authResult.node.deviceTokenHash ?? null,
       origin,
       originActor,
     });

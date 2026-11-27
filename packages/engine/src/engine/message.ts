@@ -13,7 +13,8 @@ import {
   fetchChannelDeliveryOutcomes,
   type DeliveryOutcomeRecords,
 } from './deliveryWrites.js';
-import { senderAddressField } from './address.js';
+import { senderFields, senderStampMetadata } from './address.js';
+import type { AgentDeviceStamp } from '../ports/auth.js';
 import { displayAgentName, publicMessageMetadata, sanitizeUserMessageMetadata } from './messageMetadata.js';
 import { DEFAULT_MAILBOX_DEPTH_CAP, DEFAULT_MAILBOX_TTL_MS, DEFAULT_OFFLINE_FANOUT_EXCLUDE_MS, type MailboxConfig } from './mailboxConfig.js';
 import type { WorkspaceDeliveryPolicy } from './workspaceDeliveryPolicy.js';
@@ -38,15 +39,13 @@ export async function postMessage(
     /** Validated by the route; stored in its own immutable column. */
     owner_approval?: OwnerApproval | null;
   },
-  options: { mailbox?: MailboxConfig; workspaceDeliveryPolicy?: WorkspaceDeliveryPolicy } = {},
+  options: { mailbox?: MailboxConfig; workspaceDeliveryPolicy?: WorkspaceDeliveryPolicy; senderDevice?: AgentDeviceStamp | null } = {},
 ) {
   const startedAtMs = Date.now();
   const messageId = generateId();
 
   const mentionedHandles = new Set(parseMessageMentions(data.text));
 
-  const metadata = sanitizeUserMessageMetadata(data.data);
-  const sessionRef = requireSessionRefFromMetadata(metadata);
   const createdAt = new Date();
 
   const mailbox = options.mailbox ?? {
@@ -57,8 +56,15 @@ export async function postMessage(
 
   const [attachments, [agent]] = await Promise.all([
     resolveSendAttachments(db, workspaceId, data.attachments),
-    db.select({ name: agents.name }).from(agents).where(eq(agents.id, agentId)),
+    db.select({ name: agents.name, type: agents.type }).from(agents).where(eq(agents.id, agentId)),
   ]);
+  // Channel posts carry no sender address; a person's device stamp goes after
+  // the caller's sanitized metadata.
+  const metadata = {
+    ...sanitizeUserMessageMetadata(data.data),
+    ...(agent ? senderStampMetadata({ ...agent, node: null }, options.senderDevice, { withAddress: false }) : {}),
+  };
+  const sessionRef = requireSessionRefFromMetadata(metadata);
   const hasAttachments = attachments.length > 0;
 
   // Durable writes run as one atomic unit when the adapter supports it; fanout
@@ -127,8 +133,9 @@ export async function postMessage(
         deliveryKind: 'channel',
         body: data.text,
         contentType: data.content_type ?? null,
+        // Console logs keep the caller's metadata only: no __relaycast_ key is served.
         metadata: {
-          ...metadata,
+          ...sanitizeUserMessageMetadata(data.data),
           injection_mode: data.mode ?? 'wait',
         },
         attachmentCount: attachments.length,
@@ -154,6 +161,7 @@ export async function postMessage(
     channel_id: message.channelId,
     agent_id: message.agentId,
     agent_name: agent?.name || 'unknown',
+    ...senderFields(message.metadata),
     text: message.body,
     blocks: (message.blocks as unknown[] | null) || null,
     metadata: publicMessageMetadata(message.metadata),
@@ -277,7 +285,7 @@ export async function getMessages(
     channel_id: row.channelId,
     agent_id: row.agentId,
     agent_name: displayAgentName(row.metadata, row.agentName),
-    ...senderAddressField(row.metadata),
+    ...senderFields(row.metadata),
     text: row.body,
     blocks: (row.blocks as unknown[] | null) || null,
     metadata: publicMessageMetadata(row.metadata),
@@ -341,7 +349,7 @@ export async function getMessage(db: Db, workspaceId: string, messageId: string)
     channel_id: row.channelId,
     agent_id: row.agentId,
     agent_name: displayAgentName(row.metadata, row.agentName),
-    ...senderAddressField(row.metadata),
+    ...senderFields(row.metadata),
     text: row.body,
     blocks: (row.blocks as unknown[] | null) || null,
     metadata: publicMessageMetadata(row.metadata),

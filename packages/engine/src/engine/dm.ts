@@ -47,11 +47,12 @@ import {
   addressNodeSelection,
   addressNotFound,
   addressSplits,
-  formatAgentAddress,
+  PERSON_AGENT_TYPE,
   selectAddressedRecipient,
-  SENDER_ADDRESS_METADATA_KEY,
-  senderAddressField,
+  senderFields,
+  senderStampMetadata,
 } from './address.js';
+import type { AgentDeviceStamp } from '../ports/auth.js';
 import { buildMessageSessionWrite, requireSessionRefFromMetadata } from './sessionMessages.js';
 import { fetchAttachmentsBatch, resolveSendAttachments, type AttachmentRow } from './attachments.js';
 import { canonicalJson, canonicalUserMessageMetadata, publicMessageMetadata, sanitizeUserMessageMetadata } from './messageMetadata.js';
@@ -63,6 +64,11 @@ type Db = ReturnType<typeof getDb>;
 const DIRECT_DM_IDEMPOTENCY_TTL_MS = 24 * 60 * 60 * 1000;
 
 interface SendDmOptions {
+  /**
+   * The device the sender authenticated as (a person's per-device token).
+   * Server-owned: routes pass `c.get('agentDevice')`, never caller input.
+   */
+  senderDevice?: AgentDeviceStamp | null;
   skipA2aIntercept?: boolean;
   /** Stable request identity for resuming already admitted outbound A2A. */
   idempotencyKey?: string;
@@ -301,16 +307,16 @@ async function resolveConversation(
  * Persisted DM metadata. Server-owned keys go after caller metadata so a
  * federated peer cannot override how the local runtime is injected, and
  * `sanitizeUserMessageMetadata` already drops any caller-supplied
- * `__relaycast_` key such as the sender address.
+ * `__relaycast_` key such as the sender address or device.
  */
 function dmMessageMetadata(
   data: { mode?: 'wait' | 'steer'; data?: Record<string, unknown> | null },
-  senderAddress: string | null | undefined,
+  senderStamp: Record<string, unknown> | null | undefined,
 ): Record<string, unknown> {
   return {
     ...sanitizeUserMessageMetadata(data.data),
     injection_mode: data.mode ?? 'wait',
-    ...(senderAddress ? { [SENDER_ADDRESS_METADATA_KEY]: senderAddress } : {}),
+    ...(senderStamp ?? {}),
   };
 }
 
@@ -336,11 +342,11 @@ function buildDmMessageWrites(
   messageId: string,
   createdAt = new Date(),
   inboundRegistration?: { id: string; tokenHash?: string },
-  senderAddress?: string | null,
-  addressedRecipient?: { agentId: string; nodeId: string; machine: string },
+  senderStamp?: Record<string, unknown> | null,
+  addressedRecipient?: { agentId: string; nodeId: string; machine: string; anyMachine?: boolean },
 ): AtomicWrite[] {
   const hasAttachments = attachments.length > 0;
-  const metadata = dmMessageMetadata(data, senderAddress);
+  const metadata = dmMessageMetadata(data, senderStamp);
   const sessionRef = requireSessionRefFromMetadata(metadata);
   const writes: AtomicWrite[] = [
     db
@@ -367,7 +373,7 @@ function buildDmMessageWrites(
             SELECT 1 FROM agents a JOIN nodes n ON n.id = a.location_node_id
             WHERE a.id = ${addressedRecipient.agentId} AND a.workspace_id = ${workspaceId}
               AND a.status <> 'released' AND a.location_node_id = ${addressedRecipient.nodeId}
-              AND (
+              AND (${addressedRecipient.anyMachine ? 1 : 0} = 1 OR
                 (n.role = 'direct' AND (${addressedRecipient.machine} = 'direct' OR n.machine_id = ${addressedRecipient.machine}))
                 OR (n.role <> 'direct' AND ${addressedRecipient.machine} <> 'direct'
                   AND (n.name = ${addressedRecipient.machine} OR n.machine_id = ${addressedRecipient.machine}))
@@ -418,7 +424,7 @@ function buildDmResult(
       id: message.id,
       agent_id: message.agentId,
       agent_name: fromAgent.name,
-      ...senderAddressField(message.metadata),
+      ...senderFields(message.metadata),
       text: message.body,
       injection_mode: injectionMode,
       attachments,
@@ -690,11 +696,14 @@ export async function sendDm(
       eq(agents.workspaceId, workspaceId),
       data.to === '@self' ? eq(agents.id, fromAgentId) : eq(agents.name, data.to),
     ));
+  // A person's machine part is display only (machineMatches): the admission
+  // guard still checks the agent, its node and its status, but not the machine.
   const addressedRecipient = options.address !== undefined && recipient?.agent.locationNodeId
     ? {
       agentId: recipient.agent.id,
       nodeId: recipient.agent.locationNodeId,
       machine: addressSplits(options.address).find((split) => split.agent === recipient.agent.name)!.machine,
+      anyMachine: recipient.agent.type === PERSON_AGENT_TYPE,
     }
     : undefined;
   const toAgent = recipient?.agent;
@@ -703,7 +712,7 @@ export async function sendDm(
   }
 
   const [fromAgent] = await db
-    .select({ name: agents.name, node: addressNodeSelection() })
+    .select({ name: agents.name, type: agents.type, node: addressNodeSelection() })
     .from(agents)
     .leftJoin(nodes, eq(nodes.id, agents.locationNodeId))
     .where(and(eq(agents.workspaceId, workspaceId), eq(agents.id, fromAgentId)));
@@ -711,7 +720,7 @@ export async function sendDm(
   if (!fromAgent?.name) {
     throw codedError('Sender agent not found', 'internal_error', 500);
   }
-  const senderAddress = formatAgentAddress(fromAgent.name, fromAgent.node);
+  const senderStamp = senderStampMetadata(fromAgent, options.senderDevice);
 
   // Resolved once: the owner-approval guard below and the dispatch decision
   // must agree on whether this recipient is an external A2A agent.
@@ -789,7 +798,7 @@ export async function sendDm(
 
   const publicResult = buildDmResult({
     id: messageId, agentId: fromAgentId, body: data.text, createdAt,
-    metadata: dmMessageMetadata(data, senderAddress),
+    metadata: dmMessageMetadata(data, senderStamp),
     ownerApproval: data.owner_approval ?? null,
   }, conv, fromAgent, options.address !== undefined ? { ...data, to: toAgent.name } : data, attachments);
   const eventData = buildDmReceivedEventData(publicResult, { fromName: fromAgent.name });
@@ -815,7 +824,7 @@ export async function sendDm(
   const persist = () => runAtomicWrites(db, (writeDb) => {
     const writes = buildDmMessageWrites(writeDb, workspaceId, fromAgentId, conv.channelId, data, attachments, messageId, createdAt,
       options.receivedA2aAgentId ? { id: options.receivedA2aAgentId, tokenHash: options.receivedA2aTokenHash } : undefined,
-      senderAddress, addressedRecipient);
+      senderStamp, addressedRecipient);
 
     if (directClaimId) {
       // The unique claim is the first statement in the atomic admission. A
@@ -1206,7 +1215,7 @@ export async function getDmMessages(
     id: r.id,
     agent_id: r.agentId,
     agent_name: r.agentName,
-    ...senderAddressField(r.metadata),
+    ...senderFields(r.metadata),
     text: r.body,
     injection_mode: r.metadata?.injection_mode as 'wait' | 'steer' | undefined,
     metadata: publicMessageMetadata(r.metadata),

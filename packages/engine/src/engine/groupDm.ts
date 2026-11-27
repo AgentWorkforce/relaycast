@@ -14,6 +14,8 @@ import type { WorkspaceDeliveryPolicy } from './workspaceDeliveryPolicy.js';
 import { codedError } from '../lib/httpError.js';
 import { resolveSendAttachments } from './attachments.js';
 import { publicMessageMetadata, sanitizeUserMessageMetadata } from './messageMetadata.js';
+import { senderFields, senderStampMetadata } from './address.js';
+import type { AgentDeviceStamp } from '../ports/auth.js';
 import { buildMessageSessionWrite, requireSessionRefFromMetadata } from './sessionMessages.js';
 
 type Db = ReturnType<typeof getDb>;
@@ -93,7 +95,7 @@ export async function postGroupMessage(
     mode?: 'wait' | 'steer';
     data?: Record<string, unknown> | null;
   },
-  options: { mailbox?: MailboxConfig; workspaceDeliveryPolicy?: WorkspaceDeliveryPolicy } = {},
+  options: { mailbox?: MailboxConfig; workspaceDeliveryPolicy?: WorkspaceDeliveryPolicy; senderDevice?: AgentDeviceStamp | null } = {},
 ) {
   // Verify sender is a participant (and hasn't left)
   const [participant] = await db
@@ -127,7 +129,7 @@ export async function postGroupMessage(
   }
 
   const [fromAgent] = await db
-    .select({ name: agents.name })
+    .select({ name: agents.name, type: agents.type })
     .from(agents)
     .where(and(eq(agents.workspaceId, workspaceId), eq(agents.id, agentId)));
 
@@ -138,9 +140,11 @@ export async function postGroupMessage(
   const attachments = await resolveSendAttachments(db, workspaceId, data.attachments);
   const messageId = generateId();
   const hasAttachments = attachments.length > 0;
+  // Group DMs carry no sender address; a person's device stamp is server-owned.
   const metadata = {
     ...sanitizeUserMessageMetadata(data.data),
     injection_mode: data.mode ?? 'wait',
+    ...senderStampMetadata({ ...fromAgent, node: null }, options.senderDevice, { withAddress: false }),
   };
   const sessionRef = requireSessionRefFromMetadata(metadata);
   const createdAt = new Date();
@@ -223,6 +227,7 @@ export async function postGroupMessage(
       id: message.id,
       agent_id: message.agentId,
       agent_name: fromAgent.name,
+      ...senderFields(message.metadata),
       text: message.body,
       injection_mode: injectionMode,
       attachments,

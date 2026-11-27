@@ -11,7 +11,7 @@ import {
   WorkspaceDmConversationSchema,
 } from '@relaycast/types';
 import type { AppEnv } from '../env.js';
-import { requireAgentToken, requireWorkspaceKey, requireWorkspaceRead } from '../middleware/auth.js';
+import { refuseAgentDeviceToken, requireAgentToken, requireWorkspaceKey, requireWorkspaceRead } from '../middleware/auth.js';
 import { authenticateUnexpired } from '../auth/workspaceExpiry.js';
 import { noteAuthenticatedCredential } from '../lib/credentialNotice.js';
 import { parseIdempotencyKey } from '../middleware/idempotency.js';
@@ -652,6 +652,8 @@ workspaceRoutes.post('/agents/:name/rotate-token', requireAgentToken, rateLimit,
     if (!authAgent) {
       return jsonError(c, 'unauthorized', 'Agent token required', 401);
     }
+    const deviceRefusal = refuseAgentDeviceToken(c);
+    if (deviceRefusal) return deviceRefusal;
     if (authAgent.name !== c.req.param('name')) {
       return jsonError(
         c,

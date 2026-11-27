@@ -22,8 +22,14 @@ export const ACTOR_SOCKETS_TABLE = {
     delivery_ready TEXT,
     caller_aware_actions TEXT NOT NULL DEFAULT '[]',
     last_seen INTEGER NOT NULL,
-    attached_at INTEGER NOT NULL
+    attached_at INTEGER NOT NULL,
+    device_token_hash TEXT
   )`,
+  /** Columns added after the table first shipped; ensureActorSchema adds any a stored table lacks. */
+  addedColumns: [
+    // The device-token binding of the node token that opened the socket (engine/agentDevice.ts).
+    { name: 'device_token_hash', ddl: 'device_token_hash TEXT' },
+  ],
 } as const;
 
 export interface ActorSocketRow {
@@ -42,6 +48,8 @@ export interface ActorSocketRow {
   callerAwareActions: string[];
   lastSeen: number;
   attachedAt: number;
+  /** The device-token binding of the node token that opened the socket; null when unbound. */
+  deviceTokenHash: string | null;
 }
 
 interface RawRow {
@@ -57,9 +65,10 @@ interface RawRow {
   caller_aware_actions: string;
   last_seen: number;
   attached_at: number;
+  device_token_hash: string | null;
 }
 
-const COLUMNS = 'socket_id, kind, workspace_id, node_id, observer_token_id, provider_name, instance_id, delivery_mode, delivery_ready, caller_aware_actions, last_seen, attached_at';
+const COLUMNS = 'socket_id, kind, workspace_id, node_id, observer_token_id, provider_name, instance_id, delivery_mode, delivery_ready, caller_aware_actions, last_seen, attached_at, device_token_hash';
 
 function fromRaw(row: RawRow): ActorSocketRow {
   return {
@@ -75,6 +84,7 @@ function fromRaw(row: RawRow): ActorSocketRow {
     callerAwareActions: JSON.parse(row.caller_aware_actions) as string[],
     lastSeen: Number(row.last_seen),
     attachedAt: Number(row.attached_at),
+    deviceTokenHash: row.device_token_hash ?? null,
   };
 }
 
@@ -83,15 +93,18 @@ export class ActorSocketTable {
   constructor(private readonly sql: ActorSql) {}
 
   /** Record a socket the registry attached. A reused id replaces the stale row. */
-  insert(row: { socketId: string; kind: 'node' | 'observer'; workspaceId: string; nodeId?: string; observerTokenId?: string }): void {
+  insert(row: {
+    socketId: string; kind: 'node' | 'observer'; workspaceId: string; nodeId?: string; observerTokenId?: string;
+    deviceTokenHash?: string | null;
+  }): void {
     const now = Date.now();
     this.sql.exec(
-      `INSERT INTO ${TABLE} (${COLUMNS}) VALUES (?, ?, ?, ?, ?, NULL, NULL, NULL, NULL, '[]', ?, ?)
+      `INSERT INTO ${TABLE} (${COLUMNS}) VALUES (?, ?, ?, ?, ?, NULL, NULL, NULL, NULL, '[]', ?, ?, ?)
        ON CONFLICT(socket_id) DO UPDATE SET kind = excluded.kind, workspace_id = excluded.workspace_id,
          node_id = excluded.node_id, observer_token_id = excluded.observer_token_id, provider_name = NULL,
          instance_id = NULL, delivery_mode = NULL, delivery_ready = NULL, caller_aware_actions = '[]',
-         last_seen = excluded.last_seen, attached_at = excluded.attached_at`,
-      row.socketId, row.kind, row.workspaceId, row.nodeId ?? null, row.observerTokenId ?? null, now, now,
+         last_seen = excluded.last_seen, attached_at = excluded.attached_at, device_token_hash = excluded.device_token_hash`,
+      row.socketId, row.kind, row.workspaceId, row.nodeId ?? null, row.observerTokenId ?? null, now, now, row.deviceTokenHash ?? null,
     );
   }
 

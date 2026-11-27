@@ -249,6 +249,10 @@ describe('Type definitions', () => {
     };
     expect(SessionMessageSchema.parse({ ...message, agent_address: 'ada@laptop' }).agent_address).toBe('ada@laptop');
     expect(SessionMessageSchema.parse(message)).not.toHaveProperty('agent_address');
+    const device = { id: 'ada-laptop-3f2a91c0', name: "Ada's Laptop", kind: 'desktop' as const };
+    expect(SessionMessageSchema.parse({ ...message, agent_device: device }).agent_device).toEqual(device);
+    expect(SessionMessageSchema.parse(message)).not.toHaveProperty('agent_device');
+    expect(() => SessionMessageSchema.parse({ ...message, agent_device: { ...device, kind: 'phone' } })).toThrow();
   });
 
   // ============================================

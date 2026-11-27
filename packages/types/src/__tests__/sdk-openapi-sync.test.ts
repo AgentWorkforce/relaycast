@@ -74,6 +74,9 @@ const NON_SDK_OPENAPI_PATHS = new Set([
   '/v1/internal/workspaces/{param}/api-key',
   '/v1/internal/workspaces/{param}/expiry',
   '/v1/internal/workspaces/{param}/import',
+  // Per-device person tokens: minted and revoked by the host that owns the person's sign-ins (Cloud).
+  '/v1/agents/{param}/device-tokens',
+  '/v1/agents/{param}/device-tokens/{param}',
 ]);
 
 const CORE_SDK_PATHS = new Set([

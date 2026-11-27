@@ -54,6 +54,10 @@ credentialRoutes.post('/credentials/upgrade', async (c) => {
     if (parsed.family === 'ar') {
       return jsonError(c, 'credential_not_legacy', 'This credential is already an ar_ credential', 409);
     }
+    if (parsed.agentDevice) {
+      // Would otherwise mint an ar_ credential for the agent's shared token.
+      return jsonError(c, 'device_token_forbidden', 'A device token cannot manage agent credentials', 403);
+    }
 
     const db = c.get('db');
     let principal: Principal;
