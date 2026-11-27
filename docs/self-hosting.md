@@ -613,10 +613,9 @@ applies.
 Be honest with yourself about what self-host is and isn't:
 
 - **Single process only — no horizontal scale-out.** Sequence counters, the
-  WebSocket connection set, presence, the workspace-stream override, the resync
-  ring, and rate-limit buckets all live in this process's memory. Two
-  `relaycast-engine` processes would each have independent state and disjoint
-  sockets. A multi-node deployment needs a shared realtime/persistence backend
+  WebSocket connection set, presence, the resync ring, and rate-limit buckets
+  all live in this process's memory. Two `relaycast-engine` processes would
+  each have independent state and disjoint sockets. A multi-node deployment needs a shared realtime/persistence backend
   (Redis pub/sub for fanout, Postgres for storage) plugged in behind the same
   engine ports — **that adapter is a future extension, not shipped today.**
 - **In-process background work.** Webhook deliveries run fire-and-forget in the
@@ -624,8 +623,6 @@ Be honest with yourself about what self-host is and isn't:
   survive a restart mid-flight.
 - **Idempotency windows reset on restart.** They are in-memory (best-effort),
   so they reset when the process restarts.
-- **Workspace-stream overrides reset on restart.** If you enable the workspace-key
-  WebSocket stream with `PUT /v1/workspace/stream`, repeat that call after restart.
 - **Restart resets live realtime sequences.** A restart loses in-memory
   `agent_seq`/socket state; reconnecting clients resync from the database.
 - **Need more than one process?** See [Self-hosting on TerseAI durable-actors](self-hosting-durable-actors.md): one actor per workspace behind stateless gateway replicas. That path is experimental and not yet release-grade.
