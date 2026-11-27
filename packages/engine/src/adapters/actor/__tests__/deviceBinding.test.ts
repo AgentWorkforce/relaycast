@@ -1,4 +1,5 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
+import { InProcessRealtime } from '../../node/realtime.js';
 import { createHash } from 'node:crypto';
 import { SocketGrantSchema, UNAUTHORIZED_CLOSE_CODE, isSocketGrant, type SocketPrincipal } from '../index.js';
 import type { ActorHttpRequest } from '../http.js';
@@ -134,6 +135,44 @@ describe('actor runtime device binding', () => {
     expect(dead.closed?.code).toBe(UNAUTHORIZED_CLOSE_CODE);
     expect(healthy.closed).toBeNull();
     expect(woken.sql.raw.prepare('SELECT status FROM nodes WHERE id = ?').get(unbound.node_id)).toEqual({ status: 'online' });
+  });
+
+  it('keeps tearing down the rest of the batch when one dead-device teardown throws', async () => {
+    const actor = new FakeWorkspaceActor(WORKSPACE_ID);
+    const ada = await person(actor);
+    const other = await call<{ token: string }>(actor, 'POST', '/v1/agents/ada/device-tokens', {
+      agent_id: ada.agentId, device: { id: 'ada-desk-0c1d2e3f', name: 'desk', kind: 'cli' },
+    }, ada.key);
+    const first = await grantFor(actor, ada.device);
+    const a = await actor.connect(first.principal);
+    const second = await grantFor(actor, other.json.data.token);
+    const b = await actor.connect(second.principal);
+    await actor.message(b, register(second));
+    actor.sql.raw.prepare('UPDATE agent_device_tokens SET expires_at = ?').run(Math.floor(Date.now() / 1000) - 10);
+    const original = InProcessRealtime.prototype.attachNodeSocket;
+    let thrown = 0;
+    const tornDown: string[] = [];
+    const spy = vi.spyOn(InProcessRealtime.prototype, 'attachNodeSocket').mockImplementation(function (this: InProcessRealtime, ...args) {
+      const handle = original.apply(this, args);
+      const options = args[3] as { connectionId?: string; earlyDrain?: boolean; deviceTokenHash?: string | null } | undefined;
+      if (options?.earlyDrain !== false || !options.deviceTokenHash) return handle;
+      if (thrown === 0) {
+        thrown += 1;
+        return { ...handle, handleClose: async () => { throw new Error('teardown failed'); } };
+      }
+      return { ...handle, handleClose: async () => { tornDown.push(options.connectionId ?? ''); await handle.handleClose(); } };
+    });
+    try {
+      const woken = actor.restart();
+      expect((await call(woken, 'GET', '/v1/agents', undefined, ada.key)).status).toBe(200);
+      expect(thrown).toBe(1);
+      expect(a.closed).not.toBeNull();
+      expect(b.closed).not.toBeNull();
+      // The first teardown threw; the second still ran.
+      expect(tornDown).toHaveLength(1);
+    } finally {
+      spy.mockRestore();
+    }
   });
 
   it('replays a bound socket whose device is still live, keeping its binding', async () => {

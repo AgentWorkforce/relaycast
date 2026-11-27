@@ -24,7 +24,7 @@ import {
 } from '@relaycast/types';
 import type { getDb } from '../db/index.js';
 import { actionInvocations, actions, agents, agentDeviceTokens, agentNodeBindings, channelMembers, channels, nodeProviders, nodes, workspaces } from '../db/tables.js';
-import { deviceTokenLiveCached, liveNodeBinding, nodeDeviceJoin, nodeIsDeviceBound } from './agentDevice.js';
+import { deviceTokenLive, deviceTokenLiveCached, liveNodeBinding, nodeBindingDead, nodeBindingDeadCached, nodeDeviceJoin, nodeIsDeviceBound } from './agentDevice.js';
 import { isWorkspaceExpired, WORKSPACE_EXPIRED_CODE, WORKSPACE_EXPIRED_MESSAGE } from '../auth/workspaceExpiry.js';
 import { randomHex, sha256Hex } from '../lib/crypto.js';
 import { codedError } from '../lib/httpError.js';
@@ -4106,6 +4106,16 @@ export async function handleNodeControlMessage(args: HandleNodeControlMessageArg
     }
     switch (message.type) {
       case 'node.register': {
+        // A socket opened with a device-bound node token registers only while
+        // that device token is live (fresh read: register is rare).
+        // Untracked host (`undefined`) falls back to the node row's binding
+        // with a fresh read; tracked unbound (`null`) stays exempt.
+        if (args.connectionDeviceTokenHash === undefined
+          ? await nodeBindingDead(args.db, args.workspaceId, args.nodeId)
+          : args.connectionDeviceTokenHash !== null && !await deviceTokenLive(args.db, args.connectionDeviceTokenHash)) {
+          closeSocket(args.socket, 'device token revoked');
+          throw codedError('Node token is no longer valid', 'node_token_invalid', 401);
+        }
         const provider = resolveProviderIdentity(message, args.nodeId, args.connectionId);
         if (args.connectionId && args.registry.providerAttachConflict) {
           const conflict = args.registry.providerAttachConflict(
@@ -4227,10 +4237,13 @@ export async function handleNodeControlMessage(args: HandleNodeControlMessageArg
         // the socket; this catches expiry), its heartbeat is refused and this
         // socket alone is closed. Checked against the token that opened it,
         // never the row's current binding.
-        // Untracked host (undefined): the row's binding, read with the drain
-        // state at no extra query (checkpoint heartbeats skip it, as before).
         if (args.connectionDeviceTokenHash === undefined
-          ? prior?.rowBindingDead === true
+          // Untracked socket: the row's binding, from the drain read, or (on a
+          // checkpoint heartbeat, which skips that read) a per-node cached check.
+          // Only a direct node can be device-bound; a broker checkpoint stays read-free.
+          ? (prior
+            ? prior.rowBindingDead
+            : args.heartbeatCheckpoint?.role === 'direct' && await nodeBindingDeadCached(args.db, args.workspaceId, args.nodeId))
           : args.connectionDeviceTokenHash !== null && !await deviceTokenLiveCached(args.db, args.connectionDeviceTokenHash)) {
           closeSocket(args.socket, 'device token revoked');
           throw codedError('Node token is no longer valid', 'node_token_invalid', 401);

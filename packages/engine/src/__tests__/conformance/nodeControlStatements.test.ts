@@ -138,7 +138,8 @@ describe('node control D1 statements per frame', () => {
     const directFrame = (frame: Record<string, unknown>, extra: Partial<Parameters<typeof handleNodeControlMessage>[0]> = {}) =>
       handleNodeControlMessage({
         db, registry: stack.runtime.realtime, presence, workspaceId: ws.workspaceId, nodeId: directNodeId,
-        socket: directSock, workspaceDeadline: directDeadline, raw: JSON.stringify(frame), ...extra,
+        // A host that tracks per-socket device bindings (unbound socket): the steady state.
+        socket: directSock, workspaceDeadline: directDeadline, raw: JSON.stringify(frame), connectionDeviceTokenHash: null, ...extra,
       });
     await directFrame({ v: 1, id: 'dr', type: 'node.register', node_id: directNodeId, name: `direct-${direct.agentId}`, capabilities: [], max_agents: 1, tags: [], version: 'sdk', resume_cursor: null });
     take();
@@ -148,6 +149,13 @@ describe('node control D1 statements per frame', () => {
     await directFrame(sdkBeat('b2'), { heartbeatCheckpoint: { role: 'direct' } });
     const directCheckpoint = take();
     expect(directSock.ofType('reply').at(-1)).toMatchObject({ id: 'b2', data: { agent_presence: true, agent_id: direct.agentId } });
+    // A socket whose host does not track bindings (transitional: opened before
+    // the host passed them) pays one cached node read on its first checkpoint,
+    // and none on the next within the recheck window.
+    await directFrame(sdkBeat('b3'), { heartbeatCheckpoint: { role: 'direct' }, connectionDeviceTokenHash: undefined });
+    expect(take()).toEqual(['select from "nodes"', ...directCheckpoint]);
+    await directFrame(sdkBeat('b4'), { heartbeatCheckpoint: { role: 'direct' }, connectionDeviceTokenHash: undefined });
+    expect(take()).toEqual(directCheckpoint);
 
     await settleNodeOffline(db, stack.runtime.realtime, ws.workspaceId, directNodeId, { claimRevision: Number.MAX_SAFE_INTEGER });
     const offlineSettle = take();
@@ -197,6 +205,7 @@ describe('node control D1 statements per frame', () => {
         ],
         "register": [
           "select from "workspaces"",
+          "select from "nodes"",
           "select from "nodes"",
           "select from "nodes"",
           "select from "nodes"",
