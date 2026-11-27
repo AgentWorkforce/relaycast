@@ -1,0 +1,1 @@
+ALTER TABLE "agents" ADD COLUMN "canonical_name" text;

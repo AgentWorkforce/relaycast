@@ -22,6 +22,14 @@ Packages without a separate changelog are covered by the cross-package notes bel
 
 - Self-hosted Postgres: when `relaycast-engine migrate`, `verify-db` or server startup refuses the database login, a one-line `AR_DB_LOGIN` summary now comes first and names the root cause, for example `AR_DB_LOGIN: login "postgres" is the database master/superuser (has CREATEROLE, CREATEDB; can reach rds_superuser); relaycast needs a dedicated owner login (relaycast_owner). ...`, with the fix and https://agentrelay.com/docs/self-hosting/troubleshooting#database-logins. The per-check list, the final `refusing: ...` line and exit code `65` are unchanged.
 
+### Changed
+
+- Upgraded `@relaycast/engine`'s `better-sqlite3` dependency to `^13.2.0` (Node-API) for Node.js `>=22.14.0` (including Node 24 and 26) compatibility.
+
+### Security
+
+- Agent registration (`POST /v1/agents`, node `agent.register`, and `spawn`) now rejects confusable agent names: names must be 1–128 printable non-whitespace ASCII characters (`0x21`–`0x7E`, rejecting whitespace, control characters, zero-width/bidi characters, and non-ASCII homoglyphs with `400 invalid_agent_name`), and active agent names are unique case-insensitively per workspace (`409 agent_already_exists`) while preserving display casing. `@relaycast/types` and `@relaycast/engine` export `validateAgentName` and `canonicalizeAgentName` for downstream callers.
+
 ## [12.15.0] - 2026-11-24
 
 ### Added

@@ -91,7 +91,9 @@ describe('workspace leaders', () => {
     const admin = await registerAgent(stack.app, ws.workspaceKey, 'admin');
     const ops = await registerAgent(stack.app, ws.workspaceKey, 'opsgrok');
     const leadA = await registerAgent(stack.app, ws.workspaceKey, 'lead-a');
-    await registerAgent(stack.app, ws.workspaceKey, 'Admin');
+    // Distinct name with uppercase `L` verifies pattern matching stays case-sensitive
+    // without violating case-insensitive active agent name uniqueness.
+    await registerAgent(stack.app, ws.workspaceKey, 'Lead-b');
     await registerAgent(stack.app, ws.workspaceKey, 'grokker');
     await registerAgent(stack.app, ws.workspaceKey, 'worker');
     // Same name in another workspace never leaks across.

@@ -1,6 +1,6 @@
 import { nodeLivenessAuthority, inspectNodeLiveness, inspectNodesLiveness, invalidateDirectPresence } from './nodeLiveness.js';
 import type { NodeLivenessSnapshot } from '../ports/nodeLiveness.js';
-import { eq, and, exists, gt, lt, ne, sql, inArray, type SQL } from 'drizzle-orm';
+import { eq, and, exists, gt, lt, ne, or, sql, inArray, type SQL } from 'drizzle-orm';
 import type { getDb } from '../db/index.js';
 import { agents, agentNodeBindings, agentRecoveryCredentials, channels, channelMembers, dmParticipants, deliveries, nodes } from '../db/tables.js';
 import { randomHex, sha256Hex } from '../lib/crypto.js';
@@ -12,12 +12,22 @@ import type { RegistrationAdmission } from './registrationAdmission.js';
 import { directNodeIdForAgent, isOnlineCandidate } from './node.js';
 import { addressNodeSelection, formatAgentAddress } from './address.js';
 import { runAtomicWrites, type AtomicWrite } from '../ports/database.js';
-import { AGENT_RECOVERY_PROOF_HASH_PATTERN } from '@relaycast/types';
+import {
+  AGENT_RECOVERY_PROOF_HASH_PATTERN,
+  canonicalizeAgentName,
+  validateAgentName,
+} from '@relaycast/types';
 import { WEBHOOK_AGENT_NAME } from './messageMetadata.js';
 import { issueCredential } from '../auth/credentials.js';
 import * as sqlx from '../db/sqlx.js';
 
-export { AGENT_RECOVERY_PROOF_HASH_PATTERN } from '@relaycast/types';
+export {
+  AGENT_NAME_MAX_LENGTH,
+  AGENT_NAME_PATTERN,
+  AGENT_RECOVERY_PROOF_HASH_PATTERN,
+  canonicalizeAgentName,
+  validateAgentName,
+} from '@relaycast/types';
 
 type Db = ReturnType<typeof getDb>;
 
@@ -144,29 +154,69 @@ export function releasedAgentName(name: string, agentId: string): string {
 }
 
 /**
- * Reject names the engine reserves for itself.
+ * Reject names the engine reserves for itself (`__relay_webhook__` and the
+ * `#released-` tombstone namespace), matched case-insensitively.
  *
- * Called on every registration path. The tombstone namespace keeps the release
- * path atomic-safe (see {@link releasedAgentName}). {@link WEBHOOK_AGENT_NAME}
- * is the engine-provisioned inbound-webhook identity: only `createWebhook`
- * creates it, which is what lets registration admission leave it out of the
- * `register_agent` count.
+ * Used by both new registrations (via {@link assertRegistrableAgentName}) and
+ * recovery of existing identities (`recoverAgentViaNode`), so pre-existing
+ * legacy agents with spaces, non-ASCII characters, or >128-char names remain
+ * recoverable by their owning node while reserved namespaces stay protected.
  */
-export function assertRegistrableAgentName(name: string): void {
-  if (name === WEBHOOK_AGENT_NAME) {
+export function assertUnreservedAgentName(name: string): void {
+  const canonical = canonicalizeAgentName(name);
+  if (canonical === WEBHOOK_AGENT_NAME) {
     throw codedError(
       `Agent name "${name}" is reserved for the inbound webhook identity`,
       'invalid_agent_name',
       400,
     );
   }
-  if (name.includes(RELEASED_NAME_MARKER)) {
+  if (canonical.includes(RELEASED_NAME_MARKER)) {
     throw codedError(
       `Agent name "${name}" is reserved: "${RELEASED_NAME_MARKER}" marks a released agent`,
       'invalid_agent_name',
       400,
     );
   }
+}
+
+/**
+ * Validate an agent name and reject names the engine reserves for itself.
+ *
+ * Called on every new registration path. Rejects whitespace, control
+ * characters, invisible/bidi format characters, non-ASCII homoglyphs, and
+ * oversized names. Reserved checks run against the canonical (lowercased) name
+ * so case variants cannot spoof {@link WEBHOOK_AGENT_NAME} or collide with
+ * {@link releasedAgentName} tombstones. Returns the canonical uniqueness key.
+ */
+export function assertRegistrableAgentName(name: string): string {
+  const validation = validateAgentName(name);
+  if (!validation.ok) {
+    throw codedError(validation.reason, 'invalid_agent_name', 400);
+  }
+  assertUnreservedAgentName(name);
+  return validation.canonical;
+}
+
+/**
+ * Match any active (non-released) agent holding the same canonical name in a
+ * workspace. Checks `canonical_name` (indexed) as well as locale-independent
+ * ASCII `lower(name)` (`COLLATE "C"` on PostgreSQL) so any pre-0089 legacy
+ * case-collision row whose `canonical_name` stayed NULL still blocks new
+ * confusable registrations until it is released.
+ */
+export function activeAgentNameConflictFilter(db: Db, workspaceId: string, canonicalName: string): SQL {
+  const loweredName = sqlx.dialectOf(db) === 'pg'
+    ? sql`lower(${agents.name} COLLATE "C") = ${canonicalName}`
+    : sql`lower(${agents.name}) = ${canonicalName}`;
+  return and(
+    eq(agents.workspaceId, workspaceId),
+    sql`${agents.status} <> 'released'`,
+    or(
+      eq(agents.canonicalName, canonicalName),
+      loweredName,
+    ),
+  )!;
 }
 
 /**
@@ -242,7 +292,7 @@ export async function registerAgent(
    */
   afterVerifierReclaim = false,
 ) {
-  assertRegistrableAgentName(data.name);
+  const canonicalName = assertRegistrableAgentName(data.name);
   if (!hasValidRegistrationIdentity(data.metadata)) {
     throw codedError(
       'Agent registration identity_key must be a lowercase SHA-256 verifier',
@@ -260,15 +310,21 @@ export async function registerAgent(
       400,
     );
   }
+  // Check for an active exact or case-variant conflict before admission and
+  // insert. An established name must always return `agent_already_exists`
+  // (never an admission denial), and checking `lower(name)` also guards
+  // against any pre-0089 legacy duplicate row whose `canonical_name` is NULL.
+  // Concurrent races are caught atomically by the unique indexes below.
+  const [established] = await db
+    .select({ id: agents.id })
+    .from(agents)
+    .where(activeAgentNameConflictFilter(db, workspaceId, canonicalName))
+    .limit(1);
+  if (established) {
+    throw codedError(`Agent "${data.name}" already exists in this workspace`, 'agent_already_exists', 409);
+  }
   if (data.admitRegistration && !afterVerifierReclaim) {
-    // Only a NEW identity is admitted. An established name is answered by the
-    // unique-constraint conflict below — never by a denial — so a
-    // register-or-rotate client at a host cap still reaches its rotation.
-    const [established] = await db
-      .select({ id: agents.id })
-      .from(agents)
-      .where(and(eq(agents.workspaceId, workspaceId), eq(agents.name, data.name)));
-    if (!established) await data.admitRegistration((data.type ?? 'agent') === 'human' ? 'register_human' : 'register_agent');
+    await data.admitRegistration((data.type ?? 'agent') === 'human' ? 'register_human' : 'register_agent');
   }
   const agentId = generateId();
   const directMachineId = data.directMachinePrefix ? `${data.directMachinePrefix}-${agentId}` : null;
@@ -315,6 +371,7 @@ export async function registerAgent(
           id: agentId,
           workspaceId,
           name: data.name,
+          canonicalName,
           handle: `@${data.name}`,
           type: data.type || 'agent',
           // Set status explicitly: the column DEFAULT is the deprecated 'online'
@@ -822,6 +879,7 @@ export async function deleteAgent(db: Db, workspaceId: string, name: string) {
       .update(agents)
       .set({
         name: releasedName,
+        canonicalName: null,
         handle: `@${releasedName}`,
         status: RELEASED_AGENT_STATUS,
         tokenHash: releasedTokenHash,

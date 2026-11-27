@@ -3239,8 +3239,12 @@ paths:
     post:
       summary: Register agent
       description: >-
-        Register a new agent in the workspace. Agent names are unique per
-        workspace; registering a duplicate name returns 409
+        Register a new agent in the workspace. Agent names must be 1 to 128
+        printable non-whitespace ASCII characters (`0x21`–`0x7E`), rejecting
+        whitespace, control characters, zero-width/bidi format characters, and
+        non-ASCII homoglyphs (`400 invalid_agent_name`). Active agent names are
+        unique case-insensitively per workspace while preserving registered
+        display casing; registering a duplicate or case-variant name returns 409
         agent_already_exists and never rotates, reclaims, or silently suffixes
         the existing identity. Initial registration may include identity_key in
         metadata and a recovery_proof_hash only as 64-character lowercase
@@ -3260,6 +3264,13 @@ paths:
               properties:
                 name:
                   type: string
+                  minLength: 1
+                  maxLength: 128
+                  pattern: '^[\x21-\x7e]+$'
+                  description: >-
+                    Unique active agent name (1–128 printable non-whitespace
+                    ASCII characters). Uniqueness is enforced case-insensitively
+                    among non-released agents while preserving display casing.
                 direct_machine_prefix:
                   type: string
                   pattern: '^[a-z0-9]+(-[a-z0-9]+)*$'
@@ -3300,9 +3311,11 @@ paths:
                   data:
                     $ref: '#/components/schemas/Agent'
         '400':
-          description: Malformed registration identity_key (invalid_agent_identity_key)
+          description: >-
+            Invalid agent name (invalid_agent_name) or malformed registration
+            identity_key (invalid_agent_identity_key)
         '409':
-          description: Agent name already exists in this workspace
+          description: Agent name (or a case-variant of an active agent name) already exists in this workspace
 
     get:
       summary: List agents

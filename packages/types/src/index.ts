@@ -1,4 +1,5 @@
 export * from './workspace.js';
+export * from './agent-name.js';
 export * from './agent.js';
 export * from './channel.js';
 export * from './message.js';

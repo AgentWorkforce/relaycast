@@ -245,6 +245,10 @@ export const agents = pgTable(
       .notNull()
       .references(() => workspaces.id, { onDelete: 'cascade' }),
     name: text('name').notNull(),
+    // Lowercased canonical name for case-insensitive active uniqueness. NULL on
+    // released tombstones and on any pre-migration legacy case-collision row
+    // beyond the earliest active identity.
+    canonicalName: text('canonical_name'),
     type: text('type').notNull().default('agent'),
     tokenHash: text('token_hash').notNull().unique(),
     // Superseded credential retained during the rotation grace window. See
@@ -286,6 +290,9 @@ export const agents = pgTable(
   (table) => [
     uniqueIndex('agents_rowid_unique').on(table.rowid),
     uniqueIndex('agents_workspace_name_unique').on(table.workspaceId, table.name),
+    uniqueIndex('agents_workspace_canonical_name_unique')
+      .on(table.workspaceId, table.canonicalName)
+      .where(sql`${table.canonicalName} IS NOT NULL AND ${table.status} <> 'released'`),
     // A UNIQUE constraint (not just an index) so it exists before the composite
     // foreign keys drizzle-kit emits ahead of CREATE INDEX statements.
     unique('agents_workspace_id_unique').on(table.workspaceId, table.id),

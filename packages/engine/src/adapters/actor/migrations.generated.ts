@@ -894,6 +894,14 @@ export const ACTOR_MIGRATIONS: readonly (readonly [string, readonly string[]])[]
       "DROP TRIGGER IF EXISTS messages_owner_approval_immutable",
       "CREATE TRIGGER IF NOT EXISTS messages_owner_approval_immutable\nBEFORE UPDATE OF owner_approval ON messages\nWHEN OLD.owner_approval IS NOT NEW.owner_approval\n  AND NOT (\n    OLD.owner_approval IS NOT NULL\n    AND NEW.owner_approval IS NOT NULL\n    AND json_type(OLD.owner_approval, '$.quote_redacted_at') IS NULL\n    AND json_type(NEW.owner_approval, '$.quote_redacted_at') = 'text'\n    AND NEW.owner_approval = json_set(\n      json_set(OLD.owner_approval, '$.quote', NULL),\n      '$.quote_redacted_at', json_extract(NEW.owner_approval, '$.quote_redacted_at')\n    )\n  )\nBEGIN\n  SELECT RAISE(ABORT, 'owner_approval is immutable');\nEND"
     ]
+  ],
+  [
+    "0089_agent_canonical_name.sql",
+    [
+      "ALTER TABLE agents\n  ADD COLUMN canonical_name text",
+      "UPDATE agents\nSET canonical_name = lower(name)\nWHERE id IN (\n  SELECT id\n  FROM (\n    SELECT\n      id,\n      row_number() OVER (\n        PARTITION BY workspace_id, lower(name)\n        ORDER BY created_at ASC, id ASC\n      ) AS rn\n    FROM agents\n    WHERE status <> 'released'\n  ) AS ranked\n  WHERE rn = 1\n)",
+      "CREATE UNIQUE INDEX agents_workspace_canonical_name_unique\n  ON agents (workspace_id, canonical_name)\n  WHERE canonical_name IS NOT NULL AND status <> 'released'"
+    ]
   ]
 ];
 

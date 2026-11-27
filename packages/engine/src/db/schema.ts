@@ -159,6 +159,10 @@ export const agents = sqliteTable(
       .notNull()
       .references(() => workspaces.id, { onDelete: 'cascade' }),
     name: text('name').notNull(),
+    // Lowercased canonical name for case-insensitive active uniqueness. NULL on
+    // released tombstones and on any pre-0089 legacy case-collision row beyond
+    // the earliest active identity.
+    canonicalName: text('canonical_name'),
     type: text('type').notNull().default('agent'),
     tokenHash: text('token_hash').notNull().unique(),
     // Superseded credential retained during the rotation grace window. See
@@ -198,6 +202,9 @@ export const agents = sqliteTable(
   },
   (table) => [
     uniqueIndex('agents_workspace_name_unique').on(table.workspaceId, table.name),
+    uniqueIndex('agents_workspace_canonical_name_unique')
+      .on(table.workspaceId, table.canonicalName)
+      .where(sql`${table.canonicalName} IS NOT NULL AND ${table.status} <> 'released'`),
     uniqueIndex('agents_workspace_id_unique').on(table.workspaceId, table.id),
     index('idx_agents_workspace').on(table.workspaceId),
     index('idx_agents_roster')

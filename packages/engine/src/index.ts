@@ -162,7 +162,16 @@ export { deliverPendingToNode } from './engine/delivery.js';
 export { handleNodeReconnect } from './node-reconnect.js';
 export { handleAgentDisconnect } from './agent-disconnect.js';
 export { drainNodeInvocations, sweepTimedOutInvocations } from './node-invocations.js';
-export { AGENT_LIVENESS_TTL_MS, effectiveAgentStatus, sweepStaleAgents } from './engine/agent.js';
+export {
+  AGENT_LIVENESS_TTL_MS,
+  AGENT_NAME_MAX_LENGTH,
+  AGENT_NAME_PATTERN,
+  assertRegistrableAgentName,
+  canonicalizeAgentName,
+  effectiveAgentStatus,
+  sweepStaleAgents,
+  validateAgentName,
+} from './engine/agent.js';
 export type { SweepTimedOutInvocationsOptions } from './node-invocations.js';
 export { handleNodeControlMessage } from './engine/node.js';
 export type { HandleNodeControlMessageArgs, NodeSocketLike } from './engine/node.js';

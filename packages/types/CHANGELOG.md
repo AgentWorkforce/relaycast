@@ -9,6 +9,10 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ## [Unreleased]
 
+### Added
+
+- `validateAgentName`, `canonicalizeAgentName`, `AGENT_NAME_MAX_LENGTH`, `AGENT_NAME_PATTERN`, and `AgentNameValidationResult` for enforcing printable non-whitespace ASCII agent names and case-insensitive canonical uniqueness across engine and downstream callers.
+
 ## [12.15.0] - 2026-11-24
 
 ### Added

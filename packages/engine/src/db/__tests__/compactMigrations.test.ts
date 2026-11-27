@@ -69,6 +69,7 @@ function snapshot(handle: SqliteDbHandle) {
       }
       if (name === 'agents') {
         const {
+          canonical_name: _canonicalName,
           status_updated_at: _statusUpdatedAt,
           status_before_liveness_loss: _livenessStatus,
           node_liveness_revision: _nodeLivenessRevision,
@@ -193,7 +194,13 @@ function expectConstraintsPreserved(before: ReturnType<typeof constraints>, afte
         table = { ...table, sql: table.sql.replace(', webhook_initialized INTEGER NOT NULL DEFAULT 0', '') };
       }
       if (table.name === 'agents' && original) {
-        return { ...table, sql: original.sql };
+        return {
+          ...table,
+          sql: original.sql,
+          uniqueIndexes: table.uniqueIndexes.filter(index =>
+            index.name !== 'agents_workspace_canonical_name_unique'
+            || original.uniqueIndexes.some(previous => previous.name === index.name)),
+        };
       }
       // 0073 appends the rotation grace slot and the generation fence; 0086
       // appends the nullable leaders setting.

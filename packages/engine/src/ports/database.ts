@@ -360,6 +360,7 @@ export const PG_UNIQUE_CONSTRAINTS: Readonly<Record<string, readonly [table: str
   agents_pkey: ['agents', ['id']],
   agents_rowid_unique: ['agents', ['rowid']],
   agents_token_hash_unique: ['agents', ['token_hash']],
+  agents_workspace_canonical_name_unique: ['agents', ['workspace_id', 'canonical_name']],
   agents_workspace_id_unique: ['agents', ['workspace_id', 'id']],
   agents_workspace_name_unique: ['agents', ['workspace_id', 'name']],
   certifications_pkey: ['certifications', ['id']],

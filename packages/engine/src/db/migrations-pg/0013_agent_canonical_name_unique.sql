@@ -1,0 +1,1 @@
+CREATE UNIQUE INDEX "agents_workspace_canonical_name_unique" ON "agents" USING btree ("workspace_id","canonical_name") WHERE "agents"."canonical_name" IS NOT NULL AND "agents"."status" <> 'released';

@@ -30,7 +30,13 @@ import { codedError } from '../lib/httpError.js';
 import type { RegistrationAdmission } from './registrationAdmission.js';
 import { AdmissionDeniedError } from '../lib/admissionError.js';
 import { acceptTaskInvocation, completeTaskInvocation } from './taskInvocation.js';
-import { databaseConstraintKind, hasTransactionCapability, runAtomic, runAtomicWrites } from '../ports/database.js';
+import {
+  databaseConstraintKind,
+  databaseUniqueViolation,
+  hasTransactionCapability,
+  runAtomic,
+  runAtomicWrites,
+} from '../ports/database.js';
 import { retryD1Write } from '../lib/d1Retry.js';
 import { chunkValues } from '../lib/queryChunks.js';
 import type { AtomicWrite, BatchCapability, EngineDb } from '../ports/database.js';
@@ -38,7 +44,14 @@ import type { PresenceTracker } from '../ports/presence.js';
 import type { NodeConnectionRegistry } from '../ports/realtime.js';
 import { NODE_LIVENESS_CHECKPOINT_INTERVAL_MS } from '../ports/nodeLiveness.js';
 import { generateId } from './snowflake.js';
-import { assertRegistrableAgentName, agentLivenessLoss, agentLivenessRefresh, RELEASED_AGENT_STATUS } from './agent.js';
+import {
+  activeAgentNameConflictFilter,
+  assertRegistrableAgentName,
+  assertUnreservedAgentName,
+  agentLivenessLoss,
+  agentLivenessRefresh,
+  RELEASED_AGENT_STATUS,
+} from './agent.js';
 import { rotateAgentIdentity } from './agentIdentity.js';
 import { isNodeLive, isReusableForMachineMatch, nodeHasCapacity, NODE_LIVENESS_TTL_MS } from './placement.js';
 import {
@@ -2531,18 +2544,28 @@ export async function registerAgentViaNode(
   message: FleetAgentRegisterMessage,
   options: { deliveryCursorSupported?: boolean; admitRegistration?: RegistrationAdmission } = {},
 ): Promise<AgentRegisterReplyData> {
-  assertRegistrableAgentName(message.name);
+  const canonicalName = assertRegistrableAgentName(message.name);
   const wantsAutoJoin = message.auto_join_general !== false;
+  let admissionChecked = false;
   if (options.admitRegistration) {
-    // Only a NEW identity is admitted: an established name is answered by the
-    // conflict below, never by a denial.
+    // Only a NEW identity is admitted: an established exact or case-variant
+    // name is answered by the conflict below, never by a denial. If that
+    // incumbent is released before the transactional read, we re-check
+    // admission outside the transaction before inserting (see below).
     const [established] = await db
       .select({ id: agents.id })
       .from(agents)
-      .where(and(eq(agents.workspaceId, workspaceId), eq(agents.name, message.name)));
-    if (!established) await options.admitRegistration('register_agent');
+      .where(activeAgentNameConflictFilter(db, workspaceId, canonicalName))
+      .limit(1);
+    if (!established) {
+      await options.admitRegistration('register_agent');
+      admissionChecked = true;
+    }
   }
-  const registered = await runAtomic(db, async (tx) => {
+  const attemptRegister = async (): Promise<
+    | { kind: 'registered'; reply: AgentRegisterReplyData }
+    | { kind: 'needs_admission' }
+  > => runAtomic(db, async (tx) => {
     // Every awaited statement is a separate D1 round-trip — and this path runs
     // under the node-control liveness deadline whose misses surface as
     // `d1_pressure`. The reads have no interdependencies and the writes split
@@ -2597,7 +2620,8 @@ export async function registerAgentViaNode(
       tx
         .select({ id: agents.id })
         .from(agents)
-        .where(and(eq(agents.workspaceId, workspaceId), eq(agents.name, message.name))),
+        .where(activeAgentNameConflictFilter(tx, workspaceId, canonicalName))
+        .limit(1),
       tx
         .select()
         .from(channels)
@@ -2631,7 +2655,7 @@ export async function registerAgentViaNode(
       ) ?? false);
     // Preserve the established identity conflict even when this node is full.
     // A concurrent create after this read is still caught by the unique insert
-    // below, whose reserved slot is then compensated in the catch path.
+    // below, aborting the whole atomic admission group cleanly.
     const [existing] = existingRows;
     if (existing) {
       throw codedError(
@@ -2639,6 +2663,12 @@ export async function registerAgentViaNode(
         'agent_already_exists',
         409,
       );
+    }
+    // Preflight saw an incumbent and skipped admission, but that incumbent was
+    // released before this transactional read. Exit the transaction so the
+    // external/async admission hook runs before any new identity is inserted.
+    if (options.admitRegistration && !admissionChecked) {
+      return { kind: 'needs_admission' };
     }
     const [generalChannel] = channelRows;
 
@@ -2676,8 +2706,9 @@ export async function registerAgentViaNode(
     });
 
     // D1 has no interactive transaction, so the slot and the identity commit
-    // as one batch; any later failure compensates whichever of them landed
-    // rather than leaving a ghost agent or a leaked slot.
+    // as one atomic batch. A unique conflict on `(workspace_id, name)` or
+    // `(workspace_id, canonical_name)` aborts the entire batch so a reserved
+    // node slot can never commit without an identity row (even on lost reply).
     try {
       await runStatements([
         reserveNodeAgentSlotStatement(tx, workspaceId, node, {
@@ -2691,6 +2722,7 @@ export async function registerAgentViaNode(
             id: agentId,
             workspaceId,
             name: message.name,
+            canonicalName,
             handle: `@${message.name}`,
             type: 'agent',
             tokenHash,
@@ -2704,7 +2736,6 @@ export async function registerAgentViaNode(
             resumable: message.resumable ?? false,
             sessionRef: message.session_ref ?? null,
           })
-          .onConflictDoNothing({ target: [agents.workspaceId, agents.name] })
           .returning(),
       ], admissionResults);
 
@@ -2722,13 +2753,33 @@ export async function registerAgentViaNode(
       }
 
       await runStatements(landingWrites(), []);
-      return registeredReply(agent);
+      return { kind: 'registered', reply: registeredReply(agent) };
     } catch (err) {
       // The reserve statement writes NULL into active_agents on a refused
       // admission, aborting the group before the identity insert can run —
       // nothing landed, so there is nothing to compensate.
       if (databaseConstraintKind(err) === 'node_capacity') {
         throw codedError(`Node "${node.name}" is at capacity`, 'node_capacity_exceeded', 409);
+      }
+      // A unique-constraint failure on exact or canonical name aborts an
+      // atomic batch or interactive transaction cleanly (do not issue queries
+      // on an aborted PG transaction); only on non-transactional sequential
+      // handles where the slot statement already committed do we compensate it.
+      const unique = databaseUniqueViolation(err);
+      if (
+        unique?.table === 'agents'
+        && unique.columns.length === 2
+        && unique.columns[0] === 'workspace_id'
+        && (unique.columns[1] === 'name' || unique.columns[1] === 'canonical_name')
+      ) {
+        if (!hasTransactionCapability(db) && (admissionResults[0] as { id: string }[] | undefined)?.[0]) {
+          await runStatements(releaseNodeAgentSlotWrites(tx, workspaceId, [nodeId]), []);
+        }
+        throw codedError(
+          `Agent "${message.name}" already exists; use agent.recover with proof of the immutable id`,
+          'agent_already_exists',
+          409,
+        );
       }
       // A batch is all-or-nothing, but its response is not: D1 can commit the
       // admission group and then drop the reply, leaving the sink empty while
@@ -2751,7 +2802,7 @@ export async function registerAgentViaNode(
         if (landed) {
           try {
             await runStatements(landingWrites(), []);
-            return registeredReply(landed);
+            return { kind: 'registered', reply: registeredReply(landed) };
           } catch (landingErr) {
             // The replayed landing can hit the same lost-reply ambiguity —
             // a committed landing leaves this agent's binding active on the
@@ -2772,7 +2823,7 @@ export async function registerAgentViaNode(
             } catch {
               // Probe inconclusive — treat as not landed and roll back.
             }
-            if (bound) return registeredReply(landed);
+            if (bound) return { kind: 'registered', reply: registeredReply(landed) };
             // Landing never committed: roll the admitted identity back so a
             // retry registers cleanly instead of meeting agent_already_exists.
             await runStatements([
@@ -2801,6 +2852,14 @@ export async function registerAgentViaNode(
       throw err;
     }
   });
+
+  let outcome = await attemptRegister();
+  if (outcome.kind === 'needs_admission') {
+    await options.admitRegistration!('register_agent');
+    admissionChecked = true;
+    outcome = await attemptRegister();
+  }
+  const registered = (outcome as { kind: 'registered'; reply: AgentRegisterReplyData }).reply;
   if (wantsAutoJoin) await invalidateChannelCache(workspaceId, 'general');
   return registered;
 }
@@ -2818,7 +2877,11 @@ export async function recoverAgentViaNode(
   message: FleetAgentRecoverMessage,
   options: { deliveryCursorSupported?: boolean } = {},
 ): Promise<AgentRegisterReplyData> {
-  assertRegistrableAgentName(message.name);
+  // Recovery operates on an already-registered identity pinned to immutable
+  // `expected_agent_id` + `origin_node_id`, so keep only reserved-name checks
+  // here; pre-0089 legacy agents with spaces or non-ASCII names must remain
+  // recoverable after a node restart.
+  assertUnreservedAgentName(message.name);
   const hasInteractiveTransaction = hasTransactionCapability(db);
   const recovered = await runAtomic(db, async (tx) => {
     const [node] = await tx
