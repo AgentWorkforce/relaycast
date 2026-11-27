@@ -24,7 +24,7 @@ Packages without a separate changelog are covered by the cross-package notes bel
 
 ### Changed
 
-- Upgraded `@relaycast/engine`'s `better-sqlite3` dependency to `^13.2.0` (Node-API) for Node.js 22–26 compatibility.
+- Upgraded `@relaycast/engine`'s `better-sqlite3` dependency to `^13.2.0` (Node-API) for Node.js `>=22.14.0` (including Node 24 and 26) compatibility.
 
 ### Security
 

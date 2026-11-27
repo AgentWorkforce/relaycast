@@ -200,17 +200,21 @@ export function assertRegistrableAgentName(name: string): string {
 
 /**
  * Match any active (non-released) agent holding the same canonical name in a
- * workspace. Checks `canonical_name` (indexed) as well as `lower(name)` so any
- * pre-0089 legacy case-collision row whose `canonical_name` stayed NULL still
- * blocks new confusable registrations until it is released.
+ * workspace. Checks `canonical_name` (indexed) as well as locale-independent
+ * ASCII `lower(name)` (`COLLATE "C"` on PostgreSQL) so any pre-0089 legacy
+ * case-collision row whose `canonical_name` stayed NULL still blocks new
+ * confusable registrations until it is released.
  */
-export function activeAgentNameConflictFilter(workspaceId: string, canonicalName: string): SQL {
+export function activeAgentNameConflictFilter(db: Db, workspaceId: string, canonicalName: string): SQL {
+  const loweredName = sqlx.dialectOf(db) === 'pg'
+    ? sql`lower(${agents.name} COLLATE "C") = ${canonicalName}`
+    : sql`lower(${agents.name}) = ${canonicalName}`;
   return and(
     eq(agents.workspaceId, workspaceId),
     sql`${agents.status} <> 'released'`,
     or(
       eq(agents.canonicalName, canonicalName),
-      sql`lower(${agents.name}) = ${canonicalName}`,
+      loweredName,
     ),
   )!;
 }
@@ -314,7 +318,7 @@ export async function registerAgent(
   const [established] = await db
     .select({ id: agents.id })
     .from(agents)
-    .where(activeAgentNameConflictFilter(workspaceId, canonicalName))
+    .where(activeAgentNameConflictFilter(db, workspaceId, canonicalName))
     .limit(1);
   if (established) {
     throw codedError(`Agent "${data.name}" already exists in this workspace`, 'agent_already_exists', 409);

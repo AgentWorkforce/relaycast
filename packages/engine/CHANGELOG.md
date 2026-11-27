@@ -15,7 +15,7 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Changed
 
-- Upgraded `better-sqlite3` to `^13.2.0` (Node-API prebuilds) for Node.js 22–26 compatibility.
+- Upgraded `better-sqlite3` to `^13.2.0` (Node-API prebuilds) and declared `"engines": { "node": ">=22.14.0" }` for Node.js 22.14+, 24, and 26 compatibility.
 
 ### Security
 

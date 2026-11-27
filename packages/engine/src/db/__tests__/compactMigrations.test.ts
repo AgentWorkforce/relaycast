@@ -198,7 +198,8 @@ function expectConstraintsPreserved(before: ReturnType<typeof constraints>, afte
           ...table,
           sql: original.sql,
           uniqueIndexes: table.uniqueIndexes.filter(index =>
-            original.uniqueIndexes.some(previous => previous.name === index.name)),
+            index.name !== 'agents_workspace_canonical_name_unique'
+            || original.uniqueIndexes.some(previous => previous.name === index.name)),
         };
       }
       // 0073 appends the rotation grace slot and the generation fence; 0086

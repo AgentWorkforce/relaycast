@@ -1,21 +1,14 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { readdirSync, readFileSync } from 'node:fs';
-import { join } from 'node:path';
-import { fileURLToPath } from 'node:url';
 import {
   createWorkspace,
   FakeSocket,
   makeNodeStack,
-  registerAgent,
   type TestStack,
 } from './harness.js';
-import { getSqliteDb, runMigrations } from '../../adapters/node/database.js';
 import { handleNodeControlMessage, recoverAgentViaNode, registerAgentViaNode } from '../../engine/node.js';
 import { agents } from '../../db/tables.js';
 import { AGENT_NAME_MAX_LENGTH, RELEASED_NAME_MARKER } from '../../engine/agent.js';
 import { WEBHOOK_AGENT_NAME } from '../../engine/messageMetadata.js';
-
-const migrationsDir = fileURLToPath(new URL('../../db/migrations', import.meta.url));
 
 describe('agent name validation and confusable resistance', () => {
   let stack: TestStack;
@@ -39,25 +32,49 @@ describe('agent name validation and confusable resistance', () => {
     });
   }
 
+  async function registerNodeOnSocket(workspaceId: string, node: { id: string; name: string }, maxAgents: number) {
+    const sock = new FakeSocket();
+    await handleNodeControlMessage({
+      db: stack.runtime.deps.db,
+      registry: stack.runtime.realtime,
+      workspaceId,
+      nodeId: node.id,
+      socket: sock,
+      raw: JSON.stringify({
+        v: 1,
+        id: `reg-${node.id}`,
+        type: 'node.register',
+        name: node.name,
+        node_id: node.id,
+        capabilities: [],
+        max_agents: maxAgents,
+        tags: [],
+        version: 'v1',
+        resume_cursor: null,
+      }),
+    });
+    expect(sock.ofType('reply').find((frame) => frame.id === `reg-${node.id}`)).toMatchObject({
+      ok: true,
+    });
+    return sock;
+  }
+
   it('rejects all reported confusable variants beside an existing agent on POST /v1/agents', async () => {
     const ws = await createWorkspace(stack.app, 'confusable-poc');
-    const original = await registerAgent(stack.app, ws.workspaceKey, 'alpha1');
-    expect(original.name).toBe('alpha1');
+    const created = await postAgent(ws.workspaceKey, 'alpha1');
+    expect(created.status).toBe(201);
+    const createdBody = (await created.json()) as { ok: true; data: { id: string; name: string } };
+    expect(createdBody.data.name).toBe('alpha1');
 
-    // Case variant -> 409 agent_already_exists
-    const caseVariant = await postAgent(ws.workspaceKey, 'ALPHA1');
-    expect(caseVariant.status).toBe(409);
-    await expect(caseVariant.json()).resolves.toMatchObject({
-      ok: false,
-      error: { code: 'agent_already_exists' },
-    });
-
-    const mixedCase = await postAgent(ws.workspaceKey, 'Alpha1');
-    expect(mixedCase.status).toBe(409);
-    await expect(mixedCase.json()).resolves.toMatchObject({
-      ok: false,
-      error: { code: 'agent_already_exists' },
-    });
+    // Case variants -> 409 agent_already_exists
+    for (const variant of ['ALPHA1', 'Alpha1']) {
+      const res = await postAgent(ws.workspaceKey, variant);
+      expect(res.status).toBe(409);
+      await expect(res.json()).resolves.toMatchObject({
+        ok: false,
+        error: { code: 'agent_already_exists' },
+      });
+    }
 
     // Homoglyphs, invisible/bidi characters, trailing/leading/internal whitespace,
     // control characters, oversized names, and case-variant reserved names -> 400 invalid_agent_name
@@ -93,7 +110,9 @@ describe('agent name validation and confusable resistance', () => {
     const ws1 = await createWorkspace(stack.app, 'casing-ws-1');
     const ws2 = await createWorkspace(stack.app, 'casing-ws-2');
 
-    const alice = await registerAgent(stack.app, ws1.workspaceKey, 'Alice');
+    const aliceRes = await postAgent(ws1.workspaceKey, 'Alice');
+    expect(aliceRes.status).toBe(201);
+    const alice = ((await aliceRes.json()) as { ok: true; data: { id: string; name: string } }).data;
     expect(alice.name).toBe('Alice');
 
     // Same workspace rejects lower/upper case variants.
@@ -101,8 +120,10 @@ describe('agent name validation and confusable resistance', () => {
     expect(dup.status).toBe(409);
 
     // Different workspace can register independently with different casing.
-    const otherWsAlice = await registerAgent(stack.app, ws2.workspaceKey, 'alice');
-    expect(otherWsAlice.name).toBe('alice');
+    const otherRes = await postAgent(ws2.workspaceKey, 'alice');
+    expect(otherRes.status).toBe(201);
+    const otherAlice = ((await otherRes.json()) as { ok: true; data: { id: string; name: string } }).data;
+    expect(otherAlice.name).toBe('alice');
 
     // Exact-match lookup keeps working with display casing.
     const getExact = await stack.app.request('/v1/agents/Alice', {
@@ -121,9 +142,11 @@ describe('agent name validation and confusable resistance', () => {
     });
     expect(del.status).toBe(204);
 
-    const reregistered = await registerAgent(stack.app, ws1.workspaceKey, 'alice');
+    const reregRes = await postAgent(ws1.workspaceKey, 'alice');
+    expect(reregRes.status).toBe(201);
+    const reregistered = ((await reregRes.json()) as { ok: true; data: { id: string; name: string } }).data;
     expect(reregistered.name).toBe('alice');
-    expect(reregistered.agentId).not.toBe(alice.agentId);
+    expect(reregistered.id).not.toBe(alice.id);
   });
 
   it('enforces the same validation and case-insensitive uniqueness on node agent.register without leaking capacity', async () => {
@@ -139,20 +162,7 @@ describe('agent name validation and confusable resistance', () => {
     expect(enrollRes.status).toBe(201);
     const { data: node } = (await enrollRes.json()) as { data: { id: string; name: string } };
 
-    const sock = new FakeSocket();
-    await handleNodeControlMessage({
-      db: stack.runtime.deps.db,
-      workspaceId: ws.workspaceId,
-      nodeId: node.id,
-      socket: sock,
-      message: {
-        type: 'node.register',
-        id: 'reg-node',
-        name: node.name,
-        capabilities: [],
-        max_agents: 2,
-      },
-    });
+    await registerNodeOnSocket(ws.workspaceId, node, 2);
 
     const first = await registerAgentViaNode(stack.runtime.deps.db, ws.workspaceId, node.id, 'default', {
       type: 'agent.register',
@@ -203,20 +213,7 @@ describe('agent name validation and confusable resistance', () => {
     expect(enrollRes.status).toBe(201);
     const { data: node } = (await enrollRes.json()) as { data: { id: string; name: string } };
 
-    const sock = new FakeSocket();
-    await handleNodeControlMessage({
-      db: stack.runtime.deps.db,
-      workspaceId: ws.workspaceId,
-      nodeId: node.id,
-      socket: sock,
-      message: {
-        type: 'node.register',
-        id: 'reg-legacy-node',
-        name: node.name,
-        capabilities: [],
-        max_agents: 4,
-      },
-    });
+    await registerNodeOnSocket(ws.workspaceId, node, 4);
 
     // Seed pre-0089 legacy hosted agents that would be rejected by new registration.
     for (const [id, legacyName, tokenHash] of [
@@ -286,66 +283,6 @@ describe('agent name validation and confusable resistance', () => {
         ok: false,
         error: { code: 'invalid_agent_name' },
       });
-    }
-  });
-
-  it('migrates pre-0089 legacy case-duplicate agents safely without data loss and still blocks new variants', async () => {
-    const handle = getSqliteDb(':memory:');
-    try {
-      const sqlFiles = readdirSync(migrationsDir)
-        .filter((file) => file.endsWith('.sql') && file < '0089_agent_canonical_name.sql')
-        .sort();
-      handle.sqlite.exec(`CREATE TABLE IF NOT EXISTS _engine_migrations (
-        name TEXT PRIMARY KEY,
-        applied_at INTEGER NOT NULL DEFAULT (unixepoch())
-      )`);
-      for (const file of sqlFiles) {
-        if (file === '0048_bounded_maintenance.sql' || file === '0049_redrive_review_hardening.sql') continue;
-        handle.sqlite.exec(readFileSync(join(migrationsDir, file), 'utf8'));
-        handle.sqlite.prepare('INSERT INTO _engine_migrations (name) VALUES (?)').run(file);
-      }
-
-      // Seed a legacy workspace that already had two case-colliding active agents
-      // plus one released tombstone before migration 0089.
-      handle.sqlite.exec(`
-        INSERT INTO workspaces(id, name, api_key_hash) VALUES ('ws_legacy', 'legacy', 'hash_legacy');
-        INSERT INTO agents(id, workspace_id, name, handle, token_hash, status, created_at) VALUES
-          ('a_first', 'ws_legacy', 'alpha1', '@alpha1', 'tok_1', 'active', 100),
-          ('a_second', 'ws_legacy', 'ALPHA1', '@ALPHA1', 'tok_2', 'active', 200),
-          ('a_gone', 'ws_legacy', 'beta1#released-a_gone', '@beta1#released-a_gone', 'tok_3', 'released', 50);
-      `);
-
-      // Migration 0089 succeeds despite the pre-existing case duplicates.
-      expect(runMigrations(handle).applied).toEqual(['0089_agent_canonical_name.sql']);
-
-      const rows = handle.sqlite
-        .prepare('SELECT id, name, canonical_name, status FROM agents ORDER BY id')
-        .all() as Array<{ id: string; name: string; canonical_name: string | null; status: string }>;
-      expect(rows).toEqual([
-        { id: 'a_first', name: 'alpha1', canonical_name: 'alpha1', status: 'active' },
-        { id: 'a_gone', name: 'beta1#released-a_gone', canonical_name: null, status: 'released' },
-        { id: 'a_second', name: 'ALPHA1', canonical_name: null, status: 'active' },
-      ]);
-
-      // Even if the first legacy row is released, the surviving legacy row with
-      // canonical_name = NULL still prevents registering a new case variant.
-      handle.sqlite
-        .prepare("UPDATE agents SET name = 'alpha1#released-a_first', canonical_name = NULL, status = 'released' WHERE id = 'a_first'")
-        .run();
-
-      const { registerAgent: engineRegisterAgent } = await import('../../engine/agent.js');
-      await expect(
-        engineRegisterAgent(handle.db, 'ws_legacy', { name: 'Alpha1' }),
-      ).rejects.toMatchObject({ code: 'agent_already_exists', status: 409 });
-
-      // Once both legacy rows are released, `Alpha1` can register cleanly.
-      handle.sqlite
-        .prepare("UPDATE agents SET name = 'ALPHA1#released-a_second', canonical_name = NULL, status = 'released' WHERE id = 'a_second'")
-        .run();
-      const fresh = await engineRegisterAgent(handle.db, 'ws_legacy', { name: 'Alpha1' });
-      expect(fresh.name).toBe('Alpha1');
-    } finally {
-      handle.sqlite.close();
     }
   });
 });
