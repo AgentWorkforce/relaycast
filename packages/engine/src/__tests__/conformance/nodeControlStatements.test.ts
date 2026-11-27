@@ -208,6 +208,7 @@ describe('node control D1 statements per frame', () => {
           "select from "nodes"",
           "select from "nodes"",
           "select from "nodes"",
+          "select from "nodes"",
           "delete from "actions"",
           "update "actions"",
           "select from "actions"",

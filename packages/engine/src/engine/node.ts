@@ -24,7 +24,7 @@ import {
 } from '@relaycast/types';
 import type { getDb } from '../db/index.js';
 import { actionInvocations, actions, agents, agentDeviceTokens, agentNodeBindings, channelMembers, channels, nodeProviders, nodes, workspaces } from '../db/tables.js';
-import { deviceTokenLive, deviceTokenLiveCached, liveNodeBinding, nodeBindingDeadCached, nodeDeviceJoin, nodeIsDeviceBound } from './agentDevice.js';
+import { deviceTokenLive, deviceTokenLiveCached, liveNodeBinding, nodeBindingDead, nodeBindingDeadCached, nodeDeviceJoin, nodeIsDeviceBound } from './agentDevice.js';
 import { isWorkspaceExpired, WORKSPACE_EXPIRED_CODE, WORKSPACE_EXPIRED_MESSAGE } from '../auth/workspaceExpiry.js';
 import { randomHex, sha256Hex } from '../lib/crypto.js';
 import { codedError } from '../lib/httpError.js';
@@ -4108,7 +4108,11 @@ export async function handleNodeControlMessage(args: HandleNodeControlMessageArg
       case 'node.register': {
         // A socket opened with a device-bound node token registers only while
         // that device token is live (fresh read: register is rare).
-        if (args.connectionDeviceTokenHash && !await deviceTokenLive(args.db, args.connectionDeviceTokenHash)) {
+        // Untracked host (`undefined`) falls back to the node row's binding
+        // with a fresh read; tracked unbound (`null`) stays exempt.
+        if (args.connectionDeviceTokenHash === undefined
+          ? await nodeBindingDead(args.db, args.workspaceId, args.nodeId)
+          : args.connectionDeviceTokenHash !== null && !await deviceTokenLive(args.db, args.connectionDeviceTokenHash)) {
           closeSocket(args.socket, 'device token revoked');
           throw codedError('Node token is no longer valid', 'node_token_invalid', 401);
         }

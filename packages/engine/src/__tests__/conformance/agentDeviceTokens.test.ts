@@ -643,6 +643,47 @@ describe('agent device tokens', () => {
       expect(socket.sock.closed).toBe(true);
     });
 
+    it('refuses node.register on an untracked socket whose device token expired before registration, while keeping tracked unbound sockets exempt', async () => {
+      const { ws, ada } = await seedWithChannel();
+      const laptopToken = await mintToken(ws, ada.agentId, laptop);
+      const bound = await mintNodeToken(laptopToken);
+      await stack.runtime.handle.db.update(agentDeviceTokens).set({ expiresAt: new Date(Date.now() - 1000) });
+
+      let closed = false;
+      const replies: string[] = [];
+      await handleNodeControlMessage({
+        db: stack.runtime.handle.db as never,
+        registry: stack.runtime.realtime as never,
+        workspaceId: ws.workspaceId,
+        nodeId: bound.node_id,
+        socket: { send: (data: string) => { replies.push(data); }, close: () => { closed = true; } } as never,
+        raw: JSON.stringify({
+          v: 1, id: 'reg-untracked', type: 'node.register', node_id: bound.node_id, name: `direct-${ada.agentId}`,
+          capabilities: [], max_agents: 1, tags: [], version: 't', resume_cursor: null,
+        }),
+      });
+      expect(closed).toBe(true);
+      expect(replies.join('')).toContain('node_token_invalid');
+
+      // Tracked unbound (`null`) stays exempt even when the node row points at a dead device.
+      let unboundClosed = false;
+      const unboundReplies: string[] = [];
+      await handleNodeControlMessage({
+        db: stack.runtime.handle.db as never,
+        registry: stack.runtime.realtime as never,
+        workspaceId: ws.workspaceId,
+        nodeId: bound.node_id,
+        connectionDeviceTokenHash: null,
+        socket: { send: (data: string) => { unboundReplies.push(data); }, close: () => { unboundClosed = true; } } as never,
+        raw: JSON.stringify({
+          v: 1, id: 'reg-unbound', type: 'node.register', node_id: bound.node_id, name: `direct-${ada.agentId}`,
+          capabilities: [], max_agents: 1, tags: [], version: 't', resume_cursor: null,
+        }),
+      });
+      expect(unboundClosed).toBe(false);
+      expect(unboundReplies.join('')).toContain('"ok":true');
+    });
+
     it('checks the row on checkpoint heartbeats of untracked sockets', async () => {
       const { ws, ada } = await seedWithChannel();
       const laptopToken = await mintToken(ws, ada.agentId, laptop);
