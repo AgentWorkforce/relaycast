@@ -14,6 +14,7 @@ import { addressNodeSelection, formatAgentAddress } from './address.js';
 import { runAtomicWrites, type AtomicWrite } from '../ports/database.js';
 import {
   AGENT_RECOVERY_PROOF_HASH_PATTERN,
+  canonicalizeAgentName,
   validateAgentName,
 } from '@relaycast/types';
 import { WEBHOOK_AGENT_NAME } from './messageMetadata.js';
@@ -153,20 +154,16 @@ export function releasedAgentName(name: string, agentId: string): string {
 }
 
 /**
- * Validate an agent name and reject names the engine reserves for itself.
+ * Reject names the engine reserves for itself (`__relay_webhook__` and the
+ * `#released-` tombstone namespace), matched case-insensitively.
  *
- * Called on every registration path. Rejects whitespace, control characters,
- * invisible/bidi format characters, non-ASCII homoglyphs, and oversized names.
- * Reserved checks run against the canonical (lowercased) name so case variants
- * cannot spoof {@link WEBHOOK_AGENT_NAME} or collide with {@link releasedAgentName}
- * tombstones. Returns the canonical uniqueness key.
+ * Used by both new registrations (via {@link assertRegistrableAgentName}) and
+ * recovery of existing identities (`recoverAgentViaNode`), so pre-existing
+ * legacy agents with spaces, non-ASCII characters, or >128-char names remain
+ * recoverable by their owning node while reserved namespaces stay protected.
  */
-export function assertRegistrableAgentName(name: string): string {
-  const validation = validateAgentName(name);
-  if (!validation.ok) {
-    throw codedError(validation.reason, 'invalid_agent_name', 400);
-  }
-  const { canonical } = validation;
+export function assertUnreservedAgentName(name: string): void {
+  const canonical = canonicalizeAgentName(name);
   if (canonical === WEBHOOK_AGENT_NAME) {
     throw codedError(
       `Agent name "${name}" is reserved for the inbound webhook identity`,
@@ -181,7 +178,24 @@ export function assertRegistrableAgentName(name: string): string {
       400,
     );
   }
-  return canonical;
+}
+
+/**
+ * Validate an agent name and reject names the engine reserves for itself.
+ *
+ * Called on every new registration path. Rejects whitespace, control
+ * characters, invisible/bidi format characters, non-ASCII homoglyphs, and
+ * oversized names. Reserved checks run against the canonical (lowercased) name
+ * so case variants cannot spoof {@link WEBHOOK_AGENT_NAME} or collide with
+ * {@link releasedAgentName} tombstones. Returns the canonical uniqueness key.
+ */
+export function assertRegistrableAgentName(name: string): string {
+  const validation = validateAgentName(name);
+  if (!validation.ok) {
+    throw codedError(validation.reason, 'invalid_agent_name', 400);
+  }
+  assertUnreservedAgentName(name);
+  return validation.canonical;
 }
 
 /**

@@ -5,6 +5,7 @@ import {
   type PostgresMode,
 } from "./config.js";
 import { verifyIdentity, type IdentityResult } from "./identity.js";
+import { summarizeIdentityFailure } from "./identitySummary.js";
 import {
   loadBundledPostgresMigrations,
   runPostgresMigrations,
@@ -81,6 +82,9 @@ async function withVerifiedPool(
       );
       return EXIT_FAILURE;
     }
+    // The root cause first, in one line, before the per-check list.
+    const summary = summarizeIdentityFailure(identity, mode, config.expectedRole);
+    if (summary) io.err(summary);
     io.out(`identity checks (${mode}):`);
     reportIdentity(io, identity);
     if (!identity.ok) {

@@ -29,6 +29,7 @@ import {
   type IdentityCheck,
   type IdentityResult,
 } from "./identity.js";
+import { summarizeIdentityFailure } from "./identitySummary.js";
 import {
   loadBundledPostgresMigrations,
   verifyPostgresMigrations,
@@ -54,18 +55,29 @@ export class PostgresUnavailableError extends Error {
   }
 }
 
-/** The session is not a correctly scoped runtime identity. */
+/**
+ * The session is not a correctly scoped runtime identity. The message leads
+ * with the one-line `AR_DB_LOGIN` summary ({@link summarizeIdentityFailure}),
+ * then the refusal naming every failed check.
+ */
 export class PostgresIdentityError extends Error {
   readonly checks: readonly IdentityCheck[];
-  constructor(checks: readonly IdentityCheck[]) {
+  /** The one-line `AR_DB_LOGIN` summary. */
+  readonly summary: string | null;
+  constructor(checks: readonly IdentityCheck[], expectedRole?: string) {
     const failed = checks.filter((check) => !check.ok);
-    super(
-      `refusing: the session is not a correctly scoped runtime identity (${failed
-        .map((check) => `${check.name}: ${check.detail}`)
-        .join("; ")})`,
+    const summary = summarizeIdentityFailure(
+      { ok: failed.length === 0, checks: [...checks] },
+      "runtime",
+      expectedRole,
     );
+    const refusal = `refusing: the session is not a correctly scoped runtime identity (${failed
+      .map((check) => `${check.name}: ${check.detail}`)
+      .join("; ")})`;
+    super(summary ? `${summary}\n${refusal}` : refusal);
     this.name = "PostgresIdentityError";
     this.checks = checks;
+    this.summary = summary;
   }
 }
 
@@ -191,7 +203,7 @@ export async function openPostgresEngineDb(
         { cause: err },
       );
     }
-    if (!identity.ok) throw new PostgresIdentityError(identity.checks);
+    if (!identity.ok) throw new PostgresIdentityError(identity.checks, config.expectedRole);
     try {
       ledger = await verifyPostgresMigrations(pool, { schema: config.schema, bundled });
     } catch (err) {

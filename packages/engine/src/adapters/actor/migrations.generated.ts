@@ -899,7 +899,7 @@ export const ACTOR_MIGRATIONS: readonly (readonly [string, readonly string[]])[]
     "0089_agent_canonical_name.sql",
     [
       "ALTER TABLE agents\n  ADD COLUMN canonical_name text",
-      "UPDATE agents\nSET canonical_name = lower(name)\nWHERE status <> 'released'\n  AND NOT EXISTS (\n    SELECT 1\n    FROM agents AS earlier\n    WHERE earlier.workspace_id = agents.workspace_id\n      AND earlier.status <> 'released'\n      AND lower(earlier.name) = lower(agents.name)\n      AND (\n        earlier.created_at < agents.created_at\n        OR (earlier.created_at = agents.created_at AND earlier.id < agents.id)\n      )\n  )",
+      "UPDATE agents\nSET canonical_name = lower(name)\nWHERE id IN (\n  SELECT id\n  FROM (\n    SELECT\n      id,\n      row_number() OVER (\n        PARTITION BY workspace_id, lower(name)\n        ORDER BY created_at ASC, id ASC\n      ) AS rn\n    FROM agents\n    WHERE status <> 'released'\n  ) AS ranked\n  WHERE rn = 1\n)",
       "CREATE UNIQUE INDEX agents_workspace_canonical_name_unique\n  ON agents (workspace_id, canonical_name)\n  WHERE canonical_name IS NOT NULL AND status <> 'released'"
     ]
   ]

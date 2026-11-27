@@ -10,7 +10,8 @@ import {
   type TestStack,
 } from './harness.js';
 import { getSqliteDb, runMigrations } from '../../adapters/node/database.js';
-import { handleNodeControlMessage, registerAgentViaNode } from '../../engine/node.js';
+import { handleNodeControlMessage, recoverAgentViaNode, registerAgentViaNode } from '../../engine/node.js';
+import { agents } from '../../db/tables.js';
 import { AGENT_NAME_MAX_LENGTH, RELEASED_NAME_MARKER } from '../../engine/agent.js';
 import { WEBHOOK_AGENT_NAME } from '../../engine/messageMetadata.js';
 
@@ -187,6 +188,76 @@ describe('agent name validation and confusable resistance', () => {
       name: 'Beta1',
     });
     expect(second.name).toBe('Beta1');
+  });
+
+  it('preserves node recovery for pre-existing legacy agent names with spaces or non-ASCII characters', async () => {
+    const ws = await createWorkspace(stack.app, 'legacy-node-recover');
+    const enrollRes = await stack.app.request('/v1/nodes', {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        authorization: `Bearer ${ws.workspaceKey}`,
+      },
+      body: JSON.stringify({ name: 'legacy-broker', max_agents: 4 }),
+    });
+    expect(enrollRes.status).toBe(201);
+    const { data: node } = (await enrollRes.json()) as { data: { id: string; name: string } };
+
+    const sock = new FakeSocket();
+    await handleNodeControlMessage({
+      db: stack.runtime.deps.db,
+      workspaceId: ws.workspaceId,
+      nodeId: node.id,
+      socket: sock,
+      message: {
+        type: 'node.register',
+        id: 'reg-legacy-node',
+        name: node.name,
+        capabilities: [],
+        max_agents: 4,
+      },
+    });
+
+    // Seed pre-0089 legacy hosted agents that would be rejected by new registration.
+    for (const [id, legacyName, tokenHash] of [
+      ['legacy_space', 'build worker', 'tok_legacy_space'],
+      ['legacy_unicode', 'caf\u00e9', 'tok_legacy_unicode'],
+    ] as const) {
+      await stack.runtime.deps.db.insert(agents).values({
+        id,
+        workspaceId: ws.workspaceId,
+        name: legacyName,
+        canonicalName: legacyName.toLowerCase(),
+        handle: `@${legacyName}`,
+        type: 'agent',
+        tokenHash,
+        status: 'offline',
+        locationType: 'via_node',
+        locationNodeId: node.id,
+        originNodeId: node.id,
+        providerName: 'default',
+      });
+
+      const recovered = await recoverAgentViaNode(stack.runtime.deps.db, ws.workspaceId, node.id, 'default', {
+        type: 'agent.recover',
+        id: `recover-${id}`,
+        name: legacyName,
+        expected_agent_id: id,
+      });
+      expect(recovered.agent_id).toBe(id);
+      expect(recovered.name).toBe(legacyName);
+      expect(recovered.token).toBeTruthy();
+    }
+
+    // Reserved names are still rejected on recovery.
+    await expect(
+      recoverAgentViaNode(stack.runtime.deps.db, ws.workspaceId, node.id, 'default', {
+        type: 'agent.recover',
+        id: 'recover-reserved',
+        name: WEBHOOK_AGENT_NAME.toUpperCase(),
+        expected_agent_id: 'any_id',
+      }),
+    ).rejects.toMatchObject({ code: 'invalid_agent_name', status: 400 });
   });
 
   it('rejects confusable names in POST /v1/agents/spawn', async () => {

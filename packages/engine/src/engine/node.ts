@@ -41,6 +41,7 @@ import { generateId } from './snowflake.js';
 import {
   activeAgentNameConflictFilter,
   assertRegistrableAgentName,
+  assertUnreservedAgentName,
   agentLivenessLoss,
   agentLivenessRefresh,
   RELEASED_AGENT_STATUS,
@@ -2829,7 +2830,11 @@ export async function recoverAgentViaNode(
   message: FleetAgentRecoverMessage,
   options: { deliveryCursorSupported?: boolean } = {},
 ): Promise<AgentRegisterReplyData> {
-  assertRegistrableAgentName(message.name);
+  // Recovery operates on an already-registered identity pinned to immutable
+  // `expected_agent_id` + `origin_node_id`, so keep only reserved-name checks
+  // here; pre-0089 legacy agents with spaces or non-ASCII names must remain
+  // recoverable after a node restart.
+  assertUnreservedAgentName(message.name);
   const hasInteractiveTransaction = hasTransactionCapability(db);
   const recovered = await runAtomic(db, async (tx) => {
     const [node] = await tx

@@ -7,15 +7,19 @@ See the [root changelog](../../CHANGELOG.md) for cross-package release highlight
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased - Minor]
+## [Unreleased]
 
-### Security
+### Added
 
-- Reject confusable agent names across `POST /v1/agents`, node `agent.register`, and `spawn`: names must be 1–128 printable non-whitespace ASCII characters (`0x21`–`0x7E`), blocking whitespace, control characters, zero-width/bidi characters, and non-ASCII homoglyphs with `400 invalid_agent_name`, and reserved names (`__relay_webhook__`, `#released-`) are matched case-insensitively. Active agent names are now enforced case-insensitively per workspace via `agents.canonical_name` and a partial unique index `agents_workspace_canonical_name_unique` (`WHERE canonical_name IS NOT NULL AND status <> 'released'`; SQLite `0089_agent_canonical_name.sql`, Postgres `0011_agent_canonical_name.sql`–`0013_agent_canonical_name_unique.sql`), returning `409 agent_already_exists` on case variants while preserving display casing and safely migrating pre-existing legacy rows. Releasing or deleting an agent clears `canonical_name` so the name can be re-registered under any casing. Re-exports `validateAgentName`, `canonicalizeAgentName`, `assertRegistrableAgentName`, `AGENT_NAME_MAX_LENGTH`, and `AGENT_NAME_PATTERN`.
+- `summarizeIdentityFailure(result, mode, expectedRole?)`, `DB_LOGIN_ERROR_CODE` (`AR_DB_LOGIN`) and `DB_LOGIN_DOCS_URL` from `@relaycast/engine/adapters/postgres`: a pure one-line summary of a failed `verifyIdentity` result. A master/superuser-shaped login (any of `not_superuser`, `not_createrole`, `not_createdb`, `not_replication`, `not_bypassrls`, `no_privileged_memberships` failed, or a reachable `rds_superuser`/`azure_pg_admin`/`cloudsqlsuperuser`/`alloydbsuperuser`) is named as such with the reason and the `configure-rds.sh` fix; a login other than the expected role names both; anything else lists the failed checks. `migrate`, `verify-db` and the other verified commands print it on stderr before the identity check list, and `PostgresIdentityError` (new optional `expectedRole` argument and `summary` property) leads its message with it. `verifyIdentity`, its checks and SQL, the check list, the `refusing: ...` line and exit code `65` are unchanged.
 
 ### Changed
 
 - Upgraded `better-sqlite3` to `^13.2.0` (Node-API prebuilds) for Node.js 22–26 compatibility.
+
+### Security
+
+- Reject confusable agent names across `POST /v1/agents`, node `agent.register`, and `spawn`: names must be 1–128 printable non-whitespace ASCII characters (`0x21`–`0x7E`), blocking whitespace, control characters, zero-width/bidi characters, and non-ASCII homoglyphs with `400 invalid_agent_name`, and reserved names (`__relay_webhook__`, `#released-`) are matched case-insensitively. Active agent names are now enforced case-insensitively per workspace via `agents.canonical_name` and a partial unique index `agents_workspace_canonical_name_unique` (`WHERE canonical_name IS NOT NULL AND status <> 'released'`; SQLite `0089_agent_canonical_name.sql`, Postgres `0011_agent_canonical_name.sql`–`0013_agent_canonical_name_unique.sql`), returning `409 agent_already_exists` on case variants while preserving display casing and safely migrating pre-existing legacy rows. Releasing or deleting an agent clears `canonical_name` so the name can be re-registered under any casing. Re-exports `validateAgentName`, `canonicalizeAgentName`, `assertRegistrableAgentName`, `AGENT_NAME_MAX_LENGTH`, and `AGENT_NAME_PATTERN`.
 
 ## [12.15.0] - 2026-11-24
 
