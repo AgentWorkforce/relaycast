@@ -15,6 +15,7 @@ describe('messaging tools', () => {
     dm: vi.fn(),
     dms: {
       conversations: vi.fn(),
+      messages: vi.fn(),
       createGroup: vi.fn(),
       sendMessage: vi.fn(),
     },
@@ -149,6 +150,7 @@ describe('messaging tools with workspace routing and identity overrides', () => 
     dm: vi.fn(),
     dms: {
       conversations: vi.fn(),
+      messages: vi.fn(),
       createGroup: vi.fn(),
       sendMessage: vi.fn(),
     },
@@ -161,6 +163,7 @@ describe('messaging tools with workspace routing and identity overrides', () => 
     dm: vi.fn(),
     dms: {
       conversations: vi.fn(),
+      messages: vi.fn(),
       createGroup: vi.fn(),
       sendMessage: vi.fn(),
     },
@@ -173,6 +176,7 @@ describe('messaging tools with workspace routing and identity overrides', () => 
     dm: vi.fn(),
     dms: {
       conversations: vi.fn(),
+      messages: vi.fn(),
       createGroup: vi.fn(),
       sendMessage: vi.fn(),
     },
@@ -250,6 +254,25 @@ describe('messaging tools with workspace routing and identity overrides', () => 
     });
     expect(getAgentClient).toHaveBeenCalledWith(undefined, 'WriterBot');
     expect(identityClient.dms.conversations).toHaveBeenCalled();
+  });
+
+  it('message.dm.history routes workspace and identity like message.dm.list', async () => {
+    routedClient.dms.messages.mockResolvedValue([{ id: '001' }]);
+    await client.callTool({
+      name: 'message.dm.history',
+      arguments: { conversation_id: 'conv_beta', workspace_alias: 'beta' },
+    });
+    expect(getAgentClient).toHaveBeenCalledWith({ workspace_id: undefined, workspace_alias: 'beta' }, undefined);
+    expect(routedClient.dms.messages).toHaveBeenCalledWith('conv_beta', { before: undefined, limit: 21 });
+
+    identityClient.dms.messages.mockResolvedValue([]);
+    await client.callTool({
+      name: 'message.dm.history',
+      arguments: { conversation_id: 'conv_writer', as: 'WriterBot' },
+    });
+    expect(getAgentClient).toHaveBeenCalledWith(undefined, 'WriterBot');
+    expect(identityClient.dms.messages).toHaveBeenCalledWith('conv_writer', { before: undefined, limit: 21 });
+    expect(defaultClient.dms.messages).not.toHaveBeenCalled();
   });
 
   it('message.dm.send_group with workspace_alias and as routes to identity-scoped client', async () => {
