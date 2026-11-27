@@ -81,7 +81,7 @@
     "@hono/node-server": "^1.13.7",
     "@relaycast/a2a": "12.15.0",
     "@relaycast/types": "12.15.0",
-    "better-sqlite3": "^11.10.0",
+    "better-sqlite3": "^13.2.0",
     "drizzle-orm": "^0.45.1",
     "hono": "^4.11.9",
     "pg": "^8.23.1",

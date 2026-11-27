@@ -38,7 +38,13 @@ import type { PresenceTracker } from '../ports/presence.js';
 import type { NodeConnectionRegistry } from '../ports/realtime.js';
 import { NODE_LIVENESS_CHECKPOINT_INTERVAL_MS } from '../ports/nodeLiveness.js';
 import { generateId } from './snowflake.js';
-import { assertRegistrableAgentName, agentLivenessLoss, agentLivenessRefresh, RELEASED_AGENT_STATUS } from './agent.js';
+import {
+  activeAgentNameConflictFilter,
+  assertRegistrableAgentName,
+  agentLivenessLoss,
+  agentLivenessRefresh,
+  RELEASED_AGENT_STATUS,
+} from './agent.js';
 import { rotateAgentIdentity } from './agentIdentity.js';
 import { isNodeLive, isReusableForMachineMatch, nodeHasCapacity, NODE_LIVENESS_TTL_MS } from './placement.js';
 import {
@@ -2531,15 +2537,16 @@ export async function registerAgentViaNode(
   message: FleetAgentRegisterMessage,
   options: { deliveryCursorSupported?: boolean; admitRegistration?: RegistrationAdmission } = {},
 ): Promise<AgentRegisterReplyData> {
-  assertRegistrableAgentName(message.name);
+  const canonicalName = assertRegistrableAgentName(message.name);
   const wantsAutoJoin = message.auto_join_general !== false;
   if (options.admitRegistration) {
-    // Only a NEW identity is admitted: an established name is answered by the
-    // conflict below, never by a denial.
+    // Only a NEW identity is admitted: an established exact or case-variant
+    // name is answered by the conflict below, never by a denial.
     const [established] = await db
       .select({ id: agents.id })
       .from(agents)
-      .where(and(eq(agents.workspaceId, workspaceId), eq(agents.name, message.name)));
+      .where(activeAgentNameConflictFilter(workspaceId, canonicalName))
+      .limit(1);
     if (!established) await options.admitRegistration('register_agent');
   }
   const registered = await runAtomic(db, async (tx) => {
@@ -2597,7 +2604,8 @@ export async function registerAgentViaNode(
       tx
         .select({ id: agents.id })
         .from(agents)
-        .where(and(eq(agents.workspaceId, workspaceId), eq(agents.name, message.name))),
+        .where(activeAgentNameConflictFilter(workspaceId, canonicalName))
+        .limit(1),
       tx
         .select()
         .from(channels)
@@ -2691,6 +2699,7 @@ export async function registerAgentViaNode(
             id: agentId,
             workspaceId,
             name: message.name,
+            canonicalName,
             handle: `@${message.name}`,
             type: 'agent',
             tokenHash,
@@ -2704,7 +2713,9 @@ export async function registerAgentViaNode(
             resumable: message.resumable ?? false,
             sessionRef: message.session_ref ?? null,
           })
-          .onConflictDoNothing({ target: [agents.workspaceId, agents.name] })
+          // Catch conflicts on both `(workspace_id, name)` and the active
+          // case-insensitive `(workspace_id, canonical_name)` unique index.
+          .onConflictDoNothing()
           .returning(),
       ], admissionResults);
 

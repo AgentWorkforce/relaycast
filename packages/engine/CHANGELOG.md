@@ -7,7 +7,15 @@ See the [root changelog](../../CHANGELOG.md) for cross-package release highlight
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [Unreleased - Minor]
+
+### Security
+
+- Reject confusable agent names across `POST /v1/agents`, node `agent.register`, and `spawn`: names must be 1–128 printable non-whitespace ASCII characters (`0x21`–`0x7E`), blocking whitespace, control characters, zero-width/bidi characters, and non-ASCII homoglyphs with `400 invalid_agent_name`, and reserved names (`__relay_webhook__`, `#released-`) are matched case-insensitively. Active agent names are now enforced case-insensitively per workspace via `agents.canonical_name` and a partial unique index `agents_workspace_canonical_name_unique` (`WHERE canonical_name IS NOT NULL AND status <> 'released'`; SQLite `0089_agent_canonical_name.sql`, Postgres `0011_agent_canonical_name.sql`–`0013_agent_canonical_name_unique.sql`), returning `409 agent_already_exists` on case variants while preserving display casing and safely migrating pre-existing legacy rows. Releasing or deleting an agent clears `canonical_name` so the name can be re-registered under any casing. Re-exports `validateAgentName`, `canonicalizeAgentName`, `assertRegistrableAgentName`, `AGENT_NAME_MAX_LENGTH`, and `AGENT_NAME_PATTERN`.
+
+### Changed
+
+- Upgraded `better-sqlite3` to `^13.2.0` (Node-API prebuilds) for Node.js 22–26 compatibility.
 
 ## [12.15.0] - 2026-11-24
 

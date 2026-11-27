@@ -1818,6 +1818,7 @@ async function dispatchRelease(args: {
         .update(agents)
         .set({
           name: releasedName,
+          canonicalName: null,
           handle: `@${releasedName}`,
           status: RELEASED_AGENT_STATUS,
           tokenHash: releasedTokenHash,
@@ -3352,6 +3353,7 @@ async function completeReleaseNodeInvocation(
         .update(agents)
         .set({
           name: releasedName,
+          canonicalName: null,
           handle: `@${releasedName}`,
           status: RELEASED_AGENT_STATUS,
           tokenHash: releasedTokenHash,

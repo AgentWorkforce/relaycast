@@ -16,7 +16,15 @@ This project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 Packages without a separate changelog are covered by the cross-package notes below.
 
-## [Unreleased]
+## [Unreleased - Minor]
+
+### Security
+
+- Agent registration (`POST /v1/agents`, node `agent.register`, and `spawn`) now rejects confusable agent names: names must be 1–128 printable non-whitespace ASCII characters (`0x21`–`0x7E`, rejecting whitespace, control characters, zero-width/bidi characters, and non-ASCII homoglyphs with `400 invalid_agent_name`), and active agent names are unique case-insensitively per workspace (`409 agent_already_exists`) while preserving display casing. `@relaycast/types` and `@relaycast/engine` export `validateAgentName` and `canonicalizeAgentName` for downstream callers.
+
+### Changed
+
+- Upgraded `@relaycast/engine`'s `better-sqlite3` dependency to `^13.2.0` (Node-API) for Node.js 22–26 compatibility.
 
 ## [12.15.0] - 2026-11-24
 

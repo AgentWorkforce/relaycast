@@ -196,6 +196,9 @@ describe("loadBundledPostgresMigrations", () => {
       "0008_message_owner_approval.sql",
       "0009_message_owner_approval_immutable.sql",
       "0010_owner_approval_quote_redaction.sql",
+      "0011_agent_canonical_name.sql",
+      "0012_agent_canonical_name_backfill.sql",
+      "0013_agent_canonical_name_unique.sql",
     ]);
     expect(bundled.every((m) => m.statements.length > 0)).toBe(true);
   });
