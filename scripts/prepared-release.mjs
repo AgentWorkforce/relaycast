@@ -5,7 +5,7 @@ import { createHash } from "node:crypto";
 import { appendFileSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { parseVersion } from "./release-contract.mjs";
+import { parseVersion, projectDockerDependencyMaps } from "./release-contract.mjs";
 import {
   assertReleaseMetadata,
   assertReusableReleaseTag,
@@ -105,6 +105,8 @@ export function prepareRelease({
     );
     const lockPath = path.join(cwd, "docker/package-lock.json");
     const lock = JSON.parse(readFileSync(lockPath, "utf8"));
+    const sourceLock = JSON.parse(git(cwd, ["show", `${manifest.sourceCommit}:package-lock.json`]));
+    projectDockerDependencyMaps(lock, sourceLock);
     writeFileSync(
       lockPath,
       `${JSON.stringify(refreshDockerLock(lock, manifest, version), null, 2)}\n`,

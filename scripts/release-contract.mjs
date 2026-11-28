@@ -167,6 +167,28 @@ function sameDependencyMap(actual, expected) {
   );
 }
 
+// A released Docker lock describes published tarballs. When preparing the next
+// release, take their dependency declarations from the reviewed source lock.
+export function projectDockerDependencyMaps(dockerLock, workspaceLock) {
+  const workspaces = new Map(
+    Object.entries(workspaceLock.packages)
+      .filter(([key]) => /^packages\/[^/]+$/.test(key))
+      .map(([, entry]) => [entry.name, entry]),
+  );
+  for (const [key, entry] of Object.entries(dockerLock.packages)) {
+    const match = key.match(DOCKER_PACKAGE_KEY);
+    if (!match) continue;
+    const source = workspaces.get(match[1]);
+    if (!source) throw new Error(`Missing workspace lock entry for ${match[1]}`);
+    for (const type of DOCKER_DEPENDENCY_TYPES) {
+      if (sameDependencyMap(source[type], entry[type])) continue;
+      if (source[type]) entry[type] = { ...source[type] };
+      else delete entry[type];
+    }
+  }
+  return dockerLock;
+}
+
 function assertInternalDependencies(owner, pkg, expectedVersion) {
   for (const dependencyType of [
     "dependencies",
