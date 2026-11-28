@@ -141,6 +141,7 @@ function bumpFixtureVersion(root, version, dockerIntegrities) {
         existsSync(path.join(root, "packages", entry.name, "package.json")),
     )
     .map((entry) => `packages/${entry.name}/package.json`);
+  const fixtureManifests = new Map();
   for (const file of packageDirs) {
     const manifestPath = path.join(root, file);
     const manifest = JSON.parse(readFileSync(manifestPath, "utf8"));
@@ -150,6 +151,7 @@ function bumpFixtureVersion(root, version, dockerIntegrities) {
         if (name.startsWith("@relaycast/")) manifest[type][name] = version;
       }
     }
+    fixtureManifests.set(manifest.name, manifest);
     writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
   }
   const rootLockPath = path.join(root, "package-lock.json");
@@ -191,10 +193,12 @@ function bumpFixtureVersion(root, version, dockerIntegrities) {
     entry.version = version;
     entry.resolved = `https://registry.npmjs.org/${name}/-/${shortName}-${version}.tgz`;
     entry.integrity = dockerIntegrities[name];
-    for (const type of ["dependencies", "devDependencies", "optionalDependencies", "peerDependencies"]) {
-      for (const dependency of Object.keys(entry[type] ?? {})) {
-        if (dependency.startsWith("@relaycast/")) entry[type][dependency] = version;
-      }
+    // The fixture models a newly published tarball. The checked-in Docker lock
+    // still describes the previous release until the real package is published.
+    const manifest = fixtureManifests.get(name);
+    for (const type of ["dependencies", "optionalDependencies", "peerDependencies"]) {
+      if (manifest[type]) entry[type] = manifest[type];
+      else delete entry[type];
     }
   }
   writeFileSync(dockerLockPath, `${JSON.stringify(dockerLock, null, 2)}\n`);
