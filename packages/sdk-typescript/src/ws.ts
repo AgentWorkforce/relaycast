@@ -595,7 +595,7 @@ export class WsClient {
     if (retryAfterMs !== null) this.recordRefusal(ws, retryAfterMs);
     if (this.debug) this.warn('node.register rejected', { code, message, retryAfterMs });
     const event: WsRegistrationRejectedEvent = { type: 'registration_rejected', code, message, retryAfterMs };
-    this.emitSafely('registration_rejected', event);
+    this.emit('registration_rejected', event);
     if (this.ws !== ws) return;
     if (retryAfterMs === null) {
       this.dropSocket(ws);
@@ -651,7 +651,7 @@ export class WsClient {
           message: `${PROVIDER_INSTANCE_CONFLICT_CODE} (close ${PROVIDER_INSTANCE_CONFLICT_CLOSE_CODE})`,
           retryAfterMs: null,
         };
-        this.emitSafely('registration_rejected', event);
+        this.emit('registration_rejected', event);
       }
     }
     if (!this.closed) {
@@ -768,25 +768,21 @@ export class WsClient {
   }
 
   /**
-   * {@link emit} for callers with state-critical work still to do: a handler
-   * that throws synchronously is logged and skipped instead of escaping.
-   */
-  private emitSafely(event: string, data: WsClientEvent): void {
-    try {
-      this.emit(event, data);
-    } catch (err) {
-      this.warn('event handler failed', { event, error: err });
-    }
-  }
-
-  /**
-   * Dispatch synchronously; nothing waits for the handlers. A promise a
-   * handler returns is observed only to log its rejection (the workspace
-   * stream has no ack for it to hold back), never left unhandled.
+   * Dispatch synchronously; nothing waits for the handlers. A handler that
+   * throws is logged and skipped, so it cannot starve the other handlers or
+   * abort the reconnect, resubscribe and resync work around the emit. A
+   * promise a handler returns is observed only to log its rejection (the
+   * workspace stream has no ack for it to hold back), never left unhandled.
    */
   private emit(event: string, data: WsClientEvent): void {
     const run = (handler: EventHandler) => {
-      const result = handler(data) as unknown;
+      let result: unknown;
+      try {
+        result = handler(data);
+      } catch (err) {
+        this.warn('event handler failed', { event, error: err });
+        return;
+      }
       if (result && typeof (result as Promise<unknown>).then === 'function') {
         // `Promise.resolve` adopts any thenable (a query builder has no `catch`).
         Promise.resolve(result).catch((err) => this.warn('event handler failed', { event, error: err }));
