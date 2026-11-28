@@ -54,6 +54,12 @@ export interface RequestOptions {
   schema?: z.ZodType;
   /** Whether this request may be retried automatically. Defaults to true. */
   retry?: boolean;
+  /**
+   * Abort each attempt (response and JSON body) after this many milliseconds
+   * and fail it as a `transport_error`. Unset means no timeout. A timed-out
+   * attempt is retried only when the request itself is retryable.
+   */
+  timeoutMs?: number;
 }
 
 export interface ResponseEnvelope<T> {
@@ -140,6 +146,21 @@ function computeBackoffMs(policy: RetryPolicy, retryAttempt: number): number {
   if (!policy.jitter) return Math.max(0, Math.round(exponential));
   const jitterFactor = 0.5 + Math.random();
   return Math.max(0, Math.round(exponential * jitterFactor));
+}
+
+/**
+ * Settle with `promise`, or reject once `signal` aborts, so a timed-out attempt
+ * settles even when an injected fetch ignores its signal.
+ */
+function untilAborted<T>(promise: Promise<T>, signal: AbortSignal | undefined): Promise<T> {
+  if (!signal) return promise;
+  return new Promise<T>((resolve, reject) => {
+    const onAbort = (): void => reject(signal.reason);
+    signal.addEventListener('abort', onAbort, { once: true });
+    // Always observe `promise`, so a late rejection is never unhandled.
+    promise.then(resolve, reject).finally(() => signal.removeEventListener('abort', onAbort));
+    if (signal.aborted) onAbort();
+  });
 }
 
 function parseRetryAfterMs(res: Response): number | null {
@@ -299,85 +320,110 @@ export class HttpClient {
     const isUnsafeMutation = ['POST', 'PATCH'].includes(method.toUpperCase()) && !idempotencyKey;
     const maxRetries = options?.retry === false || isUnsafeMutation ? 0 : this._retryPolicy.maxRetries;
 
+    const timeoutMs = Number.isFinite(options?.timeoutMs) ? Math.max(1, Math.floor(options!.timeoutMs!)) : undefined;
     let attempt = 0;
 
     while (true) {
-      let res: Response;
+      const attemptAbort = timeoutMs === undefined ? undefined : new AbortController();
+      const attemptTimer = attemptAbort
+        ? setTimeout(() => attemptAbort.abort(new Error(`Request timed out after ${timeoutMs}ms`)), timeoutMs)
+        : undefined;
+      const signal = attemptAbort?.signal;
       try {
-        res = await fetch(url.toString(), {
-          method,
-          headers,
-          body: hasBody ? JSON.stringify(wireBody) : undefined,
-        });
-      } catch (err) {
-        if (attempt < maxRetries) {
-          const waitMs = computeBackoffMs(this._retryPolicy, attempt);
+        let res: Response;
+        try {
+          res = await untilAborted(fetch(url.toString(), {
+            method,
+            headers,
+            body: hasBody ? JSON.stringify(wireBody) : undefined,
+            ...(signal ? { signal } : {}),
+          }), signal);
+        } catch (err) {
+          if (attempt < maxRetries) {
+            const waitMs = computeBackoffMs(this._retryPolicy, attempt);
+            attempt += 1;
+            await sleep(waitMs);
+            continue;
+          }
+          throw new RelayError(
+            'transport_error',
+            `Network request failed: ${err instanceof Error ? err.message : 'unknown error'}`,
+            { retryable: true, cause: err },
+          );
+        }
+
+        if (this._retryPolicy.retryOn.includes(res.status) && attempt < maxRetries) {
+          const waitMs = Math.min(
+            parseRetryAfterMs(res) ?? computeBackoffMs(this._retryPolicy, attempt),
+            MAX_AUTOMATIC_RETRY_DELAY_MS,
+          );
           attempt += 1;
           await sleep(waitMs);
           continue;
         }
-        throw new RelayError(
-          'transport_error',
-          `Network request failed: ${err instanceof Error ? err.message : 'unknown error'}`,
-          { retryable: true, cause: err },
-        );
-      }
 
-      if (this._retryPolicy.retryOn.includes(res.status) && attempt < maxRetries) {
-        const waitMs = Math.min(
-          parseRetryAfterMs(res) ?? computeBackoffMs(this._retryPolicy, attempt),
-          MAX_AUTOMATIC_RETRY_DELAY_MS,
-        );
-        attempt += 1;
-        await sleep(waitMs);
-        continue;
-      }
+        // 204 No Content — return undefined (used by DELETE endpoints)
+        if (res.status === 204) {
+          return { data: undefined as Camelize<T> };
+        }
 
-      // 204 No Content — return undefined (used by DELETE endpoints)
-      if (res.status === 204) {
-        return { data: undefined as Camelize<T> };
-      }
-
-      let json: unknown;
-      try {
-        json = await res.json();
-      } catch (err) {
-        throw new RelayError(
-          'transport_error',
-          `Failed to parse response as JSON: ${err instanceof Error ? err.message : 'unknown error'}`,
-          { statusCode: res.status, retryable: false, cause: err },
-        );
-      }
-      const envelope = apiEnvelopeSchema.safeParse(json);
-
-      if (!envelope.success) {
-        throw new RelayError('transport_error', 'Invalid API response', {
-          statusCode: res.status,
-          retryable: false,
-        });
-      }
-
-      if (!envelope.data.ok) {
-        const errParsed = ApiErrorSchema.safeParse(json);
-        const code = errParsed.success ? errParsed.data.error.code : 'unknown_error';
-        const message = errParsed.success ? errParsed.data.error.message : 'Unknown error';
-        throw relayErrorFromApi(code, message, res.status, parseRetryAfterMs(res) ?? undefined);
-      }
-
-      const data = envelope.data.data;
-
-      const parsedData = options?.schema ? options.schema.parse(data) : data;
-      return {
-        data: camelizeKeys(parsedData) as Camelize<T>,
-        ...(envelope.data.cursor
-          ? {
-            cursor: {
-              next: envelope.data.cursor.next,
-              hasMore: envelope.data.cursor.has_more,
-            },
+        let json: unknown;
+        try {
+          json = await untilAborted(res.json(), signal);
+        } catch (err) {
+          if (signal?.aborted) {
+            // A body that outlives the timeout is a timeout, not a malformed response.
+            if (attempt < maxRetries) {
+              const waitMs = computeBackoffMs(this._retryPolicy, attempt);
+              attempt += 1;
+              await sleep(waitMs);
+              continue;
+            }
+            throw new RelayError(
+              'transport_error',
+              `Network request failed: ${(signal.reason as Error).message}`,
+              { statusCode: res.status, retryable: true, cause: signal.reason },
+            );
           }
-          : {}),
-      };
+          throw new RelayError(
+            'transport_error',
+            `Failed to parse response as JSON: ${err instanceof Error ? err.message : 'unknown error'}`,
+            { statusCode: res.status, retryable: false, cause: err },
+          );
+        }
+        const envelope = apiEnvelopeSchema.safeParse(json);
+
+        if (!envelope.success) {
+          throw new RelayError('transport_error', 'Invalid API response', {
+            statusCode: res.status,
+            retryable: false,
+          });
+        }
+
+        if (!envelope.data.ok) {
+          const errParsed = ApiErrorSchema.safeParse(json);
+          const code = errParsed.success ? errParsed.data.error.code : 'unknown_error';
+          const message = errParsed.success ? errParsed.data.error.message : 'Unknown error';
+          throw relayErrorFromApi(code, message, res.status, parseRetryAfterMs(res) ?? undefined);
+        }
+
+        const data = envelope.data.data;
+
+        const parsedData = options?.schema ? options.schema.parse(data) : data;
+        return {
+          data: camelizeKeys(parsedData) as Camelize<T>,
+          ...(envelope.data.cursor
+            ? {
+              cursor: {
+                next: envelope.data.cursor.next,
+                hasMore: envelope.data.cursor.has_more,
+              },
+            }
+            : {}),
+        };
+      } finally {
+        if (attemptTimer !== undefined) clearTimeout(attemptTimer);
+      }
     }
   }
 

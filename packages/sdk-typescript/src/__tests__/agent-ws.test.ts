@@ -1988,6 +1988,52 @@ describe('AgentClient WebSocket integration', () => {
     expect(mockFetch).toHaveBeenCalledTimes(4);
   });
 
+  it('disconnect() is not blocked forever by a hung auto heartbeat', async () => {
+    const agent = createAgent({ autoHeartbeatMs: 30_000 });
+    agent.connect();
+    const ws = await nextSocket();
+    await openRegistered(ws);
+    await Promise.resolve();
+    expect(mockFetch).toHaveBeenCalledTimes(2);
+
+    // The next heartbeat never gets a response, and this fetch double ignores
+    // its abort signal, as a minimal injected fetch might.
+    mockFetch.mockImplementationOnce(() => new Promise(() => {}));
+    await vi.advanceTimersByTimeAsync(30_000);
+    expect(mockFetch).toHaveBeenCalledTimes(3);
+    expect(mockFetch.mock.calls[2]![0]).toBe('http://localhost:8080/v1/agents/heartbeat');
+
+    let settled = false;
+    const done = agent.disconnect().then(() => { settled = true; });
+    await vi.advanceTimersByTimeAsync(30_000);
+
+    expect(settled).toBe(true);
+    await done;
+    expect(mockFetch.mock.calls.at(-1)![0]).toBe('http://localhost:8080/v1/agents/disconnect');
+    // The timed-out heartbeat is a POST without an idempotency key: no replay.
+    expect(mockFetch.mock.calls.filter(([url]) => String(url).endsWith('/v1/agents/heartbeat'))).toHaveLength(2);
+  });
+
+  it('disconnect() settles when its own disconnect POST hangs', async () => {
+    const agent = createAgent({ autoHeartbeatMs: 30_000 });
+    agent.connect();
+    const ws = await nextSocket();
+    await openRegistered(ws);
+    await Promise.resolve();
+
+    mockFetch.mockImplementationOnce(() => new Promise(() => {}));
+    let settled = false;
+    const done = agent.disconnect().then(() => { settled = true; });
+    await vi.advanceTimersByTimeAsync(29_999);
+    expect(settled).toBe(false);
+    await vi.advanceTimersByTimeAsync(1);
+
+    expect(settled).toBe(true);
+    await done;
+    expect(mockFetch.mock.calls.at(-1)![0]).toBe('http://localhost:8080/v1/agents/disconnect');
+    expect(mockFetch.mock.calls.filter(([url]) => String(url).endsWith('/v1/agents/disconnect'))).toHaveLength(1);
+  });
+
   it('does not start auto-heartbeat interval when disabled', async () => {
     const agent = createAgent({ autoHeartbeatMs: false });
     agent.connect();
