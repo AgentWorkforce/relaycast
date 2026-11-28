@@ -137,6 +137,13 @@ interface FileListOptions {
   limit?: number;
 }
 
+/**
+ * Bound on the SDK's own background presence requests (auto heartbeat and the
+ * `disconnect()` POST), so a request that never gets a response cannot wedge
+ * `disconnect()`. Matches the setup client's default `requestTimeoutMs`.
+ */
+const PRESENCE_REQUEST_TIMEOUT_MS = 30_000;
+
 function normalizeAutoHeartbeatMs(value?: number | false): number | false {
   if (value === false) return false;
   if (typeof value === 'number' && Number.isFinite(value) && value > 0) {
@@ -291,7 +298,9 @@ export class AgentClient {
           return;
         }
         if (!this.pendingHeartbeat) {
-          this.pendingHeartbeat = this.presence.heartbeat()
+          this.pendingHeartbeat = this.client
+            .post<void>('/v1/agents/heartbeat', {}, { timeoutMs: PRESENCE_REQUEST_TIMEOUT_MS })
+            .then(() => {})
             .catch(() => {})
             .finally(() => { this.pendingHeartbeat = null; });
         }
@@ -447,7 +456,9 @@ export class AgentClient {
     // Always send the HTTP disconnect — it works even without a WS and
     // serves as the authoritative presence update.
     await this.client
-      .post('/v1/agents/disconnect', options?.deregister ? { deregister: true } : {})
+      .post('/v1/agents/disconnect', options?.deregister ? { deregister: true } : {}, {
+        timeoutMs: PRESENCE_REQUEST_TIMEOUT_MS,
+      })
       .catch(() => {});
   }
 

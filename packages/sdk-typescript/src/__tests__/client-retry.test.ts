@@ -129,4 +129,61 @@ describe('HttpClient retry policy', () => {
     await assertion;
     expect(mockFetch).toHaveBeenCalledTimes(3);
   });
+
+  it('times out a hung POST once and never replays it', async () => {
+    vi.useFakeTimers();
+    const client = new HttpClient({ apiKey: 'at_live_test123', retryPolicy: { backoffMs: 5, jitter: false } });
+    mockFetch.mockImplementation(() => new Promise(() => {}));
+
+    const promise = client.post('/v1/agents/heartbeat', {}, { timeoutMs: 100 });
+    const assertion = expect(promise).rejects.toMatchObject({
+      name: 'RelayError',
+      code: 'transport_error',
+      message: 'Network request failed: Request timed out after 100ms',
+    });
+
+    await vi.advanceTimersByTimeAsync(1_000);
+    await assertion;
+    expect(mockFetch).toHaveBeenCalledTimes(1);
+    const signal = (mockFetch.mock.calls[0]![1] as RequestInit).signal!;
+    expect(signal.aborted).toBe(true);
+  });
+
+  it('gives each retryable attempt its own timeout', async () => {
+    vi.useFakeTimers();
+    const client = new HttpClient({ apiKey: 'at_live_test123', retryPolicy: { backoffMs: 5, jitter: false } });
+    mockFetch
+      .mockImplementationOnce(() => new Promise(() => {}))
+      .mockImplementationOnce(() => mockResponse({ ok: 1 }));
+
+    const promise = client.get('/v1/workspace', undefined, { timeoutMs: 100 });
+    await vi.advanceTimersByTimeAsync(105);
+
+    await expect(promise).resolves.toEqual({ ok: 1 });
+    expect(mockFetch).toHaveBeenCalledTimes(2);
+  });
+
+  it('times out a response whose JSON body never arrives', async () => {
+    vi.useFakeTimers();
+    const client = new HttpClient({ apiKey: 'at_live_test123' });
+    mockFetch.mockResolvedValue({ ok: true, status: 200, headers: new Headers(), json: () => new Promise(() => {}) });
+
+    const promise = client.post('/v1/agents/heartbeat', {}, { timeoutMs: 100 });
+    const assertion = expect(promise).rejects.toMatchObject({
+      code: 'transport_error',
+      message: 'Network request failed: Request timed out after 100ms',
+      retryable: true,
+    });
+    await vi.advanceTimersByTimeAsync(100);
+    await assertion;
+    expect(mockFetch).toHaveBeenCalledTimes(1);
+  });
+
+  it('sends no abort signal when no timeout is requested', async () => {
+    const client = new HttpClient({ apiKey: 'at_live_test123' });
+    mockFetch.mockImplementation(() => mockResponse({}));
+
+    await client.post('/v1/agents/heartbeat', {});
+    expect(mockFetch.mock.calls[0]![1]).not.toHaveProperty('signal');
+  });
 });
