@@ -250,3 +250,15 @@ export type ExactReleaseAgentRequest = z.infer<typeof ExactReleaseAgentRequestSc
 
 export const ReleaseAgentResponseSchema = LifecycleActionInvocationResponseSchema;
 export type ReleaseAgentResponse = z.infer<typeof ReleaseAgentResponseSchema>;
+
+/**
+ * The device a person agent sent from, stamped by the server
+ * (`__relaycast_sender_device`): `kind` `unknown` for its shared token. Only
+ * person (`type: "human"`) senders carry it; absent for every other sender.
+ */
+export const AgentDeviceSchema = z.object({
+  id: z.string(),
+  name: z.string(),
+  kind: z.enum(['desktop', 'cli', 'web', 'unknown']),
+});
+export type AgentDevice = z.infer<typeof AgentDeviceSchema>;

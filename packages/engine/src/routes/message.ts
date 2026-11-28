@@ -39,6 +39,7 @@ import {
   parseQueryParams,
 } from '../lib/httpResponse.js';
 import { parsePaginationQuery, positiveIntQueryParam } from '../lib/httpQuery.js';
+import { directNodeIdForAgent } from '../engine/node.js';
 import {
   getMessagesBySessionRef,
   SessionRefSchema,
@@ -144,6 +145,12 @@ messageRoutes.post(
         if (!fromAgent) {
           return jsonNotFound(c, 'agent_not_found', `Agent "${from}" not found in this workspace`);
         }
+        // A direct node is one agent's own delivery host: it posts only as that
+        // agent (its implicit node, or the agent located on it), never as
+        // someone else. Broker nodes host many agents and keep `from` as before.
+        if (node.role === 'direct' && node.id !== directNodeIdForAgent(fromAgent.id) && fromAgent.locationNodeId !== node.id) {
+          return jsonError(c, 'from_not_allowed', 'A direct node may post only as its own agent', 403);
+        }
         // The by-message proof names this agent as the sender, and Cloud trusts
         // that id for the delegation check. A node may attach an approval only
         // for an agent it hosts, never for any agent name in the workspace.
@@ -196,7 +203,16 @@ messageRoutes.post(
             channel.id,
             senderAgentId,
             { text, blocks, attachments, data, content_type, mode, owner_approval },
-            { mailbox, workspaceDeliveryPolicy },
+            // An agent posting as itself carries its token's device. A node posting
+            // as `from` carries the device its token is bound to, but only for the
+            // person whose direct node it is; otherwise the device is unknown.
+            {
+              mailbox,
+              workspaceDeliveryPolicy,
+              senderDevice: agent
+                ? c.get('agentDevice')
+                : node && node.id === directNodeIdForAgent(senderAgentId) ? c.get('nodeDevice') : undefined,
+            },
           );
         },
         afterOperation: async (data) => {

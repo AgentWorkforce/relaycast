@@ -11,6 +11,7 @@ import { codedError } from '../lib/httpError.js';
 import type { RegistrationAdmission } from './registrationAdmission.js';
 import { directNodeIdForAgent, isOnlineCandidate } from './node.js';
 import { addressNodeSelection, formatAgentAddress } from './address.js';
+import { deleteAgentDeviceTokens } from './agentDevice.js';
 import { runAtomicWrites, type AtomicWrite } from '../ports/database.js';
 import {
   AGENT_RECOVERY_PROOF_HASH_PATTERN,
@@ -911,6 +912,9 @@ export async function deleteAgent(db: Db, workspaceId: string, name: string) {
     // a tombstone, matching the release paths.
     writes.push(writeDb.delete(agentNodeBindings).where(eq(agentNodeBindings.agentId, agent.id)));
     writes.push(writeDb.delete(nodes).where(eq(nodes.id, directNodeIdForAgent(agent.id))));
+    // A tombstone keeps its row, so the device-token FK cascade never runs:
+    // drop a person's per-device tokens with the rest of its credentials.
+    writes.push(deleteAgentDeviceTokens(writeDb, workspaceId, agent.id));
     writes.push(buildDeadLetterReleasedAgentDeliveriesWrite(
       writeDb,
       workspaceId,

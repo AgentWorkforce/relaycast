@@ -9,6 +9,7 @@ import {
 } from '../db/tables.js';
 import { codedError } from '../lib/httpError.js';
 import { D1_SAFE_IN_QUERY_CHUNK_SIZE, queryInChunks } from '../lib/queryChunks.js';
+import { senderDeviceField } from './address.js';
 import { publicMessageMetadata } from './messageMetadata.js';
 import { newestSnowflakePage } from './snowflakePage.js';
 
@@ -237,6 +238,7 @@ export async function getDmMessagesForWorkspace(
     id: r.id,
     agent_id: r.agentId,
     agent_name: r.agentName,
+    ...senderDeviceField(r.metadata as Record<string, unknown> | null),
     text: r.body,
     // Workspace/observer history is a public DM read path and must project
     // metadata like the agent-facing one, or a federated delivery's Ratify

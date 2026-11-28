@@ -72,7 +72,7 @@ describe('workspace actor runtime', () => {
     expect((await call(woken, 'GET', '/v1/agents', undefined, key)).status).toBe(200);
     const schema = woken.sql.log.filter((statement) => /sqlite_master|_engine_migrations/.test(statement));
     expect(schema).toEqual([
-      expect.stringMatching(/^SELECT name FROM sqlite_master WHERE type = 'table' AND name IN/),
+      expect.stringMatching(/^SELECT name, sql FROM sqlite_master WHERE type = 'table' AND name IN/),
       'SELECT name FROM _engine_migrations',
     ]);
     expect(woken.sql.log.filter((statement) => /^\s*(CREATE|ALTER|DROP)/i.test(statement))).toEqual([]);
@@ -81,6 +81,24 @@ describe('workspace actor runtime', () => {
     woken.sql.log.length = 0;
     expect((await call(woken, 'GET', '/v1/agents', undefined, key)).status).toBe(200);
     expect(woken.sql.log.filter((statement) => /sqlite_master|_engine_migrations/.test(statement))).toEqual([]);
+  });
+
+  it('adds a column a stored adapter table lacks, once', async () => {
+    const actor = new FakeWorkspaceActor(WORKSPACE_ID);
+    const { key } = await workspaceWithAgents(actor);
+    // A socket table stored before device_token_hash existed.
+    actor.sql.exec('ALTER TABLE _actor_sockets DROP COLUMN device_token_hash');
+    const woken = actor.restart();
+    woken.sql.log.length = 0;
+    expect((await call(woken, 'GET', '/v1/agents', undefined, key)).status).toBe(200);
+    expect(woken.sql.log.filter((statement) => /^\s*ALTER/i.test(statement)))
+      .toEqual(['ALTER TABLE _actor_sockets ADD COLUMN device_token_hash TEXT']);
+    expect(rows(woken, "SELECT COUNT(*) AS n FROM pragma_table_info('_actor_sockets') WHERE name = 'device_token_hash'"))
+      .toEqual([{ n: 1 }]);
+    const again = woken.restart();
+    again.sql.log.length = 0;
+    expect((await call(again, 'GET', '/v1/agents', undefined, key)).status).toBe(200);
+    expect(again.sql.log.filter((statement) => /^\s*(CREATE|ALTER|DROP)/i.test(statement))).toEqual([]);
   });
 
   it('rolls the schema back with a failed first call, leaving no orphan', async () => {

@@ -7,13 +7,15 @@ See the [root changelog](../../CHANGELOG.md) for cross-package release highlight
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [Unreleased - Minor]
 
 ## [12.16.0] - 2026-11-27
 
 ### Added
 
 - `validateAgentName`, `canonicalizeAgentName`, `AGENT_NAME_MAX_LENGTH`, `AGENT_NAME_PATTERN`, and `AgentNameValidationResult` for enforcing printable non-whitespace ASCII agent names and case-insensitive canonical uniqueness across engine and downstream callers.
+- `AgentDeviceSchema` / `AgentDevice` (`{ id, name, kind: desktop|cli|web|unknown }`) and an optional `agent_device` beside `agent_address` on message and delivery schemas.
+- `parseCredential` classifies agent device tokens (`at_live_dv_…`, `ar_ad_…`) as kind `agent` with `agentDevice: true`; `encodeArCredential` takes `agentDevice`. `AR_AGENT_DEVICE_CODE` and `LEGACY_AGENT_DEVICE_PREFIX` name the shapes, and `redactCredentials` redacts `ar_ad_` tokens.
 
 ## [12.15.0] - 2026-11-24
 

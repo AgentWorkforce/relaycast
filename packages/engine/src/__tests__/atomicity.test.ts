@@ -377,9 +377,11 @@ describe('atomic write paths', () => {
 
       expect(recovered.audit_id).toMatch(/^aid_/);
       expect(batches).toHaveLength(1);
-      expect(batches[0]).toHaveLength(2);
+      // Token change, its audit record, and dropping the agent's device tokens.
+      expect(batches[0]).toHaveLength(3);
       expectStatementOn(batches[0], 'update', 'agents');
       expectStatementOn(batches[0], 'insert', 'agent_identity_audit');
+      expect(batches[0].some((sql) => sql.startsWith('delete from "agent_device_tokens"'))).toBe(true);
       const [after] = await db
         .select({ tokenHash: agents.tokenHash, previousTokenHash: agents.previousTokenHash })
         .from(agents)

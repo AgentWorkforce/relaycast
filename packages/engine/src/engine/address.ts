@@ -1,5 +1,6 @@
 import { nodes } from '../db/tables.js';
 import { codedError } from '../lib/httpError.js';
+import type { AgentDeviceStamp } from '../ports/auth.js';
 
 /**
  * Legacy machine alias for agents on a direct node. Older clients do not send
@@ -9,6 +10,20 @@ export const DIRECT_MACHINE = 'direct';
 
 /** Server-owned message metadata key holding the sender's address at send time. */
 export const SENDER_ADDRESS_METADATA_KEY = '__relaycast_sender_address';
+
+/**
+ * Server-owned message metadata key holding the device a person agent sent
+ * from: `{ id, name, kind }` (engine/agentDevice.ts). Served only as the wire
+ * field `agent_device`; like every `__relaycast_` key it is stripped from
+ * caller metadata on write and never served in `metadata`.
+ */
+export const SENDER_DEVICE_METADATA_KEY = '__relaycast_sender_device';
+
+/** The `type` of a person's own agent. Its address and device come from the sending device. */
+export const PERSON_AGENT_TYPE = 'human';
+
+const UNKNOWN_DEVICE: AgentDeviceStamp = { id: 'unknown', name: 'unknown', kind: 'unknown' };
+const DEVICE_KINDS = new Set(['desktop', 'cli', 'web', 'unknown']);
 
 export interface AgentAddress {
   agent: string;
@@ -57,11 +72,48 @@ export function formatAgentAddress(agentName: string, node: AddressNode): string
 }
 
 /**
- * Whether `machine` names the node the agent is on. `direct` remains an alias
- * for every direct node; a broker matches by node name or machine_id.
+ * The sender stamp of one message, as server-owned metadata entries written
+ * after the caller's (sanitized) metadata.
+ *
+ * - A person agent (`type: 'human'`) is stamped with the device it sent from:
+ *   the device of the per-device token it authenticated with, else `unknown`
+ *   (its shared token, or a send made for it by a node or workspace key). Its
+ *   address is `<person>@<device id>`, or `<person>@direct` for an unknown
+ *   device: the person's shared direct node is registered by every device, so
+ *   its machine_id names whichever registered last and is never used here.
+ * - Any other agent keeps its node address and carries no device.
+ *
+ * `withAddress: false` stamps only the device (channel posts and group DMs,
+ * which do not carry a sender address).
  */
-export function machineMatches(machine: string, node: AddressNode): boolean {
+export function senderStampMetadata(
+  sender: { name: string; type?: string | null; node: AddressNode },
+  device: AgentDeviceStamp | null | undefined,
+  options: { withAddress?: boolean } = {},
+): Record<string, unknown> {
+  const withAddress = options.withAddress ?? true;
+  if (sender.type !== PERSON_AGENT_TYPE) {
+    const address = withAddress ? formatAgentAddress(sender.name, sender.node) : null;
+    return address ? { [SENDER_ADDRESS_METADATA_KEY]: address } : {};
+  }
+  const stamp = device ?? UNKNOWN_DEVICE;
+  const machine = stamp.kind === 'unknown' ? DIRECT_MACHINE : stamp.id;
+  return {
+    ...(withAddress && sender.node ? { [SENDER_ADDRESS_METADATA_KEY]: `${sender.name}@${machine}` } : {}),
+    [SENDER_DEVICE_METADATA_KEY]: { id: stamp.id, name: stamp.name, kind: stamp.kind },
+  };
+}
+
+/**
+ * Whether `machine` names the node the agent is on. `direct` remains an alias
+ * for every direct node; a broker matches by node name or machine_id. For a
+ * person agent the machine part is display only, never a filter: any machine
+ * (a live or revoked device id, `web`, `direct`, an old machine_id) reaches
+ * the person wherever they are.
+ */
+export function machineMatches(machine: string, node: AddressNode, agentType?: string | null): boolean {
   if (!node) return false;
+  if (agentType === PERSON_AGENT_TYPE) return true;
   if (node.role === 'direct') return machine === DIRECT_MACHINE || machine === node.machineId;
   if (machine === DIRECT_MACHINE) return false;
   return machine === node.name || machine === node.machineId;
@@ -89,13 +141,13 @@ export function requireAgentAddress(address: string): AgentAddress[] {
  * split's agent name). A stale address — the agent moved or was released —
  * matches nothing and fails instead of reaching the agent somewhere else.
  */
-export function selectAddressedRecipient<T extends { agent: { name: string; status: string }; node: AddressNode }>(
+export function selectAddressedRecipient<T extends { agent: { name: string; status: string; type?: string | null }; node: AddressNode }>(
   address: string,
   candidates: T[],
 ): T {
   const splits = requireAgentAddress(address);
   const matches = candidates.filter(({ agent, node }) => agent.status !== 'released'
-    && splits.some((split) => split.agent === agent.name && machineMatches(split.machine, node)));
+    && splits.some((split) => split.agent === agent.name && machineMatches(split.machine, node, agent.type)));
   if (matches.length > 1) {
     throw codedError(`Address "${address}" matches more than one agent`, 'ambiguous_address', 400);
   }
@@ -105,6 +157,31 @@ export function selectAddressedRecipient<T extends { agent: { name: string; stat
 
 export function addressNotFound(address: string) {
   return codedError(`No agent at address "${address}"`, 'address_not_found', 404);
+}
+
+/**
+ * `{ agent_device }` when persisted metadata carries a well-formed sender
+ * device stamp, else `{}` (absent, never null, for non-person senders).
+ */
+export function senderDeviceField(
+  metadata: Record<string, unknown> | null | undefined,
+): { agent_device?: AgentDeviceStamp } {
+  return agentDeviceField(metadata?.[SENDER_DEVICE_METADATA_KEY]);
+}
+
+/** `{ agent_device }` when `value` is a well-formed device stamp, else `{}`. */
+export function agentDeviceField(value: unknown): { agent_device?: AgentDeviceStamp } {
+  if (!value || typeof value !== 'object') return {};
+  const { id, name, kind } = value as Record<string, unknown>;
+  if (typeof id !== 'string' || typeof name !== 'string' || typeof kind !== 'string' || !DEVICE_KINDS.has(kind)) return {};
+  return { agent_device: { id, name, kind: kind as AgentDeviceStamp['kind'] } };
+}
+
+/** `{ agent_address, agent_device }` from persisted sender metadata, each only when present. */
+export function senderFields(
+  metadata: Record<string, unknown> | null | undefined,
+): { agent_address?: string; agent_device?: AgentDeviceStamp } {
+  return { ...senderAddressField(metadata), ...senderDeviceField(metadata) };
 }
 
 /** `{ agent_address }` when persisted metadata carries the sender's address, else `{}`. */

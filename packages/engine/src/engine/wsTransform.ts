@@ -1,3 +1,4 @@
+import { agentDeviceField } from './address.js';
 import { stableRelaycastEventId } from './event-id.js';
 
 export type WsEvent = {
@@ -33,6 +34,7 @@ export function transformForClient(event: WsEvent): Record<string, unknown> {
           id: d.id as string,
           agent_id: d.agent_id as string,
           agent_name: d.from_name as string,
+          ...agentDeviceField(d.agent_device),
           text: d.text as string,
           ...(d.blocks !== undefined ? { blocks: d.blocks } : {}),
           attachments: (d.attachments as unknown[]) ?? [],
@@ -74,6 +76,7 @@ export function transformForClient(event: WsEvent): Record<string, unknown> {
           agent_id: d.agent_id as string,
           agent_name: d.from_name as string,
           ...(typeof d.agent_address === 'string' ? { agent_address: d.agent_address } : {}),
+          ...agentDeviceField(d.agent_device),
           text: d.text as string,
           ...(d.blocks !== undefined ? { blocks: d.blocks } : {}),
         },
@@ -107,6 +110,7 @@ export function transformForClient(event: WsEvent): Record<string, unknown> {
           agent_id: (msg.agent_id ?? d.from_agent_id ?? d.agent_id) as string,
           agent_name: (msg.agent_name ?? d.from_name) as string,
           ...(typeof msg.agent_address === 'string' ? { agent_address: msg.agent_address } : {}),
+          ...agentDeviceField(msg.agent_device),
           text: (msg.text ?? d.text) as string,
           ...((msg.blocks !== undefined || d.blocks !== undefined)
             ? { blocks: msg.blocks !== undefined ? msg.blocks : d.blocks }
@@ -131,6 +135,7 @@ export function transformForClient(event: WsEvent): Record<string, unknown> {
           id: (msg.id ?? d.id) as string,
           agent_id: (msg.agent_id ?? d.agent_id) as string,
           agent_name: (msg.agent_name ?? d.from_name) as string,
+          ...agentDeviceField(msg.agent_device),
           text: (msg.text ?? d.text) as string,
           ...((msg.blocks !== undefined || d.blocks !== undefined)
             ? { blocks: msg.blocks !== undefined ? msg.blocks : d.blocks }
