@@ -876,7 +876,8 @@ components:
         (owner-named trusted delegates, v1). Stored immutably with the message
         in its own column, never in `metadata`, and unchangeable after send.
         Recipients see only `has_owner_approval`; the content is returned only
-        by `GET /deliveries/by-message/{messageId}` to a pending recipient.
+        by `GET /deliveries/by-message/{messageId}` to the recipient: while its
+        delivery is pending, and after its ack with `include_acked=true`.
         Any other shape is refused with `400 invalid_owner_approval`.
       additionalProperties: false
       required: [v, owner_id, actions]
@@ -6019,15 +6020,18 @@ paths:
 
   /deliveries/by-message/{messageId}:
     get:
-      summary: Prove one pending delivery for the calling agent
+      summary: Prove one delivery of a message to the calling agent
       description: >
-        Return only the calling agent token's queued or delivered, unexpired
-        delivery for the given message id. The sender agent id, workspace id,
-        channel id, and delivery reason are server-derived, and
-        `owner_approval` is the stored object from the message's own column
-        (or `null`). Unknown message ids, messages addressed to another
-        agent, and acknowledged or expired deliveries all return the same
-        `404 delivery_not_found`.
+        Return only the calling agent token's own delivery of the given
+        message id. By default only a queued or delivered, unexpired delivery
+        answers; with `include_acked=true` an acknowledged delivery answers
+        too, whatever its expiry. The sender agent id, workspace id, channel
+        id, delivery reason, status, conversation type and message creation
+        time are server-derived, and `owner_approval` is the stored object
+        from the message's own column (or `null`). Unknown message ids,
+        messages addressed to another agent, failed, dead-lettered or expired
+        deliveries, and (by default) acknowledged deliveries all return the
+        same `404 delivery_not_found`.
       tags:
         - Deliveries
       security:
@@ -6038,9 +6042,18 @@ paths:
           required: true
           schema:
             type: string
+        - name: include_acked
+          in: query
+          description: >-
+            `true` also answers for an acknowledged delivery. Absent, blank or
+            `false` keeps the default. Any other value is a 400
+            `invalid_request`.
+          schema:
+            type: boolean
+            default: false
       responses:
         '200':
-          description: Pending delivery for this agent
+          description: This agent's delivery of the message
           content:
             application/json:
               schema:
@@ -6051,7 +6064,7 @@ paths:
                     type: boolean
                   data:
                     type: object
-                    required: [message_id, workspace_id, channel_id]
+                    required: [message_id, workspace_id, channel_id, status, conversation_type, created_at]
                     properties:
                       message_id:
                         type: string
@@ -6072,10 +6085,47 @@ paths:
                           - type: object
                             nullable: true
                             enum: [null]
+                      status:
+                        type: string
+                        enum: [queued, delivered, acked]
+                        description: >-
+                          `acked` only with `include_acked=true`.
+                      conversation_type:
+                        type: string
+                        enum: [dm, group_dm, null]
+                        nullable: true
+                        description: >-
+                          From the server's conversation records, read when
+                          this answer is served. `dm` guarantees exactly a
+                          1:1 conversation record whose recorded participants
+                          are the calling agent and the message's sender and
+                          nobody else (participants who left still count).
+                          `group_dm` is any other DM conversation, including
+                          a 1:1 with a third participant added, even after
+                          that participant left. This is not a history:
+                          releasing or deleting an agent removes its
+                          participant records, so a 1:1 whose third
+                          participant was released reports `dm` again for
+                          messages between the remaining two, including
+                          messages sent while the third was present, and a
+                          1:1 message whose sender was since released or
+                          deleted reports `group_dm`. `null` is a channel
+                          message.
+                      created_at:
+                        type: string
+                        format: date-time
+                        description: The message's server-set creation time.
+        '400':
+          description: '`invalid_request`: `include_acked` is not `true` or `false`'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
         '404':
           description: >-
             `delivery_not_found`: delivery absent, not addressed to this agent,
-            acknowledged, or expired
+            failed, dead-lettered, expired, or (without `include_acked=true`)
+            acknowledged
           content:
             application/json:
               schema:

@@ -76,8 +76,8 @@ describe('owner_approval on messages', () => {
     });
   }
 
-  function byMessage(token: string, messageId: string) {
-    return stack.app.request(`/v1/deliveries/by-message/${encodeURIComponent(messageId)}`, {
+  function byMessage(token: string, messageId: string, query = '') {
+    return stack.app.request(`/v1/deliveries/by-message/${encodeURIComponent(messageId)}${query}`, {
       headers: { authorization: `Bearer ${token}` },
     });
   }
@@ -618,6 +618,33 @@ describe('owner_approval on messages', () => {
     const plainId = ((await plain.json()) as { data: { id: string } }).data.id;
     const plainProof = await byMessage(bob.token, plainId);
     expect(((await plainProof.json()) as { data: Record<string, unknown> }).data.owner_approval).toBeNull();
+  });
+
+  it('returns the stored approval after the ack only with include_acked=true', async () => {
+    const { alice, bob, carol } = await seed();
+    const sent = await dm(alice.token, { to: 'bob', text: 'please merge', owner_approval: approval() });
+    const messageId = ((await sent.json()) as { data: { id: string } }).data.id;
+    const [item] = (await deliveries(bob.token)).filter((row) => row.message_id === messageId);
+    const acked = await stack.app.request(`/v1/deliveries/${item!.id}/ack`, {
+      method: 'POST', headers: { authorization: `Bearer ${bob.token}` },
+    });
+    expect(acked.status).toBe(200);
+
+    const byDefault = await byMessage(bob.token, messageId);
+    expect(byDefault.status).toBe(404);
+    expect(await byDefault.text()).not.toContain(QUOTE);
+
+    const own = await byMessage(bob.token, messageId, '?include_acked=true');
+    expect(own.status).toBe(200);
+    expect(((await own.json()) as { data: Record<string, unknown> }).data).toMatchObject({
+      message_id: messageId, sender_agent_id: alice.agentId, status: 'acked',
+      conversation_type: 'dm', owner_approval: approval(),
+    });
+    for (const token of [alice.token, carol.token]) {
+      const denied = await byMessage(token, messageId, '?include_acked=true');
+      expect(denied.status).toBe(404);
+      expect(await denied.text()).not.toContain(QUOTE);
+    }
   });
 
   it('flags recipient payloads with has_owner_approval and never carries the content', async () => {
