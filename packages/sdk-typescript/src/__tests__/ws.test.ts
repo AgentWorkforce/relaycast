@@ -252,6 +252,75 @@ describe('WsClient', () => {
     expect(MockWebSocket.instances).toHaveLength(3);
   });
 
+  describe('a listener that throws', () => {
+    // A wildcard logger written for message events (`e.message.text`) throws
+    // on lifecycle events such as 'reconnecting', 'open' and 'error'.
+    const messageLogger = (e: unknown) => {
+      void (e as { message: { text: string } }).message.text;
+    };
+
+    it('does not stop the reconnect after a close', () => {
+      const client = new WsClient({ token: 'at_live_test', reconnectJitter: false });
+      client.on('*', messageLogger);
+      client.connect();
+      const ws1 = MockWebSocket.instances[0]!;
+      ws1.simulateOpen();
+
+      expect(() => ws1.simulateClose()).not.toThrow();
+      vi.advanceTimersByTime(1000);
+      expect(MockWebSocket.instances).toHaveLength(2);
+    });
+
+    it('does not stop the reconnect after a connect timeout', () => {
+      const client = new WsClient({ token: 'at_live_test', reconnectJitter: false });
+      client.on('error', () => {
+        throw new Error('error listener bug');
+      });
+      client.connect();
+
+      expect(() => vi.advanceTimersByTime(10_000)).not.toThrow();
+      vi.advanceTimersByTime(1000);
+      expect(MockWebSocket.instances).toHaveLength(2);
+    });
+
+    it('does not skip later listeners or the reconnect resync', () => {
+      const client = new WsClient({ token: 'at_live_test', reconnectJitter: false });
+      client.on('open', () => {
+        throw new Error('open listener bug');
+      });
+      const resubscribe = vi.fn(() => client.subscribe(['general']));
+      client.on('open', resubscribe);
+      const second = vi.fn();
+      client.on('message.created', () => {
+        throw new Error('message listener bug');
+      });
+      client.on('message.created', second);
+      client.connect();
+      const ws1 = MockWebSocket.instances[0]!;
+      ws1.simulateOpen();
+      ws1.simulateMessage({
+        type: 'message.created',
+        channel: 'general',
+        message: { id: 'm_1', agent_name: 'Bot', text: 'hi', attachments: [] },
+        agent_seq: 3,
+      });
+      expect(second).toHaveBeenCalledTimes(1);
+
+      ws1.simulateClose();
+      vi.advanceTimersByTime(1000);
+      const ws2 = MockWebSocket.instances[1]!;
+      ws2.simulateOpen();
+
+      expect(resubscribe).toHaveBeenCalledTimes(2);
+      const frames = ws2.send.mock.calls.map(([data]) => JSON.parse(data as string));
+      expect(frames).toEqual([
+        { type: 'subscribe', channels: ['general'] },
+        expect.objectContaining({ type: 'resync', last_seen_seq: 3 }),
+      ]);
+      expect(ws2.close).not.toHaveBeenCalled();
+    });
+  });
+
   it('reconnects when connect fails with error before close', () => {
     const client = new WsClient({ token: 'at_live_test', reconnectJitter: false });
     client.connect();

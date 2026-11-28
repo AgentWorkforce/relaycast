@@ -7,7 +7,11 @@ See the [root changelog](../../CHANGELOG.md) for cross-package release highlight
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [Unreleased - Patch]
+
+### Fixed
+
+- A WebSocket event listener that throws (including an `on.any` listener that throws on a lifecycle event) no longer stops the client from reconnecting, skips the other listeners for that event, or skips the post-reconnect resubscribe and `resync`. The throw is logged and dispatch continues.
 
 ## [12.15.0] - 2026-11-24
 
