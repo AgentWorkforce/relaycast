@@ -37,11 +37,14 @@ import { ConfigError } from '../../bin/secretEnv.js';
 import { ActorRealtime, type ActorSocketLike, type ActorSocketSource } from './realtime.js';
 import { ActorImport } from './import.js';
 import { ImportRequestSchema, WORKSPACE_IMPORTING_CODE } from '../migration/protocol.js';
+import { splitNodeAgents, splitResolve } from './split/directory.js';
+import type { AgentRef, SplitResolveResult } from './split/protocol.js';
 
 /** Minimum `fileSigningSecret` length: it signs file URLs and socket grants (the gateway enforces the same). */
 export const MIN_FILE_SIGNING_SECRET_LENGTH = 32;
 
 export type { ActorDatabase, ActorSql, SqliteValue } from './database.js';
+export * as split from './split/index.js';
 export { ensureActorSchema } from './schema.js';
 export { ACTOR_SOCKETS_TABLE, ActorSocketTable, type ActorSocketRow } from './socket-table.js';
 export type { ActorHttpRequest, ActorHttpResponse } from './http.js';
@@ -187,6 +190,13 @@ export interface ActorRuntime {
   /** A JSON frame from a connected node or observer. */
   onMessage(socket: ActorSocketLike, message: unknown): Promise<void>;
   onDisconnect(socket: ActorSocketLike): Promise<void>;
+  /**
+   * Split topology (prototype): authenticate an agent token and resolve a
+   * hot-path send's DM recipient or channel roster for the gateway. Read-only.
+   */
+  splitResolve(input: unknown): Promise<SplitResolveResult>;
+  /** Split topology: the agents bound to a node, for the gateway's inbox sockets. Read-only. */
+  splitNodeAgents(nodeId: string): Promise<AgentRef[]>;
 }
 
 /** No sockets: the runtime of an actor that is never connected to. */
@@ -581,6 +591,18 @@ export function createActorRuntime(options: ActorRuntimeOptions): ActorRuntime {
     onDisconnect(socket) {
       ensureSchema();
       return finish(() => realtime.onDisconnect(socket));
+    },
+
+    async splitResolve(input) {
+      ensureSchema();
+      if (importer.importing()) return { ok: false, reason: 'unsupported' };
+      return splitResolve(deps, sql, options.workspaceId, input);
+    },
+
+    async splitNodeAgents(nodeId) {
+      ensureSchema();
+      if (typeof nodeId !== 'string' || !nodeId) throw new Error('splitNodeAgents: nodeId is required');
+      return splitNodeAgents(sql, options.workspaceId, nodeId);
     },
   };
 }

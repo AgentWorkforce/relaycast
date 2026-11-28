@@ -18,6 +18,7 @@ import type { GatewayContext } from './context.js';
 import { REQUEST_ID_HEADER, bearerToken, requestHeaders, requestIdFor, requestUrl } from './http.js';
 import { errorText } from './log.js';
 import { parseSocketGrant } from './socketGrant.js';
+import { NodeSocketSplit } from './split.js';
 
 /** Largest frame a client may send upstream. */
 export const CLIENT_MAX_MESSAGE_BYTES = 1024 * 1024;
@@ -136,16 +137,24 @@ export function createSocketBridge(ctx: GatewayContext, options: SocketBridgeOpt
     workspaceId: string;
     requestId: string;
     started: number;
+    /** The node a `/v1/node/ws` grant names (split topology only). */
+    nodeId?: string;
   }
 
   function pipe(client: WebSocket, upstream: WebSocket, info: Bridged): void {
     clients.add(client);
     let closed = false;
+    const split = info.nodeId !== undefined
+      ? new NodeSocketSplit(ctx, info.workspaceId, info.nodeId, client, (code, reason) => {
+        if (client.readyState === WebSocket.OPEN || client.readyState === WebSocket.CONNECTING) client.close(code, reason);
+      })
+      : undefined;
     const finish = (code: number, reason: string, side: 'client' | 'upstream'): void => {
       if (closed) return;
       closed = true;
       clearInterval(pinger);
       clients.delete(client);
+      split?.close();
       ctx.logger.info('socket.close', {
         path: info.path,
         workspace_id: info.workspaceId,
@@ -169,10 +178,12 @@ export function createSocketBridge(ctx: GatewayContext, options: SocketBridgeOpt
         client.close(1013, 'slow upstream');
         return;
       }
-      upstream.send(data.toString());
+      const text = split ? split.fromClient(data.toString()) : data.toString();
+      if (text !== null) upstream.send(text);
     });
     upstream.on('message', (data) => {
       if (client.readyState !== WebSocket.OPEN) return;
+      split?.fromWorkspace(data.toString());
       // The actor is not paused for a client that stopped reading; bound what
       // can pile up for one instead.
       if (client.bufferedAmount > maxBufferedBytes) {
@@ -269,7 +280,13 @@ export function createSocketBridge(ctx: GatewayContext, options: SocketBridgeOpt
       ...(target.servername ? { servername: target.servername } : {}),
     });
     entry.upstream = upstream;
-    const info: Bridged = { path: url.pathname, workspaceId, requestId, started };
+    const info: Bridged = {
+      path: url.pathname,
+      workspaceId,
+      requestId,
+      started,
+      ...(ctx.config.actorsTopology === 'split' && principal.kind === 'node' ? { nodeId: principal.node_id } : {}),
+    };
     upstream.once('open', () => {
       if (!settle(entry)) {
         upstream.close(1001, 'client went away');
