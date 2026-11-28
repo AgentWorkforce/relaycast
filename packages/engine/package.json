@@ -6,7 +6,7 @@
   "engines": {
     "node": ">=22.14.0"
   },
-  "description": "Portable, platform-agnostic engine for Relaycast \u2014 channels, threads, DMs, presence, real-time events. Runs on Node + SQLite (self-host) or behind a Cloudflare Durable Object adapter (hosted).",
+  "description": "Portable, platform-agnostic engine for messaging in Agent Relay. Channels, threads, DMs, presence, real-time events.",
   "bin": {
     "relaycast-engine": "dist/bin/serve.js"
   },
