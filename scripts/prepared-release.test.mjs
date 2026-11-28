@@ -121,6 +121,11 @@ function fixture() {
       `# Changelog\n\n## [Unreleased${file === "CHANGELOG.md" ? " - Minor" : ""}]\n\n${file === "CHANGELOG.md" ? "### Fixed\n\n- Fixture change.\n\n" : ""}## [12.8.0] - 2026-11-07\n\n- Prior release.\n`,
     );
   }
+  // Model a package whose source range changed after the last published tarball.
+  const previousDockerLockPath = path.join(source, "docker/package-lock.json");
+  const previousDockerLock = JSON.parse(readFileSync(previousDockerLockPath, "utf8"));
+  previousDockerLock.packages["node_modules/@relaycast/a2a"].dependencies.zod = "^4.0.0";
+  json(previousDockerLockPath, previousDockerLock);
   const initialLock = JSON.parse(
     readFileSync(path.join(source, "package-lock.json"), "utf8"),
   );

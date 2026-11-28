@@ -1,7 +1,7 @@
 // Real local workerd/D1 coverage for the portable task CAS and additive migration.
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
-import { Miniflare } from 'miniflare';
+import { createD1TestWorker } from './d1-test-worker.mjs';
 import { drizzle } from 'drizzle-orm/d1';
 import { getSqliteDb, runMigrations } from '../dist/adapters/node/database.js';
 import * as schema from '../dist/db/schema.js';
@@ -10,7 +10,7 @@ import { acceptTaskInvocation, completeTaskInvocation, createTaskState, expireTa
 import { getInvocation } from '../dist/engine/action.js';
 
 const sqlite = getSqliteDb(':memory:');
-const mf = new Miniflare({ modules: true, script: 'export default { fetch() { return new Response("fixture") } }', compatibilityDate: '2026-05-11', d1Databases: ['DB'] });
+const mf = createD1TestWorker();
 try {
   runMigrations(sqlite);
   const d1 = await mf.getD1Database('DB');

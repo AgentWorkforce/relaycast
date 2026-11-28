@@ -16,9 +16,9 @@
   "dependencies": {
     "@relaycast/sdk": "12.16.0",
     "@relaycast/types": "12.16.0",
-    "@modelcontextprotocol/sdk": "^1.26.0",
+    "@modelcontextprotocol/sdk": "^1.32.0",
     "express": "^5.2.1",
-    "zod": "^4.3.6"
+    "zod": "^4.6.7"
   },
   "repository": {
     "type": "git",
@@ -30,6 +30,6 @@
   ],
   "devDependencies": {
     "@types/express": "^5.0.6",
-    "vitest": "^4.0.18"
+    "vitest": "^4.1.12"
   }
 }

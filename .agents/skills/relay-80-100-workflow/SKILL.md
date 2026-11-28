@@ -215,8 +215,10 @@ Fix until all tests pass.`,
 
 #### Here's the complete pattern for a feature that touches the database:
 
+Install the workflow tools in the project that runs these examples with `npm install --save-dev @relayflows/core @relayflows/cli`.
+
 ```typescript
-import { workflow } from '@agent-relay/sdk/workflows';
+import { workflow } from '@relayflows/core';
 
 const result = await workflow('my-feature')
   .description('Add feature X with full E2E validation')

@@ -16,7 +16,7 @@
     "directory": "packages/types"
   },
   "dependencies": {
-    "zod": "^4.3.6"
+    "zod": "^4.6.7"
   },
   "files": [
     "dist"

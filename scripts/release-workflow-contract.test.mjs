@@ -16,7 +16,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, it } from "node:test";
-import { PUBLISHED_PACKAGE_DIRS } from "./release-contract.mjs";
+import { projectDockerDependencyMaps, PUBLISHED_PACKAGE_DIRS } from "./release-contract.mjs";
 import {
   assertPublishedIntegrity,
   assertReleaseMetadata,
@@ -180,6 +180,7 @@ function bumpFixtureVersion(root, version, dockerIntegrities) {
 
   const dockerLockPath = path.join(root, "docker/package-lock.json");
   const dockerLock = JSON.parse(readFileSync(dockerLockPath, "utf8"));
+  projectDockerDependencyMaps(dockerLock, rootLock);
   dockerLock.version = version;
   dockerLock.packages[""].version = version;
   dockerLock.packages[""].dependencies["@relaycast/engine"] = version;
@@ -191,11 +192,7 @@ function bumpFixtureVersion(root, version, dockerIntegrities) {
     entry.version = version;
     entry.resolved = `https://registry.npmjs.org/${name}/-/${shortName}-${version}.tgz`;
     entry.integrity = dockerIntegrities[name];
-    for (const type of ["dependencies", "devDependencies", "optionalDependencies", "peerDependencies"]) {
-      for (const dependency of Object.keys(entry[type] ?? {})) {
-        if (dependency.startsWith("@relaycast/")) entry[type][dependency] = version;
-      }
-    }
+
   }
   writeFileSync(dockerLockPath, `${JSON.stringify(dockerLock, null, 2)}\n`);
   const runbookPath = path.join(root, "RUNBOOK.md");

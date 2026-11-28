@@ -21,26 +21,20 @@
     "e2e:actions": "npx tsx scripts/e2e-actions.ts"
   },
   "devDependencies": {
-    "@agent-relay/sdk": "3.2.18",
-    "agent-trajectories": "0.6.1",
-    "drizzle-kit": "^0.31.9",
+    "agent-trajectories": "0.7.0",
     "drizzle-orm": "^0.45.1",
     "eslint": "^9.39.2",
-    "local-pkg": "^1.1.1",
-    "loupe": "^3.1.4",
-    "miniflare": "4.20260617.1",
-    "strip-literal": "^3.1.0",
-    "tinypool": "^1.1.1",
-    "tinyspy": "^4.0.4",
     "turbo": "^2.4.0",
     "typescript": "^5.9.3",
-    "typescript-eslint": "^8.54.0",
-    "vite-node": "^3.2.4",
-    "vitest": "^4.0.18"
+    "typescript-eslint": "^8.74.0",
+    "vitest": "^4.1.12"
   },
   "overrides": {
-    "@vitejs/devtools-vitest": {
-      "vitest": "^4.0.18"
+    "typescript-json-schema": {
+      "glob": "^14.0.6"
+    },
+    "@esbuild-kit/core-utils": {
+      "esbuild": "0.25.12"
     }
   }
 }

@@ -5,7 +5,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { updateComparisonReferences } from "./release-contract.mjs";
+import { projectDockerDependencyMaps, updateComparisonReferences } from "./release-contract.mjs";
 import {
   assertSourceProvenance,
   packageProvenance,
@@ -303,8 +303,10 @@ function assertExactReleaseTransform({ cwd, sourceCommit, tagCommit, changedPath
       assertLockDiffIsReleaseOnly(before, after, version, { docker: false, packageIntegrities });
       expected = jsonText(expectedRootLock(before, version));
     } else if (file === "docker/package-lock.json") {
-      assertLockDiffIsReleaseOnly(before, after, version, { docker: true, packageIntegrities });
-      expected = jsonText(expectedDockerLock(before, version, packageIntegrities));
+      const workspace = JSON.parse(fileAt(cwd, sourceCommit, "package-lock.json"));
+      const sourceProjection = jsonText(projectDockerDependencyMaps(JSON.parse(before), workspace));
+      assertLockDiffIsReleaseOnly(sourceProjection, after, version, { docker: true, packageIntegrities });
+      expected = jsonText(expectedDockerLock(sourceProjection, version, packageIntegrities));
     } else if (file === "Dockerfile") expected = before.replace(/^ARG RELAYCAST_ENGINE_VERSION=\S+/m, `ARG RELAYCAST_ENGINE_VERSION=${version}`);
     else if (file === "RUNBOOK.md") expected = expectedRunbook(before, version);
     else if (file.endsWith("/CHANGELOG.md") || file === "CHANGELOG.md") expected = expectedChangelog(before, { cwd, file, version, sourceCommit, releaseDate });
