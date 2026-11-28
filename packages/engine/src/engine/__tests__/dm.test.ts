@@ -702,3 +702,43 @@ describe('invariant DM-1: a 1:1 conversation never has a departed participant', 
     expect(roster.map((r) => r.agentId).sort()).toEqual([alice, bob].sort());
   });
 });
+
+it('models replay of a selected DM after the consumer ACK is lost', async () => {
+  const { db, ws, alice } = seed();
+  const selected = await sendDm(db, ws, alice, { to: 'bob', text: 'selected sample' });
+  const unselected = await sendDm(db, ws, alice, { to: 'bob', text: 'other sample' });
+  const stored = db.select({ id: messages.id }).from(messages).all();
+  expect(stored.map(row => row.id).sort()).toEqual([selected.id, unselected.id].sort());
+
+  // Selection and the consumer outbox are test models over the real stored DMs.
+  const selectedIds = new Set([selected.id]);
+  const outbox = new Set(stored.map(row => row.id).filter(id => selectedIds.has(id)));
+  expect([...outbox]).toEqual([selected.id]);
+
+  // Each connection writes to the same fake sink, which retains items by message ID.
+  const sink = new Set<string>();
+  const attempts: string[] = [];
+  function connect() {
+    return () => {
+      for (const key of outbox) {
+        attempts.push(key);
+        sink.add(key);
+        return () => outbox.delete(key);
+      }
+    };
+  }
+
+  const firstConnection = connect();
+  firstConnection(); // Drop the ACK after the sink write.
+  expect(attempts).toEqual([selected.id]);
+  expect([...sink]).toEqual([selected.id]);
+
+  const reconnected = connect();
+  const ack = reconnected();
+  expect(attempts).toEqual([selected.id, selected.id]);
+  expect([...sink]).toEqual([selected.id]);
+  expect(ack?.()).toBe(true);
+
+  expect(reconnected()).toBeUndefined();
+  expect(attempts).toEqual([selected.id, selected.id]);
+});
