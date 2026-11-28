@@ -16,16 +16,15 @@
     "@relaycast/react": "12.16.0",
     "@relaycast/sdk": "12.16.0",
     "@relaycast/types": "12.16.0",
-    "class-variance-authority": "^0.7.0",
     "clsx": "^2.1.0",
     "lucide-react": "^0.400.0",
-    "next": "^16.4.3",
+    "next": "^16.4.5",
     "react": "^19.3.1",
     "react-dom": "^19.3.1",
     "tailwind-merge": "^2.3.0"
   },
   "devDependencies": {
-    "@opennextjs/cloudflare": "^1.20.13",
+    "@opennextjs/cloudflare": "^1.20.19",
     "@tailwindcss/postcss": "^4.0.0",
     "@testing-library/react": "^16.3.3",
     "@types/node": "^22.0.0",

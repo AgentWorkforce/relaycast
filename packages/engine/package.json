@@ -6,7 +6,7 @@
   "engines": {
     "node": ">=22.14.0"
   },
-  "description": "Portable, platform-agnostic engine for Relaycast — channels, threads, DMs, presence, real-time events. Runs on Node + SQLite (self-host) or behind a Cloudflare Durable Object adapter (hosted).",
+  "description": "Portable, platform-agnostic engine for Relaycast \u2014 channels, threads, DMs, presence, real-time events. Runs on Node + SQLite (self-host) or behind a Cloudflare Durable Object adapter (hosted).",
   "bin": {
     "relaycast-engine": "dist/bin/serve.js"
   },
@@ -81,16 +81,16 @@
     "check:pg-migrations": "node scripts/generate-pg-migrations.mjs --check"
   },
   "dependencies": {
-    "@hono/node-server": "^1.13.7",
+    "@hono/node-server": "^2.1.3",
     "@relaycast/a2a": "12.16.0",
     "@relaycast/types": "12.16.0",
     "better-sqlite3": "^13.2.0",
     "drizzle-orm": "^0.45.1",
-    "hono": "^4.11.9",
+    "hono": "^4.13.16",
     "pg": "^8.23.1",
-    "undici": "7.28.0",
+    "undici": "7.30.1",
     "ws": "^8.18.0",
-    "zod": "^4.3.6"
+    "zod": "^4.6.7"
   },
   "devDependencies": {
     "@aws-sdk/client-s3": "^3.984.0",
@@ -101,7 +101,7 @@
     "@types/pg": "^8.23.1",
     "@types/ws": "^8.5.13",
     "drizzle-kit": "^0.31.9",
-    "vitest": "^4.0.18"
+    "vitest": "^4.1.12"
   },
   "publishConfig": {
     "access": "public"

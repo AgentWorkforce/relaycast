@@ -34,7 +34,6 @@
   },
   "dependencies": {
     "@relaycast/sdk": "12.16.0",
-    "@relaycast/types": "12.16.0",
     "prism-react-renderer": "^2.4.1",
     "react-markdown": "^10.1.0",
     "remark-breaks": "^4.0.0",
@@ -50,7 +49,7 @@
     "react": "^19.3.1",
     "react-dom": "^19.3.1",
     "typescript": "^5.7.0",
-    "vitest": "^3.0.0"
+    "vitest": "^4.1.12"
   },
   "files": [
     "dist"

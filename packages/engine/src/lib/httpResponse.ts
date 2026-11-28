@@ -30,7 +30,7 @@ interface ParseJsonBodyOptions {
   };
 }
 
-export function jsonOk<T>(c: Context, data: T, status: ContentfulStatusCode = 200) {
+export function jsonOk<T>(c: Context, data: T, status: ContentfulStatusCode = 200): Response {
   return c.json({ ok: true as const, data }, status);
 }
 
