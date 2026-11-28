@@ -23,8 +23,10 @@ The relay broker-sdk workflow system orchestrates multiple AI agents (Claude, Co
 
 ## Quick Reference
 
+Install the workflow tools in the project that runs these examples with `npm install --save-dev @relayflows/core @relayflows/cli`.
+
 ```typescript
-import { workflow } from '@agent-relay/sdk/workflows';
+import { workflow } from '@relayflows/core';
 
 const result = await workflow('my-workflow')
   .description('What this workflow does')
@@ -57,9 +59,9 @@ const result = await workflow('my-workflow')
 
 **Critical TypeScript rules:**
 1. Check the project's `package.json` for `"type": "module"` — if ESM, use `import` and top-level `await`. If CJS, use `require()` and wrap in `async function main()`.
-2. `agent-relay run <file.ts>` executes the file as a standalone subprocess — it does NOT inspect exports. The file MUST call `.run()`.
+2. `npx relayflows run <file.ts>` executes the file as a standalone subprocess — it does NOT inspect exports. The file MUST call `.run()`.
 3. Use `.run({ cwd: process.cwd() })` — `createWorkflowRenderer` does not exist
-4. Validate with `--dry-run` before running: `agent-relay run --dry-run workflow.ts`
+4. Validate with `--dry-run` before running: `npx relayflows run --dry-run workflow.ts`
 
 ## ⚡ Parallelism — Design for Speed
 
@@ -71,24 +73,24 @@ When a project has multiple workflows, group independent ones into parallel wave
 
 ```bash
 # BAD — sequential (14 hours for 27 workflows at ~30 min each)
-agent-relay run workflows/34-sst-wiring.ts
-agent-relay run workflows/35-env-config.ts
-agent-relay run workflows/36-loading-states.ts
+npx relayflows run workflows/34-sst-wiring.ts
+npx relayflows run workflows/35-env-config.ts
+npx relayflows run workflows/36-loading-states.ts
 # ... one at a time
 
 # GOOD — parallel waves (3-4 hours for 27 workflows)
 # Wave 1: independent infra (parallel)
-agent-relay run workflows/34-sst-wiring.ts &
-agent-relay run workflows/35-env-config.ts &
-agent-relay run workflows/36-loading-states.ts &
-agent-relay run workflows/37-responsive.ts &
+npx relayflows run workflows/34-sst-wiring.ts &
+npx relayflows run workflows/35-env-config.ts &
+npx relayflows run workflows/36-loading-states.ts &
+npx relayflows run workflows/37-responsive.ts &
 wait
 git add -A && git commit -m "Wave 1"
 
 # Wave 2: testing (parallel — independent test suites)
-agent-relay run workflows/40-unit-tests.ts &
-agent-relay run workflows/41-integration-tests.ts &
-agent-relay run workflows/42-e2e-tests.ts &
+npx relayflows run workflows/40-unit-tests.ts &
+npx relayflows run workflows/41-integration-tests.ts &
+npx relayflows run workflows/42-e2e-tests.ts &
 wait
 git add -A && git commit -m "Wave 2"
 ```
@@ -109,12 +111,7 @@ Two workflows can run in parallel if they don't have write-write or write-read f
 
 Help wave planners (human or automated) understand what each workflow touches:
 
-```typescript
-workflow('48-comparison-mode')
-  .packages(['web', 'core'])                // monorepo packages touched
-  .isolatedFrom(['49-feedback-system'])      // explicitly safe to parallelize
-  .requiresBefore(['46-admin-dashboard'])    // explicit ordering constraint
-```
+For example, record in the plan that `48-comparison-mode` touches `web` and `core`, can run alongside `49-feedback-system`, and must finish before `46-admin-dashboard` starts.
 
 ### Within-Workflow Parallelism
 
@@ -775,9 +772,9 @@ When you set `.pattern('supervisor')` (or `hub-spoke`, `fan-out`), the runner au
 | Wrapping in `async function main()` in ESM | ESM supports top-level `await` — no wrapper needed |
 | Using `createWorkflowRenderer` | Does not exist. Use `.run({ cwd: process.cwd() })` |
 | `export default workflow(...)...build()` | No `.build()`. Chain ends with `.run()` — the file must call `.run()`, not just export config |
-| Relative import `'../workflows/builder.js'` | Use `import { workflow } from '@agent-relay/sdk/workflows'` |
+| Relative import `'../workflows/builder.js'` | Use `import { workflow } from '@relayflows/core'` |
 | Hardcoded model strings (`model: 'opus'`) | Use constants: `import { ClaudeModels } from '@agent-relay/config'` → `model: ClaudeModels.OPUS` |
-| Thinking `agent-relay run` inspects exports | It executes the file as a subprocess. Only `.run()` invocations trigger steps |
+| Thinking `npx relayflows run` inspects exports | It executes the file as a subprocess. Only `.run()` invocations trigger steps |
 | `pattern('single')` on cloud runner | Not supported — use `dag` |
 | `pattern('supervisor')` with one agent | Same agent is owner + specialist. Use `dag` |
 | Invalid verification type (`type: 'deterministic'`) | Only `exit_code`, `output_contains`, `file_exists`, `custom` are valid |
@@ -823,7 +820,7 @@ workflows:
           type: exit_code
 ```
 
-Run with: `agent-relay run path/to/workflow.yaml`
+Run with: `npx relayflows run path/to/workflow.yaml`
 
 ## Available Swarm Patterns
 

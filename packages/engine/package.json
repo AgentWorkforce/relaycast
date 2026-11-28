@@ -101,6 +101,7 @@
     "@types/pg": "^8.23.1",
     "@types/ws": "^8.5.13",
     "drizzle-kit": "^0.31.9",
+    "miniflare": "5.20261023.0-beta",
     "vitest": "^4.1.12"
   },
   "publishConfig": {

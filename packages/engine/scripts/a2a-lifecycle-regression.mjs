@@ -6,7 +6,7 @@ import { randomUUID, createHash } from 'node:crypto';
 import { createNodeRuntime } from '../dist/adapters/node/index.js';
 import { brandSqliteEngineDb, createEngine, schema } from '../dist/index.js';
 import { drizzle } from 'drizzle-orm/d1';
-import { Miniflare } from 'miniflare';
+import { createD1TestWorker } from './d1-test-worker.mjs';
 import Database from 'better-sqlite3';
 import { planMigrations } from '../dist/db/migrationPlan.js';
 import { resolveWorkspaceDeliveryPolicyFor, resolveWorkspaceDeliveryPolicy } from '../dist/engine/workspaceDeliveryPolicy.js';
@@ -31,7 +31,7 @@ const runtimes = [':memory:', `/tmp/finn-capacity-${randomUUID()}.sqlite`].map(d
   config:{environment:'test'},presence:{sweepIntervalMs:0},eventQueue:{pollIntervalMs:0},
 }));
 for(const r of runtimes){r.webhookQueue.stop();r.presence.stop();}
-const mf = new Miniflare({workers:[{modules:true,script:'export default { fetch() { return new Response("fixture") } }', compatibilityDate:'2026-05-11', d1Databases:['DB','UPGRADE']}]});
+const mf = createD1TestWorker();
 const originalFetch = globalThis.fetch;
 try {
  const d1=await mf.getD1Database('DB');

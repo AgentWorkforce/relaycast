@@ -21,28 +21,15 @@
     "e2e:actions": "npx tsx scripts/e2e-actions.ts"
   },
   "devDependencies": {
-    "@agent-relay/sdk": "3.2.18",
     "agent-trajectories": "0.7.0",
-    "drizzle-kit": "^0.31.9",
     "drizzle-orm": "^0.45.1",
     "eslint": "^9.39.2",
-    "miniflare": "4.20260730.0",
     "turbo": "^2.4.0",
     "typescript": "^5.9.3",
     "typescript-eslint": "^8.74.0",
     "vitest": "^4.1.12"
   },
   "overrides": {
-    "@vitejs/devtools-vitest": {
-      "vitest": "$vitest"
-    },
-    "miniflare@4.20260730.0": {
-      "sharp": "0.35.5",
-      "undici": "7.30.1"
-    },
-    "vitest": {
-      "vite": "^7.3.7"
-    },
     "typescript-json-schema": {
       "glob": "^14.0.6"
     },
