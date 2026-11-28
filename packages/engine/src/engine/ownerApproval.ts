@@ -44,6 +44,13 @@ export function ownerApprovalFlag(has: unknown): { has_owner_approval?: true } {
   return has ? { has_owner_approval: true } : {};
 }
 
+/** What a successful quote redaction answers with. */
+export interface OwnerApprovalQuoteRedaction {
+  message_id: string;
+  quote_redacted_at: string;
+  already_redacted: boolean;
+}
+
 /**
  * Redact a stored approval's quote (§8): set `quote` to `null` and record
  * `quote_redacted_at`. This is the one change the immutability trigger lets
@@ -55,7 +62,7 @@ export async function redactOwnerApprovalQuote(
   workspaceId: string,
   messageId: string,
   now = new Date(),
-): Promise<{ message_id: string; quote_redacted_at: string; already_redacted: boolean } | null> {
+): Promise<OwnerApprovalQuoteRedaction | null> {
   const redactedAt = now.toISOString();
   const target = and(eq(messages.workspaceId, workspaceId), eq(messages.id, messageId), isNotNull(messages.ownerApproval));
   const redacted = sqlx.jsonSet(

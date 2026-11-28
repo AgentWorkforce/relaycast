@@ -7,7 +7,11 @@ See the [root changelog](../../CHANGELOG.md) for cross-package release highlight
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [Unreleased - Minor]
+
+### Added
+
+- `redactOwnerApprovalQuote` and the `OwnerApprovalQuoteRedaction` type are exported from the package entry, so the hosted gateway can serve the redact-quote internal route by calling the same function.
 
 ## [12.16.0] - 2026-11-27
 
