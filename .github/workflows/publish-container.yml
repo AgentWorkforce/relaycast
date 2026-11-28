@@ -21,10 +21,10 @@ on:
         required: true
         type: string
       latest:
-        description: "Also tag as :latest"
+        description: "Also tag as :latest. Only an unsuffixed tag built from the v<version> release commit on main may move it."
         required: false
         type: boolean
-        default: true
+        default: false
 
 concurrency:
   group: publish-container
@@ -85,6 +85,7 @@ jobs:
         id: pin
         env:
           TAG: ${{ inputs.tag }}
+          LATEST: ${{ inputs.latest }}
         run: |
           set -euo pipefail
           pinned="$(node -p "require('./docker/package.json').dependencies['@relaycast/engine']")"
@@ -105,6 +106,28 @@ jobs:
               exit 1
               ;;
           esac
+          # The image compiles the engine from this checkout, and main keeps the
+          # pinned version after a release while its source moves on. The plain
+          # version tag and :latest are what customers pin, so they publish only
+          # when this commit is the v<pinned> release. Dispatch stays on main
+          # (checked above). A suffixed tag names later source and cannot move
+          # :latest.
+          if [ "$TAG" != "$pinned" ] && [ "$LATEST" = "true" ]; then
+            echo "refusing :latest for suffixed tag '$TAG': :latest names a released version only" >&2
+            exit 1
+          fi
+          if [ "$TAG" = "$pinned" ] || [ "$LATEST" = "true" ]; then
+            if ! git fetch --no-tags origin "refs/tags/v${pinned}:refs/tags/v${pinned}"; then
+              echo "refusing to publish '$TAG': release tag refs/tags/v${pinned} is not on origin" >&2
+              exit 1
+            fi
+            release_sha="$(git rev-parse "refs/tags/v${pinned}^{commit}")"
+            checkout_sha="$(git rev-parse "${GITHUB_SHA}^{commit}")"
+            if [ "$checkout_sha" != "$release_sha" ]; then
+              echo "refusing to publish '$TAG' from ${checkout_sha}: the plain version tag and :latest require this main checkout to be the v${pinned} release commit (${release_sha}). Add a suffix and leave :latest off." >&2
+              exit 1
+            fi
+          fi
           echo "pinned=$pinned" >> "$GITHUB_OUTPUT"
           echo "tag $TAG matches pinned engine version: $pinned"
 
